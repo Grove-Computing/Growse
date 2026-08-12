@@ -1965,8 +1965,8 @@ localhost
 * [x] `<a>` をクリックしてページ遷移できる
 * [x] Backが動作する
 * [x] Reloadが動作する
-* [ ] `<script type="text/go">` を認識できる
-* [ ] `.go` ファイルを取得できる
+* [x] `<script type="text/go">` を認識できる
+* [x] `.go` ファイルを取得できる
 * [ ] Yaegi Runtimeが起動する
 * [ ] `main()` を実行できる
 * [ ] `growse/console` が利用できる

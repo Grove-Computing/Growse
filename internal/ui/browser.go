@@ -198,6 +198,9 @@ func (ui *BrowserUI) consumeNavigationResult() {
 				}
 			}
 			ui.status = fmt.Sprintf("取得完了 · %s · HTTP %d · %d bytes", domSummary, result.page.StatusCode, len(result.page.Source))
+			if len(result.page.ScriptErrors) > 0 {
+				ui.status += fmt.Sprintf(" · Go script error %d件", len(result.page.ScriptErrors))
+			}
 		default:
 			return
 		}

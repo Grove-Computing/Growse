@@ -21,6 +21,8 @@ type Page struct {
 	Document       *dom.Document
 	Stylesheet     *css.Stylesheet
 	ComputedStyles style.Map
+	Scripts        []Script
+	ScriptErrors   []string
 }
 
 // NewPage creates a page for pageURL. A nil URL is allowed for documents such

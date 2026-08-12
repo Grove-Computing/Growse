@@ -157,6 +157,7 @@ func (b *Browser) load(ctx context.Context, pageURL *url.URL, commit historyComm
 		return nil, fmt.Errorf("load styles for %s: %w", pageURL.Redacted(), err)
 	}
 	computedStyles := style.Compute(document, stylesheet)
+	scripts, scriptErrors := loadScripts(ctx, client, response.URL, document)
 
 	page := &Page{
 		URL:            cloneURL(response.URL),
@@ -166,6 +167,8 @@ func (b *Browser) load(ctx context.Context, pageURL *url.URL, commit historyComm
 		Document:       document,
 		Stylesheet:     stylesheet,
 		ComputedStyles: computedStyles,
+		Scripts:        scripts,
+		ScriptErrors:   scriptErrors,
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
