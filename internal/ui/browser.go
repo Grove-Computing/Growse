@@ -52,6 +52,7 @@ type BrowserUI struct {
 	backIcon      *widget.Icon
 	forwardIcon   *widget.Icon
 	reloadIcon    *widget.Icon
+	pageTitle     string
 	status        string
 }
 
@@ -83,6 +84,7 @@ func NewBrowserUI(navigator Navigator, invalidate func()) *BrowserUI {
 		backIcon:    mustIcon(widget.NewIcon(icons.NavigationArrowBack)),
 		forwardIcon: mustIcon(widget.NewIcon(icons.NavigationArrowForward)),
 		reloadIcon:  mustIcon(widget.NewIcon(icons.NavigationRefresh)),
+		pageTitle:   "新しい Web を Go で開く",
 		status:      "URLを入力して Gopher ボタンを押してください",
 	}
 	if ui.invalidate == nil {
@@ -165,7 +167,15 @@ func (ui *BrowserUI) consumeNavigationResult() {
 			}
 
 			ui.address.SetText(result.page.URL.String())
-			ui.status = fmt.Sprintf("取得完了 · HTTP %d · %d bytes · %s", result.page.StatusCode, len(result.page.Source), result.page.ContentType)
+			ui.pageTitle = result.page.URL.Host
+			domSummary := "DOM未生成"
+			if result.page.Document != nil {
+				domSummary = fmt.Sprintf("DOM %dノード / %d要素", result.page.Document.NodeCount(), result.page.Document.ElementCount())
+				if title := result.page.Document.Title(); title != "" {
+					ui.pageTitle = title
+				}
+			}
+			ui.status = fmt.Sprintf("取得完了 · %s · HTTP %d · %d bytes", domSummary, result.page.StatusCode, len(result.page.Source))
 		default:
 			return
 		}
@@ -316,7 +326,7 @@ func (ui *BrowserUI) layoutViewport(gtx layout.Context) layout.Dimensions {
 								return label.Layout(gtx)
 							}),
 							layout.Rigid(layout.Spacer{Height: unit.Dp(12)}.Layout),
-							layout.Rigid(material.H5(ui.theme, "新しい Web を Go で開く").Layout),
+							layout.Rigid(material.H5(ui.theme, ui.pageTitle).Layout),
 							layout.Rigid(layout.Spacer{Height: unit.Dp(10)}.Layout),
 							layout.Rigid(material.Body1(ui.theme, ui.status).Layout),
 						)

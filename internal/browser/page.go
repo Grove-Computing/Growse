@@ -1,6 +1,10 @@
 package browser
 
-import "net/url"
+import (
+	"net/url"
+
+	"github.com/saku0512/growse/internal/dom"
+)
 
 // Page holds the state of one loaded document.
 //
@@ -11,6 +15,7 @@ type Page struct {
 	StatusCode  int
 	ContentType string
 	Source      []byte
+	Document    *dom.Document
 }
 
 // NewPage creates a page for pageURL. A nil URL is allowed for documents such

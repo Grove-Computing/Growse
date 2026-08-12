@@ -3,6 +3,7 @@
 package browser
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"sync"
 
+	htmlparser "github.com/saku0512/growse/internal/html"
 	"github.com/saku0512/growse/internal/network"
 )
 
@@ -81,12 +83,17 @@ func (b *Browser) Navigate(ctx context.Context, rawURL string) (*Page, error) {
 	if mediaType != "text/html" && mediaType != "application/xhtml+xml" {
 		return nil, fmt.Errorf("unsupported Content-Type %q", mediaType)
 	}
+	document, err := htmlparser.Parse(bytes.NewReader(response.Body))
+	if err != nil {
+		return nil, fmt.Errorf("build DOM for %s: %w", pageURL.Redacted(), err)
+	}
 
 	page := &Page{
 		URL:         cloneURL(response.URL),
 		StatusCode:  response.StatusCode,
 		ContentType: response.ContentType,
 		Source:      append([]byte(nil), response.Body...),
+		Document:    document,
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()

@@ -72,6 +72,9 @@ func TestNavigateLoadsHTMLAndUpdatesPage(t *testing.T) {
 	if got, want := string(page.Source), "<h1>Hello</h1>"; got != want {
 		t.Fatalf("page source = %q, want %q", got, want)
 	}
+	if page.Document == nil || page.Document.ElementCount() == 0 {
+		t.Fatal("successful navigation did not build a DOM")
+	}
 }
 
 func TestNavigatePreservesPageOnFailure(t *testing.T) {
