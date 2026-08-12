@@ -11,6 +11,8 @@ import (
 	"image/png"
 
 	"gioui.org/font"
+	"gioui.org/gesture"
+	"gioui.org/io/pointer"
 	"gioui.org/layout"
 	"gioui.org/op/clip"
 	"gioui.org/op/paint"
@@ -51,6 +53,7 @@ type BrowserUI struct {
 	reloadButton  widget.Clickable
 	goButton      widget.Clickable
 	pageList      widget.List
+	viewportClick gesture.Click
 	address       widget.Editor
 	gopher        paint.ImageOp
 	backIcon      *widget.Icon
@@ -63,6 +66,11 @@ type BrowserUI struct {
 // Navigator is the browser capability used by the UI.
 type Navigator interface {
 	Navigate(ctx context.Context, rawURL string) (*browser.Page, error)
+	Back(ctx context.Context) (*browser.Page, error)
+	Forward(ctx context.Context) (*browser.Page, error)
+	Reload(ctx context.Context) (*browser.Page, error)
+	CanBack() bool
+	CanForward() bool
 	Page() *browser.Page
 }
 
@@ -116,17 +124,19 @@ func (ui *BrowserUI) handleActions(gtx layout.Context) {
 		ui.startNavigation(ui.address.Text())
 	}
 	for ui.backButton.Clicked(gtx) {
-		ui.status = "Back はまだ未実装です"
+		if ui.navigator != nil && ui.navigator.CanBack() {
+			ui.startPageLoad("前のページを読み込み中", ui.navigator.Back)
+		}
 	}
 	for ui.forwardButton.Clicked(gtx) {
-		ui.status = "Forward はまだ未実装です"
+		if ui.navigator != nil && ui.navigator.CanForward() {
+			ui.startPageLoad("次のページを読み込み中", ui.navigator.Forward)
+		}
 	}
 	for ui.reloadButton.Clicked(gtx) {
-		rawURL := ui.address.Text()
-		if ui.navigator != nil && ui.navigator.Page() != nil && ui.navigator.Page().URL != nil {
-			rawURL = ui.navigator.Page().URL.String()
+		if ui.navigator != nil && ui.navigator.Page() != nil {
+			ui.startPageLoad("ページを再読み込み中", ui.navigator.Reload)
 		}
-		ui.startNavigation(rawURL)
 	}
 }
 
@@ -135,6 +145,12 @@ func (ui *BrowserUI) startNavigation(rawURL string) {
 		ui.status = "Navigationを利用できません"
 		return
 	}
+	ui.startPageLoad("読み込み中: "+rawURL, func(ctx context.Context) (*browser.Page, error) {
+		return ui.navigator.Navigate(ctx, rawURL)
+	})
+}
+
+func (ui *BrowserUI) startPageLoad(status string, load func(context.Context) (*browser.Page, error)) {
 	if ui.cancelNavigation != nil {
 		ui.cancelNavigation()
 	}
@@ -144,10 +160,10 @@ func (ui *BrowserUI) startNavigation(rawURL string) {
 	ui.navigationID++
 	navigationID := ui.navigationID
 	ui.loading = true
-	ui.status = "読み込み中: " + rawURL
+	ui.status = status
 
 	go func() {
-		page, err := ui.navigator.Navigate(ctx, rawURL)
+		page, err := load(ctx)
 		ui.results <- navigationResult{id: navigationID, page: page, err: err}
 		ui.invalidate()
 	}()
@@ -172,6 +188,7 @@ func (ui *BrowserUI) consumeNavigationResult() {
 			}
 
 			ui.address.SetText(result.page.URL.String())
+			ui.pageList.Position = layout.Position{}
 			ui.pageTitle = result.page.URL.Host
 			domSummary := "DOM未生成"
 			if result.page.Document != nil {
@@ -181,6 +198,9 @@ func (ui *BrowserUI) consumeNavigationResult() {
 				}
 			}
 			ui.status = fmt.Sprintf("取得完了 · %s · HTTP %d · %d bytes", domSummary, result.page.StatusCode, len(result.page.Source))
+			if len(result.page.ScriptErrors) > 0 {
+				ui.status += fmt.Sprintf(" · Go script error %d件", len(result.page.ScriptErrors))
+			}
 		default:
 			return
 		}
@@ -211,17 +231,20 @@ func (ui *BrowserUI) layoutToolbar(gtx layout.Context) layout.Dimensions {
 	)
 
 	return layout.Inset{Top: unit.Dp(10), Right: unit.Dp(14), Bottom: unit.Dp(10), Left: unit.Dp(14)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		canBack := ui.navigator != nil && ui.navigator.CanBack()
+		canForward := ui.navigator != nil && ui.navigator.CanForward()
+		canReload := ui.navigator != nil && ui.navigator.Page() != nil
 		return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return ui.layoutToolbarButton(gtx, &ui.backButton, ui.backIcon, "戻る")
+				return ui.layoutToolbarButton(gtx, &ui.backButton, ui.backIcon, "戻る", canBack)
 			}),
 			layout.Rigid(layout.Spacer{Width: unit.Dp(6)}.Layout),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return ui.layoutToolbarButton(gtx, &ui.forwardButton, ui.forwardIcon, "次へ")
+				return ui.layoutToolbarButton(gtx, &ui.forwardButton, ui.forwardIcon, "次へ", canForward)
 			}),
 			layout.Rigid(layout.Spacer{Width: unit.Dp(6)}.Layout),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return ui.layoutToolbarButton(gtx, &ui.reloadButton, ui.reloadIcon, "再読込")
+				return ui.layoutToolbarButton(gtx, &ui.reloadButton, ui.reloadIcon, "再読込", canReload)
 			}),
 			layout.Rigid(layout.Spacer{Width: unit.Dp(14)}.Layout),
 			layout.Flexed(1, ui.layoutAddressBar),
@@ -231,13 +254,18 @@ func (ui *BrowserUI) layoutToolbar(gtx layout.Context) layout.Dimensions {
 	})
 }
 
-func (ui *BrowserUI) layoutToolbarButton(gtx layout.Context, button *widget.Clickable, icon *widget.Icon, description string) layout.Dimensions {
+func (ui *BrowserUI) layoutToolbarButton(gtx layout.Context, button *widget.Clickable, icon *widget.Icon, description string, enabled bool) layout.Dimensions {
 	size := gtx.Dp(controlHeight)
 	gtx.Constraints = layout.Exact(image.Pt(size, size))
 
 	style := material.IconButton(ui.theme, button, icon, description)
 	style.Background = color.NRGBA{R: 228, G: 234, B: 242, A: 255}
 	style.Color = color.NRGBA{R: 52, G: 64, B: 84, A: 255}
+	if !enabled {
+		gtx = gtx.Disabled()
+		style.Background = color.NRGBA{R: 238, G: 242, B: 247, A: 255}
+		style.Color = color.NRGBA{R: 160, G: 169, B: 182, A: 255}
+	}
 	style.Size = unit.Dp(22)
 	style.Inset = layout.UniformInset(unit.Dp(11))
 	return style.Layout(gtx)
@@ -355,19 +383,74 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 	tree := layoutengine.Build(page.Document, page.ComputedStyles, viewportWidth)
 	displayList := paintmodel.Build(tree)
 	paint.Fill(gtx.Ops, rgba(displayList.Background))
+	ui.handleViewportClicks(gtx, page, tree, displayList)
 
-	return material.List(ui.theme, &ui.pageList).Layout(gtx, len(displayList.Commands), func(gtx layout.Context, index int) layout.Dimensions {
+	area := clip.Rect{Max: gtx.Constraints.Max}.Push(gtx.Ops)
+	dimensions := material.List(ui.theme, &ui.pageList).Layout(gtx, len(displayList.Commands), func(gtx layout.Context, index int) layout.Dimensions {
 		command, ok := displayList.Commands[index].(paintmodel.DrawText)
 		if !ok {
 			return layout.Dimensions{}
 		}
 		return ui.layoutDrawText(gtx, command)
 	})
+	pass := pointer.PassOp{}.Push(gtx.Ops)
+	ui.viewportClick.Add(gtx.Ops)
+	pass.Pop()
+	area.Pop()
+	return dimensions
+}
+
+func (ui *BrowserUI) handleViewportClicks(gtx layout.Context, page *browser.Page, tree *layoutengine.Tree, displayList *paintmodel.DisplayList) {
+	for {
+		click, ok := ui.viewportClick.Update(gtx.Source)
+		if !ok {
+			return
+		}
+		if click.Kind != gesture.KindClick || ui.pageList.List.Dragging() {
+			continue
+		}
+		x, y, ok := ui.documentPoint(click.Position, displayList, gtx.Metric.PxPerDp)
+		if !ok {
+			continue
+		}
+		nodeID, ok := layoutengine.HitTest(tree, x, y)
+		if !ok {
+			continue
+		}
+		linkURL, ok := page.LinkURL(nodeID)
+		if !ok {
+			continue
+		}
+		ui.startNavigation(linkURL.String())
+	}
+}
+
+func (ui *BrowserUI) documentPoint(position image.Point, displayList *paintmodel.DisplayList, pixelsPerDP float32) (float32, float32, bool) {
+	if displayList == nil || pixelsPerDP <= 0 || len(displayList.Commands) == 0 {
+		return 0, 0, false
+	}
+	first := ui.pageList.Position.First
+	if first < 0 || first >= len(displayList.Commands) {
+		return 0, 0, false
+	}
+	command, ok := displayList.Commands[first].(paintmodel.DrawText)
+	if !ok {
+		return 0, 0, false
+	}
+	firstDocumentY := command.Y - command.Top
+	x := float32(position.X) / pixelsPerDP
+	y := firstDocumentY + float32(position.Y+ui.pageList.Position.Offset)/pixelsPerDP
+	return x, y, true
 }
 
 func (ui *BrowserUI) layoutDrawText(gtx layout.Context, command paintmodel.DrawText) layout.Dimensions {
 	left := unit.Dp(command.X)
-	right := unit.Dp(32)
+	viewportWidth := float32(gtx.Constraints.Max.X) / gtx.Metric.PxPerDp
+	rightValue := viewportWidth - command.X - command.Width
+	if rightValue < 0 {
+		rightValue = 0
+	}
+	right := unit.Dp(rightValue)
 	return layout.Inset{Top: unit.Dp(command.Top), Left: left, Right: right}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		height := gtx.Dp(unit.Dp(command.Height))
 		if height < 1 {
@@ -378,6 +461,16 @@ func (ui *BrowserUI) layoutDrawText(gtx layout.Context, command paintmodel.DrawT
 		if command.Background != 0 {
 			paint.FillShape(gtx.Ops, rgba(command.Background), clip.Rect{Max: gtx.Constraints.Min}.Op())
 		}
+		if len(command.Runs) > 0 {
+			children := make([]layout.FlexChild, 0, len(command.Runs))
+			for _, run := range command.Runs {
+				run := run
+				children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					return ui.layoutTextRun(gtx, run, height)
+				}))
+			}
+			return layout.Flex{Alignment: layout.Baseline}.Layout(gtx, children...)
+		}
 
 		label := material.Label(ui.theme, unit.Sp(command.FontSize), command.Text)
 		label.Color = rgba(command.Color)
@@ -387,6 +480,31 @@ func (ui *BrowserUI) layoutDrawText(gtx layout.Context, command paintmodel.DrawT
 		}
 		return layout.W.Layout(gtx, label.Layout)
 	})
+}
+
+func (ui *BrowserUI) layoutTextRun(gtx layout.Context, run paintmodel.TextRun, height int) layout.Dimensions {
+	gtx.Constraints.Min.X = 0
+	gtx.Constraints.Min.Y = height
+	gtx.Constraints.Max.Y = height
+	text := func(gtx layout.Context) layout.Dimensions {
+		label := material.Label(ui.theme, unit.Sp(run.FontSize), run.Text)
+		label.Color = rgba(run.Color)
+		label.MaxLines = 1
+		if run.Bold {
+			label.Font.Weight = font.Bold
+		}
+		return layout.W.Layout(gtx, label.Layout)
+	}
+	if run.Background == 0 {
+		return text(gtx)
+	}
+	return layout.Stack{Alignment: layout.W}.Layout(gtx,
+		layout.Expanded(func(gtx layout.Context) layout.Dimensions {
+			paint.FillShape(gtx.Ops, rgba(run.Background), clip.Rect{Max: gtx.Constraints.Min}.Op())
+			return layout.Dimensions{Size: gtx.Constraints.Min}
+		}),
+		layout.Stacked(text),
+	)
 }
 
 func rgba(value uint32) color.NRGBA {

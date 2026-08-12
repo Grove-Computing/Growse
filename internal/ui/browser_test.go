@@ -14,6 +14,7 @@ import (
 
 	"github.com/saku0512/growse/internal/browser"
 	"github.com/saku0512/growse/internal/dom"
+	paintmodel "github.com/saku0512/growse/internal/paint"
 )
 
 type stubNavigator struct {
@@ -28,6 +29,21 @@ func (navigator *stubNavigator) Navigate(context.Context, string) (*browser.Page
 func (navigator *stubNavigator) Page() *browser.Page {
 	return navigator.page
 }
+
+func (navigator *stubNavigator) Back(context.Context) (*browser.Page, error) {
+	return navigator.page, navigator.err
+}
+
+func (navigator *stubNavigator) Forward(context.Context) (*browser.Page, error) {
+	return navigator.page, navigator.err
+}
+
+func (navigator *stubNavigator) Reload(context.Context) (*browser.Page, error) {
+	return navigator.page, navigator.err
+}
+
+func (navigator *stubNavigator) CanBack() bool    { return true }
+func (navigator *stubNavigator) CanForward() bool { return true }
 
 func TestToolbarHasFixedHeight(t *testing.T) {
 	ui := NewBrowserUI(nil, nil)
@@ -65,7 +81,7 @@ func TestToolbarButtonHasVisibleControlSize(t *testing.T) {
 		Metric:      unit.Metric{PxPerDp: 1, PxPerSp: 1},
 	}
 
-	dims := ui.layoutToolbarButton(gtx, &ui.backButton, ui.backIcon, "戻る")
+	dims := ui.layoutToolbarButton(gtx, &ui.backButton, ui.backIcon, "戻る", true)
 	if got, want := dims.Size, image.Pt(44, 44); got != want {
 		t.Fatalf("toolbar button size = %v, want %v", got, want)
 	}
@@ -118,6 +134,21 @@ func TestDocumentViewportFillsAvailableArea(t *testing.T) {
 	dims := ui.layoutViewport(gtx)
 	if got, want := dims.Size, image.Pt(1000, 700); got != want {
 		t.Fatalf("document viewport size = %v, want %v", got, want)
+	}
+}
+
+func TestDocumentPointIncludesListScrollOffset(t *testing.T) {
+	ui := NewBrowserUI(nil, nil)
+	ui.pageList.Position.First = 1
+	ui.pageList.Position.Offset = 12
+	displayList := &paintmodel.DisplayList{Commands: []paintmodel.Command{
+		paintmodel.DrawText{Y: 32, Top: 32},
+		paintmodel.DrawText{Y: 70, Top: 10},
+	}}
+
+	x, y, ok := ui.documentPoint(image.Pt(40, 18), displayList, 2)
+	if !ok || x != 20 || y != 75 {
+		t.Fatalf("documentPoint() = (%v, %v, %v), want (20, 75, true)", x, y, ok)
 	}
 }
 

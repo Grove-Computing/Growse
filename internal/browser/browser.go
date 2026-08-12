@@ -24,18 +24,19 @@ type ResourceLoader interface {
 
 // Browser owns the state for one browser window.
 //
-// The MVP supports one active page. Network loading, history, and the Go
-// runtime will be added as separate responsibilities in later steps.
+// The MVP supports one active page and a linear navigation history. The Go
+// runtime will be added as a separate responsibility in a later step.
 type Browser struct {
 	mu           sync.RWMutex
 	page         *Page
 	client       ResourceLoader
 	navigationID uint64
+	history      history
 }
 
 // New creates a browser with no page loaded.
 func New(client ResourceLoader) *Browser {
-	return &Browser{client: client}
+	return &Browser{client: client, history: newHistory()}
 }
 
 // Page returns the currently active page, or nil before the first successful
@@ -52,11 +53,79 @@ func (b *Browser) SetPage(page *Page) {
 	defer b.mu.Unlock()
 	b.navigationID++
 	b.page = page
+	if page == nil {
+		b.history = newHistory()
+	} else {
+		b.history.reset(page.URL)
+	}
 }
 
 // Navigate retrieves an HTML document and makes it the active page. The
 // current page is preserved if validation or loading fails.
 func (b *Browser) Navigate(ctx context.Context, rawURL string) (*Page, error) {
+	pageURL, err := normalizeURL(rawURL)
+	if err != nil {
+		return nil, err
+	}
+	return b.load(ctx, pageURL, historyPush, -1)
+}
+
+// Back loads the previous successful navigation entry.
+func (b *Browser) Back(ctx context.Context) (*Page, error) {
+	return b.traverse(ctx, -1)
+}
+
+// Forward loads the next navigation entry after a successful Back.
+func (b *Browser) Forward(ctx context.Context) (*Page, error) {
+	return b.traverse(ctx, 1)
+}
+
+// Reload refreshes the active page without adding a history entry.
+func (b *Browser) Reload(ctx context.Context) (*Page, error) {
+	b.mu.RLock()
+	if b.page == nil || b.page.URL == nil {
+		b.mu.RUnlock()
+		return nil, errors.New("no active page to reload")
+	}
+	pageURL := cloneURL(b.page.URL)
+	index := b.history.index
+	b.mu.RUnlock()
+	return b.load(ctx, pageURL, historyReplace, index)
+}
+
+// CanBack reports whether Back has a target entry.
+func (b *Browser) CanBack() bool {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.history.canBack()
+}
+
+// CanForward reports whether Forward has a target entry.
+func (b *Browser) CanForward() bool {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.history.canForward()
+}
+
+func (b *Browser) traverse(ctx context.Context, delta int) (*Page, error) {
+	b.mu.RLock()
+	target, index, ok := b.history.target(delta)
+	b.mu.RUnlock()
+	if !ok {
+		return nil, errors.New("no history entry in requested direction")
+	}
+	return b.load(ctx, target, historyTraverse, index)
+}
+
+type historyCommit uint8
+
+const (
+	historyPush historyCommit = iota
+	historyTraverse
+	historyReplace
+)
+
+func (b *Browser) load(ctx context.Context, pageURL *url.URL, commit historyCommit, historyIndex int) (*Page, error) {
 	b.mu.Lock()
 	b.navigationID++
 	navigationID := b.navigationID
@@ -65,11 +134,6 @@ func (b *Browser) Navigate(ctx context.Context, rawURL string) (*Page, error) {
 
 	if client == nil {
 		return nil, errors.New("network client is not configured")
-	}
-
-	pageURL, err := normalizeURL(rawURL)
-	if err != nil {
-		return nil, err
 	}
 
 	response, err := client.Get(ctx, pageURL)
@@ -93,6 +157,7 @@ func (b *Browser) Navigate(ctx context.Context, rawURL string) (*Page, error) {
 		return nil, fmt.Errorf("load styles for %s: %w", pageURL.Redacted(), err)
 	}
 	computedStyles := style.Compute(document, stylesheet)
+	scripts, scriptErrors := loadScripts(ctx, client, response.URL, document)
 
 	page := &Page{
 		URL:            cloneURL(response.URL),
@@ -102,6 +167,8 @@ func (b *Browser) Navigate(ctx context.Context, rawURL string) (*Page, error) {
 		Document:       document,
 		Stylesheet:     stylesheet,
 		ComputedStyles: computedStyles,
+		Scripts:        scripts,
+		ScriptErrors:   scriptErrors,
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -109,6 +176,16 @@ func (b *Browser) Navigate(ctx context.Context, rawURL string) (*Page, error) {
 		return nil, context.Canceled
 	}
 	b.page = page
+	switch commit {
+	case historyPush:
+		b.history.push(page.URL)
+	case historyTraverse:
+		b.history.index = historyIndex
+		b.history.replace(page.URL)
+	case historyReplace:
+		b.history.index = historyIndex
+		b.history.replace(page.URL)
+	}
 	return page, nil
 }
 

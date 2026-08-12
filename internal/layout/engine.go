@@ -16,15 +16,23 @@ const (
 )
 
 type blockStyle struct {
-	fontSize     float32
-	bold         bool
-	color        uint32
-	background   uint32
-	marginTop    float32
-	marginBottom float32
+	fontSize   float32
+	bold       bool
+	color      uint32
+	background uint32
+	display    stylemodel.Display
+	margin     stylemodel.Edges
+	padding    stylemodel.Edges
 }
 
-// Build creates a minimal vertical layout using Growse's UA defaults.
+type inlineRun struct {
+	nodeID dom.NodeID
+	tag    string
+	text   string
+	style  blockStyle
+}
+
+// Build creates a vertical block layout with a minimal inline text flow.
 func Build(document *dom.Document, computed stylemodel.Map, viewportWidth float32) *Tree {
 	if viewportWidth < pagePadding*2+1 {
 		viewportWidth = pagePadding*2 + 1
@@ -32,10 +40,9 @@ func Build(document *dom.Document, computed stylemodel.Map, viewportWidth float3
 
 	tree := &Tree{Width: viewportWidth, Background: 0xffffffff}
 	state := engine{
-		tree:         tree,
-		computed:     computed,
-		contentWidth: viewportWidth - pagePadding*2,
-		y:            pagePadding,
+		tree:     tree,
+		computed: computed,
+		y:        pagePadding,
 	}
 	if document != nil {
 		if body := findElement(document.Root, "body"); body != nil {
@@ -43,108 +50,326 @@ func Build(document *dom.Document, computed stylemodel.Map, viewportWidth float3
 				tree.Background = bodyStyle.BackgroundColor
 			}
 		}
-		state.walk(document.Root)
+		state.walk(document.Root, pagePadding, viewportWidth-pagePadding*2)
 	}
 	tree.Height = state.y + pagePadding
 	return tree
 }
 
 type engine struct {
-	tree         *Tree
-	computed     stylemodel.Map
-	contentWidth float32
-	y            float32
+	tree     *Tree
+	computed stylemodel.Map
+	y        float32
 }
 
-func (e *engine) walk(node *dom.Node) {
+func (e *engine) walk(node *dom.Node, x, width float32) {
 	if node == nil {
 		return
 	}
-	if node.Type == dom.NodeElement {
-		if isHidden(node.TagName) {
-			return
-		}
-		if style, ok := visibleBlockStyle(node.TagName); ok {
-			e.addBlock(node, style)
-			return
-		}
-	}
-
-	if node.Type == dom.NodeText {
+	switch node.Type {
+	case dom.NodeText:
 		text := normalizeWhitespace(node.Text)
 		if text != "" {
 			textStyle := defaultStyle()
 			if computed, ok := e.computed.For(node); ok {
 				textStyle = applyComputed(textStyle, computed)
 			}
-			e.addText(node.ID, "text", text, textStyle)
+			e.addText(node.ID, "text", text, textStyle, x, width)
+		}
+		return
+	case dom.NodeElement:
+		style := e.styleFor(node)
+		if style.display == stylemodel.DisplayNone {
+			return
+		}
+		if style.display == stylemodel.DisplayBlock {
+			e.addBlock(node, style, x, width)
+			return
+		}
+		text := e.inlineText(node)
+		if text != "" {
+			e.addInlineRuns(node.ID, node.TagName, e.collectInlineRuns(node, node), style, x, width)
 		}
 		return
 	}
 
 	for _, child := range node.Children {
-		e.walk(child)
+		e.walk(child, x, width)
 	}
 }
 
-func (e *engine) addBlock(node *dom.Node, style blockStyle) {
-	text := normalizeWhitespace(node.TextContent())
-	if text == "" {
-		return
+func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width float32) {
+	e.y += style.margin.Top
+	x += style.margin.Left
+	width -= style.margin.Left + style.margin.Right
+	if width < 1 {
+		width = 1
 	}
+
+	contentX := x + style.padding.Left
+	contentWidth := width - style.padding.Left - style.padding.Right
+	if contentWidth < 1 {
+		contentWidth = 1
+	}
+	e.y += style.padding.Top
+
+	var inlineRuns []inlineRun
+	flushInline := func() {
+		if len(inlineRuns) != 0 {
+			e.addInlineRuns(node.ID, node.TagName, inlineRuns, style, contentX, contentWidth)
+		}
+		inlineRuns = inlineRuns[:0]
+	}
+
+	for _, child := range node.Children {
+		if child.Type == dom.NodeElement {
+			childStyle := e.styleFor(child)
+			if childStyle.display == stylemodel.DisplayNone {
+				continue
+			}
+			if childStyle.display == stylemodel.DisplayBlock {
+				flushInline()
+				e.walk(child, contentX, contentWidth)
+				continue
+			}
+		}
+		inlineRuns = append(inlineRuns, e.collectInlineRuns(child, node)...)
+	}
+	flushInline()
+
+	e.y += style.padding.Bottom + style.margin.Bottom
+}
+
+func (e *engine) collectInlineRuns(node, owner *dom.Node) []inlineRun {
+	if node == nil {
+		return nil
+	}
+	if node.Type == dom.NodeText {
+		style := e.styleFor(node)
+		return []inlineRun{{nodeID: owner.ID, tag: owner.TagName, text: node.Text, style: style}}
+	}
+	if node.Type != dom.NodeElement {
+		return nil
+	}
+	style := e.styleFor(node)
+	if style.display == stylemodel.DisplayNone {
+		return nil
+	}
+	if node.TagName == "br" {
+		return []inlineRun{{nodeID: node.ID, tag: node.TagName, text: "\n", style: style}}
+	}
+
+	var result []inlineRun
+	for _, child := range node.Children {
+		result = append(result, e.collectInlineRuns(child, node)...)
+	}
+	return result
+}
+
+func (e *engine) inlineText(node *dom.Node) string {
+	if node == nil {
+		return ""
+	}
+	if node.Type == dom.NodeText {
+		return node.Text
+	}
+	if node.Type == dom.NodeElement && e.styleFor(node).display == stylemodel.DisplayNone {
+		return ""
+	}
+	var text strings.Builder
+	for _, child := range node.Children {
+		text.WriteString(e.inlineText(child))
+	}
+	return text.String()
+}
+
+func (e *engine) addText(nodeID dom.NodeID, tag, text string, style blockStyle, x, width float32) {
+	e.addInlineRuns(nodeID, tag, []inlineRun{{nodeID: nodeID, tag: tag, text: text, style: style}}, style, x, width)
+}
+
+func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, container blockStyle, x, width float32) {
+	var lineRuns []TextRun
+	var lineText strings.Builder
+	var usedWidth, lineHeight float32
+	var pendingSpace *inlineRun
+
+	flushLine := func() {
+		if len(lineRuns) == 0 {
+			return
+		}
+		if lineHeight == 0 {
+			lineHeight = container.fontSize * 1.4
+		}
+		e.tree.Boxes = append(e.tree.Boxes, Box{
+			NodeID: nodeID, Tag: tag, Text: lineText.String(),
+			X: x, Y: e.y, Width: width, Height: lineHeight,
+			FontSize: container.fontSize, Bold: container.bold, Color: container.color,
+			Background: container.background, Runs: append([]TextRun(nil), lineRuns...),
+		})
+		e.y += lineHeight
+		lineRuns = lineRuns[:0]
+		lineText.Reset()
+		usedWidth, lineHeight, pendingSpace = 0, 0, nil
+	}
+
+	appendPiece := func(run inlineRun, text string, pieceWidth float32) {
+		textRun := TextRun{
+			NodeID: run.nodeID, Tag: run.tag, Text: text, Width: pieceWidth,
+			FontSize: run.style.fontSize, Bold: run.style.bold,
+			Color: run.style.color, Background: run.style.background,
+		}
+		if len(lineRuns) > 0 && sameTextStyle(lineRuns[len(lineRuns)-1], textRun) {
+			lineRuns[len(lineRuns)-1].Text += text
+			lineRuns[len(lineRuns)-1].Width += pieceWidth
+		} else {
+			lineRuns = append(lineRuns, textRun)
+		}
+		lineText.WriteString(text)
+		usedWidth += pieceWidth
+		if height := run.style.fontSize * 1.4; height > lineHeight {
+			lineHeight = height
+		}
+	}
+
+	for _, token := range tokenizeInlineRuns(runs) {
+		if token.text == "\n" {
+			flushLine()
+			continue
+		}
+		if token.text == " " {
+			if len(lineRuns) > 0 {
+				copy := token
+				pendingSpace = &copy
+			}
+			continue
+		}
+
+		spaceWidth := float32(0)
+		if pendingSpace != nil {
+			spaceWidth = estimatedTextWidth(" ", pendingSpace.style.fontSize)
+		}
+		wordWidth := estimatedTextWidth(token.text, token.style.fontSize)
+		if usedWidth > 0 && usedWidth+spaceWidth+wordWidth > width {
+			flushLine()
+			spaceWidth = 0
+		}
+		if pendingSpace != nil && usedWidth > 0 {
+			appendPiece(*pendingSpace, " ", spaceWidth)
+		}
+		pendingSpace = nil
+
+		remaining := []rune(token.text)
+		for len(remaining) > 0 {
+			available := width - usedWidth
+			characters := int(available / estimatedTextWidth("m", token.style.fontSize))
+			if characters < 1 {
+				flushLine()
+				continue
+			}
+			if characters > len(remaining) {
+				characters = len(remaining)
+			}
+			piece := string(remaining[:characters])
+			appendPiece(token, piece, estimatedTextWidth(piece, token.style.fontSize))
+			remaining = remaining[characters:]
+			if len(remaining) > 0 {
+				flushLine()
+			}
+		}
+	}
+	flushLine()
+}
+
+func tokenizeInlineRuns(runs []inlineRun) []inlineRun {
+	var tokens []inlineRun
+	for _, run := range runs {
+		var word strings.Builder
+		flushWord := func() {
+			if word.Len() == 0 {
+				return
+			}
+			token := run
+			token.text = word.String()
+			tokens = append(tokens, token)
+			word.Reset()
+		}
+		for _, character := range run.text {
+			if character == '\n' {
+				flushWord()
+				token := run
+				token.text = "\n"
+				tokens = append(tokens, token)
+			} else if unicode.IsSpace(character) {
+				flushWord()
+				if len(tokens) == 0 || tokens[len(tokens)-1].text != " " {
+					token := run
+					token.text = " "
+					tokens = append(tokens, token)
+				}
+			} else {
+				word.WriteRune(character)
+			}
+		}
+		flushWord()
+	}
+	return tokens
+}
+
+func sameTextStyle(left, right TextRun) bool {
+	return left.NodeID == right.NodeID && left.Tag == right.Tag && left.FontSize == right.FontSize &&
+		left.Bold == right.Bold && left.Color == right.Color && left.Background == right.Background
+}
+
+func estimatedTextWidth(text string, fontSize float32) float32 {
+	return float32(utf8.RuneCountInString(text)) * fontSize * 0.58
+}
+
+func (e *engine) styleFor(node *dom.Node) blockStyle {
+	style := uaStyle(node.TagName)
 	if computed, ok := e.computed.For(node); ok {
 		style = applyComputed(style, computed)
 	}
-	e.y += style.marginTop
-	e.addText(node.ID, node.TagName, text, style)
-	e.y += style.marginBottom
+	return style
 }
 
-func (e *engine) addText(nodeID dom.NodeID, tag, text string, style blockStyle) {
-	lineHeight := style.fontSize * 1.4
-	for _, line := range wrapText(text, e.contentWidth, style.fontSize) {
-		e.tree.Boxes = append(e.tree.Boxes, Box{
-			NodeID:     nodeID,
-			Tag:        tag,
-			Text:       line,
-			X:          pagePadding,
-			Y:          e.y,
-			Width:      e.contentWidth,
-			Height:     lineHeight,
-			FontSize:   style.fontSize,
-			Bold:       style.bold,
-			Color:      style.color,
-			Background: style.background,
-		})
-		e.y += lineHeight
-	}
-}
-
-func visibleBlockStyle(tag string) (blockStyle, bool) {
+func uaStyle(tag string) blockStyle {
+	style := defaultStyle()
 	switch tag {
+	case "html", "body", "div", "main", "section", "article", "header", "footer", "nav", "form", "ul", "ol":
+		style.display = stylemodel.DisplayBlock
 	case "h1":
-		return blockStyle{fontSize: 32, bold: true, color: textColor, marginTop: 12, marginBottom: 12}, true
+		style.display, style.fontSize, style.bold = stylemodel.DisplayBlock, 32, true
+		style.margin = stylemodel.Edges{Top: 12, Bottom: 12}
 	case "h2":
-		return blockStyle{fontSize: 26, bold: true, color: textColor, marginTop: 10, marginBottom: 10}, true
+		style.display, style.fontSize, style.bold = stylemodel.DisplayBlock, 26, true
+		style.margin = stylemodel.Edges{Top: 10, Bottom: 10}
 	case "h3":
-		return blockStyle{fontSize: 21, bold: true, color: textColor, marginTop: 8, marginBottom: 8}, true
+		style.display, style.fontSize, style.bold = stylemodel.DisplayBlock, 21, true
+		style.margin = stylemodel.Edges{Top: 8, Bottom: 8}
+	case "h4", "h5", "h6":
+		style.display, style.bold = stylemodel.DisplayBlock, true
+		style.margin = stylemodel.Edges{Top: 8, Bottom: 8}
 	case "p":
-		return blockStyle{fontSize: 16, color: textColor, marginBottom: 14}, true
+		style.display = stylemodel.DisplayBlock
+		style.margin.Bottom = 14
 	case "button":
-		return blockStyle{fontSize: 16, bold: true, color: textColor, marginTop: 4, marginBottom: 12}, true
+		style.bold = true
 	case "li":
-		return blockStyle{fontSize: 16, color: textColor, marginBottom: 6}, true
+		style.display = stylemodel.DisplayBlock
+		style.margin.Bottom = 6
 	case "pre":
-		return blockStyle{fontSize: 15, color: textColor, marginBottom: 14}, true
+		style.display, style.fontSize = stylemodel.DisplayBlock, 15
+		style.margin.Bottom = 14
 	case "a":
-		return blockStyle{fontSize: 16, color: linkColor, marginBottom: 8}, true
-	default:
-		return blockStyle{}, false
+		style.color = linkColor
+	case "head", "script", "style", "noscript", "template":
+		style.display = stylemodel.DisplayNone
 	}
+	return style
 }
 
 func defaultStyle() blockStyle {
-	return blockStyle{fontSize: 16, color: textColor, marginBottom: 8}
+	return blockStyle{fontSize: 16, color: textColor, display: stylemodel.DisplayInline}
 }
 
 func applyComputed(block blockStyle, computed stylemodel.ComputedStyle) blockStyle {
@@ -152,16 +377,10 @@ func applyComputed(block blockStyle, computed stylemodel.ComputedStyle) blockSty
 	block.bold = computed.Bold()
 	block.color = computed.Color
 	block.background = computed.BackgroundColor
+	block.display = computed.Display
+	block.margin = computed.Margin
+	block.padding = computed.Padding
 	return block
-}
-
-func isHidden(tag string) bool {
-	switch tag {
-	case "head", "script", "style", "noscript", "template":
-		return true
-	default:
-		return false
-	}
 }
 
 func findElement(node *dom.Node, tag string) *dom.Node {
@@ -181,38 +400,4 @@ func findElement(node *dom.Node, tag string) *dom.Node {
 
 func normalizeWhitespace(value string) string {
 	return strings.Join(strings.Fields(value), " ")
-}
-
-func wrapText(text string, width, fontSize float32) []string {
-	maxRunes := int(width / (fontSize * 0.58))
-	if maxRunes < 1 {
-		maxRunes = 1
-	}
-	if utf8.RuneCountInString(text) <= maxRunes {
-		return []string{text}
-	}
-
-	var lines []string
-	remaining := []rune(text)
-	for len(remaining) > maxRunes {
-		cut := maxRunes
-		for i := maxRunes; i > maxRunes/2; i-- {
-			if unicode.IsSpace(remaining[i-1]) {
-				cut = i - 1
-				break
-			}
-		}
-		line := strings.TrimSpace(string(remaining[:cut]))
-		if line != "" {
-			lines = append(lines, line)
-		}
-		remaining = remaining[cut:]
-		for len(remaining) > 0 && unicode.IsSpace(remaining[0]) {
-			remaining = remaining[1:]
-		}
-	}
-	if line := strings.TrimSpace(string(remaining)); line != "" {
-		lines = append(lines, line)
-	}
-	return lines
 }

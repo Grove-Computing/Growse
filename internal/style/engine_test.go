@@ -44,6 +44,39 @@ p.note { color: green !important }
 	}
 }
 
+func TestComputeResolvesDisplayMarginAndPadding(t *testing.T) {
+	document := dom.NewDocument()
+	div := document.CreateElement("div", map[string]string{"class": "box"})
+	appendNode(t, document, document.Root, div)
+
+	stylesheet, err := css.Parse(strings.NewReader(`
+.box {
+  display: none;
+  margin-left: 99px;
+  margin: 1px 2px 3px 4px;
+  padding: 5px 6px 7px;
+  padding-right: 8px;
+}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	computed, ok := Compute(document, stylesheet).For(div)
+	if !ok {
+		t.Fatal("div has no computed style")
+	}
+	if computed.Display != DisplayNone {
+		t.Fatalf("display = %v, want none", computed.Display)
+	}
+	if got, want := computed.Margin, (Edges{Top: 1, Right: 2, Bottom: 3, Left: 4}); got != want {
+		t.Fatalf("margin = %#v, want %#v", got, want)
+	}
+	if got, want := computed.Padding, (Edges{Top: 5, Right: 8, Bottom: 7, Left: 6}); got != want {
+		t.Fatalf("padding = %#v, want %#v", got, want)
+	}
+}
+
 func appendNode(t *testing.T, document *dom.Document, parent, child *dom.Node) {
 	t.Helper()
 	if err := document.AppendChild(parent, child); err != nil {

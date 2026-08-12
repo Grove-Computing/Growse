@@ -2,6 +2,19 @@ package dom
 
 import "testing"
 
+func TestNodeByIDReturnsDocumentNode(t *testing.T) {
+	document := NewDocument()
+	element := document.CreateElement("a", nil)
+
+	got, ok := document.NodeByID(element.ID)
+	if !ok || got != element {
+		t.Fatalf("NodeByID(%d) = (%p, %v), want (%p, true)", element.ID, got, ok, element)
+	}
+	if got, ok := document.NodeByID(999); ok || got != nil {
+		t.Fatalf("NodeByID(999) = (%p, %v), want (nil, false)", got, ok)
+	}
+}
+
 func TestDocumentBuildsTreeAndIndexesID(t *testing.T) {
 	document := NewDocument()
 	body := document.CreateElement("BODY", nil)
