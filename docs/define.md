@@ -1969,7 +1969,7 @@ localhost
 * [x] `.go` ファイルを取得できる
 * [x] Yaegi Runtimeが起動する
 * [x] `main()` を実行できる
-* [ ] `growse/console` が利用できる
+* [x] `growse/console` が利用できる
 * [ ] `growse/dom` が利用できる
 * [ ] GoからDOM要素を取得できる
 * [ ] GoからDOMのTextを変更できる

@@ -8,10 +8,12 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"reflect"
 	"sync"
 	"testing/fstest"
 
 	runtimemodel "github.com/saku0512/growse/internal/runtime"
+	consoleapi "github.com/saku0512/growse/internal/webapi/console"
 	"github.com/traefik/yaegi/interp"
 )
 
@@ -31,7 +33,7 @@ func New() *Runtime {
 }
 
 // Load はスクリプトを検証し、実行せずにインタープリターを準備する。
-func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, _ runtimemodel.Environment) error {
+func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, environment runtimemodel.Environment) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -71,6 +73,14 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, _ run
 		return errors.New("runtime already stopped")
 	}
 	r.interpreter = interp.New(interp.Options{GoPath: ".", SourcecodeFilesystem: files})
+	console := consoleapi.New(environment.ConsoleLog)
+	if err := r.interpreter.Use(interp.Exports{
+		"growse/console/console": {
+			"Log": reflect.ValueOf(console.Log),
+		},
+	}); err != nil {
+		return fmt.Errorf("register growse/console: %w", err)
+	}
 	r.loaded = true
 	return nil
 }

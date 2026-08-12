@@ -3300,7 +3300,7 @@ Paint
 * [ ] JavaScriptは実行しない
 * [ ] Yaegi RuntimeをBrowserから抽象化できている
 * [ ] Goの `main()` を実行できる
-* [ ] `growse/console` が動作する
+* [x] `growse/console` が動作する
 * [ ] `growse/dom` が動作する
 * [ ] `GetElementByID()` が動作する
 * [ ] `SetText()` が動作する

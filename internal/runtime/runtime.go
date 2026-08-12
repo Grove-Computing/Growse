@@ -20,6 +20,7 @@ type Environment struct {
 	Document   *dom.Document
 	BaseURL    *url.URL
 	OnMutation func()
+	ConsoleLog func(message string)
 }
 
 // Runtime は1ページに属するGoスクリプトを実行する。

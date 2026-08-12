@@ -34,6 +34,30 @@ func TestRuntimeStartsMainAfterLoadingMultipleScripts(t *testing.T) {
 	}
 }
 
+func TestRuntimeExposesGrowseConsole(t *testing.T) {
+	runtime := New()
+	var messages []string
+	scripts := []runtimemodel.Script{{Source: `package main
+import "growse/console"
+func main() { console.Log("Hello from Go", 42) }`}}
+	environment := runtimemodel.Environment{ConsoleLog: func(message string) {
+		messages = append(messages, message)
+	}}
+
+	if err := runtime.Load(context.Background(), scripts, environment); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if got, want := len(messages), 1; got != want {
+		t.Fatalf("console message count = %d, want %d (%v)", got, want, messages)
+	}
+	if got, want := messages[0], "[WebGo] Hello from Go42"; got != want {
+		t.Fatalf("console message = %q, want %q", got, want)
+	}
+}
+
 func TestRuntimeLoadRequiresMainPackage(t *testing.T) {
 	runtime := New()
 	err := runtime.Load(context.Background(), []runtimemodel.Script{{
