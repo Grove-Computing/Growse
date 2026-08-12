@@ -24,7 +24,7 @@ go run ./cmd/growse
 
 ## 品質チェック
 
-GitHub Actionsでは、Linuxのraceテストと70%の最低カバレッジ、Windowsのテスト・ビルド、`go vet`、Staticcheck、actionlint、govulncheckを実行します。Go ModulesとGitHub ActionsはDependabotで週次確認します。
+GitHub Actionsでは、Linuxのraceテストと70%の最低カバレッジ、`go vet`、Staticcheck、actionlint、govulncheckを実行します。Go ModulesとGitHub ActionsはDependabotで週次確認します。
 
 ローカルでは必要な[GioのLinux依存パッケージ](https://gioui.org/doc/install/linux)を導入した上で、次のコマンドから同等の検査を実行できます。
 
