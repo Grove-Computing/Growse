@@ -1,1 +1,23 @@
 # Growse
+
+Go をクライアントサイド言語として実行する、実験的な Web ブラウザです。
+
+## 開発環境のセットアップ
+
+Go 1.26 以降と、Gio が利用する OS のグラフィックス開発ライブラリを用意します。Ubuntu / Debian 系では少なくとも Vulkan 開発ヘッダが必要です。
+
+```sh
+sudo apt-get update
+sudo apt-get install -y libvulkan-dev
+```
+
+ほかの Linux ディストリビューションを使う場合は、[Gio の Linux セットアップ手順](https://gioui.org/doc/install/linux) を参照してください。
+
+依存関係を取得して起動します。
+
+```sh
+go mod download
+go run ./cmd/growse
+```
+
+起動すると、`Growse` という空のブラウザウィンドウが表示されます。
