@@ -22,6 +22,7 @@ import (
 	"golang.org/x/exp/shiny/materialdesign/icons"
 
 	"github.com/saku0512/growse/internal/browser"
+	"github.com/saku0512/growse/internal/dom"
 	layoutengine "github.com/saku0512/growse/internal/layout"
 	paintmodel "github.com/saku0512/growse/internal/paint"
 )
@@ -72,6 +73,7 @@ type Navigator interface {
 	CanBack() bool
 	CanForward() bool
 	Page() *browser.Page
+	DispatchClick(nodeID dom.NodeID, x, y float32) bool
 }
 
 type navigationResult struct {
@@ -420,6 +422,9 @@ func (ui *BrowserUI) handleViewportClicks(gtx layout.Context, page *browser.Page
 		}
 		nodeID, ok := layoutengine.HitTest(tree, x, y)
 		if !ok {
+			continue
+		}
+		if ui.navigator.DispatchClick(nodeID, x, y) {
 			continue
 		}
 		linkURL, ok := page.LinkURL(nodeID)

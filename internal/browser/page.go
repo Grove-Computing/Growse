@@ -6,6 +6,7 @@ import (
 
 	"github.com/saku0512/growse/internal/css"
 	"github.com/saku0512/growse/internal/dom"
+	"github.com/saku0512/growse/internal/events"
 	"github.com/saku0512/growse/internal/style"
 )
 
@@ -19,6 +20,7 @@ type Page struct {
 	ContentType    string
 	Source         []byte
 	Document       *dom.Document
+	Events         *events.Dispatcher
 	Stylesheet     *css.Stylesheet
 	ComputedStyles style.Map
 	Scripts        []Script

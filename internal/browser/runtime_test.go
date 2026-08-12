@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/saku0512/growse/internal/events"
 	"github.com/saku0512/growse/internal/network"
 	runtimemodel "github.com/saku0512/growse/internal/runtime"
 )
@@ -128,5 +129,24 @@ func main() {}</script>`),
 	}
 	if mutations != 1 {
 		t.Fatalf("mutation count = %d, want 1", mutations)
+	}
+}
+
+func TestDispatchClickUsesActivePageDispatcher(t *testing.T) {
+	browser := New(nil)
+	dispatcher := events.NewDispatcher()
+	page := NewPage(mustParseURL(t, "http://localhost"))
+	page.Events = dispatcher
+	browser.SetPage(page)
+	called := false
+	dispatcher.AddEventListener(9, events.Click, func(event events.Event) {
+		called = event.X == 10 && event.Y == 20
+	})
+
+	if !browser.DispatchClick(9, 10, 20) || !called {
+		t.Fatal("DispatchClick() did not dispatch to the active page")
+	}
+	if browser.DispatchClick(10, 10, 20) {
+		t.Fatal("DispatchClick() handled a node without listeners")
 	}
 }

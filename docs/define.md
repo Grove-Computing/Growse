@@ -1973,8 +1973,8 @@ localhost
 * [x] `growse/dom` が利用できる
 * [x] GoからDOM要素を取得できる
 * [x] GoからDOMのTextを変更できる
-* [ ] クリックイベントをGoへDispatchできる
-* [ ] Goから登録した `OnClick` が実行される
+* [x] クリックイベントをGoへDispatchできる
+* [x] Goから登録した `OnClick` が実行される
 * [x] DOM Mutation後に再描画される
 * [x] JavaScriptを実行しない
 * [x] JavaScript Engineを搭載しない

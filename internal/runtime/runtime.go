@@ -6,6 +6,7 @@ import (
 	"net/url"
 
 	"github.com/saku0512/growse/internal/dom"
+	"github.com/saku0512/growse/internal/events"
 )
 
 // Script は文書内で見つかった1つのGoソースを表す。
@@ -18,6 +19,7 @@ type Script struct {
 // Environment はRuntimeへ公開するページの状態を保持する。
 type Environment struct {
 	Document   *dom.Document
+	Events     *events.Dispatcher
 	BaseURL    *url.URL
 	OnMutation func()
 	ConsoleLog func(message string)

@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	dommodel "github.com/saku0512/growse/internal/dom"
+	"github.com/saku0512/growse/internal/events"
 )
 
 func TestGetElementByIDReadsAndChangesText(t *testing.T) {
@@ -17,7 +18,7 @@ func TestGetElementByIDReadsAndChangesText(t *testing.T) {
 		t.Fatal(err)
 	}
 	mutations := 0
-	api := New(document, func() { mutations++ })
+	api := New(document, events.NewDispatcher(), func() { mutations++ })
 
 	element := api.GetElementByID("message")
 	if element == nil || element.Text() != "before" {
@@ -33,7 +34,23 @@ func TestGetElementByIDReadsAndChangesText(t *testing.T) {
 }
 
 func TestGetElementByIDReturnsNilForUnknownElement(t *testing.T) {
-	if element := New(dommodel.NewDocument(), nil).GetElementByID("unknown"); element != nil {
+	if element := New(dommodel.NewDocument(), events.NewDispatcher(), nil).GetElementByID("unknown"); element != nil {
 		t.Fatalf("GetElementByID() = %#v, want nil", element)
+	}
+}
+
+func TestOnClickRegistersHandler(t *testing.T) {
+	document := dommodel.NewDocument()
+	button := document.CreateElement("button", map[string]string{"id": "button"})
+	if err := document.AppendChild(document.Root, button); err != nil {
+		t.Fatal(err)
+	}
+	dispatcher := events.NewDispatcher()
+	element := New(document, dispatcher, nil).GetElementByID("button")
+	called := false
+	element.OnClick(func() { called = true })
+
+	if !dispatcher.Dispatch(events.Event{Type: events.Click, Target: button.ID}) || !called {
+		t.Fatal("registered click handler was not called")
 	}
 }

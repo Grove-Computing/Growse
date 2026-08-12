@@ -3306,8 +3306,8 @@ Paint
 * [x] `SetText()` が動作する
 * [x] DOM Mutationを検出できる
 * [x] Mutation後に再描画できる
-* [ ] `OnClick()` を登録できる
-* [ ] clickをGoへDispatchできる
+* [x] `OnClick()` を登録できる
+* [x] clickをGoへDispatchできる
 * [ ] Runtime Errorでブラウザ全体が終了しない
 * [ ] 外部OriginのGoコードを自動実行しない
 * [ ] Counter Demoが正常動作する

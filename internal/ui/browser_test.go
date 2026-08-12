@@ -44,6 +44,9 @@ func (navigator *stubNavigator) Reload(context.Context) (*browser.Page, error) {
 
 func (navigator *stubNavigator) CanBack() bool    { return true }
 func (navigator *stubNavigator) CanForward() bool { return true }
+func (navigator *stubNavigator) DispatchClick(dom.NodeID, float32, float32) bool {
+	return false
+}
 
 func TestToolbarHasFixedHeight(t *testing.T) {
 	ui := NewBrowserUI(nil, nil)

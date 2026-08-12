@@ -75,7 +75,7 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 	}
 	r.interpreter = interp.New(interp.Options{GoPath: ".", SourcecodeFilesystem: files})
 	console := consoleapi.New(environment.ConsoleLog)
-	dom := domapi.New(environment.Document, environment.OnMutation)
+	dom := domapi.New(environment.Document, environment.Events, environment.OnMutation)
 	if err := r.interpreter.Use(interp.Exports{
 		"growse/console/console": {
 			"Log": reflect.ValueOf(console.Log),

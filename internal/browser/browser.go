@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/saku0512/growse/internal/dom"
+	"github.com/saku0512/growse/internal/events"
 	htmlparser "github.com/saku0512/growse/internal/html"
 	"github.com/saku0512/growse/internal/network"
 	runtimemodel "github.com/saku0512/growse/internal/runtime"
@@ -61,6 +63,17 @@ func (b *Browser) Page() *Page {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	return b.page
+}
+
+// DispatchClick はアクティブページの対象ノードへクリックを配信する。
+func (b *Browser) DispatchClick(nodeID dom.NodeID, x, y float32) bool {
+	b.mu.RLock()
+	page := b.page
+	b.mu.RUnlock()
+	if page == nil || page.Events == nil {
+		return false
+	}
+	return page.Events.Dispatch(events.Event{Type: events.Click, Target: nodeID, X: x, Y: y})
 }
 
 // SetPage replaces the active page. Passing nil clears the active page.
@@ -201,6 +214,7 @@ func (b *Browser) load(ctx context.Context, pageURL *url.URL, commit historyComm
 		ContentType:    response.ContentType,
 		Source:         append([]byte(nil), response.Body...),
 		Document:       document,
+		Events:         events.NewDispatcher(),
 		Stylesheet:     stylesheet,
 		ComputedStyles: computedStyles,
 		Scripts:        scripts,
@@ -267,6 +281,7 @@ func startRuntime(ctx context.Context, factory runtimemodel.Factory, page *Page,
 	}
 	environment := runtimemodel.Environment{
 		Document: page.Document,
+		Events:   page.Events,
 		BaseURL:  cloneURL(page.URL),
 		OnMutation: func() {
 			page.ComputedStyles = style.Compute(page.Document, page.Stylesheet)

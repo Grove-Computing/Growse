@@ -1,11 +1,15 @@
 // Package dom はWebGoスクリプト向けのDOM APIを提供する。
 package dom
 
-import dommodel "github.com/saku0512/growse/internal/dom"
+import (
+	dommodel "github.com/saku0512/growse/internal/dom"
+	"github.com/saku0512/growse/internal/events"
+)
 
 // API は1ページのDocumentへアクセスする。
 type API struct {
 	document   *dommodel.Document
+	events     *events.Dispatcher
 	onMutation func()
 }
 
@@ -13,12 +17,13 @@ type API struct {
 type Element struct {
 	document   *dommodel.Document
 	id         dommodel.NodeID
+	events     *events.Dispatcher
 	onMutation func()
 }
 
 // New はDocumentに結び付いたDOM APIを生成する。
-func New(document *dommodel.Document, onMutation func()) *API {
-	return &API{document: document, onMutation: onMutation}
+func New(document *dommodel.Document, dispatcher *events.Dispatcher, onMutation func()) *API {
+	return &API{document: document, events: dispatcher, onMutation: onMutation}
 }
 
 // GetElementByID は指定したidを持つ最初の要素を返す。
@@ -30,7 +35,20 @@ func (api *API) GetElementByID(id string) *Element {
 	if !ok || node.Type != dommodel.NodeElement {
 		return nil
 	}
-	return &Element{document: api.document, id: node.ID, onMutation: api.onMutation}
+	return &Element{document: api.document, id: node.ID, events: api.events, onMutation: api.onMutation}
+}
+
+// OnClick は要素のクリックイベントへハンドラーを登録する。
+func (element *Element) OnClick(handler func()) {
+	if element == nil || element.document == nil || element.events == nil || handler == nil {
+		return
+	}
+	if _, ok := element.document.NodeByID(element.id); !ok {
+		return
+	}
+	element.events.AddEventListener(element.id, events.Click, func(events.Event) {
+		handler()
+	})
 }
 
 // Text は要素と子孫のテキストを返す。
