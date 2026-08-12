@@ -367,7 +367,12 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 
 func (ui *BrowserUI) layoutDrawText(gtx layout.Context, command paintmodel.DrawText) layout.Dimensions {
 	left := unit.Dp(command.X)
-	right := unit.Dp(32)
+	viewportWidth := float32(gtx.Constraints.Max.X) / gtx.Metric.PxPerDp
+	rightValue := viewportWidth - command.X - command.Width
+	if rightValue < 0 {
+		rightValue = 0
+	}
+	right := unit.Dp(rightValue)
 	return layout.Inset{Top: unit.Dp(command.Top), Left: left, Right: right}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		height := gtx.Dp(unit.Dp(command.Height))
 		if height < 1 {
