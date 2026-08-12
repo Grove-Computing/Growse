@@ -102,6 +102,25 @@ func TestNavigationResultUpdatesAddressAndStatus(t *testing.T) {
 	}
 }
 
+func TestDocumentViewportFillsAvailableArea(t *testing.T) {
+	pageURL, err := url.Parse("https://example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	navigator := &stubNavigator{page: &browser.Page{URL: pageURL, Document: testDocument(t)}}
+	ui := NewBrowserUI(navigator, nil)
+	gtx := layout.Context{
+		Ops:         new(op.Ops),
+		Constraints: layout.Exact(image.Pt(1000, 700)),
+		Metric:      unit.Metric{PxPerDp: 1, PxPerSp: 1},
+	}
+
+	dims := ui.layoutViewport(gtx)
+	if got, want := dims.Size, image.Pt(1000, 700); got != want {
+		t.Fatalf("document viewport size = %v, want %v", got, want)
+	}
+}
+
 func testDocument(t *testing.T) *dom.Document {
 	t.Helper()
 	document := dom.NewDocument()

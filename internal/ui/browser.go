@@ -10,6 +10,7 @@ import (
 	"image/color"
 	"image/png"
 
+	"gioui.org/font"
 	"gioui.org/layout"
 	"gioui.org/op/clip"
 	"gioui.org/op/paint"
@@ -19,6 +20,8 @@ import (
 	"golang.org/x/exp/shiny/materialdesign/icons"
 
 	"github.com/saku0512/growse/internal/browser"
+	layoutengine "github.com/saku0512/growse/internal/layout"
+	paintmodel "github.com/saku0512/growse/internal/paint"
 )
 
 //go:embed assets/gopher-blue.png
@@ -47,6 +50,7 @@ type BrowserUI struct {
 	forwardButton widget.Clickable
 	reloadButton  widget.Clickable
 	goButton      widget.Clickable
+	pageList      widget.List
 	address       widget.Editor
 	gopher        paint.ImageOp
 	backIcon      *widget.Icon
@@ -92,6 +96,7 @@ func NewBrowserUI(navigator Navigator, invalidate func()) *BrowserUI {
 	}
 	ui.address.SingleLine = true
 	ui.address.SetText(defaultURL)
+	ui.pageList.Axis = layout.Vertical
 	return ui
 }
 
@@ -292,6 +297,12 @@ func mustIcon(icon *widget.Icon, err error) *widget.Icon {
 }
 
 func (ui *BrowserUI) layoutViewport(gtx layout.Context) layout.Dimensions {
+	if ui.navigator != nil {
+		if page := ui.navigator.Page(); page != nil && page.Document != nil {
+			return ui.layoutDocument(gtx, page)
+		}
+	}
+
 	paint.Fill(gtx.Ops, color.NRGBA{R: 238, G: 243, B: 248, A: 255})
 
 	return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
@@ -335,4 +346,50 @@ func (ui *BrowserUI) layoutViewport(gtx layout.Context) layout.Dimensions {
 			)
 		})
 	})
+}
+
+func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layout.Dimensions {
+	paint.Fill(gtx.Ops, color.NRGBA{R: 255, G: 255, B: 255, A: 255})
+
+	viewportWidth := float32(gtx.Constraints.Max.X) / gtx.Metric.PxPerDp
+	tree := layoutengine.Build(page.Document, viewportWidth)
+	displayList := paintmodel.Build(tree)
+
+	return material.List(ui.theme, &ui.pageList).Layout(gtx, len(displayList.Commands), func(gtx layout.Context, index int) layout.Dimensions {
+		command, ok := displayList.Commands[index].(paintmodel.DrawText)
+		if !ok {
+			return layout.Dimensions{}
+		}
+		return ui.layoutDrawText(gtx, command)
+	})
+}
+
+func (ui *BrowserUI) layoutDrawText(gtx layout.Context, command paintmodel.DrawText) layout.Dimensions {
+	left := unit.Dp(command.X)
+	right := unit.Dp(32)
+	return layout.Inset{Top: unit.Dp(command.Top), Left: left, Right: right}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		height := gtx.Dp(unit.Dp(command.Height))
+		if height < 1 {
+			height = 1
+		}
+		gtx.Constraints.Min.Y = height
+		gtx.Constraints.Max.Y = height
+
+		label := material.Label(ui.theme, unit.Sp(command.FontSize), command.Text)
+		label.Color = rgba(command.Color)
+		label.MaxLines = 1
+		if command.Bold {
+			label.Font.Weight = font.Bold
+		}
+		return layout.W.Layout(gtx, label.Layout)
+	})
+}
+
+func rgba(value uint32) color.NRGBA {
+	return color.NRGBA{
+		R: uint8(value >> 24),
+		G: uint8(value >> 16),
+		B: uint8(value >> 8),
+		A: uint8(value),
+	}
 }
