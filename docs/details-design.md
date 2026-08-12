@@ -73,45 +73,16 @@ Growseは以下の原則に従って実装する。
 
 # 4. システム全体構成
 
-```text
-┌──────────────────────────────────────────────────────┐
-│                     Growse                           │
-│                                                      │
-│  ┌────────────────────────────────────────────────┐  │
-│  │ UI                                             │  │
-│  │ AddressBar / Back / Reload / Viewport          │  │
-│  └───────────────────────┬────────────────────────┘  │
-│                          │                           │
-│  ┌───────────────────────▼────────────────────────┐  │
-│  │ Browser                                        │  │
-│  │ Navigation / Page / History                    │  │
-│  └───────────────────────┬────────────────────────┘  │
-│                          │                           │
-│           ┌──────────────┼───────────────┐           │
-│           │              │               │           │
-│           ▼              ▼               ▼           │
-│       Network          HTML           Runtime         │
-│           │              │               │           │
-│           │              ▼               │           │
-│           │             DOM ◀─────────────┘           │
-│           │              │                           │
-│           ├── CSS ───────▼                           │
-│           │          Style Engine                    │
-│           │              │                           │
-│           │              ▼                           │
-│           │          Layout Engine                   │
-│           │              │                           │
-│           │              ▼                           │
-│           │          Paint Engine                    │
-│           │              │                           │
-│           │              ▼                           │
-│           │         Display List                     │
-│           │              │                           │
-│           │              ▼                           │
-│           │          Gio Renderer                    │
-│           │                                          │
-│           └── Image Resource ────────────────────────┘
-└──────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    UI[UI<br/>Address Bar / Back / Reload / Viewport] --> Browser[Browser<br/>Navigation / Page / History]
+    Browser --> Network --> CSS[CSS]
+    Browser --> HTML --> DOM
+    Browser --> Runtime --> DOM
+    CSS --> Style[Style Engine]
+    DOM --> Style
+    Style --> Layout[Layout Engine] --> Paint[Paint Engine] --> DisplayList[Display List] --> Renderer[Gio Renderer]
+    Network --> Images[Image Resource] --> Renderer
 ```
 
 ---
@@ -255,30 +226,16 @@ growse/
 
 パッケージ間の依存方向を以下に限定する。
 
-```text
-UI
- ↓
-Browser
- ↓
-DOM / Network / Runtime
- ↓
-Style
- ↓
-Layout
- ↓
-Paint
- ↓
-Renderer
+```mermaid
+flowchart TD
+    UI --> Browser --> Core[DOM / Network / Runtime] --> Style --> Layout --> Paint --> Renderer
 ```
 
 ただしRuntimeはWeb APIを介してDOMへアクセスする。
 
-```text
-Runtime
- ↓
-Web API
- ↓
-DOM
+```mermaid
+flowchart TD
+    Runtime --> WebAPI[Web API] --> DOM
 ```
 
 以下は禁止する。
@@ -415,40 +372,12 @@ func (b *Browser) Navigate(
 
 # 13. Navigation処理
 
-```text
-Navigate()
- ↓
-URL parse
- ↓
-現在Runtime停止
- ↓
-HTTP GET
- ↓
-Content-Type確認
- ↓
-HTML parse
- ↓
-DOM生成
- ↓
-stylesheet探索
- ↓
-CSS取得
- ↓
-CSS parse
- ↓
-Style計算
- ↓
-Layout
- ↓
-Paint
- ↓
-Page設定
- ↓
-History追加
- ↓
-Go Script探索
- ↓
-Runtime開始
+```mermaid
+flowchart TD
+    Navigate --> URLParse[URL parse] --> Stop[現在Runtime停止] --> HTTP[HTTP GET] --> ContentType[Content-Type確認]
+    ContentType --> HTMLParse[HTML parse] --> DOM[DOM生成] --> Stylesheet[stylesheet探索] --> CSSFetch[CSS取得]
+    CSSFetch --> CSSParse[CSS parse] --> Style[Style計算] --> Layout --> Paint --> Page[Page設定]
+    Page --> History[History追加] --> Script[Go Script探索] --> Runtime[Runtime開始]
 ```
 
 ---
@@ -765,18 +694,9 @@ func (e *Element) Children() []*Element
 
 # 32. SetText処理
 
-```text
-SetText()
- ↓
-既存Text Child確認
- ↓
-Text更新
- ↓
-Mutation生成
- ↓
-Document Callback
- ↓
-Page Dirty
+```mermaid
+flowchart TD
+    SetText --> Existing[既存Text Child確認] --> Update[Text更新] --> Mutation[Mutation生成] --> Callback[Document Callback] --> Dirty[Page Dirty]
 ```
 
 ---
@@ -1141,18 +1061,9 @@ type StyledNode struct {
 
 # 51. Style計算
 
-```text
-DOM Node
- ↓
-UA Style
- ↓
-Selector Matching
- ↓
-Specificity計算
- ↓
-Cascade
- ↓
-Computed Style
+```mermaid
+flowchart TD
+    DOMNode[DOM Node] --> UA[UA Style] --> Matching[Selector Matching] --> Specificity[Specificity計算] --> Cascade --> Computed[Computed Style]
 ```
 
 ---
@@ -1680,18 +1591,9 @@ MVPではイベントバブリングを実装しない。
 
 `<a>` はGrowseネイティブイベントとして処理する。
 
-```text
-Click
- ↓
-Hit Test
- ↓
-Node
- ↓
-<a>判定
- ↓
-href取得
- ↓
-Navigate
+```mermaid
+flowchart TD
+    Click --> HitTest[Hit Test] --> Node --> Link[&lt;a&gt;判定] --> Href[href取得] --> Navigate
 ```
 
 Go側にclick handlerが登録されている場合は、MVPではGo handlerを先に実行してからNavigateしてよい。
@@ -2085,22 +1987,9 @@ Navigate / Close時にcancelする。
 
 UI Event Loop内で以下を処理する。
 
-```text
-Input
- ↓
-Navigation/Event
- ↓
-DOM Mutation
- ↓
-Dirty確認
- ↓
-Style
- ↓
-Layout
- ↓
-Paint
- ↓
-Render
+```mermaid
+flowchart TD
+    Input --> Event[Navigation/Event] --> Mutation[DOM Mutation] --> Dirty[Dirty確認] --> Style --> Layout --> Paint --> Render
 ```
 
 ---
@@ -3586,30 +3475,12 @@ defer
 
 Growseでは、以下の境界を維持する。
 
-```text
-┌───────────────────┐
-│ Existing Library  │
-│                   │
-│ Gio               │ → Window / Drawing
-│ x/net/html        │ → HTML Syntax
-│ tdewolff/parse    │ → CSS Syntax
-│ Yaegi             │ → Go Execution
-└─────────┬─────────┘
-          │
-          ▼
-┌───────────────────┐
-│      Growse       │
-│                   │
-│ DOM               │
-│ Style             │
-│ Cascade           │
-│ Layout            │
-│ Paint             │
-│ Events            │
-│ Browser API       │
-│ Navigation        │
-│ Runtime Lifecycle │
-└───────────────────┘
+```mermaid
+flowchart TD
+    Gio[Gio<br/>Window / Drawing] --> Growse
+    HTMLParser[x/net/html<br/>HTML Syntax] --> Growse
+    CSSParser[tdewolff/parse<br/>CSS Syntax] --> Growse
+    Yaegi[Yaegi<br/>Go Execution] --> Growse[Growse<br/>DOM / Style / Cascade / Layout / Paint / Events / Browser API / Navigation / Runtime Lifecycle]
 ```
 
 既存ライブラリは**低レベルな部品としてのみ利用し、Webブラウザとしての挙動はGrowse自身が定義・制御する。**

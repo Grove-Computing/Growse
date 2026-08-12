@@ -32,16 +32,13 @@ GrowseはJavaScriptエンジンを搭載しない。
 
 また、GoコードをWebAssemblyへコンパイルして実行する方式も採用しない。
 
-```text
-HTML
-CSS
-Go Source
-    ↓
-Growse
-    ↓
-Go Runtime
-    ↓
-DOM / Event / Browser API
+```mermaid
+flowchart TD
+    HTML[HTML] --> Growse[Growse]
+    CSS[CSS] --> Growse
+    GoSource[Go Source] --> Growse
+    Growse --> Runtime[Go Runtime]
+    Runtime --> BrowserAPI[DOM / Event / Browser API]
 ```
 
 という独自のWeb実行環境を提供する。
@@ -165,38 +162,13 @@ func main() {
 
 ### 期待動作
 
-```text
-URL入力
- ↓
-index.html取得
- ↓
-HTML解析
- ↓
-DOM生成
- ↓
-style.css取得
- ↓
-CSS解析
- ↓
-Layout
- ↓
-画面描画
- ↓
-app.go取得
- ↓
-Go Runtimeでmain()実行
- ↓
-イベントハンドラ登録
- ↓
-ユーザーが「+」をクリック
- ↓
-Goイベントハンドラ実行
- ↓
-DOM更新
- ↓
-再Layout
- ↓
-再描画
+```mermaid
+flowchart TD
+    URL[URL入力] --> HTMLFetch[index.html取得] --> HTMLParse[HTML解析] --> DOM[DOM生成]
+    DOM --> CSSFetch[style.css取得] --> CSSParse[CSS解析] --> Layout --> Render[画面描画]
+    Render --> GoFetch[app.go取得] --> Main[Go Runtimeで main() 実行] --> Listener[イベントハンドラ登録]
+    Listener --> Click[ユーザーが「+」をクリック] --> Handler[Goイベントハンドラ実行]
+    Handler --> Mutation[DOM更新] --> Relayout[再Layout] --> Rerender[再描画]
 ```
 
 ---
@@ -244,16 +216,9 @@ GioをHTMLレンダリングエンジンとして使用してはならない。
 
 Webページは、
 
-```text
-DOM
- ↓
-Growse Style Engine
- ↓
-Growse Layout Engine
- ↓
-Growse Paint Engine
- ↓
-Gio
+```mermaid
+flowchart TD
+    DOM --> Style[Growse Style Engine] --> Layout[Growse Layout Engine] --> Paint[Growse Paint Engine] --> Gio
 ```
 
 によって描画する。
@@ -330,22 +295,16 @@ GoコードをWebAssemblyへ変換して実行してはならない。
 
 禁止する構成：
 
-```text
-Go
- ↓
-WebAssembly
- ↓
-WASM Runtime
+```mermaid
+flowchart TD
+    Go --> WebAssembly --> WASMRuntime[WASM Runtime]
 ```
 
 採用する構成：
 
-```text
-Go Source
- ↓
-Growse Go Runtime
- ↓
-Growse Browser API
+```mermaid
+flowchart TD
+    GoSource[Go Source] --> Runtime[Growse Go Runtime] --> API[Growse Browser API]
 ```
 
 ---
@@ -440,14 +399,9 @@ TLSについてはGo標準ライブラリを利用する。
 
 最低限以下を実装する。
 
-```text
-Page A
- ↓
-Page B
- ↓
-Back
- ↓
-Page A
+```mermaid
+flowchart LR
+    PageA[Page A] --> PageB[Page B] --> Back --> PageAReturn[Page A]
 ```
 
 MVPでは、
@@ -473,16 +427,9 @@ golang.org/x/net/html
 
 処理：
 
-```text
-HTML Source
- ↓
-x/net/html
- ↓
-html.Node
- ↓
-Growse DOM Converter
- ↓
-Growse DOM
+```mermaid
+flowchart TD
+    Source[HTML Source] --> Parser[x/net/html] --> HTMLNode[html.Node] --> Converter[Growse DOM Converter] --> DOM[Growse DOM]
 ```
 
 ---
@@ -591,20 +538,10 @@ github.com/tdewolff/parse/v2/css
 
 ただしライブラリの役割は**CSS構文解析まで**とする。
 
-```text
-CSS
- ↓
-tdewolff parser
- ↓
-Growse CSS Rule
- ↓
-Selector Matching
- ↓
-Specificity
- ↓
-Cascade
- ↓
-Computed Style
+```mermaid
+flowchart TD
+    CSS --> Parser[tdewolff parser] --> Rule[Growse CSS Rule] --> Matching[Selector Matching]
+    Matching --> Specificity --> Cascade --> Computed[Computed Style]
 ```
 
 後半はGrowse独自実装とする。
@@ -793,12 +730,10 @@ font-weight
 
 LayoutはGrowse独自実装とする。
 
-```text
-Growse DOM
-+
-Computed Style
- ↓
-Layout Tree
+```mermaid
+flowchart TD
+    DOM[Growse DOM] --> LayoutTree[Layout Tree]
+    Style[Computed Style] --> LayoutTree
 ```
 
 ---
@@ -901,14 +836,9 @@ Layout Engineから直接Gioを呼ばない。
 
 一度Display Listへ変換する。
 
-```text
-Layout Tree
- ↓
-Paint Engine
- ↓
-Display List
- ↓
-Gio Renderer
+```mermaid
+flowchart TD
+    LayoutTree[Layout Tree] --> PaintEngine[Paint Engine] --> DisplayList[Display List] --> Renderer[Gio Renderer]
 ```
 
 ---
@@ -991,16 +921,9 @@ Horizontal Scrollは任意とする。
 
 クリック位置からDOM要素を特定できること。
 
-```text
-Mouse X/Y
- ↓
-Layout Tree
- ↓
-Hit Testing
- ↓
-NodeID
- ↓
-DOM Element
+```mermaid
+flowchart TD
+    Pointer[Mouse X/Y] --> LayoutTree[Layout Tree] --> HitTest[Hit Testing] --> NodeID --> Element[DOM Element]
 ```
 
 主に、
@@ -1024,18 +947,9 @@ DOM Element
 
 処理：
 
-```text
-Click
- ↓
-Hit Test
- ↓
-<a>
- ↓
-href
- ↓
-URL resolve
- ↓
-Navigate
+```mermaid
+flowchart TD
+    Click --> HitTest[Hit Test] --> Link[&lt;a&gt;] --> Href[href] --> Resolve[URL resolve] --> Navigate
 ```
 
 ---
@@ -1069,14 +983,9 @@ MVPでは外部ファイル形式を優先する。
 
 MVPのGo実行エンジンとしてYaegiを使用する。
 
-```text
-Go Source
- ↓
-Yaegi
- ↓
-Growse Host API
- ↓
-DOM
+```mermaid
+flowchart TD
+    Source[Go Source] --> Yaegi --> API[Growse Host API] --> DOM
 ```
 
 ただしGrowse内部ではYaegiへ直接依存させない。
@@ -1253,18 +1162,9 @@ element.On(
 
 処理フロー：
 
-```text
-Mouse Click
- ↓
-Gio Input
- ↓
-Hit Testing
- ↓
-NodeID
- ↓
-Growse Event System
- ↓
-Go Event Handler
+```mermaid
+flowchart TD
+    Click[Mouse Click] --> Input[Gio Input] --> HitTest[Hit Testing] --> NodeID --> Events[Growse Event System] --> Handler[Go Event Handler]
 ```
 
 ---
@@ -1273,20 +1173,10 @@ Go Event Handler
 
 GoからDOMが変更された場合、
 
-```text
-Go Runtime
- ↓
-DOM Mutation
- ↓
-Dirty Flag
- ↓
-Style Calculation
- ↓
-Layout
- ↓
-Paint
- ↓
-Gio
+```mermaid
+flowchart TD
+    Runtime[Go Runtime] --> Mutation[DOM Mutation] --> Dirty[Dirty Flag]
+    Dirty --> Style[Style Calculation] --> Layout --> Paint --> Gio
 ```
 
 によって画面へ反映する。
@@ -1540,45 +1430,14 @@ JavaScript
 
 # 57. アーキテクチャ
 
-```text
-                        Internet
-                           │
-                           ▼
-                     ┌──────────┐
-                     │ net/http │
-                     └────┬─────┘
-                          │
-           ┌──────────────┼─────────────┐
-           │              │             │
-           ▼              ▼             ▼
-        HTML            CSS           app.go
-           │              │             │
-           ▼              ▼             ▼
-      x/net/html      tdewolff        Runtime
-           │              │          Interface
-           ▼              ▼             │
-      DOM Converter   CSS Rules          ▼
-           │              │           Yaegi
-           ▼              │             │
-      Growse DOM ◀────────┘             │
-           ▲                            │
-           │                            │
-           └────── Growse Web API ──────┘
-           │
-           ▼
-      Style Engine
-           │
-           ▼
-      Layout Engine
-           │
-           ▼
-       Display List
-           │
-           ▼
-       Gio Renderer
-           │
-           ▼
-          GPU
+```mermaid
+flowchart TD
+    Internet --> HTTP[net/http]
+    HTTP --> HTML[HTML] & CSS[CSS] & Go[app.go]
+    HTML --> HTMLParser[x/net/html] --> Converter[DOM Converter] --> DOM[Growse DOM]
+    CSS --> CSSParser[tdewolff] --> Rules[CSS Rules] --> DOM
+    Go --> RuntimeInterface[Runtime Interface] --> Yaegi --> WebAPI[Growse Web API] --> DOM
+    DOM --> Style[Style Engine] --> Layout[Layout Engine] --> DisplayList[Display List] --> Renderer[Gio Renderer] --> GPU
 ```
 
 ---
