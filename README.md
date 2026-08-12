@@ -20,4 +20,9 @@ go mod download
 go run ./cmd/growse
 ```
 
-起動すると、`Growse` という空のブラウザウィンドウが表示されます。
+起動すると、Back・Reload・URL入力欄・Gopher ボタンを備えたブラウザウィンドウが表示されます。Navigation は次の実装段階です。
+
+## Go Gopher のクレジット
+
+The Go Gopher was designed by Renée French.
+The Go Gopher is licensed under the Creative Commons Attribution 4.0 License.
