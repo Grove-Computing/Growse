@@ -1,13 +1,13 @@
 package browser
 
-import "net/url"
+import (
+	"net/url"
+
+	runtimemodel "github.com/saku0512/growse/internal/runtime"
+)
 
 // Script is one Go source discovered in document order.
-type Script struct {
-	SourceURL *url.URL
-	Source    string
-	Inline    bool
-}
+type Script = runtimemodel.Script
 
 // IsTrustedOrigin reports whether automatic Go execution is permitted for u.
 func IsTrustedOrigin(u *url.URL) bool {

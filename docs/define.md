@@ -1967,8 +1967,8 @@ localhost
 * [x] Reloadが動作する
 * [x] `<script type="text/go">` を認識できる
 * [x] `.go` ファイルを取得できる
-* [ ] Yaegi Runtimeが起動する
-* [ ] `main()` を実行できる
+* [x] Yaegi Runtimeが起動する
+* [x] `main()` を実行できる
 * [ ] `growse/console` が利用できる
 * [ ] `growse/dom` が利用できる
 * [ ] GoからDOM要素を取得できる

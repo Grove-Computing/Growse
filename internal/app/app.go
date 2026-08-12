@@ -10,6 +10,8 @@ import (
 
 	"github.com/saku0512/growse/internal/browser"
 	"github.com/saku0512/growse/internal/network"
+	runtimemodel "github.com/saku0512/growse/internal/runtime"
+	"github.com/saku0512/growse/internal/runtime/yaegi"
 	"github.com/saku0512/growse/internal/ui"
 )
 
@@ -32,7 +34,10 @@ func Run() {
 
 func runWindow(window *gioapp.Window) error {
 	var ops op.Ops
-	browserState := browser.New(network.NewClient())
+	browserState := browser.NewWithRuntimeFactory(network.NewClient(), func() runtimemodel.Runtime {
+		return yaegi.New()
+	})
+	defer browserState.Close()
 	browserUI := ui.NewBrowserUI(browserState, window.Invalidate)
 	defer browserUI.Close()
 

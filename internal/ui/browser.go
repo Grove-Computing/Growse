@@ -201,6 +201,11 @@ func (ui *BrowserUI) consumeNavigationResult() {
 			if len(result.page.ScriptErrors) > 0 {
 				ui.status += fmt.Sprintf(" · Go script error %d件", len(result.page.ScriptErrors))
 			}
+			if result.page.RuntimeStarted {
+				ui.status += " · Go Runtime起動済み"
+			} else if result.page.RuntimeError != "" {
+				ui.status += " · Go Runtimeエラー: " + result.page.RuntimeError
+			}
 		default:
 			return
 		}

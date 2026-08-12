@@ -11,8 +11,8 @@ import (
 
 // Page holds the state of one loaded document.
 //
-// Document, stylesheet, layout tree, display list, scripts, and runtime state
-// are intentionally added only after their corresponding packages exist.
+// Runtimeの状態はスクリプト取得エラーと分けて保持し、Goコードを実行できない場合も
+// ページの表示を継続できるようにする。
 type Page struct {
 	URL            *url.URL
 	StatusCode     int
@@ -23,6 +23,8 @@ type Page struct {
 	ComputedStyles style.Map
 	Scripts        []Script
 	ScriptErrors   []string
+	RuntimeStarted bool
+	RuntimeError   string
 }
 
 // NewPage creates a page for pageURL. A nil URL is allowed for documents such

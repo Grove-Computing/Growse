@@ -5,6 +5,7 @@ go 1.26.5
 require (
 	gioui.org v0.10.2
 	github.com/tdewolff/parse/v2 v2.8.13
+	github.com/traefik/yaegi v0.16.1
 	golang.org/x/exp/shiny v0.0.0-20250408133849-7e4ce0ab07d0
 	golang.org/x/net v0.55.0
 )

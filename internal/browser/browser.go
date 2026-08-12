@@ -14,6 +14,7 @@ import (
 
 	htmlparser "github.com/saku0512/growse/internal/html"
 	"github.com/saku0512/growse/internal/network"
+	runtimemodel "github.com/saku0512/growse/internal/runtime"
 	"github.com/saku0512/growse/internal/style"
 )
 
@@ -24,19 +25,26 @@ type ResourceLoader interface {
 
 // Browser owns the state for one browser window.
 //
-// The MVP supports one active page and a linear navigation history. The Go
-// runtime will be added as a separate responsibility in a later step.
+// MVPでは1つのアクティブページ、線形の閲覧履歴、信頼済みページごとに
+// 独立した1つのGo Runtimeを保持する。
 type Browser struct {
-	mu           sync.RWMutex
-	page         *Page
-	client       ResourceLoader
-	navigationID uint64
-	history      history
+	mu             sync.RWMutex
+	page           *Page
+	client         ResourceLoader
+	runtimeFactory runtimemodel.Factory
+	activeRuntime  runtimemodel.Runtime
+	navigationID   uint64
+	history        history
 }
 
 // New creates a browser with no page loaded.
 func New(client ResourceLoader) *Browser {
-	return &Browser{client: client, history: newHistory()}
+	return NewWithRuntimeFactory(client, nil)
+}
+
+// NewWithRuntimeFactory は信頼済みページのスクリプトを実行するBrowserを生成する。
+func NewWithRuntimeFactory(client ResourceLoader, factory runtimemodel.Factory) *Browser {
+	return &Browser{client: client, runtimeFactory: factory, history: newHistory()}
 }
 
 // Page returns the currently active page, or nil before the first successful
@@ -50,14 +58,32 @@ func (b *Browser) Page() *Page {
 // SetPage replaces the active page. Passing nil clears the active page.
 func (b *Browser) SetPage(page *Page) {
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	b.navigationID++
+	activeRuntime := b.activeRuntime
+	b.activeRuntime = nil
 	b.page = page
 	if page == nil {
 		b.history = newHistory()
 	} else {
 		b.history.reset(page.URL)
 	}
+	b.mu.Unlock()
+	if activeRuntime != nil {
+		_ = activeRuntime.Stop()
+	}
+}
+
+// Close はアクティブページに属するRuntimeを停止する。
+func (b *Browser) Close() error {
+	b.mu.Lock()
+	b.navigationID++
+	activeRuntime := b.activeRuntime
+	b.activeRuntime = nil
+	b.mu.Unlock()
+	if activeRuntime != nil {
+		return activeRuntime.Stop()
+	}
+	return nil
 }
 
 // Navigate retrieves an HTML document and makes it the active page. The
@@ -130,6 +156,7 @@ func (b *Browser) load(ctx context.Context, pageURL *url.URL, commit historyComm
 	b.navigationID++
 	navigationID := b.navigationID
 	client := b.client
+	runtimeFactory := b.runtimeFactory
 	b.mu.Unlock()
 
 	if client == nil {
@@ -170,11 +197,23 @@ func (b *Browser) load(ctx context.Context, pageURL *url.URL, commit historyComm
 		Scripts:        scripts,
 		ScriptErrors:   scriptErrors,
 	}
+	pageRuntime := startRuntime(ctx, runtimeFactory, page)
+	if err := ctx.Err(); err != nil {
+		if pageRuntime != nil {
+			_ = pageRuntime.Stop()
+		}
+		return nil, err
+	}
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	if navigationID != b.navigationID {
+		b.mu.Unlock()
+		if pageRuntime != nil {
+			_ = pageRuntime.Stop()
+		}
 		return nil, context.Canceled
 	}
+	previousRuntime := b.activeRuntime
+	b.activeRuntime = pageRuntime
 	b.page = page
 	switch commit {
 	case historyPush:
@@ -186,7 +225,57 @@ func (b *Browser) load(ctx context.Context, pageURL *url.URL, commit historyComm
 		b.history.index = historyIndex
 		b.history.replace(page.URL)
 	}
+	b.mu.Unlock()
+	if previousRuntime != nil {
+		_ = previousRuntime.Stop()
+	}
 	return page, nil
+}
+
+func startRuntime(ctx context.Context, factory runtimemodel.Factory, page *Page) runtimemodel.Runtime {
+	if factory == nil || page == nil || len(page.Scripts) == 0 {
+		return nil
+	}
+	if !IsTrustedOrigin(page.URL) {
+		page.RuntimeError = fmt.Sprintf("blocked Go script execution from untrusted origin: %s", page.URL.Redacted())
+		return nil
+	}
+	for _, script := range page.Scripts {
+		if !IsTrustedOrigin(script.SourceURL) {
+			page.RuntimeError = fmt.Sprintf("blocked Go script execution from untrusted origin: %s", runtimeOrigin(script.SourceURL))
+			return nil
+		}
+	}
+	if len(page.ScriptErrors) != 0 {
+		page.RuntimeError = "Go script loading failed; runtime was not started"
+		return nil
+	}
+
+	pageRuntime := factory()
+	if pageRuntime == nil {
+		page.RuntimeError = "Go runtime factory returned nil"
+		return nil
+	}
+	environment := runtimemodel.Environment{Document: page.Document, BaseURL: cloneURL(page.URL)}
+	if err := pageRuntime.Load(ctx, page.Scripts, environment); err != nil {
+		page.RuntimeError = fmt.Sprintf("load Go runtime: %v", err)
+		_ = pageRuntime.Stop()
+		return nil
+	}
+	if err := pageRuntime.Start(ctx); err != nil {
+		page.RuntimeError = fmt.Sprintf("start Go runtime: %v", err)
+		_ = pageRuntime.Stop()
+		return nil
+	}
+	page.RuntimeStarted = true
+	return pageRuntime
+}
+
+func runtimeOrigin(sourceURL *url.URL) string {
+	if sourceURL == nil {
+		return "unknown"
+	}
+	return sourceURL.Redacted()
 }
 
 func normalizeURL(rawURL string) (*url.URL, error) {
