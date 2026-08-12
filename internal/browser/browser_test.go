@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"testing"
 
+	"github.com/saku0512/growse/internal/dom"
 	"github.com/saku0512/growse/internal/network"
 )
 
@@ -200,6 +201,36 @@ func TestNewPageCopiesURL(t *testing.T) {
 
 	if got, want := page.URL.String(), "https://example.com/original"; got != want {
 		t.Fatalf("page URL = %q, want %q", got, want)
+	}
+}
+
+func TestPageLinkURLResolvesNearestAnchor(t *testing.T) {
+	document := dom.NewDocument()
+	anchor := document.CreateElement("a", map[string]string{"href": "../next?q=1"})
+	span := document.CreateElement("span", nil)
+	text := document.CreateText("Next")
+	for _, edge := range [][2]*dom.Node{{document.Root, anchor}, {anchor, span}, {span, text}} {
+		if err := document.AppendChild(edge[0], edge[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	page := &Page{URL: mustParseURL(t, "https://example.com/docs/current"), Document: document}
+
+	resolved, ok := page.LinkURL(span.ID)
+	if !ok || resolved.String() != "https://example.com/next?q=1" {
+		t.Fatalf("LinkURL() = (%v, %v), want resolved relative URL", resolved, ok)
+	}
+}
+
+func TestPageLinkURLRejectsUnsupportedScheme(t *testing.T) {
+	document := dom.NewDocument()
+	anchor := document.CreateElement("a", map[string]string{"href": "javascript:alert(1)"})
+	if err := document.AppendChild(document.Root, anchor); err != nil {
+		t.Fatal(err)
+	}
+	page := &Page{URL: mustParseURL(t, "https://example.com"), Document: document}
+	if resolved, ok := page.LinkURL(anchor.ID); ok || resolved != nil {
+		t.Fatalf("LinkURL() = (%v, %v), want unsupported scheme rejected", resolved, ok)
 	}
 }
 

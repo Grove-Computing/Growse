@@ -14,6 +14,7 @@ import (
 
 	"github.com/saku0512/growse/internal/browser"
 	"github.com/saku0512/growse/internal/dom"
+	paintmodel "github.com/saku0512/growse/internal/paint"
 )
 
 type stubNavigator struct {
@@ -118,6 +119,21 @@ func TestDocumentViewportFillsAvailableArea(t *testing.T) {
 	dims := ui.layoutViewport(gtx)
 	if got, want := dims.Size, image.Pt(1000, 700); got != want {
 		t.Fatalf("document viewport size = %v, want %v", got, want)
+	}
+}
+
+func TestDocumentPointIncludesListScrollOffset(t *testing.T) {
+	ui := NewBrowserUI(nil, nil)
+	ui.pageList.Position.First = 1
+	ui.pageList.Position.Offset = 12
+	displayList := &paintmodel.DisplayList{Commands: []paintmodel.Command{
+		paintmodel.DrawText{Y: 32, Top: 32},
+		paintmodel.DrawText{Y: 70, Top: 10},
+	}}
+
+	x, y, ok := ui.documentPoint(image.Pt(40, 18), displayList, 2)
+	if !ok || x != 20 || y != 75 {
+		t.Fatalf("documentPoint() = (%v, %v, %v), want (20, 75, true)", x, y, ok)
 	}
 }
 

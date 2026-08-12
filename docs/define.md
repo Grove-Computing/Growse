@@ -1962,7 +1962,7 @@ localhost
 * [x] Gio RendererでDisplay Listを描画できる
 * [x] 縦スクロールできる
 * [x] Hit Testingが動作する
-* [ ] `<a>` をクリックしてページ遷移できる
+* [x] `<a>` をクリックしてページ遷移できる
 * [ ] Backが動作する
 * [x] Reloadが動作する
 * [ ] `<script type="text/go">` を認識できる

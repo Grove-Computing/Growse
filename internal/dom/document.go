@@ -10,6 +10,7 @@ type Document struct {
 	Root *Node
 
 	byID   map[string]*Node
+	nodes  map[NodeID]*Node
 	nextID NodeID
 }
 
@@ -17,10 +18,20 @@ type Document struct {
 func NewDocument() *Document {
 	document := &Document{
 		byID:   make(map[string]*Node),
+		nodes:  make(map[NodeID]*Node),
 		nextID: 1,
 	}
 	document.Root = document.newNode(NodeDocument)
 	return document
+}
+
+// NodeByID returns the node with the internal document-scoped identifier.
+func (d *Document) NodeByID(id NodeID) (*Node, bool) {
+	if d == nil {
+		return nil, false
+	}
+	node, ok := d.nodes[id]
+	return node, ok
 }
 
 // CreateElement creates an unattached element owned by the document.
@@ -88,6 +99,7 @@ func (d *Document) Title() string {
 func (d *Document) newNode(nodeType NodeType) *Node {
 	node := &Node{ID: d.nextID, Type: nodeType, document: d}
 	d.nextID++
+	d.nodes[node.ID] = node
 	return node
 }
 

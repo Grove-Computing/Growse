@@ -11,6 +11,8 @@ import (
 	"image/png"
 
 	"gioui.org/font"
+	"gioui.org/gesture"
+	"gioui.org/io/pointer"
 	"gioui.org/layout"
 	"gioui.org/op/clip"
 	"gioui.org/op/paint"
@@ -51,6 +53,7 @@ type BrowserUI struct {
 	reloadButton  widget.Clickable
 	goButton      widget.Clickable
 	pageList      widget.List
+	viewportClick gesture.Click
 	address       widget.Editor
 	gopher        paint.ImageOp
 	backIcon      *widget.Icon
@@ -172,6 +175,7 @@ func (ui *BrowserUI) consumeNavigationResult() {
 			}
 
 			ui.address.SetText(result.page.URL.String())
+			ui.pageList.Position = layout.Position{}
 			ui.pageTitle = result.page.URL.Host
 			domSummary := "DOM未生成"
 			if result.page.Document != nil {
@@ -355,14 +359,64 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 	tree := layoutengine.Build(page.Document, page.ComputedStyles, viewportWidth)
 	displayList := paintmodel.Build(tree)
 	paint.Fill(gtx.Ops, rgba(displayList.Background))
+	ui.handleViewportClicks(gtx, page, tree, displayList)
 
-	return material.List(ui.theme, &ui.pageList).Layout(gtx, len(displayList.Commands), func(gtx layout.Context, index int) layout.Dimensions {
+	area := clip.Rect{Max: gtx.Constraints.Max}.Push(gtx.Ops)
+	dimensions := material.List(ui.theme, &ui.pageList).Layout(gtx, len(displayList.Commands), func(gtx layout.Context, index int) layout.Dimensions {
 		command, ok := displayList.Commands[index].(paintmodel.DrawText)
 		if !ok {
 			return layout.Dimensions{}
 		}
 		return ui.layoutDrawText(gtx, command)
 	})
+	pass := pointer.PassOp{}.Push(gtx.Ops)
+	ui.viewportClick.Add(gtx.Ops)
+	pass.Pop()
+	area.Pop()
+	return dimensions
+}
+
+func (ui *BrowserUI) handleViewportClicks(gtx layout.Context, page *browser.Page, tree *layoutengine.Tree, displayList *paintmodel.DisplayList) {
+	for {
+		click, ok := ui.viewportClick.Update(gtx.Source)
+		if !ok {
+			return
+		}
+		if click.Kind != gesture.KindClick || ui.pageList.List.Dragging() {
+			continue
+		}
+		x, y, ok := ui.documentPoint(click.Position, displayList, gtx.Metric.PxPerDp)
+		if !ok {
+			continue
+		}
+		nodeID, ok := layoutengine.HitTest(tree, x, y)
+		if !ok {
+			continue
+		}
+		linkURL, ok := page.LinkURL(nodeID)
+		if !ok {
+			continue
+		}
+		ui.startNavigation(linkURL.String())
+	}
+}
+
+func (ui *BrowserUI) documentPoint(position image.Point, displayList *paintmodel.DisplayList, pixelsPerDP float32) (float32, float32, bool) {
+	if displayList == nil || pixelsPerDP <= 0 || len(displayList.Commands) == 0 {
+		return 0, 0, false
+	}
+	first := ui.pageList.Position.First
+	if first < 0 || first >= len(displayList.Commands) {
+		return 0, 0, false
+	}
+	command, ok := displayList.Commands[first].(paintmodel.DrawText)
+	if !ok {
+		return 0, 0, false
+	}
+	firstDocumentY := command.Y - command.Top
+	x := float32(position.X) / pixelsPerDP
+	y := firstDocumentY + float32(position.Y+ui.pageList.Position.Offset)/pixelsPerDP
+	return x, y, true
 }
 
 func (ui *BrowserUI) layoutDrawText(gtx layout.Context, command paintmodel.DrawText) layout.Dimensions {

@@ -2,6 +2,7 @@ package browser
 
 import (
 	"net/url"
+	"strings"
 
 	"github.com/saku0512/growse/internal/css"
 	"github.com/saku0512/growse/internal/dom"
@@ -26,6 +27,37 @@ type Page struct {
 // as an in-memory error page that do not have a network location.
 func NewPage(pageURL *url.URL) *Page {
 	return &Page{URL: cloneURL(pageURL)}
+}
+
+// LinkURL resolves the nearest anchor at nodeID against the page URL.
+func (p *Page) LinkURL(nodeID dom.NodeID) (*url.URL, bool) {
+	if p == nil || p.URL == nil || p.Document == nil {
+		return nil, false
+	}
+	node, ok := p.Document.NodeByID(nodeID)
+	if !ok {
+		return nil, false
+	}
+	for current := node; current != nil; current = current.Parent {
+		if current.Type != dom.NodeElement || current.TagName != "a" {
+			continue
+		}
+		href, ok := current.Attribute("href")
+		href = strings.TrimSpace(href)
+		if !ok || href == "" {
+			return nil, false
+		}
+		reference, err := url.Parse(href)
+		if err != nil {
+			return nil, false
+		}
+		resolved := p.URL.ResolveReference(reference)
+		if resolved.Scheme != "http" && resolved.Scheme != "https" {
+			return nil, false
+		}
+		return resolved, true
+	}
+	return nil, false
 }
 
 func cloneURL(source *url.URL) *url.URL {
