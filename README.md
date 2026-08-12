@@ -20,7 +20,7 @@ go mod download
 go run ./cmd/growse
 ```
 
-起動すると、Back・Reload・URL入力欄・Gopher ボタンを備えたブラウザウィンドウが表示されます。Navigation は次の実装段階です。
+起動すると、戻る・進む・再読込・URL入力欄・Gopher ボタンを備えたブラウザウィンドウが表示されます。URLを入力してGopherボタンを押すとHTMLを取得し、HTTPステータス・サイズ・Content-TypeをViewportへ表示します。HTMLの解析と描画は次の実装段階です。
 
 ## Go Gopher のクレジット
 

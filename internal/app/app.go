@@ -7,6 +7,9 @@ import (
 	gioapp "gioui.org/app"
 	"gioui.org/op"
 	"gioui.org/unit"
+
+	"github.com/saku0512/growse/internal/browser"
+	"github.com/saku0512/growse/internal/network"
 	"github.com/saku0512/growse/internal/ui"
 )
 
@@ -29,7 +32,9 @@ func Run() {
 
 func runWindow(window *gioapp.Window) error {
 	var ops op.Ops
-	browserUI := ui.NewBrowserUI()
+	browserState := browser.New(network.NewClient())
+	browserUI := ui.NewBrowserUI(browserState, window.Invalidate)
+	defer browserUI.Close()
 
 	for {
 		switch event := window.Event().(type) {

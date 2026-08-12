@@ -3,7 +3,9 @@ package ui
 
 import (
 	"bytes"
+	"context"
 	_ "embed"
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
@@ -15,6 +17,8 @@ import (
 	"gioui.org/widget"
 	"gioui.org/widget/material"
 	"golang.org/x/exp/shiny/materialdesign/icons"
+
+	"github.com/saku0512/growse/internal/browser"
 )
 
 //go:embed assets/gopher-blue.png
@@ -31,7 +35,13 @@ const (
 
 // BrowserUI owns the widgets displayed around the page viewport.
 type BrowserUI struct {
-	theme *material.Theme
+	theme            *material.Theme
+	navigator        Navigator
+	invalidate       func()
+	results          chan navigationResult
+	cancelNavigation context.CancelFunc
+	navigationID     uint64
+	loading          bool
 
 	backButton    widget.Clickable
 	forwardButton widget.Clickable
@@ -45,8 +55,20 @@ type BrowserUI struct {
 	status        string
 }
 
+// Navigator is the browser capability used by the UI.
+type Navigator interface {
+	Navigate(ctx context.Context, rawURL string) (*browser.Page, error)
+	Page() *browser.Page
+}
+
+type navigationResult struct {
+	id   uint64
+	page *browser.Page
+	err  error
+}
+
 // NewBrowserUI creates a browser toolbar and an empty viewport.
-func NewBrowserUI() *BrowserUI {
+func NewBrowserUI(navigator Navigator, invalidate func()) *BrowserUI {
 	gopherImage, err := png.Decode(bytes.NewReader(gopherPNG))
 	if err != nil {
 		panic("decode embedded Go Gopher image: " + err.Error())
@@ -54,11 +76,17 @@ func NewBrowserUI() *BrowserUI {
 
 	ui := &BrowserUI{
 		theme:       material.NewTheme(),
+		navigator:   navigator,
+		invalidate:  invalidate,
+		results:     make(chan navigationResult, 1),
 		gopher:      paint.NewImageOp(gopherImage),
 		backIcon:    mustIcon(widget.NewIcon(icons.NavigationArrowBack)),
 		forwardIcon: mustIcon(widget.NewIcon(icons.NavigationArrowForward)),
 		reloadIcon:  mustIcon(widget.NewIcon(icons.NavigationRefresh)),
 		status:      "URLを入力して Gopher ボタンを押してください",
+	}
+	if ui.invalidate == nil {
+		ui.invalidate = func() {}
 	}
 	ui.address.SingleLine = true
 	ui.address.SetText(defaultURL)
@@ -75,8 +103,10 @@ func (ui *BrowserUI) Layout(gtx layout.Context) layout.Dimensions {
 }
 
 func (ui *BrowserUI) handleActions(gtx layout.Context) {
+	ui.consumeNavigationResult()
+
 	for ui.goButton.Clicked(gtx) {
-		ui.status = "Navigation はまだ未実装です: " + ui.address.Text()
+		ui.startNavigation(ui.address.Text())
 	}
 	for ui.backButton.Clicked(gtx) {
 		ui.status = "Back はまだ未実装です"
@@ -85,7 +115,68 @@ func (ui *BrowserUI) handleActions(gtx layout.Context) {
 		ui.status = "Forward はまだ未実装です"
 	}
 	for ui.reloadButton.Clicked(gtx) {
-		ui.status = "Reload はまだ未実装です"
+		rawURL := ui.address.Text()
+		if ui.navigator != nil && ui.navigator.Page() != nil && ui.navigator.Page().URL != nil {
+			rawURL = ui.navigator.Page().URL.String()
+		}
+		ui.startNavigation(rawURL)
+	}
+}
+
+func (ui *BrowserUI) startNavigation(rawURL string) {
+	if ui.navigator == nil {
+		ui.status = "Navigationを利用できません"
+		return
+	}
+	if ui.cancelNavigation != nil {
+		ui.cancelNavigation()
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	ui.cancelNavigation = cancel
+	ui.navigationID++
+	navigationID := ui.navigationID
+	ui.loading = true
+	ui.status = "読み込み中: " + rawURL
+
+	go func() {
+		page, err := ui.navigator.Navigate(ctx, rawURL)
+		ui.results <- navigationResult{id: navigationID, page: page, err: err}
+		ui.invalidate()
+	}()
+}
+
+func (ui *BrowserUI) consumeNavigationResult() {
+	for {
+		select {
+		case result := <-ui.results:
+			if result.id != ui.navigationID {
+				continue
+			}
+			ui.loading = false
+			ui.cancelNavigation = nil
+			if result.err != nil {
+				ui.status = "読み込みエラー: " + result.err.Error()
+				return
+			}
+			if result.page == nil || result.page.URL == nil {
+				ui.status = "読み込みエラー: ページ情報がありません"
+				return
+			}
+
+			ui.address.SetText(result.page.URL.String())
+			ui.status = fmt.Sprintf("取得完了 · HTTP %d · %d bytes · %s", result.page.StatusCode, len(result.page.Source), result.page.ContentType)
+		default:
+			return
+		}
+	}
+}
+
+// Close cancels an in-flight navigation when the window closes.
+func (ui *BrowserUI) Close() {
+	ui.navigationID++
+	if ui.cancelNavigation != nil {
+		ui.cancelNavigation()
 	}
 }
 
@@ -216,7 +307,11 @@ func (ui *BrowserUI) layoutViewport(gtx layout.Context) layout.Dimensions {
 					return layout.Inset{Top: unit.Dp(36), Right: unit.Dp(48), Bottom: unit.Dp(36), Left: unit.Dp(48)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 						return layout.Flex{Axis: layout.Vertical, Alignment: layout.Middle}.Layout(gtx,
 							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-								label := material.Caption(ui.theme, "GROWSE · READY")
+								state := "GROWSE · READY"
+								if ui.loading {
+									state = "GROWSE · LOADING"
+								}
+								label := material.Caption(ui.theme, state)
 								label.Color = color.NRGBA{R: 0, G: 137, B: 173, A: 255}
 								return label.Layout(gtx)
 							}),

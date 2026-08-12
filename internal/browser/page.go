@@ -7,7 +7,10 @@ import "net/url"
 // Document, stylesheet, layout tree, display list, scripts, and runtime state
 // are intentionally added only after their corresponding packages exist.
 type Page struct {
-	URL *url.URL
+	URL         *url.URL
+	StatusCode  int
+	ContentType string
+	Source      []byte
 }
 
 // NewPage creates a page for pageURL. A nil URL is allowed for documents such
