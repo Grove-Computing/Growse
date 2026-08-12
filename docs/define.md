@@ -1943,27 +1943,27 @@ localhost
 
 以下をすべて満たすこと。
 
-* [ ] Linux上でGrowseがネイティブアプリとして起動する
-* [ ] GioによるBrowser UIが表示される
-* [ ] URLを入力できる
-* [ ] HTTPページを取得できる
-* [ ] HTTPSページを取得できる
-* [ ] HTMLを解析できる
-* [ ] Growse独自DOMへ変換できる
-* [ ] 基本HTMLを画面へ描画できる
-* [ ] CSSを読み込める
-* [ ] CSS Selectorが動作する
-* [ ] CSS Cascadeが動作する
-* [ ] Computed Styleを生成できる
-* [ ] Block Layoutが動作する
-* [ ] Inline Textが動作する
-* [ ] Box Modelが動作する
-* [ ] Display Listを生成できる
-* [ ] Gio RendererでDisplay Listを描画できる
-* [ ] 縦スクロールできる
+* [x] Linux上でGrowseがネイティブアプリとして起動する
+* [x] GioによるBrowser UIが表示される
+* [x] URLを入力できる
+* [x] HTTPページを取得できる
+* [x] HTTPSページを取得できる
+* [x] HTMLを解析できる
+* [x] Growse独自DOMへ変換できる
+* [x] 基本HTMLを画面へ描画できる
+* [x] CSSを読み込める
+* [x] CSS Selectorが動作する
+* [x] CSS Cascadeが動作する
+* [x] Computed Styleを生成できる
+* [x] Block Layoutが動作する
+* [x] Inline Textが動作する
+* [x] Box Modelが動作する
+* [x] Display Listを生成できる
+* [x] Gio RendererでDisplay Listを描画できる
+* [x] 縦スクロールできる
 * [ ] `<a>` をクリックしてページ遷移できる
 * [ ] Backが動作する
-* [ ] Reloadが動作する
+* [x] Reloadが動作する
 * [ ] `<script type="text/go">` を認識できる
 * [ ] `.go` ファイルを取得できる
 * [ ] Yaegi Runtimeが起動する
@@ -1975,10 +1975,10 @@ localhost
 * [ ] クリックイベントをGoへDispatchできる
 * [ ] Goから登録した `OnClick` が実行される
 * [ ] DOM Mutation後に再描画される
-* [ ] JavaScriptを実行しない
-* [ ] JavaScript Engineを搭載しない
-* [ ] Goコードの実行にWebAssemblyを使用しない
-* [ ] WebView・Chromium・WebKit等を使用しない
+* [x] JavaScriptを実行しない
+* [x] JavaScript Engineを搭載しない
+* [x] Goコードの実行にWebAssemblyを使用しない
+* [x] WebView・Chromium・WebKit等を使用しない
 * [ ] Counter Demoが正常に動作する
 
 ---
