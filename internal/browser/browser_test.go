@@ -107,6 +107,80 @@ func TestNavigatePreservesPageOnFailure(t *testing.T) {
 	}
 }
 
+func TestBackAndForwardLoadHistoryEntries(t *testing.T) {
+	firstURL := mustParseURL(t, "https://example.com/first")
+	secondURL := mustParseURL(t, "https://example.com/second")
+	loader := &routeLoader{responses: map[string]*network.Response{
+		firstURL.String():  {URL: firstURL, StatusCode: 200, ContentType: "text/html", Body: []byte("<p>First</p>")},
+		secondURL.String(): {URL: secondURL, StatusCode: 200, ContentType: "text/html", Body: []byte("<p>Second</p>")},
+	}}
+	browser := New(loader)
+	if _, err := browser.Navigate(context.Background(), firstURL.String()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := browser.Navigate(context.Background(), secondURL.String()); err != nil {
+		t.Fatal(err)
+	}
+	if !browser.CanBack() || browser.CanForward() {
+		t.Fatalf("history state after navigation = back:%v forward:%v", browser.CanBack(), browser.CanForward())
+	}
+
+	page, err := browser.Back(context.Background())
+	if err != nil || page.URL.String() != firstURL.String() {
+		t.Fatalf("Back() = (%v, %v), want first page", page, err)
+	}
+	if browser.CanBack() || !browser.CanForward() {
+		t.Fatalf("history state after Back = back:%v forward:%v", browser.CanBack(), browser.CanForward())
+	}
+
+	page, err = browser.Forward(context.Background())
+	if err != nil || page.URL.String() != secondURL.String() {
+		t.Fatalf("Forward() = (%v, %v), want second page", page, err)
+	}
+}
+
+func TestFailedBackPreservesPageAndHistoryIndex(t *testing.T) {
+	firstURL := mustParseURL(t, "https://example.com/first")
+	secondURL := mustParseURL(t, "https://example.com/second")
+	loader := &routeLoader{responses: map[string]*network.Response{
+		firstURL.String():  {URL: firstURL, StatusCode: 200, ContentType: "text/html", Body: []byte("<p>First</p>")},
+		secondURL.String(): {URL: secondURL, StatusCode: 200, ContentType: "text/html", Body: []byte("<p>Second</p>")},
+	}}
+	browser := New(loader)
+	if _, err := browser.Navigate(context.Background(), firstURL.String()); err != nil {
+		t.Fatal(err)
+	}
+	current, err := browser.Navigate(context.Background(), secondURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	delete(loader.responses, firstURL.String())
+
+	if _, err := browser.Back(context.Background()); err == nil {
+		t.Fatal("Back() error = nil, want load failure")
+	}
+	if browser.Page() != current || !browser.CanBack() || browser.CanForward() {
+		t.Fatal("failed Back changed the active page or history position")
+	}
+}
+
+func TestReloadDoesNotAddHistoryEntry(t *testing.T) {
+	pageURL := mustParseURL(t, "https://example.com/page")
+	loader := &routeLoader{responses: map[string]*network.Response{
+		pageURL.String(): {URL: pageURL, StatusCode: 200, ContentType: "text/html", Body: []byte("<p>Page</p>")},
+	}}
+	browser := New(loader)
+	if _, err := browser.Navigate(context.Background(), pageURL.String()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := browser.Reload(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := len(browser.history.entries), 1; got != want {
+		t.Fatalf("history entries after Reload = %d, want %d", got, want)
+	}
+}
+
 func TestNavigateRejectsUnsupportedContentType(t *testing.T) {
 	browser := New(stubLoader{response: &network.Response{
 		URL:         mustParseURL(t, "https://example.com/image.png"),

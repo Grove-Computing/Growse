@@ -66,6 +66,11 @@ type BrowserUI struct {
 // Navigator is the browser capability used by the UI.
 type Navigator interface {
 	Navigate(ctx context.Context, rawURL string) (*browser.Page, error)
+	Back(ctx context.Context) (*browser.Page, error)
+	Forward(ctx context.Context) (*browser.Page, error)
+	Reload(ctx context.Context) (*browser.Page, error)
+	CanBack() bool
+	CanForward() bool
 	Page() *browser.Page
 }
 
@@ -119,17 +124,19 @@ func (ui *BrowserUI) handleActions(gtx layout.Context) {
 		ui.startNavigation(ui.address.Text())
 	}
 	for ui.backButton.Clicked(gtx) {
-		ui.status = "Back はまだ未実装です"
+		if ui.navigator != nil && ui.navigator.CanBack() {
+			ui.startPageLoad("前のページを読み込み中", ui.navigator.Back)
+		}
 	}
 	for ui.forwardButton.Clicked(gtx) {
-		ui.status = "Forward はまだ未実装です"
+		if ui.navigator != nil && ui.navigator.CanForward() {
+			ui.startPageLoad("次のページを読み込み中", ui.navigator.Forward)
+		}
 	}
 	for ui.reloadButton.Clicked(gtx) {
-		rawURL := ui.address.Text()
-		if ui.navigator != nil && ui.navigator.Page() != nil && ui.navigator.Page().URL != nil {
-			rawURL = ui.navigator.Page().URL.String()
+		if ui.navigator != nil && ui.navigator.Page() != nil {
+			ui.startPageLoad("ページを再読み込み中", ui.navigator.Reload)
 		}
-		ui.startNavigation(rawURL)
 	}
 }
 
@@ -138,6 +145,12 @@ func (ui *BrowserUI) startNavigation(rawURL string) {
 		ui.status = "Navigationを利用できません"
 		return
 	}
+	ui.startPageLoad("読み込み中: "+rawURL, func(ctx context.Context) (*browser.Page, error) {
+		return ui.navigator.Navigate(ctx, rawURL)
+	})
+}
+
+func (ui *BrowserUI) startPageLoad(status string, load func(context.Context) (*browser.Page, error)) {
 	if ui.cancelNavigation != nil {
 		ui.cancelNavigation()
 	}
@@ -147,10 +160,10 @@ func (ui *BrowserUI) startNavigation(rawURL string) {
 	ui.navigationID++
 	navigationID := ui.navigationID
 	ui.loading = true
-	ui.status = "読み込み中: " + rawURL
+	ui.status = status
 
 	go func() {
-		page, err := ui.navigator.Navigate(ctx, rawURL)
+		page, err := load(ctx)
 		ui.results <- navigationResult{id: navigationID, page: page, err: err}
 		ui.invalidate()
 	}()
@@ -215,17 +228,20 @@ func (ui *BrowserUI) layoutToolbar(gtx layout.Context) layout.Dimensions {
 	)
 
 	return layout.Inset{Top: unit.Dp(10), Right: unit.Dp(14), Bottom: unit.Dp(10), Left: unit.Dp(14)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		canBack := ui.navigator != nil && ui.navigator.CanBack()
+		canForward := ui.navigator != nil && ui.navigator.CanForward()
+		canReload := ui.navigator != nil && ui.navigator.Page() != nil
 		return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return ui.layoutToolbarButton(gtx, &ui.backButton, ui.backIcon, "戻る")
+				return ui.layoutToolbarButton(gtx, &ui.backButton, ui.backIcon, "戻る", canBack)
 			}),
 			layout.Rigid(layout.Spacer{Width: unit.Dp(6)}.Layout),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return ui.layoutToolbarButton(gtx, &ui.forwardButton, ui.forwardIcon, "次へ")
+				return ui.layoutToolbarButton(gtx, &ui.forwardButton, ui.forwardIcon, "次へ", canForward)
 			}),
 			layout.Rigid(layout.Spacer{Width: unit.Dp(6)}.Layout),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return ui.layoutToolbarButton(gtx, &ui.reloadButton, ui.reloadIcon, "再読込")
+				return ui.layoutToolbarButton(gtx, &ui.reloadButton, ui.reloadIcon, "再読込", canReload)
 			}),
 			layout.Rigid(layout.Spacer{Width: unit.Dp(14)}.Layout),
 			layout.Flexed(1, ui.layoutAddressBar),
@@ -235,13 +251,18 @@ func (ui *BrowserUI) layoutToolbar(gtx layout.Context) layout.Dimensions {
 	})
 }
 
-func (ui *BrowserUI) layoutToolbarButton(gtx layout.Context, button *widget.Clickable, icon *widget.Icon, description string) layout.Dimensions {
+func (ui *BrowserUI) layoutToolbarButton(gtx layout.Context, button *widget.Clickable, icon *widget.Icon, description string, enabled bool) layout.Dimensions {
 	size := gtx.Dp(controlHeight)
 	gtx.Constraints = layout.Exact(image.Pt(size, size))
 
 	style := material.IconButton(ui.theme, button, icon, description)
 	style.Background = color.NRGBA{R: 228, G: 234, B: 242, A: 255}
 	style.Color = color.NRGBA{R: 52, G: 64, B: 84, A: 255}
+	if !enabled {
+		gtx = gtx.Disabled()
+		style.Background = color.NRGBA{R: 238, G: 242, B: 247, A: 255}
+		style.Color = color.NRGBA{R: 160, G: 169, B: 182, A: 255}
+	}
 	style.Size = unit.Dp(22)
 	style.Inset = layout.UniformInset(unit.Dp(11))
 	return style.Layout(gtx)

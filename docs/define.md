@@ -1963,7 +1963,7 @@ localhost
 * [x] 縦スクロールできる
 * [x] Hit Testingが動作する
 * [x] `<a>` をクリックしてページ遷移できる
-* [ ] Backが動作する
+* [x] Backが動作する
 * [x] Reloadが動作する
 * [ ] `<script type="text/go">` を認識できる
 * [ ] `.go` ファイルを取得できる

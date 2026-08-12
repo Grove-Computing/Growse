@@ -30,6 +30,21 @@ func (navigator *stubNavigator) Page() *browser.Page {
 	return navigator.page
 }
 
+func (navigator *stubNavigator) Back(context.Context) (*browser.Page, error) {
+	return navigator.page, navigator.err
+}
+
+func (navigator *stubNavigator) Forward(context.Context) (*browser.Page, error) {
+	return navigator.page, navigator.err
+}
+
+func (navigator *stubNavigator) Reload(context.Context) (*browser.Page, error) {
+	return navigator.page, navigator.err
+}
+
+func (navigator *stubNavigator) CanBack() bool    { return true }
+func (navigator *stubNavigator) CanForward() bool { return true }
+
 func TestToolbarHasFixedHeight(t *testing.T) {
 	ui := NewBrowserUI(nil, nil)
 	gtx := layout.Context{
@@ -66,7 +81,7 @@ func TestToolbarButtonHasVisibleControlSize(t *testing.T) {
 		Metric:      unit.Metric{PxPerDp: 1, PxPerSp: 1},
 	}
 
-	dims := ui.layoutToolbarButton(gtx, &ui.backButton, ui.backIcon, "戻る")
+	dims := ui.layoutToolbarButton(gtx, &ui.backButton, ui.backIcon, "戻る", true)
 	if got, want := dims.Size, image.Pt(44, 44); got != want {
 		t.Fatalf("toolbar button size = %v, want %v", got, want)
 	}
