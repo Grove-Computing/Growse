@@ -352,8 +352,9 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 	paint.Fill(gtx.Ops, color.NRGBA{R: 255, G: 255, B: 255, A: 255})
 
 	viewportWidth := float32(gtx.Constraints.Max.X) / gtx.Metric.PxPerDp
-	tree := layoutengine.Build(page.Document, viewportWidth)
+	tree := layoutengine.Build(page.Document, page.ComputedStyles, viewportWidth)
 	displayList := paintmodel.Build(tree)
+	paint.Fill(gtx.Ops, rgba(displayList.Background))
 
 	return material.List(ui.theme, &ui.pageList).Layout(gtx, len(displayList.Commands), func(gtx layout.Context, index int) layout.Dimensions {
 		command, ok := displayList.Commands[index].(paintmodel.DrawText)
@@ -374,6 +375,9 @@ func (ui *BrowserUI) layoutDrawText(gtx layout.Context, command paintmodel.DrawT
 		}
 		gtx.Constraints.Min.Y = height
 		gtx.Constraints.Max.Y = height
+		if command.Background != 0 {
+			paint.FillShape(gtx.Ops, rgba(command.Background), clip.Rect{Max: gtx.Constraints.Min}.Op())
+		}
 
 		label := material.Label(ui.theme, unit.Sp(command.FontSize), command.Text)
 		label.Color = rgba(command.Color)

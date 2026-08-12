@@ -5,9 +5,10 @@ import "github.com/saku0512/growse/internal/layout"
 
 // DisplayList is an ordered collection of page painting commands.
 type DisplayList struct {
-	Width    float32
-	Height   float32
-	Commands []Command
+	Width      float32
+	Height     float32
+	Background uint32
+	Commands   []Command
 }
 
 // Command is implemented by every display-list operation.
@@ -25,9 +26,10 @@ type DrawText struct {
 	Width  float32
 	Height float32
 
-	FontSize float32
-	Bold     bool
-	Color    uint32
+	FontSize   float32
+	Bold       bool
+	Color      uint32
+	Background uint32
 }
 
 func (DrawText) paintCommand() {}
@@ -38,7 +40,7 @@ func Build(tree *layout.Tree) *DisplayList {
 		return &DisplayList{}
 	}
 
-	list := &DisplayList{Width: tree.Width, Height: tree.Height}
+	list := &DisplayList{Width: tree.Width, Height: tree.Height, Background: tree.Background}
 	list.Commands = make([]Command, 0, len(tree.Boxes))
 	previousBottom := float32(0)
 	for _, box := range tree.Boxes {
@@ -47,15 +49,16 @@ func Build(tree *layout.Tree) *DisplayList {
 			top = 0
 		}
 		list.Commands = append(list.Commands, DrawText{
-			Text:     box.Text,
-			X:        box.X,
-			Y:        box.Y,
-			Top:      top,
-			Width:    box.Width,
-			Height:   box.Height,
-			FontSize: box.FontSize,
-			Bold:     box.Bold,
-			Color:    box.Color,
+			Text:       box.Text,
+			X:          box.X,
+			Y:          box.Y,
+			Top:        top,
+			Width:      box.Width,
+			Height:     box.Height,
+			FontSize:   box.FontSize,
+			Bold:       box.Bold,
+			Color:      box.Color,
+			Background: box.Background,
 		})
 		previousBottom = box.Y + box.Height
 	}

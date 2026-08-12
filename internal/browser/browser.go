@@ -14,6 +14,7 @@ import (
 
 	htmlparser "github.com/saku0512/growse/internal/html"
 	"github.com/saku0512/growse/internal/network"
+	"github.com/saku0512/growse/internal/style"
 )
 
 // ResourceLoader retrieves a resource for navigation.
@@ -87,13 +88,20 @@ func (b *Browser) Navigate(ctx context.Context, rawURL string) (*Page, error) {
 	if err != nil {
 		return nil, fmt.Errorf("build DOM for %s: %w", pageURL.Redacted(), err)
 	}
+	stylesheet, err := b.loadStyles(ctx, client, response.URL, document)
+	if err != nil {
+		return nil, fmt.Errorf("load styles for %s: %w", pageURL.Redacted(), err)
+	}
+	computedStyles := style.Compute(document, stylesheet)
 
 	page := &Page{
-		URL:         cloneURL(response.URL),
-		StatusCode:  response.StatusCode,
-		ContentType: response.ContentType,
-		Source:      append([]byte(nil), response.Body...),
-		Document:    document,
+		URL:            cloneURL(response.URL),
+		StatusCode:     response.StatusCode,
+		ContentType:    response.ContentType,
+		Source:         append([]byte(nil), response.Body...),
+		Document:       document,
+		Stylesheet:     stylesheet,
+		ComputedStyles: computedStyles,
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()

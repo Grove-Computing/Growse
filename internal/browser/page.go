@@ -3,7 +3,9 @@ package browser
 import (
 	"net/url"
 
+	"github.com/saku0512/growse/internal/css"
 	"github.com/saku0512/growse/internal/dom"
+	"github.com/saku0512/growse/internal/style"
 )
 
 // Page holds the state of one loaded document.
@@ -11,11 +13,13 @@ import (
 // Document, stylesheet, layout tree, display list, scripts, and runtime state
 // are intentionally added only after their corresponding packages exist.
 type Page struct {
-	URL         *url.URL
-	StatusCode  int
-	ContentType string
-	Source      []byte
-	Document    *dom.Document
+	URL            *url.URL
+	StatusCode     int
+	ContentType    string
+	Source         []byte
+	Document       *dom.Document
+	Stylesheet     *css.Stylesheet
+	ComputedStyles style.Map
 }
 
 // NewPage creates a page for pageURL. A nil URL is allowed for documents such

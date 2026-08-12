@@ -1,0 +1,52 @@
+package style
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/saku0512/growse/internal/css"
+	"github.com/saku0512/growse/internal/dom"
+)
+
+func TestComputeAppliesCascadeAndInheritance(t *testing.T) {
+	document := dom.NewDocument()
+	body := document.CreateElement("body", nil)
+	p := document.CreateElement("p", map[string]string{"id": "message", "class": "lead note"})
+	span := document.CreateElement("span", nil)
+	appendNode(t, document, document.Root, body)
+	appendNode(t, document, body, p)
+	appendNode(t, document, p, span)
+
+	stylesheet, err := css.Parse(strings.NewReader(`
+p { color: red; font-size: 18px }
+.lead { color: blue }
+#message { color: #123456; font-weight: bold }
+p.note { color: green !important }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	computed := Compute(document, stylesheet)
+	pStyle, ok := computed.For(p)
+	if !ok {
+		t.Fatal("paragraph has no computed style")
+	}
+	if got, want := pStyle.Color, uint32(0x008000ff); got != want {
+		t.Fatalf("paragraph color = %#x, want %#x", got, want)
+	}
+	if pStyle.FontSize != 18 || !pStyle.Bold() {
+		t.Fatalf("paragraph style = %#v, want 18px bold", pStyle)
+	}
+	spanStyle, _ := computed.For(span)
+	if spanStyle.Color != pStyle.Color || spanStyle.FontSize != pStyle.FontSize {
+		t.Fatalf("span style = %#v, want inherited %#v", spanStyle, pStyle)
+	}
+}
+
+func appendNode(t *testing.T, document *dom.Document, parent, child *dom.Node) {
+	t.Helper()
+	if err := document.AppendChild(parent, child); err != nil {
+		t.Fatal(err)
+	}
+}

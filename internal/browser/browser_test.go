@@ -14,6 +14,20 @@ type stubLoader struct {
 	err      error
 }
 
+type routeLoader struct {
+	responses map[string]*network.Response
+	requested []string
+}
+
+func (loader *routeLoader) Get(_ context.Context, resourceURL *url.URL) (*network.Response, error) {
+	loader.requested = append(loader.requested, resourceURL.String())
+	response, ok := loader.responses[resourceURL.String()]
+	if !ok {
+		return nil, errors.New("unexpected URL: " + resourceURL.String())
+	}
+	return response, nil
+}
+
 func (loader stubLoader) Get(context.Context, *url.URL) (*network.Response, error) {
 	return loader.response, loader.err
 }
@@ -101,6 +115,48 @@ func TestNavigateRejectsUnsupportedContentType(t *testing.T) {
 
 	if _, err := browser.Navigate(context.Background(), "https://example.com/image.png"); err == nil {
 		t.Fatal("Navigate() error = nil, want unsupported Content-Type error")
+	}
+}
+
+func TestNavigateLoadsInlineAndSameOriginStylesheets(t *testing.T) {
+	pageURL := mustParseURL(t, "https://example.com/index.html")
+	cssURL := mustParseURL(t, "https://example.com/site.css")
+	loader := &routeLoader{responses: map[string]*network.Response{
+		pageURL.String(): {
+			URL: pageURL, StatusCode: 200, ContentType: "text/html",
+			Body: []byte(`<html><head>
+<link rel="stylesheet" href="/site.css">
+<link rel="stylesheet" href="https://cdn.example.org/ignored.css">
+<style>#title { font-size: 30px; }</style>
+</head><body><h1 id="title" class="hero">Hello</h1></body></html>`),
+		},
+		cssURL.String(): {
+			URL: cssURL, StatusCode: 200, ContentType: "text/css",
+			Body: []byte(`.hero { color: #123456; }`),
+		},
+	}}
+	browser := New(loader)
+
+	page, err := browser.Navigate(context.Background(), pageURL.String())
+	if err != nil {
+		t.Fatalf("Navigate() error = %v", err)
+	}
+	if got, want := len(loader.requested), 2; got != want {
+		t.Fatalf("request count = %d, want %d (%v)", got, want, loader.requested)
+	}
+	title, ok := page.Document.GetElementByID("title")
+	if !ok {
+		t.Fatal("title element was not indexed")
+	}
+	computed, ok := page.ComputedStyles.For(title)
+	if !ok {
+		t.Fatal("title element has no computed style")
+	}
+	if got, want := computed.Color, uint32(0x123456ff); got != want {
+		t.Fatalf("title color = %#x, want %#x", got, want)
+	}
+	if got, want := computed.FontSize, float32(30); got != want {
+		t.Fatalf("title font size = %v, want %v", got, want)
 	}
 }
 

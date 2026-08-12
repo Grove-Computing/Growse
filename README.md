@@ -20,7 +20,7 @@ go mod download
 go run ./cmd/growse
 ```
 
-起動すると、戻る・進む・再読込・URL入力欄・Gopher ボタンを備えたブラウザウィンドウが表示されます。URLを入力してGopherボタンを押すとHTMLを取得し、`x/net/html` の解析結果をGrowse独自DOMへ変換します。独自のLayout TreeとDisplay Listを経由し、CSSなしのUA既定スタイルで見出し・段落・リンク等のテキストをViewportへ縦積み描画します。
+起動すると、戻る・進む・再読込・URL入力欄・Gopher ボタンを備えたブラウザウィンドウが表示されます。URLを入力してGopherボタンを押すとHTMLと同一オリジンのCSSを取得し、Growse独自DOM・Computed Style・Layout Tree・Display Listを経由してViewportへ描画します。現在はタグ・`.class`・`#id`・`tag.class`セレクタと、文字色・背景色・フォントサイズ・太さに対応しています。
 
 ## Go Gopher のクレジット
 

@@ -6,6 +6,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/saku0512/growse/internal/dom"
+	stylemodel "github.com/saku0512/growse/internal/style"
 )
 
 const (
@@ -18,23 +19,30 @@ type blockStyle struct {
 	fontSize     float32
 	bold         bool
 	color        uint32
+	background   uint32
 	marginTop    float32
 	marginBottom float32
 }
 
 // Build creates a minimal vertical layout using Growse's UA defaults.
-func Build(document *dom.Document, viewportWidth float32) *Tree {
+func Build(document *dom.Document, computed stylemodel.Map, viewportWidth float32) *Tree {
 	if viewportWidth < pagePadding*2+1 {
 		viewportWidth = pagePadding*2 + 1
 	}
 
-	tree := &Tree{Width: viewportWidth}
+	tree := &Tree{Width: viewportWidth, Background: 0xffffffff}
 	state := engine{
 		tree:         tree,
+		computed:     computed,
 		contentWidth: viewportWidth - pagePadding*2,
 		y:            pagePadding,
 	}
 	if document != nil {
+		if body := findElement(document.Root, "body"); body != nil {
+			if bodyStyle, ok := computed.For(body); ok && bodyStyle.BackgroundColor != 0 {
+				tree.Background = bodyStyle.BackgroundColor
+			}
+		}
 		state.walk(document.Root)
 	}
 	tree.Height = state.y + pagePadding
@@ -43,6 +51,7 @@ func Build(document *dom.Document, viewportWidth float32) *Tree {
 
 type engine struct {
 	tree         *Tree
+	computed     stylemodel.Map
 	contentWidth float32
 	y            float32
 }
@@ -64,7 +73,11 @@ func (e *engine) walk(node *dom.Node) {
 	if node.Type == dom.NodeText {
 		text := normalizeWhitespace(node.Text)
 		if text != "" {
-			e.addText(node.ID, "text", text, defaultStyle())
+			textStyle := defaultStyle()
+			if computed, ok := e.computed.For(node); ok {
+				textStyle = applyComputed(textStyle, computed)
+			}
+			e.addText(node.ID, "text", text, textStyle)
 		}
 		return
 	}
@@ -79,6 +92,9 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle) {
 	if text == "" {
 		return
 	}
+	if computed, ok := e.computed.For(node); ok {
+		style = applyComputed(style, computed)
+	}
 	e.y += style.marginTop
 	e.addText(node.ID, node.TagName, text, style)
 	e.y += style.marginBottom
@@ -88,16 +104,17 @@ func (e *engine) addText(nodeID dom.NodeID, tag, text string, style blockStyle) 
 	lineHeight := style.fontSize * 1.4
 	for _, line := range wrapText(text, e.contentWidth, style.fontSize) {
 		e.tree.Boxes = append(e.tree.Boxes, Box{
-			NodeID:   nodeID,
-			Tag:      tag,
-			Text:     line,
-			X:        pagePadding,
-			Y:        e.y,
-			Width:    e.contentWidth,
-			Height:   lineHeight,
-			FontSize: style.fontSize,
-			Bold:     style.bold,
-			Color:    style.color,
+			NodeID:     nodeID,
+			Tag:        tag,
+			Text:       line,
+			X:          pagePadding,
+			Y:          e.y,
+			Width:      e.contentWidth,
+			Height:     lineHeight,
+			FontSize:   style.fontSize,
+			Bold:       style.bold,
+			Color:      style.color,
+			Background: style.background,
 		})
 		e.y += lineHeight
 	}
@@ -130,6 +147,14 @@ func defaultStyle() blockStyle {
 	return blockStyle{fontSize: 16, color: textColor, marginBottom: 8}
 }
 
+func applyComputed(block blockStyle, computed stylemodel.ComputedStyle) blockStyle {
+	block.fontSize = computed.FontSize
+	block.bold = computed.Bold()
+	block.color = computed.Color
+	block.background = computed.BackgroundColor
+	return block
+}
+
 func isHidden(tag string) bool {
 	switch tag {
 	case "head", "script", "style", "noscript", "template":
@@ -137,6 +162,21 @@ func isHidden(tag string) bool {
 	default:
 		return false
 	}
+}
+
+func findElement(node *dom.Node, tag string) *dom.Node {
+	if node == nil {
+		return nil
+	}
+	if node.Type == dom.NodeElement && node.TagName == tag {
+		return node
+	}
+	for _, child := range node.Children {
+		if found := findElement(child, tag); found != nil {
+			return found
+		}
+	}
+	return nil
 }
 
 func normalizeWhitespace(value string) string {

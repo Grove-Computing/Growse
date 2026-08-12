@@ -1,9 +1,12 @@
 package layout
 
 import (
+	"strings"
 	"testing"
 
+	"github.com/saku0512/growse/internal/css"
 	"github.com/saku0512/growse/internal/dom"
+	"github.com/saku0512/growse/internal/style"
 )
 
 func TestBuildCreatesVisibleVerticalBoxes(t *testing.T) {
@@ -26,7 +29,7 @@ func TestBuildCreatesVisibleVerticalBoxes(t *testing.T) {
 		[2]*dom.Node{p, document.CreateText("World")},
 	)
 
-	tree := Build(document, 800)
+	tree := Build(document, nil, 800)
 	if got, want := len(tree.Boxes), 2; got != want {
 		t.Fatalf("box count = %d, want %d", got, want)
 	}
@@ -46,9 +49,31 @@ func TestBuildWrapsLongText(t *testing.T) {
 		[2]*dom.Node{p, document.CreateText("one two three four five six seven eight nine ten")},
 	)
 
-	tree := Build(document, 160)
+	tree := Build(document, nil, 160)
 	if len(tree.Boxes) < 2 {
 		t.Fatalf("box count = %d, want wrapped text", len(tree.Boxes))
+	}
+}
+
+func TestBuildUsesComputedTextStyle(t *testing.T) {
+	document := dom.NewDocument()
+	p := document.CreateElement("p", map[string]string{"class": "notice"})
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, p},
+		[2]*dom.Node{p, document.CreateText("Styled")},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`.notice { color: #abcdef; font-size: 24px; font-weight: bold }`))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tree := Build(document, style.Compute(document, stylesheet), 800)
+	if len(tree.Boxes) != 1 {
+		t.Fatalf("box count = %d, want 1", len(tree.Boxes))
+	}
+	box := tree.Boxes[0]
+	if box.Color != 0xabcdefff || box.FontSize != 24 || !box.Bold {
+		t.Fatalf("box style = %#v, want CSS color, size and weight", box)
 	}
 }
 
