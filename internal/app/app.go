@@ -37,6 +37,7 @@ func runWindow(window *gioapp.Window) error {
 	browserState := browser.NewWithRuntimeFactory(network.NewClient(), func() runtimemodel.Runtime {
 		return yaegi.New()
 	})
+	browserState.SetOnMutation(window.Invalidate)
 	defer browserState.Close()
 	browserUI := ui.NewBrowserUI(browserState, window.Invalidate)
 	defer browserUI.Close()

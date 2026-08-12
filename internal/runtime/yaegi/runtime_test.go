@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	dommodel "github.com/saku0512/growse/internal/dom"
 	runtimemodel "github.com/saku0512/growse/internal/runtime"
 )
 
@@ -55,6 +56,46 @@ func main() { console.Log("Hello from Go", 42) }`}}
 	}
 	if got, want := messages[0], "[WebGo] Hello from Go42"; got != want {
 		t.Fatalf("console message = %q, want %q", got, want)
+	}
+}
+
+func TestRuntimeExposesGrowseDOM(t *testing.T) {
+	document := dommodel.NewDocument()
+	message := document.CreateElement("p", map[string]string{"id": "message"})
+	if err := document.AppendChild(document.Root, message); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(message, document.CreateText("before")); err != nil {
+		t.Fatal(err)
+	}
+	mutations := 0
+	runtime := New()
+	scripts := []runtimemodel.Script{{Source: `package main
+import "growse/dom"
+func main() {
+	element := dom.GetElementByID("message")
+	if element != nil && element.Text() == "before" {
+		element.SetText("after")
+	}
+}`}}
+	environment := runtimemodel.Environment{
+		Document: document,
+		OnMutation: func() {
+			mutations++
+		},
+	}
+
+	if err := runtime.Load(context.Background(), scripts, environment); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if got, want := message.TextContent(), "after"; got != want {
+		t.Fatalf("TextContent() = %q, want %q", got, want)
+	}
+	if mutations != 1 {
+		t.Fatalf("mutation count = %d, want 1", mutations)
 	}
 }
 

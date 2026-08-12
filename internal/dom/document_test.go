@@ -56,3 +56,31 @@ func TestAppendChildRejectsNodeFromAnotherDocument(t *testing.T) {
 		t.Fatal("AppendChild() error = nil for a foreign node")
 	}
 }
+
+func TestSetTextContentReplacesDescendantsAndIndexes(t *testing.T) {
+	document := NewDocument()
+	parent := document.CreateElement("p", map[string]string{"id": "message"})
+	child := document.CreateElement("span", map[string]string{"id": "old"})
+	text := document.CreateText("before")
+	for _, edge := range [][2]*Node{{document.Root, parent}, {parent, child}, {child, text}} {
+		if err := document.AppendChild(edge[0], edge[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if !document.SetTextContent(parent.ID, "after") {
+		t.Fatal("SetTextContent() = false, want true")
+	}
+	if got, want := parent.TextContent(), "after"; got != want {
+		t.Fatalf("TextContent() = %q, want %q", got, want)
+	}
+	if _, ok := document.NodeByID(child.ID); ok {
+		t.Fatal("removed child remains in node index")
+	}
+	if _, ok := document.GetElementByID("old"); ok {
+		t.Fatal("removed child remains in id index")
+	}
+	if got, want := len(parent.Children), 1; got != want || parent.Children[0].Type != NodeText {
+		t.Fatalf("children = %#v, want one text node", parent.Children)
+	}
+}

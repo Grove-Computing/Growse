@@ -20,7 +20,7 @@ go mod download
 go run ./cmd/growse
 ```
 
-起動すると、戻る・進む・再読込・URL入力欄・Gopher ボタンを備えたブラウザウィンドウが表示されます。リンクのクリック、戻る・進む、履歴を増やさない再読込に対応しています。URLを入力してGopherボタンを押すとHTMLと同一オリジンのCSSを取得し、Growse独自DOM・Computed Style・Layout Tree・Display Listを経由してViewportへ描画します。現在はタグ・`.class`・`#id`・`tag.class`セレクタと、文字色・背景色・フォントサイズ・太さ・`display`・margin・paddingに対応しています。インライン要素はスタイル付きText Runとして行内へ配置し、簡易的に折り返します。`<script type="text/go">` のインラインソースと外部`.go`ファイルはPageへ読み込み、localhost・127.0.0.1・`::1` のページではYaegi Runtimeで`main()`を実行します。WebGoスクリプトは`growse/console`の`Log`でログを出力できます。GoからのDOM操作とイベント登録はまだ行いません。
+起動すると、戻る・進む・再読込・URL入力欄・Gopher ボタンを備えたブラウザウィンドウが表示されます。リンクのクリック、戻る・進む、履歴を増やさない再読込に対応しています。URLを入力してGopherボタンを押すとHTMLと同一オリジンのCSSを取得し、Growse独自DOM・Computed Style・Layout Tree・Display Listを経由してViewportへ描画します。現在はタグ・`.class`・`#id`・`tag.class`セレクタと、文字色・背景色・フォントサイズ・太さ・`display`・margin・paddingに対応しています。インライン要素はスタイル付きText Runとして行内へ配置し、簡易的に折り返します。`<script type="text/go">` のインラインソースと外部`.go`ファイルはPageへ読み込み、localhost・127.0.0.1・`::1` のページではYaegi Runtimeで`main()`を実行します。WebGoスクリプトは`growse/console`の`Log`でログを出力でき、`growse/dom`の`GetElementByID`・`Text`・`SetText`でDOMテキストを操作できます。変更後はComputed Styleを再計算して画面を更新します。イベント登録はまだ行いません。
 
 ## 品質チェック
 

@@ -11,20 +11,26 @@ import (
 )
 
 type runtimeStub struct {
-	loadCalls  int
-	startCalls int
-	stopCalls  int
-	loadErr    error
-	startErr   error
+	loadCalls     int
+	startCalls    int
+	stopCalls     int
+	loadErr       error
+	startErr      error
+	environment   runtimemodel.Environment
+	mutateOnStart bool
 }
 
-func (runtime *runtimeStub) Load(context.Context, []runtimemodel.Script, runtimemodel.Environment) error {
+func (runtime *runtimeStub) Load(_ context.Context, _ []runtimemodel.Script, environment runtimemodel.Environment) error {
 	runtime.loadCalls++
+	runtime.environment = environment
 	return runtime.loadErr
 }
 
 func (runtime *runtimeStub) Start(context.Context) error {
 	runtime.startCalls++
+	if runtime.mutateOnStart && runtime.environment.OnMutation != nil {
+		runtime.environment.OnMutation()
+	}
 	return runtime.startErr
 }
 
@@ -102,5 +108,25 @@ func main() {}</script>`),
 	}
 	if runtime.stopCalls != 1 {
 		t.Fatalf("Stop() calls = %d, want failed runtime cleanup", runtime.stopCalls)
+	}
+}
+
+func TestRuntimeMutationNotifiesBrowser(t *testing.T) {
+	pageURL := mustParseURL(t, "http://localhost/index.html")
+	loader := stubLoader{response: &network.Response{
+		URL: pageURL, StatusCode: 200, ContentType: "text/html",
+		Body: []byte(`<script type="text/go">package main
+func main() {}</script>`),
+	}}
+	runtime := &runtimeStub{mutateOnStart: true}
+	browser := NewWithRuntimeFactory(loader, func() runtimemodel.Runtime { return runtime })
+	mutations := 0
+	browser.SetOnMutation(func() { mutations++ })
+
+	if _, err := browser.Navigate(context.Background(), pageURL.String()); err != nil {
+		t.Fatalf("Navigate() error = %v", err)
+	}
+	if mutations != 1 {
+		t.Fatalf("mutation count = %d, want 1", mutations)
 	}
 }

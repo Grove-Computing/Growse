@@ -3301,11 +3301,11 @@ Paint
 * [ ] Yaegi RuntimeをBrowserから抽象化できている
 * [ ] Goの `main()` を実行できる
 * [x] `growse/console` が動作する
-* [ ] `growse/dom` が動作する
-* [ ] `GetElementByID()` が動作する
-* [ ] `SetText()` が動作する
-* [ ] DOM Mutationを検出できる
-* [ ] Mutation後に再描画できる
+* [x] `growse/dom` が動作する
+* [x] `GetElementByID()` が動作する
+* [x] `SetText()` が動作する
+* [x] DOM Mutationを検出できる
+* [x] Mutation後に再描画できる
 * [ ] `OnClick()` を登録できる
 * [ ] clickをGoへDispatchできる
 * [ ] Runtime Errorでブラウザ全体が終了しない

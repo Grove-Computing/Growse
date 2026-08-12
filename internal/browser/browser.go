@@ -33,6 +33,7 @@ type Browser struct {
 	client         ResourceLoader
 	runtimeFactory runtimemodel.Factory
 	activeRuntime  runtimemodel.Runtime
+	onMutation     func()
 	navigationID   uint64
 	history        history
 }
@@ -45,6 +46,13 @@ func New(client ResourceLoader) *Browser {
 // NewWithRuntimeFactory は信頼済みページのスクリプトを実行するBrowserを生成する。
 func NewWithRuntimeFactory(client ResourceLoader, factory runtimemodel.Factory) *Browser {
 	return &Browser{client: client, runtimeFactory: factory, history: newHistory()}
+}
+
+// SetOnMutation はWebGoによるDOM変更後の通知先を設定する。
+func (b *Browser) SetOnMutation(callback func()) {
+	b.mu.Lock()
+	b.onMutation = callback
+	b.mu.Unlock()
 }
 
 // Page returns the currently active page, or nil before the first successful
@@ -157,6 +165,7 @@ func (b *Browser) load(ctx context.Context, pageURL *url.URL, commit historyComm
 	navigationID := b.navigationID
 	client := b.client
 	runtimeFactory := b.runtimeFactory
+	onMutation := b.onMutation
 	b.mu.Unlock()
 
 	if client == nil {
@@ -197,7 +206,7 @@ func (b *Browser) load(ctx context.Context, pageURL *url.URL, commit historyComm
 		Scripts:        scripts,
 		ScriptErrors:   scriptErrors,
 	}
-	pageRuntime := startRuntime(ctx, runtimeFactory, page)
+	pageRuntime := startRuntime(ctx, runtimeFactory, page, onMutation)
 	if err := ctx.Err(); err != nil {
 		if pageRuntime != nil {
 			_ = pageRuntime.Stop()
@@ -232,7 +241,7 @@ func (b *Browser) load(ctx context.Context, pageURL *url.URL, commit historyComm
 	return page, nil
 }
 
-func startRuntime(ctx context.Context, factory runtimemodel.Factory, page *Page) runtimemodel.Runtime {
+func startRuntime(ctx context.Context, factory runtimemodel.Factory, page *Page, onMutation func()) runtimemodel.Runtime {
 	if factory == nil || page == nil || len(page.Scripts) == 0 {
 		return nil
 	}
@@ -256,7 +265,16 @@ func startRuntime(ctx context.Context, factory runtimemodel.Factory, page *Page)
 		page.RuntimeError = "Go runtime factory returned nil"
 		return nil
 	}
-	environment := runtimemodel.Environment{Document: page.Document, BaseURL: cloneURL(page.URL)}
+	environment := runtimemodel.Environment{
+		Document: page.Document,
+		BaseURL:  cloneURL(page.URL),
+		OnMutation: func() {
+			page.ComputedStyles = style.Compute(page.Document, page.Stylesheet)
+			if onMutation != nil {
+				onMutation()
+			}
+		},
+	}
 	if err := pageRuntime.Load(ctx, page.Scripts, environment); err != nil {
 		page.RuntimeError = fmt.Sprintf("load Go runtime: %v", err)
 		_ = pageRuntime.Stop()

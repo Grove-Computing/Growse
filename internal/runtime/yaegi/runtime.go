@@ -14,6 +14,7 @@ import (
 
 	runtimemodel "github.com/saku0512/growse/internal/runtime"
 	consoleapi "github.com/saku0512/growse/internal/webapi/console"
+	domapi "github.com/saku0512/growse/internal/webapi/dom"
 	"github.com/traefik/yaegi/interp"
 )
 
@@ -74,12 +75,17 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 	}
 	r.interpreter = interp.New(interp.Options{GoPath: ".", SourcecodeFilesystem: files})
 	console := consoleapi.New(environment.ConsoleLog)
+	dom := domapi.New(environment.Document, environment.OnMutation)
 	if err := r.interpreter.Use(interp.Exports{
 		"growse/console/console": {
 			"Log": reflect.ValueOf(console.Log),
 		},
+		"growse/dom/dom": {
+			"Element":        reflect.ValueOf((*domapi.Element)(nil)),
+			"GetElementByID": reflect.ValueOf(dom.GetElementByID),
+		},
 	}); err != nil {
-		return fmt.Errorf("register growse/console: %w", err)
+		return fmt.Errorf("register Growse Web API: %w", err)
 	}
 	r.loaded = true
 	return nil

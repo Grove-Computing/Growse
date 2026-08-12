@@ -77,6 +77,26 @@ func (d *Document) GetElementByID(id string) (*Node, bool) {
 	return node, ok
 }
 
+// SetTextContent は指定したノードの子を1つのテキストノードへ置き換える。
+func (d *Document) SetTextContent(id NodeID, value string) bool {
+	if d == nil {
+		return false
+	}
+	node, ok := d.nodes[id]
+	if !ok || node.Type != NodeElement {
+		return false
+	}
+	for _, child := range node.Children {
+		d.removeSubtree(child)
+	}
+	node.Children = nil
+	text := d.CreateText(value)
+	text.Parent = node
+	node.Children = append(node.Children, text)
+	d.rebuildIDIndex()
+	return true
+}
+
 // NodeCount returns the number of nodes, including the document root.
 func (d *Document) NodeCount() int {
 	return countNodes(d.Root)
@@ -101,6 +121,37 @@ func (d *Document) newNode(nodeType NodeType) *Node {
 	d.nextID++
 	d.nodes[node.ID] = node
 	return node
+}
+
+func (d *Document) removeSubtree(node *Node) {
+	if node == nil {
+		return
+	}
+	for _, child := range node.Children {
+		d.removeSubtree(child)
+	}
+	delete(d.nodes, node.ID)
+	node.Children = nil
+	node.Parent = nil
+}
+
+func (d *Document) rebuildIDIndex() {
+	d.byID = make(map[string]*Node)
+	var walk func(*Node)
+	walk = func(node *Node) {
+		if node == nil {
+			return
+		}
+		if id, ok := node.Attribute("id"); ok && id != "" {
+			if _, exists := d.byID[id]; !exists {
+				d.byID[id] = node
+			}
+		}
+		for _, child := range node.Children {
+			walk(child)
+		}
+	}
+	walk(d.Root)
 }
 
 func cloneAttributes(attributes map[string]string) map[string]string {
