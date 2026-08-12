@@ -8,7 +8,7 @@ Go 1.26 以降と、Gio が利用する OS のグラフィックス開発ライ�
 
 ```sh
 sudo apt-get update
-sudo apt-get install -y libvulkan-dev
+sudo apt-get install -y libvulkan-dev gcc pkg-config libwayland-dev libx11-dev libx11-xcb-dev libxkbcommon-x11-dev libgles2-mesa-dev libegl1-mesa-dev libffi-dev libxcursor-dev libvulkan-dev
 ```
 
 ほかの Linux ディストリビューションを使う場合は、[Gio の Linux セットアップ手順](https://gioui.org/doc/install/linux) を参照してください。
