@@ -1980,7 +1980,7 @@ localhost
 * [x] JavaScript Engineを搭載しない
 * [x] Goコードの実行にWebAssemblyを使用しない
 * [x] WebView・Chromium・WebKit等を使用しない
-* [ ] Counter Demoが正常に動作する
+* [x] Counter Demoが正常に動作する
 
 ---
 

@@ -3310,7 +3310,7 @@ Paint
 * [x] clickをGoへDispatchできる
 * [ ] Runtime Errorでブラウザ全体が終了しない
 * [ ] 外部OriginのGoコードを自動実行しない
-* [ ] Counter Demoが正常動作する
+* [x] Counter Demoが正常動作する
 
 ---
 

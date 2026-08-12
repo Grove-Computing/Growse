@@ -93,3 +93,20 @@ func TestIsTrustedOriginAllowsOnlyLoopbackHosts(t *testing.T) {
 		})
 	}
 }
+
+func TestIsGoContentTypeAcceptsCommonGoMIMETypes(t *testing.T) {
+	for _, contentType := range []string{
+		"text/go",
+		"text/x-go; charset=utf-8",
+		"application/x-go",
+		"text/plain",
+		"",
+	} {
+		if !isGoContentType(contentType) {
+			t.Errorf("isGoContentType(%q) = false, want true", contentType)
+		}
+	}
+	if isGoContentType("application/javascript") {
+		t.Fatal("isGoContentType(application/javascript) = true, want false")
+	}
+}

@@ -15,6 +15,7 @@ import (
 	runtimemodel "github.com/saku0512/growse/internal/runtime"
 	consoleapi "github.com/saku0512/growse/internal/webapi/console"
 	domapi "github.com/saku0512/growse/internal/webapi/dom"
+	strconvapi "github.com/saku0512/growse/internal/webapi/strconv"
 	"github.com/traefik/yaegi/interp"
 )
 
@@ -83,6 +84,9 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 		"growse/dom/dom": {
 			"Element":        reflect.ValueOf((*domapi.Element)(nil)),
 			"GetElementByID": reflect.ValueOf(dom.GetElementByID),
+		},
+		"growse/strconv/strconv": {
+			"Itoa": reflect.ValueOf(strconvapi.Itoa),
 		},
 	}); err != nil {
 		return fmt.Errorf("register Growse Web API: %w", err)

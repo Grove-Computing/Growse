@@ -1,0 +1,25 @@
+body {
+    background-color: white;
+    color: black;
+}
+
+.container {
+    padding: 32px;
+}
+
+h1 {
+    color: #0969da;
+    font-size: 32px;
+}
+
+button {
+    background-color: #dbeafe;
+    color: #075985;
+    font-size: 24px;
+    padding: 8px 24px;
+}
+
+#count {
+    font-size: 28px;
+    font-weight: bold;
+}

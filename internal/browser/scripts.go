@@ -102,7 +102,7 @@ func isGoContentType(value string) bool {
 		return false
 	}
 	switch strings.ToLower(mediaType) {
-	case "text/go", "text/plain", "application/x-go":
+	case "text/go", "text/x-go", "text/plain", "application/x-go":
 		return true
 	default:
 		return false
