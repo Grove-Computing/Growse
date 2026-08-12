@@ -3,12 +3,32 @@ package style
 
 import "github.com/saku0512/growse/internal/dom"
 
+// Display controls whether an element participates in block or inline layout.
+type Display uint8
+
+const (
+	DisplayInline Display = iota
+	DisplayBlock
+	DisplayNone
+)
+
+// Edges contains resolved pixel values in CSS clockwise order.
+type Edges struct {
+	Top    float32
+	Right  float32
+	Bottom float32
+	Left   float32
+}
+
 // ComputedStyle contains the MVP properties consumed by layout and paint.
 type ComputedStyle struct {
 	Color           uint32
 	BackgroundColor uint32
 	FontSize        float32
 	FontWeight      int
+	Display         Display
+	Margin          Edges
+	Padding         Edges
 }
 
 // Bold reports whether the computed weight should use a bold face.

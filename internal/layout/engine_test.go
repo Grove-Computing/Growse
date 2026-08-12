@@ -77,6 +77,74 @@ func TestBuildUsesComputedTextStyle(t *testing.T) {
 	}
 }
 
+func TestBuildAppliesBoxModelAndDisplay(t *testing.T) {
+	document := dom.NewDocument()
+	visible := document.CreateElement("p", map[string]string{"class": "visible"})
+	hidden := document.CreateElement("p", map[string]string{"class": "hidden"})
+	link := document.CreateElement("a", nil)
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, visible},
+		[2]*dom.Node{visible, document.CreateText("Hello ")},
+		[2]*dom.Node{visible, link},
+		[2]*dom.Node{link, document.CreateText("world")},
+		[2]*dom.Node{visible, document.CreateText("!")},
+		[2]*dom.Node{document.Root, hidden},
+		[2]*dom.Node{hidden, document.CreateText("Secret")},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.visible { margin: 10px 30px 14px 20px; padding: 4px 12px 6px 8px; }
+.hidden { display: none; }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tree := Build(document, style.Compute(document, stylesheet), 800)
+	if got, want := len(tree.Boxes), 1; got != want {
+		t.Fatalf("box count = %d, want %d", got, want)
+	}
+	box := tree.Boxes[0]
+	if box.Text != "Hello world!" {
+		t.Fatalf("text = %q, want inline content on one flow", box.Text)
+	}
+	if box.X != 60 || box.Y != 46 || box.Width != 666 {
+		t.Fatalf("box geometry = (%v, %v, %v), want (60, 46, 666)", box.X, box.Y, box.Width)
+	}
+}
+
+func TestBuildPreservesInlineRunStyles(t *testing.T) {
+	document := dom.NewDocument()
+	p := document.CreateElement("p", nil)
+	span := document.CreateElement("span", map[string]string{"class": "accent"})
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, p},
+		[2]*dom.Node{p, document.CreateText("Hello ")},
+		[2]*dom.Node{p, span},
+		[2]*dom.Node{span, document.CreateText("Growse")},
+		[2]*dom.Node{p, document.CreateText("!")},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`.accent { color: red; font-size: 24px; font-weight: bold; }`))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tree := Build(document, style.Compute(document, stylesheet), 800)
+	if got, want := len(tree.Boxes), 1; got != want {
+		t.Fatalf("line count = %d, want %d", got, want)
+	}
+	line := tree.Boxes[0]
+	if line.Text != "Hello Growse!" || len(line.Runs) != 3 {
+		t.Fatalf("line = %#v, want three styled runs", line)
+	}
+	accent := line.Runs[1]
+	if accent.Text != "Growse" || accent.Color != 0xff0000ff || accent.FontSize != 24 || !accent.Bold {
+		t.Fatalf("accent run = %#v, want styled Growse", accent)
+	}
+	if line.Height != 24*1.4 {
+		t.Fatalf("line height = %v, want largest run height", line.Height)
+	}
+}
+
 func appendNodes(t *testing.T, document *dom.Document, edges ...[2]*dom.Node) {
 	t.Helper()
 	for _, edge := range edges {

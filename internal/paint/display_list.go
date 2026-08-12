@@ -1,7 +1,10 @@
 // Package paint converts layout output into renderer-independent commands.
 package paint
 
-import "github.com/saku0512/growse/internal/layout"
+import (
+	"github.com/saku0512/growse/internal/dom"
+	"github.com/saku0512/growse/internal/layout"
+)
 
 // DisplayList is an ordered collection of page painting commands.
 type DisplayList struct {
@@ -30,9 +33,23 @@ type DrawText struct {
 	Bold       bool
 	Color      uint32
 	Background uint32
+	Runs       []TextRun
 }
 
 func (DrawText) paintCommand() {}
+
+// TextRun is one styled fragment within a DrawText line.
+type TextRun struct {
+	NodeID dom.NodeID
+	Tag    string
+	Text   string
+	Width  float32
+
+	FontSize   float32
+	Bold       bool
+	Color      uint32
+	Background uint32
+}
 
 // Build creates a display list from a layout tree.
 func Build(tree *layout.Tree) *DisplayList {
@@ -48,7 +65,7 @@ func Build(tree *layout.Tree) *DisplayList {
 		if top < 0 {
 			top = 0
 		}
-		list.Commands = append(list.Commands, DrawText{
+		command := DrawText{
 			Text:       box.Text,
 			X:          box.X,
 			Y:          box.Y,
@@ -59,7 +76,15 @@ func Build(tree *layout.Tree) *DisplayList {
 			Bold:       box.Bold,
 			Color:      box.Color,
 			Background: box.Background,
-		})
+		}
+		command.Runs = make([]TextRun, 0, len(box.Runs))
+		for _, run := range box.Runs {
+			command.Runs = append(command.Runs, TextRun{
+				NodeID: run.NodeID, Tag: run.Tag, Text: run.Text, Width: run.Width,
+				FontSize: run.FontSize, Bold: run.Bold, Color: run.Color, Background: run.Background,
+			})
+		}
+		list.Commands = append(list.Commands, command)
 		previousBottom = box.Y + box.Height
 	}
 	return list

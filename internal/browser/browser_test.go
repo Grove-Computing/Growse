@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"testing"
 
+	"github.com/saku0512/growse/internal/dom"
 	"github.com/saku0512/growse/internal/network"
 )
 
@@ -106,6 +107,80 @@ func TestNavigatePreservesPageOnFailure(t *testing.T) {
 	}
 }
 
+func TestBackAndForwardLoadHistoryEntries(t *testing.T) {
+	firstURL := mustParseURL(t, "https://example.com/first")
+	secondURL := mustParseURL(t, "https://example.com/second")
+	loader := &routeLoader{responses: map[string]*network.Response{
+		firstURL.String():  {URL: firstURL, StatusCode: 200, ContentType: "text/html", Body: []byte("<p>First</p>")},
+		secondURL.String(): {URL: secondURL, StatusCode: 200, ContentType: "text/html", Body: []byte("<p>Second</p>")},
+	}}
+	browser := New(loader)
+	if _, err := browser.Navigate(context.Background(), firstURL.String()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := browser.Navigate(context.Background(), secondURL.String()); err != nil {
+		t.Fatal(err)
+	}
+	if !browser.CanBack() || browser.CanForward() {
+		t.Fatalf("history state after navigation = back:%v forward:%v", browser.CanBack(), browser.CanForward())
+	}
+
+	page, err := browser.Back(context.Background())
+	if err != nil || page.URL.String() != firstURL.String() {
+		t.Fatalf("Back() = (%v, %v), want first page", page, err)
+	}
+	if browser.CanBack() || !browser.CanForward() {
+		t.Fatalf("history state after Back = back:%v forward:%v", browser.CanBack(), browser.CanForward())
+	}
+
+	page, err = browser.Forward(context.Background())
+	if err != nil || page.URL.String() != secondURL.String() {
+		t.Fatalf("Forward() = (%v, %v), want second page", page, err)
+	}
+}
+
+func TestFailedBackPreservesPageAndHistoryIndex(t *testing.T) {
+	firstURL := mustParseURL(t, "https://example.com/first")
+	secondURL := mustParseURL(t, "https://example.com/second")
+	loader := &routeLoader{responses: map[string]*network.Response{
+		firstURL.String():  {URL: firstURL, StatusCode: 200, ContentType: "text/html", Body: []byte("<p>First</p>")},
+		secondURL.String(): {URL: secondURL, StatusCode: 200, ContentType: "text/html", Body: []byte("<p>Second</p>")},
+	}}
+	browser := New(loader)
+	if _, err := browser.Navigate(context.Background(), firstURL.String()); err != nil {
+		t.Fatal(err)
+	}
+	current, err := browser.Navigate(context.Background(), secondURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	delete(loader.responses, firstURL.String())
+
+	if _, err := browser.Back(context.Background()); err == nil {
+		t.Fatal("Back() error = nil, want load failure")
+	}
+	if browser.Page() != current || !browser.CanBack() || browser.CanForward() {
+		t.Fatal("failed Back changed the active page or history position")
+	}
+}
+
+func TestReloadDoesNotAddHistoryEntry(t *testing.T) {
+	pageURL := mustParseURL(t, "https://example.com/page")
+	loader := &routeLoader{responses: map[string]*network.Response{
+		pageURL.String(): {URL: pageURL, StatusCode: 200, ContentType: "text/html", Body: []byte("<p>Page</p>")},
+	}}
+	browser := New(loader)
+	if _, err := browser.Navigate(context.Background(), pageURL.String()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := browser.Reload(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := len(browser.history.entries), 1; got != want {
+		t.Fatalf("history entries after Reload = %d, want %d", got, want)
+	}
+}
+
 func TestNavigateRejectsUnsupportedContentType(t *testing.T) {
 	browser := New(stubLoader{response: &network.Response{
 		URL:         mustParseURL(t, "https://example.com/image.png"),
@@ -200,6 +275,36 @@ func TestNewPageCopiesURL(t *testing.T) {
 
 	if got, want := page.URL.String(), "https://example.com/original"; got != want {
 		t.Fatalf("page URL = %q, want %q", got, want)
+	}
+}
+
+func TestPageLinkURLResolvesNearestAnchor(t *testing.T) {
+	document := dom.NewDocument()
+	anchor := document.CreateElement("a", map[string]string{"href": "../next?q=1"})
+	span := document.CreateElement("span", nil)
+	text := document.CreateText("Next")
+	for _, edge := range [][2]*dom.Node{{document.Root, anchor}, {anchor, span}, {span, text}} {
+		if err := document.AppendChild(edge[0], edge[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	page := &Page{URL: mustParseURL(t, "https://example.com/docs/current"), Document: document}
+
+	resolved, ok := page.LinkURL(span.ID)
+	if !ok || resolved.String() != "https://example.com/next?q=1" {
+		t.Fatalf("LinkURL() = (%v, %v), want resolved relative URL", resolved, ok)
+	}
+}
+
+func TestPageLinkURLRejectsUnsupportedScheme(t *testing.T) {
+	document := dom.NewDocument()
+	anchor := document.CreateElement("a", map[string]string{"href": "javascript:alert(1)"})
+	if err := document.AppendChild(document.Root, anchor); err != nil {
+		t.Fatal(err)
+	}
+	page := &Page{URL: mustParseURL(t, "https://example.com"), Document: document}
+	if resolved, ok := page.LinkURL(anchor.ID); ok || resolved != nil {
+		t.Fatalf("LinkURL() = (%v, %v), want unsupported scheme rejected", resolved, ok)
 	}
 }
 
