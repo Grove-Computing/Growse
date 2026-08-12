@@ -1961,6 +1961,7 @@ localhost
 * [x] Display Listを生成できる
 * [x] Gio RendererでDisplay Listを描画できる
 * [x] 縦スクロールできる
+* [x] Hit Testingが動作する
 * [ ] `<a>` をクリックしてページ遷移できる
 * [ ] Backが動作する
 * [x] Reloadが動作する

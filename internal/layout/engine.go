@@ -88,7 +88,7 @@ func (e *engine) walk(node *dom.Node, x, width float32) {
 		}
 		text := e.inlineText(node)
 		if text != "" {
-			e.addInlineRuns(e.collectInlineRuns(node, node), style, x, width)
+			e.addInlineRuns(node.ID, node.TagName, e.collectInlineRuns(node, node), style, x, width)
 		}
 		return
 	}
@@ -116,7 +116,7 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width float32) {
 	var inlineRuns []inlineRun
 	flushInline := func() {
 		if len(inlineRuns) != 0 {
-			e.addInlineRuns(inlineRuns, style, contentX, contentWidth)
+			e.addInlineRuns(node.ID, node.TagName, inlineRuns, style, contentX, contentWidth)
 		}
 		inlineRuns = inlineRuns[:0]
 	}
@@ -184,10 +184,10 @@ func (e *engine) inlineText(node *dom.Node) string {
 }
 
 func (e *engine) addText(nodeID dom.NodeID, tag, text string, style blockStyle, x, width float32) {
-	e.addInlineRuns([]inlineRun{{nodeID: nodeID, tag: tag, text: text, style: style}}, style, x, width)
+	e.addInlineRuns(nodeID, tag, []inlineRun{{nodeID: nodeID, tag: tag, text: text, style: style}}, style, x, width)
 }
 
-func (e *engine) addInlineRuns(runs []inlineRun, container blockStyle, x, width float32) {
+func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, container blockStyle, x, width float32) {
 	var lineRuns []TextRun
 	var lineText strings.Builder
 	var usedWidth, lineHeight float32
@@ -201,7 +201,7 @@ func (e *engine) addInlineRuns(runs []inlineRun, container blockStyle, x, width 
 			lineHeight = container.fontSize * 1.4
 		}
 		e.tree.Boxes = append(e.tree.Boxes, Box{
-			NodeID: containerNodeID(lineRuns), Tag: containerTag(lineRuns), Text: lineText.String(),
+			NodeID: nodeID, Tag: tag, Text: lineText.String(),
 			X: x, Y: e.y, Width: width, Height: lineHeight,
 			FontSize: container.fontSize, Bold: container.bold, Color: container.color,
 			Background: container.background, Runs: append([]TextRun(nil), lineRuns...),
@@ -322,20 +322,6 @@ func sameTextStyle(left, right TextRun) bool {
 
 func estimatedTextWidth(text string, fontSize float32) float32 {
 	return float32(utf8.RuneCountInString(text)) * fontSize * 0.58
-}
-
-func containerNodeID(runs []TextRun) dom.NodeID {
-	if len(runs) == 0 {
-		return 0
-	}
-	return runs[0].NodeID
-}
-
-func containerTag(runs []TextRun) string {
-	if len(runs) == 0 {
-		return ""
-	}
-	return runs[0].Tag
 }
 
 func (e *engine) styleFor(node *dom.Node) blockStyle {
