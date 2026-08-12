@@ -112,6 +112,39 @@ func TestBuildAppliesBoxModelAndDisplay(t *testing.T) {
 	}
 }
 
+func TestBuildPreservesInlineRunStyles(t *testing.T) {
+	document := dom.NewDocument()
+	p := document.CreateElement("p", nil)
+	span := document.CreateElement("span", map[string]string{"class": "accent"})
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, p},
+		[2]*dom.Node{p, document.CreateText("Hello ")},
+		[2]*dom.Node{p, span},
+		[2]*dom.Node{span, document.CreateText("Growse")},
+		[2]*dom.Node{p, document.CreateText("!")},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`.accent { color: red; font-size: 24px; font-weight: bold; }`))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tree := Build(document, style.Compute(document, stylesheet), 800)
+	if got, want := len(tree.Boxes), 1; got != want {
+		t.Fatalf("line count = %d, want %d", got, want)
+	}
+	line := tree.Boxes[0]
+	if line.Text != "Hello Growse!" || len(line.Runs) != 3 {
+		t.Fatalf("line = %#v, want three styled runs", line)
+	}
+	accent := line.Runs[1]
+	if accent.Text != "Growse" || accent.Color != 0xff0000ff || accent.FontSize != 24 || !accent.Bold {
+		t.Fatalf("accent run = %#v, want styled Growse", accent)
+	}
+	if line.Height != 24*1.4 {
+		t.Fatalf("line height = %v, want largest run height", line.Height)
+	}
+}
+
 func appendNodes(t *testing.T, document *dom.Document, edges ...[2]*dom.Node) {
 	t.Helper()
 	for _, edge := range edges {

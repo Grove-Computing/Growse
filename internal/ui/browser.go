@@ -383,6 +383,16 @@ func (ui *BrowserUI) layoutDrawText(gtx layout.Context, command paintmodel.DrawT
 		if command.Background != 0 {
 			paint.FillShape(gtx.Ops, rgba(command.Background), clip.Rect{Max: gtx.Constraints.Min}.Op())
 		}
+		if len(command.Runs) > 0 {
+			children := make([]layout.FlexChild, 0, len(command.Runs))
+			for _, run := range command.Runs {
+				run := run
+				children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					return ui.layoutTextRun(gtx, run, height)
+				}))
+			}
+			return layout.Flex{Alignment: layout.Baseline}.Layout(gtx, children...)
+		}
 
 		label := material.Label(ui.theme, unit.Sp(command.FontSize), command.Text)
 		label.Color = rgba(command.Color)
@@ -392,6 +402,31 @@ func (ui *BrowserUI) layoutDrawText(gtx layout.Context, command paintmodel.DrawT
 		}
 		return layout.W.Layout(gtx, label.Layout)
 	})
+}
+
+func (ui *BrowserUI) layoutTextRun(gtx layout.Context, run paintmodel.TextRun, height int) layout.Dimensions {
+	gtx.Constraints.Min.X = 0
+	gtx.Constraints.Min.Y = height
+	gtx.Constraints.Max.Y = height
+	text := func(gtx layout.Context) layout.Dimensions {
+		label := material.Label(ui.theme, unit.Sp(run.FontSize), run.Text)
+		label.Color = rgba(run.Color)
+		label.MaxLines = 1
+		if run.Bold {
+			label.Font.Weight = font.Bold
+		}
+		return layout.W.Layout(gtx, label.Layout)
+	}
+	if run.Background == 0 {
+		return text(gtx)
+	}
+	return layout.Stack{Alignment: layout.W}.Layout(gtx,
+		layout.Expanded(func(gtx layout.Context) layout.Dimensions {
+			paint.FillShape(gtx.Ops, rgba(run.Background), clip.Rect{Max: gtx.Constraints.Min}.Op())
+			return layout.Dimensions{Size: gtx.Constraints.Min}
+		}),
+		layout.Stacked(text),
+	)
 }
 
 func rgba(value uint32) color.NRGBA {

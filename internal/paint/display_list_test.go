@@ -8,7 +8,7 @@ import (
 
 func TestBuildPreservesPaintOrder(t *testing.T) {
 	tree := &layout.Tree{Width: 400, Height: 100, Boxes: []layout.Box{
-		{Text: "first", Y: 10},
+		{Text: "first", Y: 10, Runs: []layout.TextRun{{Text: "first", Color: 0x123456ff}}},
 		{Text: "second", Y: 40},
 	}}
 
@@ -19,5 +19,8 @@ func TestBuildPreservesPaintOrder(t *testing.T) {
 	first, ok := list.Commands[0].(DrawText)
 	if !ok || first.Text != "first" {
 		t.Fatalf("first command = %#v, want DrawText first", list.Commands[0])
+	}
+	if len(first.Runs) != 1 || first.Runs[0].Color != 0x123456ff {
+		t.Fatalf("first runs = %#v, want preserved inline style", first.Runs)
 	}
 }

@@ -26,4 +26,18 @@ type Box struct {
 	Bold       bool
 	Color      uint32
 	Background uint32
+	Runs       []TextRun
+}
+
+// TextRun is a continuously styled fragment inside one line box.
+type TextRun struct {
+	NodeID dom.NodeID
+	Tag    string
+	Text   string
+	Width  float32
+
+	FontSize   float32
+	Bold       bool
+	Color      uint32
+	Background uint32
 }

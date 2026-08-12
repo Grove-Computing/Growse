@@ -25,6 +25,13 @@ type blockStyle struct {
 	padding    stylemodel.Edges
 }
 
+type inlineRun struct {
+	nodeID dom.NodeID
+	tag    string
+	text   string
+	style  blockStyle
+}
+
 // Build creates a vertical block layout with a minimal inline text flow.
 func Build(document *dom.Document, computed stylemodel.Map, viewportWidth float32) *Tree {
 	if viewportWidth < pagePadding*2+1 {
@@ -81,7 +88,7 @@ func (e *engine) walk(node *dom.Node, x, width float32) {
 		}
 		text := e.inlineText(node)
 		if text != "" {
-			e.addText(node.ID, node.TagName, text, style, x, width)
+			e.addInlineRuns(e.collectInlineRuns(node, node), style, x, width)
 		}
 		return
 	}
@@ -106,13 +113,12 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width float32) {
 	}
 	e.y += style.padding.Top
 
-	var inlineParts []string
+	var inlineRuns []inlineRun
 	flushInline := func() {
-		text := normalizeWhitespace(strings.Join(inlineParts, ""))
-		if text != "" {
-			e.addText(node.ID, node.TagName, text, style, contentX, contentWidth)
+		if len(inlineRuns) != 0 {
+			e.addInlineRuns(inlineRuns, style, contentX, contentWidth)
 		}
-		inlineParts = inlineParts[:0]
+		inlineRuns = inlineRuns[:0]
 	}
 
 	for _, child := range node.Children {
@@ -127,13 +133,37 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width float32) {
 				continue
 			}
 		}
-		if text := e.inlineText(child); text != "" {
-			inlineParts = append(inlineParts, text)
-		}
+		inlineRuns = append(inlineRuns, e.collectInlineRuns(child, node)...)
 	}
 	flushInline()
 
 	e.y += style.padding.Bottom + style.margin.Bottom
+}
+
+func (e *engine) collectInlineRuns(node, owner *dom.Node) []inlineRun {
+	if node == nil {
+		return nil
+	}
+	if node.Type == dom.NodeText {
+		style := e.styleFor(node)
+		return []inlineRun{{nodeID: owner.ID, tag: owner.TagName, text: node.Text, style: style}}
+	}
+	if node.Type != dom.NodeElement {
+		return nil
+	}
+	style := e.styleFor(node)
+	if style.display == stylemodel.DisplayNone {
+		return nil
+	}
+	if node.TagName == "br" {
+		return []inlineRun{{nodeID: node.ID, tag: node.TagName, text: "\n", style: style}}
+	}
+
+	var result []inlineRun
+	for _, child := range node.Children {
+		result = append(result, e.collectInlineRuns(child, node)...)
+	}
+	return result
 }
 
 func (e *engine) inlineText(node *dom.Node) string {
@@ -154,23 +184,158 @@ func (e *engine) inlineText(node *dom.Node) string {
 }
 
 func (e *engine) addText(nodeID dom.NodeID, tag, text string, style blockStyle, x, width float32) {
-	lineHeight := style.fontSize * 1.4
-	for _, line := range wrapText(text, width, style.fontSize) {
+	e.addInlineRuns([]inlineRun{{nodeID: nodeID, tag: tag, text: text, style: style}}, style, x, width)
+}
+
+func (e *engine) addInlineRuns(runs []inlineRun, container blockStyle, x, width float32) {
+	var lineRuns []TextRun
+	var lineText strings.Builder
+	var usedWidth, lineHeight float32
+	var pendingSpace *inlineRun
+
+	flushLine := func() {
+		if len(lineRuns) == 0 {
+			return
+		}
+		if lineHeight == 0 {
+			lineHeight = container.fontSize * 1.4
+		}
 		e.tree.Boxes = append(e.tree.Boxes, Box{
-			NodeID:     nodeID,
-			Tag:        tag,
-			Text:       line,
-			X:          x,
-			Y:          e.y,
-			Width:      width,
-			Height:     lineHeight,
-			FontSize:   style.fontSize,
-			Bold:       style.bold,
-			Color:      style.color,
-			Background: style.background,
+			NodeID: containerNodeID(lineRuns), Tag: containerTag(lineRuns), Text: lineText.String(),
+			X: x, Y: e.y, Width: width, Height: lineHeight,
+			FontSize: container.fontSize, Bold: container.bold, Color: container.color,
+			Background: container.background, Runs: append([]TextRun(nil), lineRuns...),
 		})
 		e.y += lineHeight
+		lineRuns = lineRuns[:0]
+		lineText.Reset()
+		usedWidth, lineHeight, pendingSpace = 0, 0, nil
 	}
+
+	appendPiece := func(run inlineRun, text string, pieceWidth float32) {
+		textRun := TextRun{
+			NodeID: run.nodeID, Tag: run.tag, Text: text, Width: pieceWidth,
+			FontSize: run.style.fontSize, Bold: run.style.bold,
+			Color: run.style.color, Background: run.style.background,
+		}
+		if len(lineRuns) > 0 && sameTextStyle(lineRuns[len(lineRuns)-1], textRun) {
+			lineRuns[len(lineRuns)-1].Text += text
+			lineRuns[len(lineRuns)-1].Width += pieceWidth
+		} else {
+			lineRuns = append(lineRuns, textRun)
+		}
+		lineText.WriteString(text)
+		usedWidth += pieceWidth
+		if height := run.style.fontSize * 1.4; height > lineHeight {
+			lineHeight = height
+		}
+	}
+
+	for _, token := range tokenizeInlineRuns(runs) {
+		if token.text == "\n" {
+			flushLine()
+			continue
+		}
+		if token.text == " " {
+			if len(lineRuns) > 0 {
+				copy := token
+				pendingSpace = &copy
+			}
+			continue
+		}
+
+		spaceWidth := float32(0)
+		if pendingSpace != nil {
+			spaceWidth = estimatedTextWidth(" ", pendingSpace.style.fontSize)
+		}
+		wordWidth := estimatedTextWidth(token.text, token.style.fontSize)
+		if usedWidth > 0 && usedWidth+spaceWidth+wordWidth > width {
+			flushLine()
+			spaceWidth = 0
+		}
+		if pendingSpace != nil && usedWidth > 0 {
+			appendPiece(*pendingSpace, " ", spaceWidth)
+		}
+		pendingSpace = nil
+
+		remaining := []rune(token.text)
+		for len(remaining) > 0 {
+			available := width - usedWidth
+			characters := int(available / estimatedTextWidth("m", token.style.fontSize))
+			if characters < 1 {
+				flushLine()
+				continue
+			}
+			if characters > len(remaining) {
+				characters = len(remaining)
+			}
+			piece := string(remaining[:characters])
+			appendPiece(token, piece, estimatedTextWidth(piece, token.style.fontSize))
+			remaining = remaining[characters:]
+			if len(remaining) > 0 {
+				flushLine()
+			}
+		}
+	}
+	flushLine()
+}
+
+func tokenizeInlineRuns(runs []inlineRun) []inlineRun {
+	var tokens []inlineRun
+	for _, run := range runs {
+		var word strings.Builder
+		flushWord := func() {
+			if word.Len() == 0 {
+				return
+			}
+			token := run
+			token.text = word.String()
+			tokens = append(tokens, token)
+			word.Reset()
+		}
+		for _, character := range run.text {
+			if character == '\n' {
+				flushWord()
+				token := run
+				token.text = "\n"
+				tokens = append(tokens, token)
+			} else if unicode.IsSpace(character) {
+				flushWord()
+				if len(tokens) == 0 || tokens[len(tokens)-1].text != " " {
+					token := run
+					token.text = " "
+					tokens = append(tokens, token)
+				}
+			} else {
+				word.WriteRune(character)
+			}
+		}
+		flushWord()
+	}
+	return tokens
+}
+
+func sameTextStyle(left, right TextRun) bool {
+	return left.NodeID == right.NodeID && left.Tag == right.Tag && left.FontSize == right.FontSize &&
+		left.Bold == right.Bold && left.Color == right.Color && left.Background == right.Background
+}
+
+func estimatedTextWidth(text string, fontSize float32) float32 {
+	return float32(utf8.RuneCountInString(text)) * fontSize * 0.58
+}
+
+func containerNodeID(runs []TextRun) dom.NodeID {
+	if len(runs) == 0 {
+		return 0
+	}
+	return runs[0].NodeID
+}
+
+func containerTag(runs []TextRun) string {
+	if len(runs) == 0 {
+		return ""
+	}
+	return runs[0].Tag
 }
 
 func (e *engine) styleFor(node *dom.Node) blockStyle {
@@ -249,38 +414,4 @@ func findElement(node *dom.Node, tag string) *dom.Node {
 
 func normalizeWhitespace(value string) string {
 	return strings.Join(strings.Fields(value), " ")
-}
-
-func wrapText(text string, width, fontSize float32) []string {
-	maxRunes := int(width / (fontSize * 0.58))
-	if maxRunes < 1 {
-		maxRunes = 1
-	}
-	if utf8.RuneCountInString(text) <= maxRunes {
-		return []string{text}
-	}
-
-	var lines []string
-	remaining := []rune(text)
-	for len(remaining) > maxRunes {
-		cut := maxRunes
-		for i := maxRunes; i > maxRunes/2; i-- {
-			if unicode.IsSpace(remaining[i-1]) {
-				cut = i - 1
-				break
-			}
-		}
-		line := strings.TrimSpace(string(remaining[:cut]))
-		if line != "" {
-			lines = append(lines, line)
-		}
-		remaining = remaining[cut:]
-		for len(remaining) > 0 && unicode.IsSpace(remaining[0]) {
-			remaining = remaining[1:]
-		}
-	}
-	if line := strings.TrimSpace(string(remaining)); line != "" {
-		lines = append(lines, line)
-	}
-	return lines
 }
