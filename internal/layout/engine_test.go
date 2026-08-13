@@ -146,6 +146,34 @@ func TestBuildAppliesSizingConstraintsAndBoxSizing(t *testing.T) {
 	}
 }
 
+func TestBuildCollapsesAdjacentBlockMargins(t *testing.T) {
+	document := dom.NewDocument()
+	body := document.CreateElement("body", nil)
+	first := document.CreateElement("div", map[string]string{"class": "first"})
+	second := document.CreateElement("div", map[string]string{"class": "second"})
+	third := document.CreateElement("div", map[string]string{"class": "third"})
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, body},
+		[2]*dom.Node{body, first}, [2]*dom.Node{first, document.CreateText("first")},
+		[2]*dom.Node{body, second}, [2]*dom.Node{second, document.CreateText("second")},
+		[2]*dom.Node{body, third}, [2]*dom.Node{third, document.CreateText("third")},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.first { margin-bottom: 20px; }
+.second { margin-top: 10px; margin-bottom: 20px; }
+.third { margin-top: -5px; }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, style.Compute(document, stylesheet), 800)
+	firstGap := tree.Boxes[1].Y - (tree.Boxes[0].Y + tree.Boxes[0].Height)
+	secondGap := tree.Boxes[2].Y - (tree.Boxes[1].Y + tree.Boxes[1].Height)
+	if firstGap != 20 || secondGap != 15 {
+		t.Fatalf("collapsed gaps = (%v, %v), want (20, 15)", firstGap, secondGap)
+	}
+}
+
 func TestBuildPreservesInlineRunStyles(t *testing.T) {
 	document := dom.NewDocument()
 	p := document.CreateElement("p", nil)

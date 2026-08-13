@@ -106,7 +106,7 @@ func (e *engine) walk(node *dom.Node, x, width, containingHeight float32, height
 			return
 		}
 		if style.display == stylemodel.DisplayBlock {
-			e.addBlock(node, style, x, width, containingHeight, heightDefinite)
+			e.addBlock(node, style, x, width, containingHeight, heightDefinite, nil)
 			return
 		}
 		runs := e.collectInlineRuns(node, node)
@@ -164,8 +164,12 @@ func isTextInput(node *dom.Node) bool {
 	return !ok || strings.EqualFold(strings.TrimSpace(typeValue), "text")
 }
 
-func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containingHeight float32, heightDefinite bool) {
-	e.y += style.margin.Top
+func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containingHeight float32, heightDefinite bool, topMargin *float32) {
+	if topMargin == nil {
+		e.y += style.margin.Top
+	} else {
+		e.y += *topMargin
+	}
 	x += style.margin.Left
 	availableWidth := width - style.margin.Left - style.margin.Right
 	if availableWidth < 1 {
@@ -209,9 +213,12 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 	}
 
 	inlineRuns := e.generatedRuns(node, true, style)
+	previousBlock := false
+	previousBottomMargin := float32(0)
 	flushInline := func() {
 		if len(inlineRuns) != 0 {
 			e.addInlineRuns(node.ID, node.TagName, inlineRuns, style, contentX, contentWidth)
+			previousBlock = false
 		}
 		inlineRuns = inlineRuns[:0]
 	}
@@ -222,9 +229,24 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 			if childStyle.display == stylemodel.DisplayNone {
 				continue
 			}
+			if isTextInput(child) {
+				flushInline()
+				e.addInput(child, childStyle, contentX, contentWidth, childContainingHeight, declaredHeightDefinite)
+				previousBlock = true
+				previousBottomMargin = childStyle.margin.Bottom
+				continue
+			}
 			if childStyle.display == stylemodel.DisplayBlock {
 				flushInline()
-				e.walk(child, contentX, contentWidth, childContainingHeight, declaredHeightDefinite)
+				if previousBlock {
+					e.y -= previousBottomMargin
+					collapsed := collapseMargins(previousBottomMargin, childStyle.margin.Top)
+					e.addBlock(child, childStyle, contentX, contentWidth, childContainingHeight, declaredHeightDefinite, &collapsed)
+				} else {
+					e.addBlock(child, childStyle, contentX, contentWidth, childContainingHeight, declaredHeightDefinite, nil)
+				}
+				previousBlock = true
+				previousBottomMargin = childStyle.margin.Bottom
 				continue
 			}
 		}
@@ -247,6 +269,12 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 		outerHeight = 0
 	}
 	e.y = boxTop + outerHeight + style.margin.Bottom
+}
+
+func collapseMargins(first, second float32) float32 {
+	positive := max(first, float32(0), second)
+	negative := min(first, float32(0), second)
+	return positive + negative
 }
 
 func resolveSize(value stylemodel.SizeValue, basis float32, basisDefinite bool) (float32, bool) {
