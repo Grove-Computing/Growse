@@ -292,7 +292,10 @@ func TestUpdateViewportRecomputesRelativeUnits(t *testing.T) {
 	if err := document.AppendChild(document.Root, paragraph); err != nil {
 		t.Fatal(err)
 	}
-	stylesheet, err := css.Parse(strings.NewReader(`p { font-size: 10vw; padding: 5vh }`))
+	stylesheet, err := css.Parse(strings.NewReader(`
+p { font-size: 10vw; padding: 5vh }
+@media (max-width: 900px) { p { color: red } }
+`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -306,7 +309,7 @@ func TestUpdateViewportRecomputesRelativeUnits(t *testing.T) {
 		t.Fatal("UpdateViewport() = false, want changed")
 	}
 	computed, _ := page.ComputedStyles.For(paragraph)
-	if computed.FontSize != 80 || computed.Padding.Top != 30 {
+	if computed.FontSize != 80 || computed.Padding.Top != 30 || computed.Color != 0xff0000ff {
 		t.Fatalf("viewport-relative style = %#v", computed)
 	}
 	if browser.UpdateViewport(800, 600) {

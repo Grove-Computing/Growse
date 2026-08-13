@@ -299,6 +299,35 @@ p { color: blue }
 	}
 }
 
+func TestParseMediaQueriesAndNestedRules(t *testing.T) {
+	stylesheet, err := Parse(strings.NewReader(`
+@media screen and (min-width: 600px), not print and (orientation: portrait) {
+  p { color: red }
+  @media (hover: hover) { a { color: blue } }
+}
+@supports (display: grid) { div { color: green } }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := len(stylesheet.Rules), 2; got != want {
+		t.Fatalf("rule count = %d, want %d", got, want)
+	}
+	first := stylesheet.Rules[0]
+	if got, want := len(first.Media), 1; got != want || len(first.Media[0]) != 2 {
+		t.Fatalf("first media groups = %#v", first.Media)
+	}
+	if first.Media[0][0].Type != "screen" || first.Media[0][0].Features[0].Name != "min-width" {
+		t.Fatalf("screen query = %#v", first.Media[0][0])
+	}
+	if first.Media[0][1].Modifier != MediaModifierNot || first.Media[0][1].Type != "print" {
+		t.Fatalf("not query = %#v", first.Media[0][1])
+	}
+	if got, want := len(stylesheet.Rules[1].Media), 2; got != want {
+		t.Fatalf("nested media group count = %d, want %d", got, want)
+	}
+}
+
 func TestParseSupportedHoverSelectors(t *testing.T) {
 	stylesheet, err := Parse(strings.NewReader(`
 button:hover, #save:hover, .todo:hover, li.todo:hover { color: red }

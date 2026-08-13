@@ -22,6 +22,29 @@ type Rule struct {
 	Selectors    []Selector
 	Declarations []Declaration
 	Order        int
+	Media        [][]MediaQuery
+}
+
+// MediaModifier changes how one media query is interpreted.
+type MediaModifier uint8
+
+const (
+	MediaModifierNone MediaModifier = iota
+	MediaModifierNot
+	MediaModifierOnly
+)
+
+// MediaQuery is one comma-separated media query. Features are combined by and.
+type MediaQuery struct {
+	Modifier MediaModifier
+	Type     string
+	Features []MediaFeature
+}
+
+// MediaFeature is a media feature name and its optional value.
+type MediaFeature struct {
+	Name  string
+	Value string
 }
 
 // Declaration is one CSS property/value pair.

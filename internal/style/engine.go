@@ -31,10 +31,17 @@ type Environment struct {
 	ViewportWidth  float32
 	ViewportHeight float32
 	RootFontSize   float32
+	ResolutionDPI  float32
+	ColorScheme    string
+	Hover          bool
+	Pointer        string
 }
 
 func defaultEnvironment() Environment {
-	return Environment{ViewportWidth: 1280, ViewportHeight: 720, RootFontSize: 16}
+	return Environment{
+		ViewportWidth: 1280, ViewportHeight: 720, RootFontSize: 16,
+		ResolutionDPI: 96, ColorScheme: "light", Hover: true, Pointer: "fine",
+	}
 }
 
 // ComputeWithState applies styles using transient browser interaction state.
@@ -57,6 +64,15 @@ func ComputeWithEnvironment(document *dom.Document, stylesheet *css.Stylesheet, 
 	if environment.RootFontSize <= 0 {
 		environment.RootFontSize = 16
 	}
+	if environment.ResolutionDPI <= 0 {
+		environment.ResolutionDPI = 96
+	}
+	if environment.ColorScheme == "" {
+		environment.ColorScheme = "light"
+	}
+	if environment.Pointer == "" {
+		environment.Pointer = "fine"
+	}
 	computeNode(document.Root, initialStyle(), stylesheet, state, environment, result)
 	return result
 }
@@ -68,7 +84,7 @@ func computeNode(node *dom.Node, parent ComputedStyle, stylesheet *css.Styleshee
 	} else if node.Type == dom.NodeElement {
 		computed = applyUADefaults(node.TagName, computed)
 		computed = applyAuthorRules(node, computed, parent, stylesheet, state, environment)
-		computed = applyGeneratedContent(node, computed, stylesheet, state)
+		computed = applyGeneratedContent(node, computed, stylesheet, state, environment)
 		result[node.ID] = computed
 	} else if node.Type == dom.NodeText {
 		result[node.ID] = computed
@@ -142,6 +158,9 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 	}
 	winners := make(map[string]winner)
 	for _, rule := range stylesheet.Rules {
+		if !matchesMediaGroups(rule.Media, environment) {
+			continue
+		}
 		for _, selector := range rule.Selectors {
 			if selectorPseudoElement(selector) != css.PseudoElementNone {
 				continue
@@ -501,7 +520,7 @@ func isCSSNameByte(value byte) bool {
 		value >= 'A' && value <= 'Z' || value >= '0' && value <= '9' || value >= 0x80
 }
 
-func applyGeneratedContent(node *dom.Node, computed ComputedStyle, stylesheet *css.Stylesheet, state InteractionState) ComputedStyle {
+func applyGeneratedContent(node *dom.Node, computed ComputedStyle, stylesheet *css.Stylesheet, state InteractionState, environment Environment) ComputedStyle {
 	if stylesheet == nil {
 		return computed
 	}
@@ -515,6 +534,9 @@ func applyGeneratedContent(node *dom.Node, computed ComputedStyle, stylesheet *c
 		var selected winner
 		found := false
 		for _, rule := range stylesheet.Rules {
+			if !matchesMediaGroups(rule.Media, environment) {
+				continue
+			}
 			for _, selector := range rule.Selectors {
 				if selectorPseudoElement(selector) != target.kind || !matches(node, selector, state) {
 					continue

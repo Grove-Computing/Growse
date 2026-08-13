@@ -154,6 +154,7 @@ func (navigator *stubNavigator) recomputeHoverStyles() {
 		style.InteractionState{Hovered: hovered, Focused: navigator.page.FocusTarget},
 		style.Environment{
 			ViewportWidth: navigator.page.ViewportWidth, ViewportHeight: navigator.page.ViewportHeight, RootFontSize: 16,
+			ResolutionDPI: 96, ColorScheme: "light", Hover: true, Pointer: "fine",
 		},
 	)
 }

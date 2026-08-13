@@ -21,6 +21,12 @@ func Parse(reader io.Reader) (*Stylesheet, error) {
 	p := parser.NewParser(parse.NewInputBytes(input), false)
 	stylesheet := &Stylesheet{}
 	var current *Rule
+	type atRuleFrame struct {
+		active  bool
+		isMedia bool
+		media   []MediaQuery
+	}
+	var atRules []atRuleFrame
 
 	for {
 		grammar, _, data := p.Next()
@@ -37,6 +43,21 @@ func Parse(reader io.Reader) (*Stylesheet, error) {
 			}
 			return stylesheet, nil
 		case parser.BeginRulesetGrammar:
+			active := true
+			var mediaGroups [][]MediaQuery
+			for _, frame := range atRules {
+				if !frame.active {
+					active = false
+					break
+				}
+				if frame.isMedia {
+					mediaGroups = append(mediaGroups, append([]MediaQuery(nil), frame.media...))
+				}
+			}
+			if !active {
+				current = nil
+				continue
+			}
 			selectorText := string(data) + tokenText(p.Values())
 			selectors := parseSelectorList(selectorText)
 			if len(selectors) == 0 {
@@ -44,7 +65,7 @@ func Parse(reader io.Reader) (*Stylesheet, error) {
 				continue
 			}
 			stylesheet.Rules = append(stylesheet.Rules, Rule{
-				Kind: RuleStyle, Selectors: selectors, Order: len(stylesheet.Rules),
+				Kind: RuleStyle, Selectors: selectors, Order: len(stylesheet.Rules), Media: mediaGroups,
 			})
 			current = &stylesheet.Rules[len(stylesheet.Rules)-1]
 		case parser.DeclarationGrammar, parser.CustomPropertyGrammar:
@@ -64,9 +85,21 @@ func Parse(reader io.Reader) (*Stylesheet, error) {
 			}
 		case parser.EndRulesetGrammar:
 			current = nil
-		case parser.AtRuleGrammar, parser.BeginAtRuleGrammar, parser.EndAtRuleGrammar:
-			// At-rules are ignored until their individual evaluators are
-			// implemented. Do not attach declarations to the preceding rule.
+		case parser.AtRuleGrammar:
+			current = nil
+		case parser.BeginAtRuleGrammar:
+			name := strings.ToLower(strings.TrimSpace(string(data)))
+			frame := atRuleFrame{active: false}
+			if name == "@media" {
+				frame.active, frame.isMedia = true, true
+				frame.media = parseMediaQueryList(tokenText(p.Values()))
+			}
+			atRules = append(atRules, frame)
+			current = nil
+		case parser.EndAtRuleGrammar:
+			if len(atRules) != 0 {
+				atRules = atRules[:len(atRules)-1]
+			}
 			current = nil
 		}
 	}

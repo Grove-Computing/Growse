@@ -581,6 +581,43 @@ func TestComputeResolvesCurrentColorAndAlpha(t *testing.T) {
 	}
 }
 
+func TestComputeEvaluatesMediaQueries(t *testing.T) {
+	document := dom.NewDocument()
+	paragraph := document.CreateElement("p", nil)
+	appendNode(t, document, document.Root, paragraph)
+	stylesheet, err := css.Parse(strings.NewReader(`
+p { color: black; }
+@media screen and (min-width: 700px) and (max-height: 700px) {
+  p { color: red; }
+}
+@media (orientation: landscape) and (min-resolution: 2dppx) {
+  p { font-size: 20px; }
+}
+@media (prefers-color-scheme: dark) and (hover: hover) and (pointer: fine) {
+  p { background-color: blue; }
+}
+@media only screen, print { p { padding: 4px; } }
+@media print { p { color: green !important; } }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	matched, _ := ComputeWithEnvironment(document, stylesheet, InteractionState{}, Environment{
+		ViewportWidth: 800, ViewportHeight: 600, RootFontSize: 16,
+		ResolutionDPI: 192, ColorScheme: "dark", Hover: true, Pointer: "fine",
+	}).For(paragraph)
+	if matched.Color != 0xff0000ff || matched.FontSize != 20 || matched.BackgroundColor != 0x0000ffff || matched.Padding.Top != 4 {
+		t.Fatalf("matched media style = %#v", matched)
+	}
+	unmatched, _ := ComputeWithEnvironment(document, stylesheet, InteractionState{}, Environment{
+		ViewportWidth: 500, ViewportHeight: 700, RootFontSize: 16,
+		ResolutionDPI: 96, ColorScheme: "light", Hover: false, Pointer: "coarse",
+	}).For(paragraph)
+	if unmatched.Color != 0x000000ff || unmatched.FontSize == 20 || unmatched.BackgroundColor == 0x0000ffff {
+		t.Fatalf("unmatched media style = %#v", unmatched)
+	}
+}
+
 func parseTestSelector(t *testing.T, value string) css.Selector {
 	t.Helper()
 	stylesheet, err := css.Parse(strings.NewReader(value + " { color: red }"))

@@ -501,6 +501,7 @@ func computePageStyles(page *Page) style.Map {
 	}
 	return style.ComputeWithEnvironment(page.Document, page.Stylesheet, interactionState(page), style.Environment{
 		ViewportWidth: page.ViewportWidth, ViewportHeight: page.ViewportHeight, RootFontSize: 16,
+		ResolutionDPI: 96, ColorScheme: "light", Hover: true, Pointer: "fine",
 	})
 }
 
