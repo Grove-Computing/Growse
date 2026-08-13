@@ -19,6 +19,11 @@ button {
     padding: 8px 24px;
 }
 
+button:hover {
+    background-color: #bae6fd;
+    color: #0c4a6e;
+}
+
 #count {
     font-size: 28px;
     font-weight: bold;

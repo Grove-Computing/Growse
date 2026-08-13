@@ -31,6 +31,11 @@ button {
     padding: 8px 16px;
 }
 
+button:hover {
+    background-color: #99f6e4;
+    color: #134e4a;
+}
+
 .todo {
     background-color: white;
     padding: 12px;

@@ -39,6 +39,11 @@ func (s ComputedStyle) Bold() bool {
 // Map stores computed styles by DOM NodeID.
 type Map map[dom.NodeID]ComputedStyle
 
+// InteractionState contains transient browser state used by selector matching.
+type InteractionState struct {
+	Hovered map[dom.NodeID]bool
+}
+
 // For returns a node's computed style and whether one was calculated.
 func (m Map) For(node *dom.Node) (ComputedStyle, bool) {
 	if node == nil {

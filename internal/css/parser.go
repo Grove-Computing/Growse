@@ -87,24 +87,28 @@ func parseSelectorList(value string) []Selector {
 }
 
 func parseSelector(value string) (Selector, bool) {
+	hover := strings.HasSuffix(value, ":hover")
+	if hover {
+		value = strings.TrimSuffix(value, ":hover")
+	}
 	if value == "" || strings.ContainsAny(value, " >+~[:*") {
 		return Selector{}, false
 	}
 	if strings.HasPrefix(value, "#") && validName(value[1:]) {
-		return Selector{Kind: SelectorID, ID: value[1:]}, true
+		return Selector{Kind: SelectorID, ID: value[1:], Hover: hover}, true
 	}
 	if strings.HasPrefix(value, ".") && validName(value[1:]) {
-		return Selector{Kind: SelectorClass, Class: value[1:]}, true
+		return Selector{Kind: SelectorClass, Class: value[1:], Hover: hover}, true
 	}
 	if index := strings.IndexByte(value, '.'); index > 0 && strings.Count(value, ".") == 1 {
 		tag, class := strings.ToLower(value[:index]), value[index+1:]
 		if validName(tag) && validName(class) {
-			return Selector{Kind: SelectorTagClass, Tag: tag, Class: class}, true
+			return Selector{Kind: SelectorTagClass, Tag: tag, Class: class, Hover: hover}, true
 		}
 		return Selector{}, false
 	}
 	if validName(value) {
-		return Selector{Kind: SelectorTag, Tag: strings.ToLower(value)}, true
+		return Selector{Kind: SelectorTag, Tag: strings.ToLower(value), Hover: hover}, true
 	}
 	return Selector{}, false
 }

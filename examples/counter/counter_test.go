@@ -37,6 +37,24 @@ func TestCounterDemoFiles(t *testing.T) {
 	if !ok {
 		t.Fatal("count output was not found")
 	}
+	normalButton, ok := page.ComputedStyles.For(button)
+	if !ok || normalButton.BackgroundColor != 0xdbeafeff {
+		t.Fatalf("normal button style = %#v, want default background", normalButton)
+	}
+	if !browserState.UpdateHover(button.ID, 12, 34) {
+		t.Fatal("button hover was not applied")
+	}
+	hoveredButton, ok := page.ComputedStyles.For(button)
+	if !ok || hoveredButton.BackgroundColor != 0xbae6fdff || hoveredButton.Color != 0x0c4a6eff {
+		t.Fatalf("hovered button style = %#v, want hover colors", hoveredButton)
+	}
+	if !browserState.ClearHover() {
+		t.Fatal("button hover was not cleared")
+	}
+	restoredButton, _ := page.ComputedStyles.For(button)
+	if restoredButton.BackgroundColor != normalButton.BackgroundColor {
+		t.Fatalf("restored button background = %#x, want %#x", restoredButton.BackgroundColor, normalButton.BackgroundColor)
+	}
 	for click := 1; click <= 2; click++ {
 		if !browserState.DispatchClick(button.ID, 0, 0) {
 			t.Fatalf("click %d was not handled", click)

@@ -9,6 +9,8 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"log/slog"
+	"math"
 
 	"gioui.org/font"
 	"gioui.org/gesture"
@@ -32,7 +34,7 @@ var gopherPNG []byte
 
 const (
 	defaultURL         = "http://localhost:8080"
-	toolbarHeight      = unit.Dp(72)
+	toolbarHeight      = unit.Dp(92)
 	controlHeight      = unit.Dp(44)
 	addressBarHeight   = unit.Dp(48)
 	gopherButtonWidth  = unit.Dp(92)
@@ -49,22 +51,28 @@ type BrowserUI struct {
 	navigationID     uint64
 	loading          bool
 
-	backButton     widget.Clickable
-	forwardButton  widget.Clickable
-	reloadButton   widget.Clickable
-	goButton       widget.Clickable
-	pageList       widget.List
-	viewportClick  gesture.Click
-	address        widget.Editor
-	gopher         paint.ImageOp
-	backIcon       *widget.Icon
-	forwardIcon    *widget.Icon
-	reloadIcon     *widget.Icon
-	pageTitle      string
-	status         string
-	inputEditors   map[dom.NodeID]*widget.Editor
-	inputFocused   map[dom.NodeID]bool
-	inputCommitted map[dom.NodeID]string
+	backButton        widget.Clickable
+	forwardButton     widget.Clickable
+	reloadButton      widget.Clickable
+	goButton          widget.Clickable
+	pageList          widget.List
+	viewportClick     gesture.Click
+	address           widget.Editor
+	gopher            paint.ImageOp
+	gopherCursor      paint.ImageOp
+	gopherCursorReady bool
+	pointerTag        pointerTag
+	pointer           pointerState
+	backIcon          *widget.Icon
+	forwardIcon       *widget.Icon
+	reloadIcon        *widget.Icon
+	pageTitle         string
+	status            string
+	pageStatus        string
+	statusHasError    bool
+	inputEditors      map[dom.NodeID]*widget.Editor
+	inputFocused      map[dom.NodeID]bool
+	inputCommitted    map[dom.NodeID]string
 }
 
 // Navigator is the browser capability used by the UI.
@@ -80,6 +88,8 @@ type Navigator interface {
 	SetInputValue(nodeID dom.NodeID, value string) bool
 	CommitInputValue(nodeID dom.NodeID, value string) bool
 	SubmitForm(nodeID dom.NodeID) bool
+	UpdateHover(nodeID dom.NodeID, x, y float32) bool
+	ClearHover() bool
 }
 
 type navigationResult struct {
@@ -95,6 +105,7 @@ func NewBrowserUI(navigator Navigator, invalidate func()) *BrowserUI {
 		panic("decode embedded Go Gopher image: " + err.Error())
 	}
 
+	cursorImage, cursorErr := loadGopherCursor()
 	ui := &BrowserUI{
 		theme:          material.NewTheme(),
 		navigator:      navigator,
@@ -106,9 +117,16 @@ func NewBrowserUI(navigator Navigator, invalidate func()) *BrowserUI {
 		reloadIcon:     mustIcon(widget.NewIcon(icons.NavigationRefresh)),
 		pageTitle:      "新しい Web を Go で開く",
 		status:         "URLを入力して Gopher ボタンを押してください",
+		pageStatus:     "URLを入力して Gopher ボタンを押してください",
 		inputEditors:   make(map[dom.NodeID]*widget.Editor),
 		inputFocused:   make(map[dom.NodeID]bool),
 		inputCommitted: make(map[dom.NodeID]string),
+	}
+	if cursorErr != nil {
+		slog.Error("Gopherカーソルを初期化できませんでした", "component", "ui", "error", cursorErr)
+	} else {
+		ui.gopherCursor = paint.NewImageOp(cursorImage)
+		ui.gopherCursorReady = true
 	}
 	if ui.invalidate == nil {
 		ui.invalidate = func() {}
@@ -122,10 +140,13 @@ func NewBrowserUI(navigator Navigator, invalidate func()) *BrowserUI {
 
 // Layout draws the browser toolbar and page viewport.
 func (ui *BrowserUI) Layout(gtx layout.Context) layout.Dimensions {
+	ui.handlePointerEvents(gtx)
 	ui.handleActions(gtx)
 
 	viewport := layout.Inset{Top: toolbarHeight}.Layout(gtx, ui.layoutViewport)
 	ui.layoutToolbar(gtx)
+	ui.layoutGopherCursor(gtx)
+	ui.registerPointerTracker(gtx)
 	return viewport
 }
 
@@ -164,6 +185,7 @@ func (ui *BrowserUI) handleActions(gtx layout.Context) {
 func (ui *BrowserUI) startNavigation(rawURL string) {
 	if ui.navigator == nil {
 		ui.status = "Navigationを利用できません"
+		ui.statusHasError = true
 		return
 	}
 	ui.startPageLoad("読み込み中: "+rawURL, func(ctx context.Context) (*browser.Page, error) {
@@ -172,6 +194,9 @@ func (ui *BrowserUI) startNavigation(rawURL string) {
 }
 
 func (ui *BrowserUI) startPageLoad(status string, load func(context.Context) (*browser.Page, error)) {
+	if ui.navigator != nil {
+		ui.navigator.ClearHover()
+	}
 	if ui.cancelNavigation != nil {
 		ui.cancelNavigation()
 	}
@@ -181,6 +206,7 @@ func (ui *BrowserUI) startPageLoad(status string, load func(context.Context) (*b
 	ui.navigationID++
 	navigationID := ui.navigationID
 	ui.loading = true
+	ui.statusHasError = false
 	ui.status = status
 
 	go func() {
@@ -204,10 +230,14 @@ func (ui *BrowserUI) consumeNavigationResult() {
 			ui.inputCommitted = make(map[dom.NodeID]string)
 			if result.err != nil {
 				ui.status = "読み込みエラー: " + result.err.Error()
+				ui.pageStatus = ui.status
+				ui.statusHasError = true
 				return
 			}
 			if result.page == nil || result.page.URL == nil {
 				ui.status = "読み込みエラー: ページ情報がありません"
+				ui.pageStatus = ui.status
+				ui.statusHasError = true
 				return
 			}
 
@@ -221,15 +251,18 @@ func (ui *BrowserUI) consumeNavigationResult() {
 					ui.pageTitle = title
 				}
 			}
-			ui.status = fmt.Sprintf("取得完了 · %s · HTTP %d · %d bytes", domSummary, result.page.StatusCode, len(result.page.Source))
+			ui.pageStatus = fmt.Sprintf("取得完了 · %s · HTTP %d · %d bytes", domSummary, result.page.StatusCode, len(result.page.Source))
 			if len(result.page.ScriptErrors) > 0 {
-				ui.status += fmt.Sprintf(" · Go script error %d件", len(result.page.ScriptErrors))
+				ui.pageStatus += fmt.Sprintf(" · Go script error %d件", len(result.page.ScriptErrors))
+				ui.statusHasError = true
 			}
 			if result.page.RuntimeStarted {
-				ui.status += " · Go Runtime起動済み"
+				ui.pageStatus += " · Go Runtime起動済み"
 			} else if result.page.RuntimeError != "" {
-				ui.status += " · Go Runtimeエラー: " + result.page.RuntimeError
+				ui.pageStatus += " · Go Runtimeエラー: " + result.page.RuntimeError
+				ui.statusHasError = true
 			}
+			ui.status = ui.pageStatus
 		default:
 			return
 		}
@@ -239,6 +272,9 @@ func (ui *BrowserUI) consumeNavigationResult() {
 // Close cancels an in-flight navigation when the window closes.
 func (ui *BrowserUI) Close() {
 	ui.navigationID++
+	if ui.navigator != nil {
+		ui.navigator.ClearHover()
+	}
 	if ui.cancelNavigation != nil {
 		ui.cancelNavigation()
 	}
@@ -259,26 +295,37 @@ func (ui *BrowserUI) layoutToolbar(gtx layout.Context) layout.Dimensions {
 		clip.Rect{Min: image.Pt(0, height-1), Max: image.Pt(gtx.Constraints.Max.X, height)}.Op(),
 	)
 
-	return layout.Inset{Top: unit.Dp(10), Right: unit.Dp(14), Bottom: unit.Dp(10), Left: unit.Dp(14)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+	return layout.Inset{Top: unit.Dp(8), Right: unit.Dp(14), Bottom: unit.Dp(6), Left: unit.Dp(14)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		canBack := ui.navigator != nil && ui.navigator.CanBack()
 		canForward := ui.navigator != nil && ui.navigator.CanForward()
 		canReload := ui.navigator != nil && ui.navigator.Page() != nil
-		return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return ui.layoutToolbarButton(gtx, &ui.backButton, ui.backIcon, "戻る", canBack)
+				return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return ui.layoutToolbarButton(gtx, &ui.backButton, ui.backIcon, "戻る", canBack)
+					}),
+					layout.Rigid(layout.Spacer{Width: unit.Dp(6)}.Layout),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return ui.layoutToolbarButton(gtx, &ui.forwardButton, ui.forwardIcon, "次へ", canForward)
+					}),
+					layout.Rigid(layout.Spacer{Width: unit.Dp(6)}.Layout),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return ui.layoutToolbarButton(gtx, &ui.reloadButton, ui.reloadIcon, "再読込", canReload)
+					}),
+					layout.Rigid(layout.Spacer{Width: unit.Dp(14)}.Layout),
+					layout.Flexed(1, ui.layoutAddressBar),
+					layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
+					layout.Rigid(ui.layoutGopherButton),
+				)
 			}),
-			layout.Rigid(layout.Spacer{Width: unit.Dp(6)}.Layout),
+			layout.Rigid(layout.Spacer{Height: unit.Dp(2)}.Layout),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return ui.layoutToolbarButton(gtx, &ui.forwardButton, ui.forwardIcon, "次へ", canForward)
+				label := material.Caption(ui.theme, ui.status)
+				label.Color = color.NRGBA{R: 72, G: 84, B: 102, A: 255}
+				label.MaxLines = 1
+				return label.Layout(gtx)
 			}),
-			layout.Rigid(layout.Spacer{Width: unit.Dp(6)}.Layout),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return ui.layoutToolbarButton(gtx, &ui.reloadButton, ui.reloadIcon, "再読込", canReload)
-			}),
-			layout.Rigid(layout.Spacer{Width: unit.Dp(14)}.Layout),
-			layout.Flexed(1, ui.layoutAddressBar),
-			layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
-			layout.Rigid(ui.layoutGopherButton),
 		)
 	})
 }
@@ -412,6 +459,7 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 	tree := layoutengine.Build(page.Document, page.ComputedStyles, viewportWidth)
 	displayList := paintmodel.Build(tree)
 	paint.Fill(gtx.Ops, rgba(displayList.Background))
+	ui.updateViewportHover(gtx, page, tree, displayList)
 	ui.handleViewportClicks(gtx, page, tree, displayList)
 
 	area := clip.Rect{Max: gtx.Constraints.Max}.Push(gtx.Ops)
@@ -430,6 +478,44 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 	pass.Pop()
 	area.Pop()
 	return dimensions
+}
+
+func (ui *BrowserUI) updateViewportHover(gtx layout.Context, page *browser.Page, tree *layoutengine.Tree, displayList *paintmodel.DisplayList) {
+	if ui.navigator == nil {
+		return
+	}
+	viewportY := ui.pointer.position.Y - float32(gtx.Dp(toolbarHeight))
+	if !ui.pointer.inside || viewportY < 0 || viewportY >= float32(gtx.Constraints.Max.Y) {
+		ui.navigator.ClearHover()
+		ui.updateLinkPreview(page, 0)
+		return
+	}
+	position := image.Pt(int(math.Round(float64(ui.pointer.position.X))), int(math.Round(float64(viewportY))))
+	x, y, ok := ui.documentPoint(position, displayList, gtx.Metric.PxPerDp)
+	if !ok {
+		ui.navigator.ClearHover()
+		ui.updateLinkPreview(page, 0)
+		return
+	}
+	nodeID, ok := layoutengine.HitTest(tree, x, y)
+	if !ok {
+		ui.navigator.ClearHover()
+		ui.updateLinkPreview(page, 0)
+		return
+	}
+	ui.navigator.UpdateHover(nodeID, x, y)
+	ui.updateLinkPreview(page, nodeID)
+}
+
+func (ui *BrowserUI) updateLinkPreview(page *browser.Page, nodeID dom.NodeID) {
+	if ui.loading || ui.statusHasError {
+		return
+	}
+	if linkURL, ok := page.LinkURL(nodeID); ok {
+		ui.status = linkURL.Redacted()
+		return
+	}
+	ui.status = ui.pageStatus
 }
 
 func (ui *BrowserUI) handleViewportClicks(gtx layout.Context, page *browser.Page, tree *layoutengine.Tree, displayList *paintmodel.DisplayList) {

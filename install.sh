@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-repository="${GROWSE_REPOSITORY:-saku0512/growse}"
+repository="${GROWSE_REPOSITORY:-Growse-Project/Growse}"
 version="${GROWSE_VERSION:-latest}"
 install_dir="${GROWSE_INSTALL_DIR:-${HOME}/.local/bin}"
 api_base_url="${GROWSE_API_BASE_URL:-https://api.github.com/repos/${repository}}"
