@@ -5,6 +5,8 @@ set -euo pipefail
 repository="${GROWSE_REPOSITORY:-saku0512/growse}"
 version="${GROWSE_VERSION:-latest}"
 install_dir="${GROWSE_INSTALL_DIR:-${HOME}/.local/bin}"
+api_base_url="${GROWSE_API_BASE_URL:-https://api.github.com/repos/${repository}}"
+release_base_url="${GROWSE_RELEASE_BASE_URL:-https://github.com/${repository}/releases/download}"
 
 download() {
   local url=$1
@@ -21,7 +23,7 @@ download() {
 }
 
 if [[ "$version" == "latest" ]]; then
-  release_json=$(download "https://api.github.com/repos/${repository}/releases/latest" -)
+  release_json=$(download "${api_base_url%/}/releases/latest" -)
   version=$(printf '%s\n' "$release_json" | sed -n 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/p')
   if [[ -z "$version" ]]; then
     echo "最新リリースのバージョンを取得できませんでした。" >&2
@@ -76,7 +78,7 @@ fi
 
 archive="growse_${version}_${platform}_${arch}.${extension}"
 checksum="${archive}.sha256"
-release_url="https://github.com/${repository}/releases/download/${version}"
+release_url="${release_base_url%/}/${version}"
 work_dir=$(mktemp -d)
 trap 'rm -rf "$work_dir"' EXIT
 

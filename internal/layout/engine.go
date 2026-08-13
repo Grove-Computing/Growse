@@ -13,6 +13,8 @@ const (
 	pagePadding = float32(32)
 	textColor   = uint32(0x202124ff)
 	linkColor   = uint32(0x0969daff)
+	inputWidth  = float32(280)
+	inputHeight = float32(40)
 )
 
 type blockStyle struct {
@@ -82,6 +84,10 @@ func (e *engine) walk(node *dom.Node, x, width float32) {
 		if style.display == stylemodel.DisplayNone {
 			return
 		}
+		if isTextInput(node) {
+			e.addInput(node, style, x, width)
+			return
+		}
 		if style.display == stylemodel.DisplayBlock {
 			e.addBlock(node, style, x, width)
 			return
@@ -96,6 +102,39 @@ func (e *engine) walk(node *dom.Node, x, width float32) {
 	for _, child := range node.Children {
 		e.walk(child, x, width)
 	}
+}
+
+func (e *engine) addInput(node *dom.Node, style blockStyle, x, width float32) {
+	e.y += style.margin.Top
+	x += style.margin.Left
+	width -= style.margin.Left + style.margin.Right
+	if width > inputWidth {
+		width = inputWidth
+	}
+	if width < 1 {
+		width = 1
+	}
+	value, _ := node.Attribute("value")
+	e.tree.Boxes = append(e.tree.Boxes, Box{
+		NodeID: node.ID,
+		Tag:    node.TagName,
+		Text:   value,
+		Input:  true,
+		X:      x,
+		Y:      e.y,
+		Width:  width,
+		Height: inputHeight,
+		Color:  style.color,
+	})
+	e.y += inputHeight + style.margin.Bottom
+}
+
+func isTextInput(node *dom.Node) bool {
+	if node == nil || node.Type != dom.NodeElement || node.TagName != "input" {
+		return false
+	}
+	typeValue, ok := node.Attribute("type")
+	return !ok || strings.EqualFold(strings.TrimSpace(typeValue), "text")
 }
 
 func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width float32) {

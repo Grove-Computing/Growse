@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/saku0512/growse/internal/dom"
+	"github.com/saku0512/growse/internal/events"
 	"github.com/saku0512/growse/internal/network"
 )
 
@@ -62,6 +63,132 @@ func TestSetPageCanClearActivePage(t *testing.T) {
 
 	if browser.Page() != nil {
 		t.Fatal("active page should be cleared")
+	}
+}
+
+func TestSetInputValueUpdatesActiveTextInput(t *testing.T) {
+	document := dom.NewDocument()
+	input := document.CreateElement("input", map[string]string{"type": "text"})
+	if err := document.AppendChild(document.Root, input); err != nil {
+		t.Fatal(err)
+	}
+	page := NewPage(mustParseURL(t, "http://localhost"))
+	page.Document = document
+	page.Events = events.NewDispatcher()
+	var inputEvent events.Event
+	page.Events.AddEventListener(input.ID, events.Input, func(event events.Event) { inputEvent = event })
+	browser := New(nil)
+	browser.SetPage(page)
+	mutations := 0
+	browser.SetOnMutation(func() { mutations++ })
+
+	if !browser.SetInputValue(input.ID, "hello") {
+		t.Fatal("SetInputValue() = false, want true")
+	}
+	if got, ok := input.Attribute("value"); !ok || got != "hello" {
+		t.Fatalf("input value = (%q, %v), want (hello, true)", got, ok)
+	}
+	if browser.SetInputValue(input.ID, "hello") {
+		t.Fatal("SetInputValue() = true for unchanged value")
+	}
+	if got, want := mutations, 1; got != want {
+		t.Fatalf("mutation count = %d, want %d", got, want)
+	}
+	if inputEvent.Type != events.Input || inputEvent.Target != input.ID || inputEvent.Value != "hello" {
+		t.Fatalf("input event = %#v, want updated value", inputEvent)
+	}
+}
+
+func TestSetInputValueRejectsUnsupportedOrInactiveNode(t *testing.T) {
+	document := dom.NewDocument()
+	checkbox := document.CreateElement("input", map[string]string{"type": "checkbox"})
+	paragraph := document.CreateElement("p", nil)
+	detached := document.CreateElement("input", nil)
+	for _, node := range []*dom.Node{checkbox, paragraph} {
+		if err := document.AppendChild(document.Root, node); err != nil {
+			t.Fatal(err)
+		}
+	}
+	page := NewPage(mustParseURL(t, "http://localhost"))
+	page.Document = document
+	browser := New(nil)
+	browser.SetPage(page)
+
+	for _, node := range []*dom.Node{checkbox, paragraph, detached} {
+		if browser.SetInputValue(node.ID, "value") {
+			t.Fatalf("SetInputValue(%s) = true, want false", node.TagName)
+		}
+	}
+}
+
+func TestCommitInputValueDispatchesChangeEvent(t *testing.T) {
+	document := dom.NewDocument()
+	input := document.CreateElement("input", map[string]string{"id": "query", "value": "hello"})
+	if err := document.AppendChild(document.Root, input); err != nil {
+		t.Fatal(err)
+	}
+	page := NewPage(mustParseURL(t, "http://localhost"))
+	page.Document = document
+	page.Events = events.NewDispatcher()
+	var received events.Event
+	page.Events.AddEventListener(input.ID, events.Change, func(event events.Event) { received = event })
+	browser := New(nil)
+	browser.SetPage(page)
+
+	if !browser.CommitInputValue(input.ID, "hello") {
+		t.Fatal("CommitInputValue() = false, want handled event")
+	}
+	if received.Type != events.Change || received.Target != input.ID || received.Value != "hello" {
+		t.Fatalf("change event = %#v, want committed value", received)
+	}
+}
+
+func TestSubmitFormDispatchesToNearestForm(t *testing.T) {
+	document := dom.NewDocument()
+	form := document.CreateElement("form", map[string]string{"id": "search"})
+	input := document.CreateElement("input", map[string]string{"id": "query"})
+	if err := document.AppendChild(document.Root, form); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(form, input); err != nil {
+		t.Fatal(err)
+	}
+	page := NewPage(mustParseURL(t, "http://localhost"))
+	page.Document = document
+	page.Events = events.NewDispatcher()
+	var received events.Event
+	page.Events.AddEventListener(form.ID, events.Submit, func(event events.Event) { received = event })
+	browser := New(nil)
+	browser.SetPage(page)
+
+	if !browser.SubmitForm(input.ID) {
+		t.Fatal("SubmitForm() = false, want true")
+	}
+	if received.Type != events.Submit || received.Target != form.ID {
+		t.Fatalf("submit event = %#v, want form target", received)
+	}
+}
+
+func TestDispatchClickSubmitsSubmitButton(t *testing.T) {
+	document := dom.NewDocument()
+	form := document.CreateElement("form", nil)
+	button := document.CreateElement("button", map[string]string{"type": "submit"})
+	if err := document.AppendChild(document.Root, form); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(form, button); err != nil {
+		t.Fatal(err)
+	}
+	page := NewPage(mustParseURL(t, "http://localhost"))
+	page.Document = document
+	page.Events = events.NewDispatcher()
+	submitted := false
+	page.Events.AddEventListener(form.ID, events.Submit, func(events.Event) { submitted = true })
+	browser := New(nil)
+	browser.SetPage(page)
+
+	if !browser.DispatchClick(button.ID, 0, 0) || !submitted {
+		t.Fatal("submit button click did not submit its form")
 	}
 }
 

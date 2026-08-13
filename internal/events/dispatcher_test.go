@@ -1,7 +1,10 @@
 package events
 
 import (
+	"bytes"
+	"log/slog"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/saku0512/growse/internal/dom"
@@ -27,6 +30,10 @@ func TestDispatchCallsTargetListenersInRegistrationOrder(t *testing.T) {
 }
 
 func TestDispatchContainsListenerPanicAndContinues(t *testing.T) {
+	var logs bytes.Buffer
+	previousLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previousLogger) })
 	dispatcher := NewDispatcher()
 	called := false
 	dispatcher.AddEventListener(1, Click, func(Event) { panic("boom") })
@@ -35,10 +42,30 @@ func TestDispatchContainsListenerPanicAndContinues(t *testing.T) {
 	if !dispatcher.Dispatch(Event{Type: Click, Target: 1}) || !called {
 		t.Fatal("Dispatch() did not continue after listener panic")
 	}
+	for _, want := range []string{"WebGoイベントハンドラーでpanicが発生しました", "type=click", "panic=boom"} {
+		if !strings.Contains(logs.String(), want) {
+			t.Fatalf("panic log = %q, want to contain %q", logs.String(), want)
+		}
+	}
 }
 
 func TestDispatchReportsUnhandledEvent(t *testing.T) {
 	if NewDispatcher().Dispatch(Event{Type: Click, Target: 1}) {
 		t.Fatal("Dispatch() = true for event without listeners")
+	}
+}
+
+func TestRemoveEventListenersRemovesSpecifiedNodes(t *testing.T) {
+	dispatcher := NewDispatcher()
+	dispatcher.AddEventListener(1, Click, func(Event) {})
+	dispatcher.AddEventListener(2, Click, func(Event) {})
+
+	dispatcher.RemoveEventListeners(1)
+
+	if dispatcher.Dispatch(Event{Type: Click, Target: 1}) {
+		t.Fatal("removed node event was handled")
+	}
+	if !dispatcher.Dispatch(Event{Type: Click, Target: 2}) {
+		t.Fatal("unrelated node event listener was removed")
 	}
 }

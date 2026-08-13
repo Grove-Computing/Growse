@@ -38,6 +38,20 @@ type DrawText struct {
 
 func (DrawText) paintCommand() {}
 
+// DrawInput は編集可能な1行テキスト入力を描画する。
+type DrawInput struct {
+	NodeID dom.NodeID
+	Value  string
+	X      float32
+	Y      float32
+	Top    float32
+	Width  float32
+	Height float32
+	Color  uint32
+}
+
+func (DrawInput) paintCommand() {}
+
 // TextRun is one styled fragment within a DrawText line.
 type TextRun struct {
 	NodeID dom.NodeID
@@ -64,6 +78,20 @@ func Build(tree *layout.Tree) *DisplayList {
 		top := box.Y - previousBottom
 		if top < 0 {
 			top = 0
+		}
+		if box.Input {
+			list.Commands = append(list.Commands, DrawInput{
+				NodeID: box.NodeID,
+				Value:  box.Text,
+				X:      box.X,
+				Y:      box.Y,
+				Top:    top,
+				Width:  box.Width,
+				Height: box.Height,
+				Color:  box.Color,
+			})
+			previousBottom = box.Y + box.Height
+			continue
 		}
 		command := DrawText{
 			Text:       box.Text,

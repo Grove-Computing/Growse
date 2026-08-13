@@ -11,8 +11,16 @@ import (
 // Type はDOMイベントの種類を表す。
 type Type string
 
-// Click はポインターによるクリックイベントを表す。
-const Click Type = "click"
+const (
+	// Click はポインターによるクリックイベントを表す。
+	Click Type = "click"
+	// Input はユーザー操作で入力値が変化したイベントを表す。
+	Input Type = "input"
+	// Change は入力の編集が確定したイベントを表す。
+	Change Type = "change"
+	// Submit はformの送信操作を表す。
+	Submit Type = "submit"
+)
 
 // Event はDOM要素へ配信するイベント情報を保持する。
 type Event struct {
@@ -20,6 +28,7 @@ type Event struct {
 	Target dom.NodeID
 	X      float32
 	Y      float32
+	Value  string
 }
 
 // Listener はイベントを処理する関数である。
@@ -49,6 +58,18 @@ func (dispatcher *Dispatcher) AddEventListener(nodeID dom.NodeID, eventType Type
 		dispatcher.listeners[nodeID] = byType
 	}
 	byType[eventType] = append(byType[eventType], listener)
+}
+
+// RemoveEventListeners は指定したノードに登録された全リスナーを削除する。
+func (dispatcher *Dispatcher) RemoveEventListeners(nodeIDs ...dom.NodeID) {
+	if dispatcher == nil {
+		return
+	}
+	dispatcher.mu.Lock()
+	defer dispatcher.mu.Unlock()
+	for _, nodeID := range nodeIDs {
+		delete(dispatcher.listeners, nodeID)
+	}
 }
 
 // Dispatch は対象ノードへ登録されたリスナーを登録順に呼び出す。

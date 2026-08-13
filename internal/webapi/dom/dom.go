@@ -2,6 +2,8 @@
 package dom
 
 import (
+	"strings"
+
 	dommodel "github.com/saku0512/growse/internal/dom"
 	"github.com/saku0512/growse/internal/events"
 )
@@ -21,6 +23,15 @@ type Element struct {
 	onMutation func()
 }
 
+// Event はWebGoへ公開するDOMイベント情報である。
+type Event struct {
+	Type     string
+	TargetID string
+	Value    string
+	X        float32
+	Y        float32
+}
+
 // New はDocumentに結び付いたDOM APIを生成する。
 func New(document *dommodel.Document, dispatcher *events.Dispatcher, onMutation func()) *API {
 	return &API{document: document, events: dispatcher, onMutation: onMutation}
@@ -35,20 +46,212 @@ func (api *API) GetElementByID(id string) *Element {
 	if !ok || node.Type != dommodel.NodeElement {
 		return nil
 	}
-	return &Element{document: api.document, id: node.ID, events: api.events, onMutation: api.onMutation}
+	return api.element(node)
+}
+
+// QuerySelector は対応する単純セレクターに最初に一致する要素を返す。
+func (api *API) QuerySelector(selector string) *Element {
+	if api == nil || api.document == nil {
+		return nil
+	}
+	node, ok := api.document.QuerySelector(selector)
+	if !ok {
+		return nil
+	}
+	return api.element(node)
+}
+
+// CreateElement はDocumentが所有する未接続の要素を作成する。
+func (api *API) CreateElement(tagName string) *Element {
+	if api == nil || api.document == nil {
+		return nil
+	}
+	tagName = strings.TrimSpace(tagName)
+	if !validTagName(tagName) {
+		return nil
+	}
+	return api.element(api.document.CreateElement(tagName, nil))
 }
 
 // OnClick は要素のクリックイベントへハンドラーを登録する。
 func (element *Element) OnClick(handler func()) {
-	if element == nil || element.document == nil || element.events == nil || handler == nil {
+	if handler == nil {
 		return
 	}
-	if _, ok := element.document.NodeByID(element.id); !ok {
-		return
-	}
-	element.events.AddEventListener(element.id, events.Click, func(events.Event) {
+	element.addEventListener(events.Click, func(events.Event) {
 		handler()
 	})
+}
+
+// OnClickEvent はクリックイベント情報を受け取るハンドラーを登録する。
+func (element *Element) OnClickEvent(handler func(Event)) {
+	if handler == nil {
+		return
+	}
+	element.addEventListener(events.Click, func(event events.Event) {
+		handler(element.publicEvent(event))
+	})
+}
+
+// OnInput はユーザー操作による入力値変更のハンドラーを登録する。
+func (element *Element) OnInput(handler func(Event)) {
+	if handler == nil {
+		return
+	}
+	element.addEventListener(events.Input, func(event events.Event) {
+		handler(element.publicEvent(event))
+	})
+}
+
+// OnChange は入力の編集確定ハンドラーを登録する。
+func (element *Element) OnChange(handler func(Event)) {
+	if handler == nil {
+		return
+	}
+	element.addEventListener(events.Change, func(event events.Event) {
+		handler(element.publicEvent(event))
+	})
+}
+
+// OnSubmit はformの送信操作ハンドラーを登録する。
+func (element *Element) OnSubmit(handler func(Event)) {
+	if handler == nil {
+		return
+	}
+	element.addEventListener(events.Submit, func(event events.Event) {
+		handler(element.publicEvent(event))
+	})
+}
+
+// AppendChild は未接続の子要素を接続済みの要素の末尾へ追加する。
+func (element *Element) AppendChild(child *Element) bool {
+	if element == nil || child == nil || element.document == nil || child.document != element.document {
+		return false
+	}
+	parentNode, parentOK := element.document.NodeByID(element.id)
+	childNode, childOK := element.document.NodeByID(child.id)
+	if !parentOK || !childOK || parentNode.Type != dommodel.NodeElement || childNode.Type != dommodel.NodeElement {
+		return false
+	}
+	if !element.document.IsConnected(parentNode) || element.document.IsConnected(childNode) || childNode.Parent != nil {
+		return false
+	}
+	if err := element.document.AppendChild(parentNode, childNode); err != nil {
+		return false
+	}
+	if element.onMutation != nil {
+		element.onMutation()
+	}
+	return true
+}
+
+// Remove は要素自身とその子孫をDocumentから削除する。
+func (element *Element) Remove() bool {
+	if element == nil || element.document == nil {
+		return false
+	}
+	removed, ok := element.document.Remove(element.id)
+	if !ok {
+		return false
+	}
+	if element.events != nil {
+		element.events.RemoveEventListeners(removed...)
+	}
+	if element.onMutation != nil {
+		element.onMutation()
+	}
+	return true
+}
+
+// GetAttribute は要素に設定された属性値を返す。
+func (element *Element) GetAttribute(name string) (string, bool) {
+	if element == nil || element.document == nil {
+		return "", false
+	}
+	name = strings.ToLower(strings.TrimSpace(name))
+	if !validAttributeName(name) {
+		return "", false
+	}
+	node, ok := element.document.NodeByID(element.id)
+	if !ok || node.Type != dommodel.NodeElement {
+		return "", false
+	}
+	return node.Attribute(name)
+}
+
+// SetAttribute は要素の属性値を変更する。
+func (element *Element) SetAttribute(name, value string) bool {
+	if element == nil || element.document == nil {
+		return false
+	}
+	name = strings.ToLower(strings.TrimSpace(name))
+	if !validAttributeName(name) || !element.document.SetAttribute(element.id, name, value) {
+		return false
+	}
+	if element.onMutation != nil {
+		element.onMutation()
+	}
+	return true
+}
+
+// AddClass は重複を避けてクラスを追加する。
+func (element *Element) AddClass(className string) bool {
+	if !validClassName(className) {
+		return false
+	}
+	classes, _ := element.GetAttribute("class")
+	for _, class := range strings.Fields(classes) {
+		if class == className {
+			return false
+		}
+	}
+	if classes = strings.Join(strings.Fields(classes), " "); classes != "" {
+		classes += " "
+	}
+	return element.SetAttribute("class", classes+className)
+}
+
+// RemoveClass は指定したクラスを要素から削除する。
+func (element *Element) RemoveClass(className string) bool {
+	if !validClassName(className) {
+		return false
+	}
+	classes, ok := element.GetAttribute("class")
+	if !ok {
+		return false
+	}
+	fields := strings.Fields(classes)
+	result := fields[:0]
+	removed := false
+	for _, class := range fields {
+		if class == className {
+			removed = true
+			continue
+		}
+		result = append(result, class)
+	}
+	if !removed {
+		return false
+	}
+	return element.SetAttribute("class", strings.Join(result, " "))
+}
+
+// Value はテキストinputの現在値を返す。
+func (element *Element) Value() string {
+	node, ok := element.textInputNode()
+	if !ok {
+		return ""
+	}
+	value, _ := node.Attribute("value")
+	return value
+}
+
+// SetValue はテキストinputの現在値を変更する。
+func (element *Element) SetValue(value string) bool {
+	if _, ok := element.textInputNode(); !ok {
+		return false
+	}
+	return element.SetAttribute("value", value)
 }
 
 // Text は要素と子孫のテキストを返す。
@@ -71,4 +274,98 @@ func (element *Element) SetText(value string) {
 	if element.onMutation != nil {
 		element.onMutation()
 	}
+}
+
+func (api *API) element(node *dommodel.Node) *Element {
+	if api == nil || node == nil {
+		return nil
+	}
+	return &Element{document: api.document, id: node.ID, events: api.events, onMutation: api.onMutation}
+}
+
+func (element *Element) textInputNode() (*dommodel.Node, bool) {
+	if element == nil || element.document == nil {
+		return nil, false
+	}
+	node, ok := element.document.NodeByID(element.id)
+	if !ok || node.Type != dommodel.NodeElement || node.TagName != "input" {
+		return nil, false
+	}
+	typeValue, hasType := node.Attribute("type")
+	if hasType && !strings.EqualFold(strings.TrimSpace(typeValue), "text") {
+		return nil, false
+	}
+	return node, true
+}
+
+func (element *Element) addEventListener(eventType events.Type, listener events.Listener) bool {
+	if element == nil || element.document == nil || element.events == nil || listener == nil {
+		return false
+	}
+	node, ok := element.document.NodeByID(element.id)
+	if !ok || !element.document.IsConnected(node) {
+		return false
+	}
+	element.events.AddEventListener(element.id, eventType, listener)
+	return true
+}
+
+func (element *Element) publicEvent(event events.Event) Event {
+	result := Event{Type: string(event.Type), Value: event.Value, X: event.X, Y: event.Y}
+	if element == nil || element.document == nil {
+		return result
+	}
+	node, ok := element.document.NodeByID(event.Target)
+	if !ok {
+		return result
+	}
+	result.TargetID, _ = node.Attribute("id")
+	if node.TagName == "input" {
+		result.Value, _ = node.Attribute("value")
+	}
+	return result
+}
+
+func validTagName(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, character := range value {
+		if character != '-' &&
+			(character < 'a' || character > 'z') &&
+			(character < 'A' || character > 'Z') &&
+			(character < '0' || character > '9') {
+			return false
+		}
+	}
+	return true
+}
+
+func validAttributeName(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, character := range value {
+		if character != '-' && character != '_' && character != ':' &&
+			(character < 'a' || character > 'z') &&
+			(character < '0' || character > '9') {
+			return false
+		}
+	}
+	return true
+}
+
+func validClassName(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, character := range value {
+		if character != '-' && character != '_' &&
+			(character < 'a' || character > 'z') &&
+			(character < 'A' || character > 'Z') &&
+			(character < '0' || character > '9') {
+			return false
+		}
+	}
+	return true
 }

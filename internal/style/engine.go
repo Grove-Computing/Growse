@@ -60,7 +60,7 @@ func inheritedStyle(parent ComputedStyle) ComputedStyle {
 
 func applyUADefaults(tag string, computed ComputedStyle) ComputedStyle {
 	switch tag {
-	case "html", "body", "div", "main", "section", "article", "header", "footer", "nav", "form", "ul", "ol":
+	case "html", "body", "div", "main", "section", "article", "header", "footer", "nav", "form", "ul", "ol", "input":
 		computed.Display = DisplayBlock
 	case "h1":
 		computed.Display, computed.FontSize, computed.FontWeight = DisplayBlock, 32, 700

@@ -8,13 +8,19 @@ import (
 	"testing"
 	"time"
 
+	"gioui.org/f32"
+	"gioui.org/io/input"
+	"gioui.org/io/key"
+	"gioui.org/io/pointer"
 	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/unit"
 
 	"github.com/saku0512/growse/internal/browser"
 	"github.com/saku0512/growse/internal/dom"
+	"github.com/saku0512/growse/internal/events"
 	paintmodel "github.com/saku0512/growse/internal/paint"
+	"github.com/saku0512/growse/internal/style"
 )
 
 type stubNavigator struct {
@@ -45,6 +51,33 @@ func (navigator *stubNavigator) Reload(context.Context) (*browser.Page, error) {
 func (navigator *stubNavigator) CanBack() bool    { return true }
 func (navigator *stubNavigator) CanForward() bool { return true }
 func (navigator *stubNavigator) DispatchClick(dom.NodeID, float32, float32) bool {
+	return false
+}
+func (navigator *stubNavigator) SetInputValue(nodeID dom.NodeID, value string) bool {
+	if navigator.page == nil || navigator.page.Document == nil {
+		return false
+	}
+	return navigator.page.Document.SetAttribute(nodeID, "value", value)
+}
+func (navigator *stubNavigator) CommitInputValue(nodeID dom.NodeID, value string) bool {
+	if navigator.page == nil || navigator.page.Events == nil {
+		return false
+	}
+	return navigator.page.Events.Dispatch(events.Event{Type: events.Change, Target: nodeID, Value: value})
+}
+func (navigator *stubNavigator) SubmitForm(nodeID dom.NodeID) bool {
+	if navigator.page == nil || navigator.page.Document == nil || navigator.page.Events == nil {
+		return false
+	}
+	node, ok := navigator.page.Document.NodeByID(nodeID)
+	if !ok {
+		return false
+	}
+	for current := node; current != nil; current = current.Parent {
+		if current.Type == dom.NodeElement && current.TagName == "form" {
+			return navigator.page.Events.Dispatch(events.Event{Type: events.Submit, Target: current.ID})
+		}
+	}
 	return false
 }
 
@@ -121,6 +154,52 @@ func TestNavigationResultUpdatesAddressAndStatus(t *testing.T) {
 	}
 }
 
+type recordingNavigator struct {
+	stubNavigator
+	navigated chan string
+}
+
+func (navigator *recordingNavigator) Navigate(_ context.Context, rawURL string) (*browser.Page, error) {
+	navigator.navigated <- rawURL
+	return navigator.page, navigator.err
+}
+
+func TestAddressEnterStartsNavigation(t *testing.T) {
+	pageURL, err := url.Parse("https://example.com/search")
+	if err != nil {
+		t.Fatal(err)
+	}
+	navigator := &recordingNavigator{
+		stubNavigator: stubNavigator{page: &browser.Page{URL: pageURL}},
+		navigated:     make(chan string, 1),
+	}
+	ui := NewBrowserUI(navigator, nil)
+	ui.address.SetText("example.com/search")
+
+	router := new(input.Router)
+	gtx := layout.Context{
+		Ops:         new(op.Ops),
+		Source:      router.Source(),
+		Constraints: layout.Exact(image.Pt(1280, 800)),
+		Metric:      unit.Metric{PxPerDp: 1, PxPerSp: 1},
+	}
+	ui.Layout(gtx)
+	router.Frame(gtx.Ops)
+	gtx.Execute(key.FocusCmd{Tag: &ui.address})
+	router.Queue(key.Event{Name: key.NameReturn, State: key.Press})
+
+	gtx.Reset()
+	ui.Layout(gtx)
+	select {
+	case got := <-navigator.navigated:
+		if want := "example.com/search"; got != want {
+			t.Fatalf("Navigate() URL = %q, want %q", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Enter did not start navigation")
+	}
+}
+
 func TestDocumentViewportFillsAvailableArea(t *testing.T) {
 	pageURL, err := url.Parse("https://example.com")
 	if err != nil {
@@ -152,6 +231,133 @@ func TestDocumentPointIncludesListScrollOffset(t *testing.T) {
 	x, y, ok := ui.documentPoint(image.Pt(40, 18), displayList, 2)
 	if !ok || x != 20 || y != 75 {
 		t.Fatalf("documentPoint() = (%v, %v, %v), want (20, 75, true)", x, y, ok)
+	}
+}
+
+func TestTextInputReceivesFocusFromPointerPress(t *testing.T) {
+	document := dom.NewDocument()
+	inputNode := document.CreateElement("input", map[string]string{"type": "text"})
+	if err := document.AppendChild(document.Root, inputNode); err != nil {
+		t.Fatal(err)
+	}
+	page := &browser.Page{Document: document, ComputedStyles: style.Compute(document, nil)}
+	ui := NewBrowserUI(&stubNavigator{page: page}, nil)
+	router := new(input.Router)
+	gtx := layout.Context{
+		Ops:         new(op.Ops),
+		Source:      router.Source(),
+		Constraints: layout.Exact(image.Pt(800, 600)),
+		Metric:      unit.Metric{PxPerDp: 1, PxPerSp: 1},
+	}
+
+	ui.layoutDocument(gtx, page)
+	router.Frame(gtx.Ops)
+	router.Queue(pointer.Event{
+		Buttons:  pointer.ButtonPrimary,
+		Kind:     pointer.Press,
+		Source:   pointer.Mouse,
+		Position: f32.Pt(40, 40),
+	})
+	gtx.Reset()
+	ui.layoutDocument(gtx, page)
+
+	editor := ui.inputEditors[inputNode.ID]
+	if editor == nil {
+		t.Fatal("input editor was not created")
+	}
+	if !gtx.Focused(editor) {
+		t.Fatal("pointer press did not focus the input editor")
+	}
+}
+
+func TestTextInputWritesKeyboardEditsToDOM(t *testing.T) {
+	document := dom.NewDocument()
+	inputNode := document.CreateElement("input", map[string]string{"type": "text"})
+	if err := document.AppendChild(document.Root, inputNode); err != nil {
+		t.Fatal(err)
+	}
+	page := &browser.Page{Document: document, ComputedStyles: style.Compute(document, nil)}
+	ui := NewBrowserUI(&stubNavigator{page: page}, nil)
+	router := new(input.Router)
+	gtx := layout.Context{
+		Ops:         new(op.Ops),
+		Source:      router.Source(),
+		Constraints: layout.Exact(image.Pt(800, 600)),
+		Metric:      unit.Metric{PxPerDp: 1, PxPerSp: 1},
+	}
+
+	ui.layoutDocument(gtx, page)
+	router.Frame(gtx.Ops)
+	editor := ui.inputEditors[inputNode.ID]
+	gtx.Execute(key.FocusCmd{Tag: editor})
+	router.Queue(key.EditEvent{Range: key.Range{Start: 0, End: 0}, Text: "hello"})
+	gtx.Reset()
+	ui.layoutDocument(gtx, page)
+
+	if got, ok := inputNode.Attribute("value"); !ok || got != "hello" {
+		t.Fatalf("DOM input value = (%q, %v), want (hello, true)", got, ok)
+	}
+	if got, want := editor.Text(), "hello"; got != want {
+		t.Fatalf("editor text = %q, want %q", got, want)
+	}
+}
+
+func TestTextInputEnterDispatchesChangeAfterEdit(t *testing.T) {
+	document := dom.NewDocument()
+	form := document.CreateElement("form", map[string]string{"id": "search-form"})
+	inputNode := document.CreateElement("input", map[string]string{"id": "query"})
+	if err := document.AppendChild(document.Root, form); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(form, inputNode); err != nil {
+		t.Fatal(err)
+	}
+	page := &browser.Page{
+		Document: document, ComputedStyles: style.Compute(document, nil), Events: events.NewDispatcher(),
+	}
+	var changes []events.Event
+	var submissions []events.Event
+	page.Events.AddEventListener(inputNode.ID, events.Change, func(event events.Event) {
+		changes = append(changes, event)
+	})
+	page.Events.AddEventListener(form.ID, events.Submit, func(event events.Event) {
+		submissions = append(submissions, event)
+	})
+	ui := NewBrowserUI(&stubNavigator{page: page}, nil)
+	router := new(input.Router)
+	gtx := layout.Context{
+		Ops:         new(op.Ops),
+		Source:      router.Source(),
+		Constraints: layout.Exact(image.Pt(800, 600)),
+		Metric:      unit.Metric{PxPerDp: 1, PxPerSp: 1},
+	}
+
+	ui.layoutDocument(gtx, page)
+	router.Frame(gtx.Ops)
+	editor := ui.inputEditors[inputNode.ID]
+	gtx.Execute(key.FocusCmd{Tag: editor})
+	gtx.Reset()
+	ui.layoutDocument(gtx, page)
+	router.Frame(gtx.Ops)
+	router.Queue(key.EditEvent{Range: key.Range{Start: 0, End: 0}, Text: "hello"})
+	gtx.Reset()
+	ui.layoutDocument(gtx, page)
+	router.Frame(gtx.Ops)
+	router.Queue(key.Event{Name: key.NameReturn, State: key.Press})
+	gtx.Reset()
+	ui.layoutDocument(gtx, page)
+
+	if got, want := len(changes), 1; got != want {
+		t.Fatalf("change event count = %d, want %d", got, want)
+	}
+	if changes[0].Value != "hello" {
+		t.Fatalf("change value = %q, want hello", changes[0].Value)
+	}
+	if got, want := len(submissions), 1; got != want {
+		t.Fatalf("submit event count = %d, want %d", got, want)
+	}
+	if submissions[0].Target != form.ID {
+		t.Fatalf("submit target = %d, want %d", submissions[0].Target, form.ID)
 	}
 }
 

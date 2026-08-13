@@ -49,19 +49,22 @@ type BrowserUI struct {
 	navigationID     uint64
 	loading          bool
 
-	backButton    widget.Clickable
-	forwardButton widget.Clickable
-	reloadButton  widget.Clickable
-	goButton      widget.Clickable
-	pageList      widget.List
-	viewportClick gesture.Click
-	address       widget.Editor
-	gopher        paint.ImageOp
-	backIcon      *widget.Icon
-	forwardIcon   *widget.Icon
-	reloadIcon    *widget.Icon
-	pageTitle     string
-	status        string
+	backButton     widget.Clickable
+	forwardButton  widget.Clickable
+	reloadButton   widget.Clickable
+	goButton       widget.Clickable
+	pageList       widget.List
+	viewportClick  gesture.Click
+	address        widget.Editor
+	gopher         paint.ImageOp
+	backIcon       *widget.Icon
+	forwardIcon    *widget.Icon
+	reloadIcon     *widget.Icon
+	pageTitle      string
+	status         string
+	inputEditors   map[dom.NodeID]*widget.Editor
+	inputFocused   map[dom.NodeID]bool
+	inputCommitted map[dom.NodeID]string
 }
 
 // Navigator is the browser capability used by the UI.
@@ -74,6 +77,9 @@ type Navigator interface {
 	CanForward() bool
 	Page() *browser.Page
 	DispatchClick(nodeID dom.NodeID, x, y float32) bool
+	SetInputValue(nodeID dom.NodeID, value string) bool
+	CommitInputValue(nodeID dom.NodeID, value string) bool
+	SubmitForm(nodeID dom.NodeID) bool
 }
 
 type navigationResult struct {
@@ -90,21 +96,25 @@ func NewBrowserUI(navigator Navigator, invalidate func()) *BrowserUI {
 	}
 
 	ui := &BrowserUI{
-		theme:       material.NewTheme(),
-		navigator:   navigator,
-		invalidate:  invalidate,
-		results:     make(chan navigationResult, 1),
-		gopher:      paint.NewImageOp(gopherImage),
-		backIcon:    mustIcon(widget.NewIcon(icons.NavigationArrowBack)),
-		forwardIcon: mustIcon(widget.NewIcon(icons.NavigationArrowForward)),
-		reloadIcon:  mustIcon(widget.NewIcon(icons.NavigationRefresh)),
-		pageTitle:   "新しい Web を Go で開く",
-		status:      "URLを入力して Gopher ボタンを押してください",
+		theme:          material.NewTheme(),
+		navigator:      navigator,
+		invalidate:     invalidate,
+		results:        make(chan navigationResult, 1),
+		gopher:         paint.NewImageOp(gopherImage),
+		backIcon:       mustIcon(widget.NewIcon(icons.NavigationArrowBack)),
+		forwardIcon:    mustIcon(widget.NewIcon(icons.NavigationArrowForward)),
+		reloadIcon:     mustIcon(widget.NewIcon(icons.NavigationRefresh)),
+		pageTitle:      "新しい Web を Go で開く",
+		status:         "URLを入力して Gopher ボタンを押してください",
+		inputEditors:   make(map[dom.NodeID]*widget.Editor),
+		inputFocused:   make(map[dom.NodeID]bool),
+		inputCommitted: make(map[dom.NodeID]string),
 	}
 	if ui.invalidate == nil {
 		ui.invalidate = func() {}
 	}
 	ui.address.SingleLine = true
+	ui.address.Submit = true
 	ui.address.SetText(defaultURL)
 	ui.pageList.Axis = layout.Vertical
 	return ui
@@ -122,6 +132,15 @@ func (ui *BrowserUI) Layout(gtx layout.Context) layout.Dimensions {
 func (ui *BrowserUI) handleActions(gtx layout.Context) {
 	ui.consumeNavigationResult()
 
+	for {
+		event, ok := ui.address.Update(gtx)
+		if !ok {
+			break
+		}
+		if submitted, ok := event.(widget.SubmitEvent); ok {
+			ui.startNavigation(submitted.Text)
+		}
+	}
 	for ui.goButton.Clicked(gtx) {
 		ui.startNavigation(ui.address.Text())
 	}
@@ -180,6 +199,9 @@ func (ui *BrowserUI) consumeNavigationResult() {
 			}
 			ui.loading = false
 			ui.cancelNavigation = nil
+			ui.inputEditors = make(map[dom.NodeID]*widget.Editor)
+			ui.inputFocused = make(map[dom.NodeID]bool)
+			ui.inputCommitted = make(map[dom.NodeID]string)
 			if result.err != nil {
 				ui.status = "読み込みエラー: " + result.err.Error()
 				return
@@ -394,11 +416,14 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 
 	area := clip.Rect{Max: gtx.Constraints.Max}.Push(gtx.Ops)
 	dimensions := material.List(ui.theme, &ui.pageList).Layout(gtx, len(displayList.Commands), func(gtx layout.Context, index int) layout.Dimensions {
-		command, ok := displayList.Commands[index].(paintmodel.DrawText)
-		if !ok {
+		switch command := displayList.Commands[index].(type) {
+		case paintmodel.DrawText:
+			return ui.layoutDrawText(gtx, command)
+		case paintmodel.DrawInput:
+			return ui.layoutDrawInput(gtx, command)
+		default:
 			return layout.Dimensions{}
 		}
-		return ui.layoutDrawText(gtx, command)
 	})
 	pass := pointer.PassOp{}.Push(gtx.Ops)
 	ui.viewportClick.Add(gtx.Ops)
@@ -443,14 +468,92 @@ func (ui *BrowserUI) documentPoint(position image.Point, displayList *paintmodel
 	if first < 0 || first >= len(displayList.Commands) {
 		return 0, 0, false
 	}
-	command, ok := displayList.Commands[first].(paintmodel.DrawText)
+	firstDocumentY, ok := commandDocumentY(displayList.Commands[first])
 	if !ok {
 		return 0, 0, false
 	}
-	firstDocumentY := command.Y - command.Top
 	x := float32(position.X) / pixelsPerDP
 	y := firstDocumentY + float32(position.Y+ui.pageList.Position.Offset)/pixelsPerDP
 	return x, y, true
+}
+
+func commandDocumentY(command paintmodel.Command) (float32, bool) {
+	switch command := command.(type) {
+	case paintmodel.DrawText:
+		return command.Y - command.Top, true
+	case paintmodel.DrawInput:
+		return command.Y - command.Top, true
+	default:
+		return 0, false
+	}
+}
+
+func (ui *BrowserUI) layoutDrawInput(gtx layout.Context, command paintmodel.DrawInput) layout.Dimensions {
+	left := unit.Dp(command.X)
+	viewportWidth := float32(gtx.Constraints.Max.X) / gtx.Metric.PxPerDp
+	rightValue := viewportWidth - command.X - command.Width
+	if rightValue < 0 {
+		rightValue = 0
+	}
+	right := unit.Dp(rightValue)
+	return layout.Inset{Top: unit.Dp(command.Top), Left: left, Right: right}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		height := gtx.Dp(unit.Dp(command.Height))
+		gtx.Constraints.Min.Y = height
+		gtx.Constraints.Max.Y = height
+		editor := ui.inputEditors[command.NodeID]
+		wasFocused := ui.inputFocused[command.NodeID]
+		if editor == nil {
+			editor = new(widget.Editor)
+			editor.SingleLine = true
+			editor.Submit = true
+			editor.SetText(command.Value)
+			ui.inputEditors[command.NodeID] = editor
+			ui.inputCommitted[command.NodeID] = command.Value
+		} else if editor.Text() != command.Value {
+			editor.SetText(command.Value)
+			ui.inputCommitted[command.NodeID] = command.Value
+		}
+		for {
+			event, ok := editor.Update(gtx)
+			if !ok {
+				break
+			}
+			if _, changed := event.(widget.ChangeEvent); changed && ui.navigator != nil {
+				ui.navigator.SetInputValue(command.NodeID, editor.Text())
+			}
+			if _, submitted := event.(widget.SubmitEvent); submitted {
+				ui.commitInput(command.NodeID, editor.Text())
+				if ui.navigator != nil {
+					ui.navigator.SubmitForm(command.NodeID)
+				}
+			}
+		}
+		focused := gtx.Focused(editor)
+		if wasFocused && !focused {
+			ui.commitInput(command.NodeID, editor.Text())
+		}
+		ui.inputFocused[command.NodeID] = focused
+		return widget.Border{
+			Color:        color.NRGBA{R: 150, G: 160, B: 175, A: 255},
+			CornerRadius: unit.Dp(6),
+			Width:        unit.Dp(1),
+		}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+			paint.FillShape(gtx.Ops, color.NRGBA{R: 255, G: 255, B: 255, A: 255}, clip.Rect{Max: gtx.Constraints.Min}.Op())
+			style := material.Editor(ui.theme, editor, "")
+			style.Color = rgba(command.Color)
+			return layout.UniformInset(unit.Dp(8)).Layout(gtx, style.Layout)
+		})
+	})
+}
+
+func (ui *BrowserUI) commitInput(nodeID dom.NodeID, value string) {
+	if ui.inputCommitted[nodeID] == value {
+		return
+	}
+	ui.inputCommitted[nodeID] = value
+	if ui.navigator != nil {
+		ui.navigator.CommitInputValue(nodeID, value)
+	}
 }
 
 func (ui *BrowserUI) layoutDrawText(gtx layout.Context, command paintmodel.DrawText) layout.Dimensions {

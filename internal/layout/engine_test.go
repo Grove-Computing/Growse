@@ -145,6 +145,34 @@ func TestBuildPreservesInlineRunStyles(t *testing.T) {
 	}
 }
 
+func TestBuildCreatesTextInputBox(t *testing.T) {
+	document := dom.NewDocument()
+	input := document.CreateElement("input", map[string]string{"type": "text", "value": "hello"})
+	appendNodes(t, document, [2]*dom.Node{document.Root, input})
+
+	tree := Build(document, style.Compute(document, nil), 800)
+	if got, want := len(tree.Boxes), 1; got != want {
+		t.Fatalf("box count = %d, want %d", got, want)
+	}
+	box := tree.Boxes[0]
+	if !box.Input || box.NodeID != input.ID || box.Text != "hello" {
+		t.Fatalf("input box = %#v, want text input value", box)
+	}
+	if box.Width != inputWidth || box.Height != inputHeight {
+		t.Fatalf("input size = (%v, %v), want (%v, %v)", box.Width, box.Height, inputWidth, inputHeight)
+	}
+}
+
+func TestBuildIgnoresUnsupportedInputType(t *testing.T) {
+	document := dom.NewDocument()
+	input := document.CreateElement("input", map[string]string{"type": "checkbox"})
+	appendNodes(t, document, [2]*dom.Node{document.Root, input})
+
+	if boxes := Build(document, style.Compute(document, nil), 800).Boxes; len(boxes) != 0 {
+		t.Fatalf("boxes = %#v, want unsupported input omitted", boxes)
+	}
+}
+
 func appendNodes(t *testing.T, document *dom.Document, edges ...[2]*dom.Node) {
 	t.Helper()
 	for _, edge := range edges {
