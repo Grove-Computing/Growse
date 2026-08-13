@@ -525,6 +525,57 @@ func main() {
 	}
 }
 
+func TestRuntimeDoesNotInvokeEventAfterElementRemoval(t *testing.T) {
+	document := dommodel.NewDocument()
+	container := document.CreateElement("main", map[string]string{"id": "container"})
+	removeButton := document.CreateElement("button", map[string]string{"id": "remove"})
+	message := document.CreateElement("p", map[string]string{"id": "message"})
+	for _, node := range []*dommodel.Node{container, removeButton, message} {
+		if err := document.AppendChild(document.Root, node); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dispatcher := events.NewDispatcher()
+	runtime := New()
+	scripts := []runtimemodel.Script{{Source: `package main
+import "growse/dom"
+func main() {
+	item := dom.CreateElement("button")
+	item.SetAttribute("id", "temporary")
+	dom.GetElementByID("container").AppendChild(item)
+	item.OnClick(func() {
+		dom.GetElementByID("message").SetText("unexpected")
+	})
+	dom.GetElementByID("remove").OnClick(func() {
+		item.Remove()
+	})
+}`}}
+	environment := runtimemodel.Environment{Document: document, Events: dispatcher}
+
+	if err := runtime.Load(context.Background(), scripts, environment); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	item, ok := document.GetElementByID("temporary")
+	if !ok {
+		t.Fatal("temporary element was not appended")
+	}
+	if !dispatcher.Dispatch(events.Event{Type: events.Click, Target: removeButton.ID}) {
+		t.Fatal("remove click was not handled")
+	}
+	if _, ok := document.GetElementByID("temporary"); ok {
+		t.Fatal("temporary element remains after Remove")
+	}
+	if dispatcher.Dispatch(events.Event{Type: events.Click, Target: item.ID}) {
+		t.Fatal("removed element event was handled")
+	}
+	if got := message.TextContent(); got != "" {
+		t.Fatalf("message = %q, want empty", got)
+	}
+}
+
 func TestRuntimeDispatchesWebGoOnClick(t *testing.T) {
 	document := dommodel.NewDocument()
 	button := document.CreateElement("button", map[string]string{"id": "increment"})
