@@ -96,7 +96,7 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           GOOS: ${{ matrix.goos }}
         run: |
-          mkdir -p dist/package/examples/counter
+          mkdir -p dist/package/examples
           output="dist/package/growse"
           ldflags="-s -w"
           if [[ "$GOOS" == "windows" ]]; then
@@ -104,10 +104,8 @@ jobs:
             ldflags="$ldflags -H windowsgui"
           fi
           go build -trimpath -ldflags="$ldflags" -o "$output" ./cmd/growse
-          cp README.md dist/package/
-          cp examples/counter/index.html dist/package/examples/counter/
-          cp examples/counter/style.css dist/package/examples/counter/
-          cp examples/counter/_app.go dist/package/examples/counter/
+          cp README.md SECURITY.md LICENSE.md dist/package/
+          cp -R examples/counter examples/todo dist/package/examples/
 
       - name: Package Unix archive
         if: runner.os != 'Windows'
