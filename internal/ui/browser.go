@@ -475,6 +475,8 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 			return ui.layoutDrawText(gtx, command)
 		case paintmodel.DrawInput:
 			return ui.layoutDrawInput(gtx, command)
+		case paintmodel.DrawBox:
+			return layoutDrawBox(gtx, command)
 		default:
 			return layout.Dimensions{}
 		}
@@ -603,9 +605,23 @@ func commandDocumentY(command paintmodel.Command) (float32, bool) {
 		return command.Y - command.Top, true
 	case paintmodel.DrawInput:
 		return command.Y - command.Top, true
+	case paintmodel.DrawBox:
+		return command.Y - command.Top, true
 	default:
 		return 0, false
 	}
+}
+
+func layoutDrawBox(gtx layout.Context, command paintmodel.DrawBox) layout.Dimensions {
+	return layout.Inset{Top: unit.Dp(command.Top), Left: unit.Dp(command.X)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		if command.Clip != nil {
+			defer commandClip(gtx, command.Clip, command.X, command.Y).Push(gtx.Ops).Pop()
+		}
+		paint.FillShape(gtx.Ops, rgba(command.Color), clip.Rect{Max: image.Pt(
+			gtx.Dp(unit.Dp(command.Width)), gtx.Dp(unit.Dp(command.Height)),
+		)}.Op())
+		return layout.Dimensions{}
+	})
 }
 
 func (ui *BrowserUI) layoutDrawInput(gtx layout.Context, command paintmodel.DrawInput) layout.Dimensions {

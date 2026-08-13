@@ -8,9 +8,20 @@ type Tree struct {
 	Width        float32
 	Height       float32
 	Background   uint32
+	Decorations  []Decoration
 	Boxes        []Box
 	ScrollWidth  float32
 	ScrollHeight float32
+}
+
+// Decoration is the border-box visual of one element. It is kept separately
+// from line boxes so backgrounds can be painted before descendant content.
+type Decoration struct {
+	Order  int
+	NodeID dom.NodeID
+	Rect
+	Background uint32
+	Clip       *Rect
 }
 
 // Rect is a document-coordinate clipping rectangle.
@@ -20,6 +31,7 @@ type Rect struct {
 
 // Box is one line of visible page content.
 type Box struct {
+	Order  int
 	NodeID dom.NodeID
 	Tag    string
 	Text   string

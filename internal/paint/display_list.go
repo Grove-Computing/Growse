@@ -2,6 +2,8 @@
 package paint
 
 import (
+	"sort"
+
 	"github.com/saku0512/growse/internal/dom"
 	"github.com/saku0512/growse/internal/layout"
 )
@@ -57,6 +59,21 @@ type DrawInput struct {
 
 func (DrawInput) paintCommand() {}
 
+// DrawBox paints an element background without advancing by its painted height.
+// Its Top value only moves the list cursor to the element's document position.
+type DrawBox struct {
+	NodeID dom.NodeID
+	X      float32
+	Y      float32
+	Top    float32
+	Width  float32
+	Height float32
+	Color  uint32
+	Clip   *layout.Rect
+}
+
+func (DrawBox) paintCommand() {}
+
 // TextRun is one styled fragment within a DrawText line.
 type TextRun struct {
 	NodeID dom.NodeID
@@ -81,9 +98,35 @@ func Build(tree *layout.Tree) *DisplayList {
 		Width: tree.Width, Height: tree.Height, ScrollWidth: tree.ScrollWidth,
 		ScrollHeight: tree.ScrollHeight, Background: tree.Background,
 	}
-	list.Commands = make([]Command, 0, len(tree.Boxes))
+	type orderedItem struct {
+		order      int
+		decoration *layout.Decoration
+		box        *layout.Box
+	}
+	items := make([]orderedItem, 0, len(tree.Decorations)+len(tree.Boxes))
+	for index := range tree.Decorations {
+		items = append(items, orderedItem{order: tree.Decorations[index].Order, decoration: &tree.Decorations[index]})
+	}
+	for index := range tree.Boxes {
+		items = append(items, orderedItem{order: tree.Boxes[index].Order, box: &tree.Boxes[index]})
+	}
+	sort.SliceStable(items, func(left, right int) bool { return items[left].order < items[right].order })
+
+	list.Commands = make([]Command, 0, len(items))
 	previousBottom := float32(0)
-	for _, box := range tree.Boxes {
+	for _, item := range items {
+		if item.decoration != nil {
+			decoration := item.decoration
+			top := max(decoration.Y-previousBottom, float32(0))
+			list.Commands = append(list.Commands, DrawBox{
+				NodeID: decoration.NodeID, X: decoration.X, Y: decoration.Y, Top: top,
+				Width: decoration.Width, Height: decoration.Height, Color: decoration.Background,
+				Clip: cloneLayoutRect(decoration.Clip),
+			})
+			previousBottom += top
+			continue
+		}
+		box := *item.box
 		top := box.Y - previousBottom
 		if top < 0 {
 			top = 0

@@ -90,6 +90,10 @@ func build(document *dom.Document, computed stylemodel.Map, viewportWidth, viewp
 		tree.ScrollWidth = max(tree.ScrollWidth, box.X+contentWidth+pagePadding)
 		tree.ScrollHeight = max(tree.ScrollHeight, box.Y+box.Height+pagePadding)
 	}
+	for _, decoration := range tree.Decorations {
+		tree.ScrollWidth = max(tree.ScrollWidth, decoration.X+decoration.Width+pagePadding)
+		tree.ScrollHeight = max(tree.ScrollHeight, decoration.Y+decoration.Height+pagePadding)
+	}
 	return tree
 }
 
@@ -98,6 +102,13 @@ type engine struct {
 	computed stylemodel.Map
 	y        float32
 	clip     *Rect
+	order    int
+}
+
+func (e *engine) nextOrder() int {
+	result := e.order
+	e.order++
+	return result
 }
 
 func (e *engine) walk(node *dom.Node, x, width, containingHeight float32, heightDefinite bool) {
@@ -162,6 +173,7 @@ func (e *engine) addInput(node *dom.Node, style blockStyle, x, width, containing
 	usedHeight = constrainSize(usedHeight, style.minHeight, style.maxHeight, containingHeight, heightDefinite)
 	value, _ := node.Attribute("value")
 	e.tree.Boxes = append(e.tree.Boxes, Box{
+		Order:  e.nextOrder(),
 		NodeID: node.ID,
 		Tag:    node.TagName,
 		Text:   value,
@@ -221,6 +233,15 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 		contentWidth = 1
 	}
 	boxTop := e.y
+	decorationIndex := -1
+	if style.background != 0 {
+		decorationIndex = len(e.tree.Decorations)
+		e.tree.Decorations = append(e.tree.Decorations, Decoration{
+			Order: e.nextOrder(), NodeID: node.ID,
+			Rect:       Rect{X: x, Y: boxTop, Width: outerWidth},
+			Background: style.background, Clip: cloneRect(e.clip),
+		})
+	}
 	e.y += style.border.Top.Width + style.padding.Top
 	contentTop := e.y
 	declaredHeight, declaredHeightDefinite := resolveSize(style.height, containingHeight, heightDefinite)
@@ -299,6 +320,9 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 	}
 	if outerHeight < 0 {
 		outerHeight = 0
+	}
+	if decorationIndex >= 0 {
+		e.tree.Decorations[decorationIndex].Height = outerHeight
 	}
 	e.y = boxTop + outerHeight + style.margin.Bottom
 }
@@ -410,10 +434,11 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 			lineHeight = container.fontSize * 1.4
 		}
 		e.tree.Boxes = append(e.tree.Boxes, Box{
+			Order:  e.nextOrder(),
 			NodeID: nodeID, Tag: tag, Text: lineText.String(),
 			X: x, Y: e.y, Width: width, Height: lineHeight,
 			FontSize: container.fontSize, Bold: container.bold, Color: container.color,
-			Background: container.background, Runs: append([]TextRun(nil), lineRuns...),
+			Runs:     append([]TextRun(nil), lineRuns...),
 			Baseline: e.y + lineAscent, Clip: cloneRect(e.clip),
 		})
 		e.y += lineHeight

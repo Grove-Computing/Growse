@@ -40,3 +40,19 @@ func TestBuildCreatesInputCommand(t *testing.T) {
 		t.Fatalf("input command = %#v, want node 7 with value and geometry", list.Commands[0])
 	}
 }
+
+func TestBuildPaintsBoxBackgroundBeforeContent(t *testing.T) {
+	tree := &layout.Tree{
+		Decorations: []layout.Decoration{{Order: 1, NodeID: 7, Rect: layout.Rect{X: 10, Y: 20, Width: 100, Height: 40}, Background: 0x123456ff}},
+		Boxes:       []layout.Box{{Order: 2, NodeID: 7, Text: "card", X: 18, Y: 28, Width: 84, Height: 20}},
+	}
+	list := Build(tree)
+	if len(list.Commands) != 2 {
+		t.Fatalf("commands = %#v", list.Commands)
+	}
+	background, backgroundOK := list.Commands[0].(DrawBox)
+	content, contentOK := list.Commands[1].(DrawText)
+	if !backgroundOK || !contentOK || background.Color != 0x123456ff || background.Width != 100 || content.Text != "card" {
+		t.Fatalf("commands = %#v", list.Commands)
+	}
+}

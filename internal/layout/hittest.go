@@ -25,6 +25,15 @@ func HitTest(tree *Tree, x, y float32) (dom.NodeID, bool) {
 		}
 		return box.NodeID, true
 	}
+	for decorationIndex := len(tree.Decorations) - 1; decorationIndex >= 0; decorationIndex-- {
+		decoration := tree.Decorations[decorationIndex]
+		if decoration.Clip != nil && !containsPoint(decoration.Clip.X, decoration.Clip.Y, decoration.Clip.Width, decoration.Clip.Height, x, y) {
+			continue
+		}
+		if containsPoint(decoration.X, decoration.Y, decoration.Width, decoration.Height, x, y) {
+			return decoration.NodeID, true
+		}
+	}
 	return 0, false
 }
 

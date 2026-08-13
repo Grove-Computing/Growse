@@ -259,6 +259,33 @@ func TestBuildCarriesOverflowClipAndScrollExtentIntoHitTesting(t *testing.T) {
 	}
 }
 
+func TestBuildCreatesElementBackgroundBeforeItsContent(t *testing.T) {
+	document := dom.NewDocument()
+	box := document.CreateElement("div", map[string]string{"class": "card"})
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, box},
+		[2]*dom.Node{box, document.CreateText("card")},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`.card { width: 120px; padding: 8px; background-color: #123456; }`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, style.Compute(document, stylesheet), 800)
+	if len(tree.Decorations) != 1 || len(tree.Boxes) != 1 {
+		t.Fatalf("decorations/boxes = %d/%d", len(tree.Decorations), len(tree.Boxes))
+	}
+	decoration := tree.Decorations[0]
+	if decoration.NodeID != box.ID || decoration.Background != 0x123456ff || decoration.Width != 136 || decoration.Height <= tree.Boxes[0].Height {
+		t.Fatalf("background decoration = %#v", decoration)
+	}
+	if decoration.Order >= tree.Boxes[0].Order {
+		t.Fatalf("background order = %d, content order = %d", decoration.Order, tree.Boxes[0].Order)
+	}
+	if got, ok := HitTest(tree, decoration.X+2, decoration.Y+2); !ok || got != box.ID {
+		t.Fatalf("background hit = (%d, %v), want %d", got, ok, box.ID)
+	}
+}
+
 func TestBuildPreservesInlineRunStyles(t *testing.T) {
 	document := dom.NewDocument()
 	p := document.CreateElement("p", nil)
