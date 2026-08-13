@@ -189,6 +189,47 @@ input[disabled][type="text"] { color: red }
 	}
 }
 
+func TestComputeMatchesCombinators(t *testing.T) {
+	document := dom.NewDocument()
+	main := document.CreateElement("main", nil)
+	section := document.CreateElement("section", nil)
+	heading := document.CreateElement("h1", nil)
+	space := document.CreateText("between")
+	direct := document.CreateElement("p", map[string]string{"class": "direct"})
+	general := document.CreateElement("span", map[string]string{"class": "general"})
+	outside := document.CreateElement("p", map[string]string{"class": "direct general"})
+	appendNode(t, document, document.Root, main)
+	appendNode(t, document, main, section)
+	appendNode(t, document, section, heading)
+	appendNode(t, document, section, space)
+	appendNode(t, document, section, direct)
+	appendNode(t, document, section, general)
+	appendNode(t, document, document.Root, outside)
+
+	stylesheet, err := css.Parse(strings.NewReader(`
+main .direct { color: red }
+section > .direct { font-size: 21px }
+h1 + .direct { font-weight: bold }
+h1 ~ .general { background-color: blue }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	computed := Compute(document, stylesheet)
+	directStyle, _ := computed.For(direct)
+	generalStyle, _ := computed.For(general)
+	outsideStyle, _ := computed.For(outside)
+	if directStyle.Color != 0xff0000ff || directStyle.FontSize != 21 || !directStyle.Bold() {
+		t.Fatalf("descendant/child/adjacent style = %#v", directStyle)
+	}
+	if generalStyle.BackgroundColor != 0x0000ffff {
+		t.Fatalf("general sibling style = %#v", generalStyle)
+	}
+	if outsideStyle.Color == 0xff0000ff || outsideStyle.FontSize == 21 || outsideStyle.BackgroundColor == 0x0000ffff {
+		t.Fatalf("outside style = %#v", outsideStyle)
+	}
+}
+
 func appendNode(t *testing.T, document *dom.Document, parent, child *dom.Node) {
 	t.Helper()
 	if err := document.AppendChild(parent, child); err != nil {

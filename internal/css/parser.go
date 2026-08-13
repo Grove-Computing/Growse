@@ -152,63 +152,24 @@ func parseSelectorList(value string) []Selector {
 }
 
 func parseSelector(value string) (Selector, bool) {
-	hover := strings.HasSuffix(value, ":hover")
-	if hover {
-		value = strings.TrimSuffix(value, ":hover")
-	}
-	if value == "" {
+	parts, combinators, ok := splitComplexSelector(value)
+	if !ok {
 		return Selector{}, false
 	}
-
-	compound := CompoundSelector{Hover: hover}
-	position := 0
-	if value[0] == '*' {
-		compound.Universal = true
-		position++
-	} else if value[0] != '.' && value[0] != '#' && value[0] != '[' {
-		end := selectorNameEnd(value, position)
-		if end == position || !validName(value[position:end]) {
+	compounds := make([]CompoundSelector, 0, len(parts))
+	for _, part := range parts {
+		compound, ok := parseCompoundSelector(part)
+		if !ok {
 			return Selector{}, false
 		}
-		compound.Type = strings.ToLower(value[position:end])
-		position = end
+		compounds = append(compounds, compound)
 	}
-	for position < len(value) {
-		prefix := value[position]
-		switch prefix {
-		case '.', '#':
-			position++
-			end := selectorNameEnd(value, position)
-			if end == position || !validName(value[position:end]) {
-				return Selector{}, false
-			}
-			name := value[position:end]
-			if prefix == '.' {
-				compound.Classes = append(compound.Classes, name)
-			} else {
-				compound.IDs = append(compound.IDs, name)
-			}
-			position = end
-		case '[':
-			end, ok := attributeEnd(value, position)
-			if !ok {
-				return Selector{}, false
-			}
-			attribute, ok := parseAttributeSelector(value[position+1 : end])
-			if !ok {
-				return Selector{}, false
-			}
-			compound.Attributes = append(compound.Attributes, attribute)
-			position = end + 1
-		default:
-			return Selector{}, false
-		}
+	selector := Selector{Kind: SelectorCompound, Compounds: compounds, Combinators: combinators}
+	if len(compounds) != 1 {
+		return selector, true
 	}
-	if !compound.Universal && compound.Type == "" && len(compound.IDs) == 0 && len(compound.Classes) == 0 && len(compound.Attributes) == 0 {
-		return Selector{}, false
-	}
-
-	selector := Selector{Kind: SelectorCompound, Hover: hover, Compounds: []CompoundSelector{compound}}
+	compound := compounds[0]
+	selector.Hover = compound.Hover
 	if compound.Universal && compound.Type == "" && len(compound.IDs) == 0 && len(compound.Classes) == 0 && len(compound.Attributes) == 0 {
 		selector.Kind = SelectorUniversal
 	}
@@ -222,6 +183,173 @@ func parseSelector(value string) (Selector, bool) {
 		selector.Kind, selector.Tag, selector.Class = SelectorTagClass, compound.Type, compound.Classes[0]
 	}
 	return selector, true
+}
+
+func parseCompoundSelector(value string) (CompoundSelector, bool) {
+	hover := strings.HasSuffix(value, ":hover")
+	if hover {
+		value = strings.TrimSuffix(value, ":hover")
+	}
+	if value == "" {
+		return CompoundSelector{}, false
+	}
+
+	compound := CompoundSelector{Hover: hover}
+	position := 0
+	if value[0] == '*' {
+		compound.Universal = true
+		position++
+	} else if value[0] != '.' && value[0] != '#' && value[0] != '[' {
+		end := selectorNameEnd(value, position)
+		if end == position || !validName(value[position:end]) {
+			return CompoundSelector{}, false
+		}
+		compound.Type = strings.ToLower(value[position:end])
+		position = end
+	}
+	for position < len(value) {
+		prefix := value[position]
+		switch prefix {
+		case '.', '#':
+			position++
+			end := selectorNameEnd(value, position)
+			if end == position || !validName(value[position:end]) {
+				return CompoundSelector{}, false
+			}
+			name := value[position:end]
+			if prefix == '.' {
+				compound.Classes = append(compound.Classes, name)
+			} else {
+				compound.IDs = append(compound.IDs, name)
+			}
+			position = end
+		case '[':
+			end, ok := attributeEnd(value, position)
+			if !ok {
+				return CompoundSelector{}, false
+			}
+			attribute, ok := parseAttributeSelector(value[position+1 : end])
+			if !ok {
+				return CompoundSelector{}, false
+			}
+			compound.Attributes = append(compound.Attributes, attribute)
+			position = end + 1
+		default:
+			return CompoundSelector{}, false
+		}
+	}
+	if !compound.Universal && compound.Type == "" && len(compound.IDs) == 0 && len(compound.Classes) == 0 && len(compound.Attributes) == 0 {
+		return CompoundSelector{}, false
+	}
+	return compound, true
+}
+
+func splitComplexSelector(value string) ([]string, []Combinator, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, nil, false
+	}
+	var parts []string
+	var combinators []Combinator
+	start, bracketDepth, parenthesisDepth := 0, 0, 0
+	var quote byte
+	escaped := false
+	for position := 0; position < len(value); position++ {
+		character := value[position]
+		if quote != 0 {
+			if escaped {
+				escaped = false
+			} else if character == '\\' {
+				escaped = true
+			} else if character == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch character {
+		case '\'', '"':
+			quote = character
+		case '[':
+			bracketDepth++
+		case ']':
+			bracketDepth--
+		case '(':
+			parenthesisDepth++
+		case ')':
+			parenthesisDepth--
+		}
+		if bracketDepth < 0 || parenthesisDepth < 0 {
+			return nil, nil, false
+		}
+		if bracketDepth != 0 || parenthesisDepth != 0 {
+			continue
+		}
+		if isSelectorWhitespace(character) {
+			part := strings.TrimSpace(value[start:position])
+			if part == "" {
+				return nil, nil, false
+			}
+			parts = append(parts, part)
+			for position+1 < len(value) && isSelectorWhitespace(value[position+1]) {
+				position++
+			}
+			if position+1 >= len(value) {
+				return nil, nil, false
+			}
+			if combinator, ok := explicitCombinator(value[position+1]); ok {
+				combinators = append(combinators, combinator)
+				position++
+				for position+1 < len(value) && isSelectorWhitespace(value[position+1]) {
+					position++
+				}
+			} else {
+				combinators = append(combinators, CombinatorDescendant)
+			}
+			start = position + 1
+			continue
+		}
+		if combinator, ok := explicitCombinator(character); ok {
+			part := strings.TrimSpace(value[start:position])
+			if part == "" {
+				return nil, nil, false
+			}
+			parts = append(parts, part)
+			combinators = append(combinators, combinator)
+			for position+1 < len(value) && isSelectorWhitespace(value[position+1]) {
+				position++
+			}
+			start = position + 1
+		}
+	}
+	if quote != 0 || bracketDepth != 0 || parenthesisDepth != 0 {
+		return nil, nil, false
+	}
+	last := strings.TrimSpace(value[start:])
+	if last == "" {
+		return nil, nil, false
+	}
+	parts = append(parts, last)
+	if len(parts) != len(combinators)+1 {
+		return nil, nil, false
+	}
+	return parts, combinators, true
+}
+
+func isSelectorWhitespace(character byte) bool {
+	return character == ' ' || character == '\t' || character == '\n' || character == '\r' || character == '\f'
+}
+
+func explicitCombinator(character byte) (Combinator, bool) {
+	switch character {
+	case '>':
+		return CombinatorChild, true
+	case '+':
+		return CombinatorAdjacentSibling, true
+	case '~':
+		return CombinatorGeneralSibling, true
+	default:
+		return 0, false
+	}
 }
 
 func selectorNameEnd(value string, start int) int {

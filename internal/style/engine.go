@@ -215,7 +215,7 @@ func matches(node *dom.Node, selector css.Selector, state InteractionState) bool
 		return false
 	}
 	if len(selector.Compounds) != 0 {
-		return matchesCompound(node, selector.Compounds[len(selector.Compounds)-1], state)
+		return matchesSelectorAt(node, selector, len(selector.Compounds)-1, state)
 	}
 	if selector.Tag != "" && node.TagName != selector.Tag {
 		return false
@@ -239,6 +239,55 @@ func matches(node *dom.Node, selector css.Selector, state InteractionState) bool
 		return false
 	}
 	return true
+}
+
+func matchesSelectorAt(node *dom.Node, selector css.Selector, index int, state InteractionState) bool {
+	if !matchesCompound(node, selector.Compounds[index], state) {
+		return false
+	}
+	if index == 0 {
+		return true
+	}
+	switch selector.Combinators[index-1] {
+	case css.CombinatorDescendant:
+		for ancestor := node.Parent; ancestor != nil; ancestor = ancestor.Parent {
+			if ancestor.Type == dom.NodeElement && matchesSelectorAt(ancestor, selector, index-1, state) {
+				return true
+			}
+		}
+		return false
+	case css.CombinatorChild:
+		return node.Parent != nil && node.Parent.Type == dom.NodeElement &&
+			matchesSelectorAt(node.Parent, selector, index-1, state)
+	case css.CombinatorAdjacentSibling:
+		previous := previousElementSibling(node)
+		return previous != nil && matchesSelectorAt(previous, selector, index-1, state)
+	case css.CombinatorGeneralSibling:
+		for previous := previousElementSibling(node); previous != nil; previous = previousElementSibling(previous) {
+			if matchesSelectorAt(previous, selector, index-1, state) {
+				return true
+			}
+		}
+		return false
+	default:
+		return false
+	}
+}
+
+func previousElementSibling(node *dom.Node) *dom.Node {
+	if node == nil || node.Parent == nil {
+		return nil
+	}
+	var previous *dom.Node
+	for _, sibling := range node.Parent.Children {
+		if sibling == node {
+			return previous
+		}
+		if sibling.Type == dom.NodeElement {
+			previous = sibling
+		}
+	}
+	return nil
 }
 
 func matchesCompound(node *dom.Node, compound css.CompoundSelector, state InteractionState) bool {

@@ -107,15 +107,26 @@ type AttributeSelector struct {
 	Value   string
 }
 
+// Combinator describes the relationship between two adjacent compounds.
+type Combinator uint8
+
+const (
+	CombinatorDescendant Combinator = iota
+	CombinatorChild
+	CombinatorAdjacentSibling
+	CombinatorGeneralSibling
+)
+
 // Selector is a parsed selector. The legacy fields remain populated for the
 // original four selector forms while Compounds is the canonical AST.
 type Selector struct {
-	Kind      SelectorKind
-	Tag       string
-	Class     string
-	ID        string
-	Hover     bool
-	Compounds []CompoundSelector
+	Kind        SelectorKind
+	Tag         string
+	Class       string
+	ID          string
+	Hover       bool
+	Compounds   []CompoundSelector
+	Combinators []Combinator
 }
 
 // Specificity returns the selector's (ID, class, tag) specificity tuple.

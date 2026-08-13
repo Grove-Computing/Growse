@@ -16,7 +16,7 @@ body > p { color: red }
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
-	if got, want := len(stylesheet.Rules), 3; got != want {
+	if got, want := len(stylesheet.Rules), 4; got != want {
 		t.Fatalf("rule count = %d, want %d", got, want)
 	}
 	if got, want := len(stylesheet.Rules[0].Selectors), 2; got != want {
@@ -144,13 +144,37 @@ func TestParseBuildsTypedRuleSelectorAndValueModel(t *testing.T) {
 	}
 }
 
-func TestParseIgnoresUnsupportedSelectors(t *testing.T) {
-	stylesheet, err := Parse(strings.NewReader(`body > p { color: red }`))
+func TestParseRejectsMalformedCombinators(t *testing.T) {
+	stylesheet, err := Parse(strings.NewReader(`body >> p, main + ~ a { color: red }`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(stylesheet.Rules) != 0 {
 		t.Fatalf("rule count = %d, want 0", len(stylesheet.Rules))
+	}
+}
+
+func TestParseCombinators(t *testing.T) {
+	stylesheet, err := Parse(strings.NewReader(`main article .note > p + span ~ a[href] { color: red }`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := len(stylesheet.Rules), 1; got != want {
+		t.Fatalf("rule count = %d, want %d", got, want)
+	}
+	selector := stylesheet.Rules[0].Selectors[0]
+	wantCombinators := []Combinator{
+		CombinatorDescendant, CombinatorDescendant, CombinatorChild,
+		CombinatorAdjacentSibling, CombinatorGeneralSibling,
+	}
+	if !reflect.DeepEqual(selector.Combinators, wantCombinators) {
+		t.Fatalf("combinators = %v, want %v", selector.Combinators, wantCombinators)
+	}
+	if got, want := len(selector.Compounds), 6; got != want {
+		t.Fatalf("compound count = %d, want %d", got, want)
+	}
+	if got, want := selector.Specificity(), [3]int{0, 2, 5}; got != want {
+		t.Fatalf("specificity = %v, want %v", got, want)
 	}
 }
 
@@ -232,7 +256,7 @@ button:hover, #save:hover, .todo:hover, li.todo:hover { color: red }
 
 func TestParseIgnoresUnsupportedHoverSelectors(t *testing.T) {
 	stylesheet, err := Parse(strings.NewReader(`
-:hover, div:hover:hover, main button:hover, button:active, button:hover::before { color: red }
+:hover, div:hover:hover, button:active, button:hover::before { color: red }
 p { color: blue }
 `))
 	if err != nil {
