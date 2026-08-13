@@ -73,7 +73,14 @@ func (b *Browser) DispatchClick(nodeID dom.NodeID, x, y float32) bool {
 	if page == nil || page.Events == nil {
 		return false
 	}
-	return page.Events.Dispatch(events.Event{Type: events.Click, Target: nodeID, X: x, Y: y})
+	clickHandled := page.Events.Dispatch(events.Event{Type: events.Click, Target: nodeID, X: x, Y: y})
+	submitHandled := false
+	if node, ok := page.Document.NodeByID(nodeID); ok && isSubmitButton(node) {
+		if form := nearestForm(node); form != nil {
+			submitHandled = page.Events.Dispatch(events.Event{Type: events.Submit, Target: form.ID})
+		}
+	}
+	return clickHandled || submitHandled
 }
 
 // SetInputValue はユーザー入力をアクティブページのテキストinputへ反映する。
@@ -121,6 +128,28 @@ func (b *Browser) CommitInputValue(nodeID dom.NodeID, value string) bool {
 	dispatcher := page.Events
 	b.mu.RUnlock()
 	return dispatcher.Dispatch(events.Event{Type: events.Change, Target: nodeID, Value: value})
+}
+
+// SubmitForm はinputを含む最も近いformへsubmitイベントを配信する。
+func (b *Browser) SubmitForm(nodeID dom.NodeID) bool {
+	b.mu.RLock()
+	page := b.page
+	if page == nil || page.Document == nil || page.Events == nil {
+		b.mu.RUnlock()
+		return false
+	}
+	node, ok := page.Document.NodeByID(nodeID)
+	if !ok || !isTextInput(node) || !page.Document.IsConnected(node) {
+		b.mu.RUnlock()
+		return false
+	}
+	form := nearestForm(node)
+	dispatcher := page.Events
+	b.mu.RUnlock()
+	if form == nil {
+		return false
+	}
+	return dispatcher.Dispatch(events.Event{Type: events.Submit, Target: form.ID})
 }
 
 // SetPage replaces the active page. Passing nil clears the active page.
@@ -364,6 +393,23 @@ func isTextInput(node *dom.Node) bool {
 	}
 	typeValue, ok := node.Attribute("type")
 	return !ok || strings.EqualFold(strings.TrimSpace(typeValue), "text")
+}
+
+func isSubmitButton(node *dom.Node) bool {
+	if node == nil || node.Type != dom.NodeElement || node.TagName != "button" {
+		return false
+	}
+	typeValue, ok := node.Attribute("type")
+	return !ok || strings.EqualFold(strings.TrimSpace(typeValue), "submit")
+}
+
+func nearestForm(node *dom.Node) *dom.Node {
+	for current := node; current != nil; current = current.Parent {
+		if current.Type == dom.NodeElement && current.TagName == "form" {
+			return current
+		}
+	}
+	return nil
 }
 
 func normalizeURL(rawURL string) (*url.URL, error) {

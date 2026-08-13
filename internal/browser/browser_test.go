@@ -143,6 +143,55 @@ func TestCommitInputValueDispatchesChangeEvent(t *testing.T) {
 	}
 }
 
+func TestSubmitFormDispatchesToNearestForm(t *testing.T) {
+	document := dom.NewDocument()
+	form := document.CreateElement("form", map[string]string{"id": "search"})
+	input := document.CreateElement("input", map[string]string{"id": "query"})
+	if err := document.AppendChild(document.Root, form); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(form, input); err != nil {
+		t.Fatal(err)
+	}
+	page := NewPage(mustParseURL(t, "http://localhost"))
+	page.Document = document
+	page.Events = events.NewDispatcher()
+	var received events.Event
+	page.Events.AddEventListener(form.ID, events.Submit, func(event events.Event) { received = event })
+	browser := New(nil)
+	browser.SetPage(page)
+
+	if !browser.SubmitForm(input.ID) {
+		t.Fatal("SubmitForm() = false, want true")
+	}
+	if received.Type != events.Submit || received.Target != form.ID {
+		t.Fatalf("submit event = %#v, want form target", received)
+	}
+}
+
+func TestDispatchClickSubmitsSubmitButton(t *testing.T) {
+	document := dom.NewDocument()
+	form := document.CreateElement("form", nil)
+	button := document.CreateElement("button", map[string]string{"type": "submit"})
+	if err := document.AppendChild(document.Root, form); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(form, button); err != nil {
+		t.Fatal(err)
+	}
+	page := NewPage(mustParseURL(t, "http://localhost"))
+	page.Document = document
+	page.Events = events.NewDispatcher()
+	submitted := false
+	page.Events.AddEventListener(form.ID, events.Submit, func(events.Event) { submitted = true })
+	browser := New(nil)
+	browser.SetPage(page)
+
+	if !browser.DispatchClick(button.ID, 0, 0) || !submitted {
+		t.Fatal("submit button click did not submit its form")
+	}
+}
+
 func TestNavigateLoadsHTMLAndUpdatesPage(t *testing.T) {
 	finalURL := mustParseURL(t, "https://example.com/final")
 	browser := New(stubLoader{response: &network.Response{

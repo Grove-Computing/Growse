@@ -65,6 +65,21 @@ func (navigator *stubNavigator) CommitInputValue(nodeID dom.NodeID, value string
 	}
 	return navigator.page.Events.Dispatch(events.Event{Type: events.Change, Target: nodeID, Value: value})
 }
+func (navigator *stubNavigator) SubmitForm(nodeID dom.NodeID) bool {
+	if navigator.page == nil || navigator.page.Document == nil || navigator.page.Events == nil {
+		return false
+	}
+	node, ok := navigator.page.Document.NodeByID(nodeID)
+	if !ok {
+		return false
+	}
+	for current := node; current != nil; current = current.Parent {
+		if current.Type == dom.NodeElement && current.TagName == "form" {
+			return navigator.page.Events.Dispatch(events.Event{Type: events.Submit, Target: current.ID})
+		}
+	}
+	return false
+}
 
 func TestToolbarHasFixedHeight(t *testing.T) {
 	ui := NewBrowserUI(nil, nil)
@@ -289,16 +304,24 @@ func TestTextInputWritesKeyboardEditsToDOM(t *testing.T) {
 
 func TestTextInputEnterDispatchesChangeAfterEdit(t *testing.T) {
 	document := dom.NewDocument()
+	form := document.CreateElement("form", map[string]string{"id": "search-form"})
 	inputNode := document.CreateElement("input", map[string]string{"id": "query"})
-	if err := document.AppendChild(document.Root, inputNode); err != nil {
+	if err := document.AppendChild(document.Root, form); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(form, inputNode); err != nil {
 		t.Fatal(err)
 	}
 	page := &browser.Page{
 		Document: document, ComputedStyles: style.Compute(document, nil), Events: events.NewDispatcher(),
 	}
 	var changes []events.Event
+	var submissions []events.Event
 	page.Events.AddEventListener(inputNode.ID, events.Change, func(event events.Event) {
 		changes = append(changes, event)
+	})
+	page.Events.AddEventListener(form.ID, events.Submit, func(event events.Event) {
+		submissions = append(submissions, event)
 	})
 	ui := NewBrowserUI(&stubNavigator{page: page}, nil)
 	router := new(input.Router)
@@ -329,6 +352,12 @@ func TestTextInputEnterDispatchesChangeAfterEdit(t *testing.T) {
 	}
 	if changes[0].Value != "hello" {
 		t.Fatalf("change value = %q, want hello", changes[0].Value)
+	}
+	if got, want := len(submissions), 1; got != want {
+		t.Fatalf("submit event count = %d, want %d", got, want)
+	}
+	if submissions[0].Target != form.ID {
+		t.Fatalf("submit target = %d, want %d", submissions[0].Target, form.ID)
 	}
 }
 

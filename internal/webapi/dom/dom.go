@@ -113,6 +113,16 @@ func (element *Element) OnChange(handler func(Event)) {
 	})
 }
 
+// OnSubmit はformの送信操作ハンドラーを登録する。
+func (element *Element) OnSubmit(handler func(Event)) {
+	if handler == nil {
+		return
+	}
+	element.addEventListener(events.Submit, func(event events.Event) {
+		handler(element.publicEvent(event))
+	})
+}
+
 // AppendChild は未接続の子要素を接続済みの要素の末尾へ追加する。
 func (element *Element) AppendChild(child *Element) bool {
 	if element == nil || child == nil || element.document == nil || child.document != element.document {

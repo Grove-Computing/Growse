@@ -439,3 +439,22 @@ func TestOnChangeProvidesCommittedValue(t *testing.T) {
 		t.Fatalf("event = %#v, want committed input data", received)
 	}
 }
+
+func TestOnSubmitProvidesFormTarget(t *testing.T) {
+	document := dommodel.NewDocument()
+	form := document.CreateElement("form", map[string]string{"id": "todo-form"})
+	if err := document.AppendChild(document.Root, form); err != nil {
+		t.Fatal(err)
+	}
+	dispatcher := events.NewDispatcher()
+	element := New(document, dispatcher, nil).GetElementByID("todo-form")
+	var received Event
+	element.OnSubmit(func(event Event) { received = event })
+
+	if !dispatcher.Dispatch(events.Event{Type: events.Submit, Target: form.ID}) {
+		t.Fatal("submit event was not handled")
+	}
+	if received.Type != "submit" || received.TargetID != "todo-form" {
+		t.Fatalf("event = %#v, want form submit data", received)
+	}
+}

@@ -79,6 +79,7 @@ type Navigator interface {
 	DispatchClick(nodeID dom.NodeID, x, y float32) bool
 	SetInputValue(nodeID dom.NodeID, value string) bool
 	CommitInputValue(nodeID dom.NodeID, value string) bool
+	SubmitForm(nodeID dom.NodeID) bool
 }
 
 type navigationResult struct {
@@ -522,6 +523,9 @@ func (ui *BrowserUI) layoutDrawInput(gtx layout.Context, command paintmodel.Draw
 			}
 			if _, submitted := event.(widget.SubmitEvent); submitted {
 				ui.commitInput(command.NodeID, editor.Text())
+				if ui.navigator != nil {
+					ui.navigator.SubmitForm(command.NodeID)
+				}
 			}
 		}
 		focused := gtx.Focused(editor)

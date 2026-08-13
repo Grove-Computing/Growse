@@ -18,6 +18,8 @@ const (
 	Input Type = "input"
 	// Change は入力の編集が確定したイベントを表す。
 	Change Type = "change"
+	// Submit はformの送信操作を表す。
+	Submit Type = "submit"
 )
 
 // Event はDOM要素へ配信するイベント情報を保持する。
