@@ -214,6 +214,9 @@ func matches(node *dom.Node, selector css.Selector, state InteractionState) bool
 	if node == nil || node.Type != dom.NodeElement {
 		return false
 	}
+	if len(selector.Compounds) != 0 {
+		return matchesCompound(node, selector.Compounds[len(selector.Compounds)-1], state)
+	}
 	if selector.Tag != "" && node.TagName != selector.Tag {
 		return false
 	}
@@ -234,6 +237,32 @@ func matches(node *dom.Node, selector css.Selector, state InteractionState) bool
 			}
 		}
 		return false
+	}
+	return true
+}
+
+func matchesCompound(node *dom.Node, compound css.CompoundSelector, state InteractionState) bool {
+	if compound.Type != "" && node.TagName != compound.Type {
+		return false
+	}
+	if compound.Hover && !state.Hovered[node.ID] {
+		return false
+	}
+	id, _ := node.Attribute("id")
+	for _, expected := range compound.IDs {
+		if id != expected {
+			return false
+		}
+	}
+	classes, _ := node.Attribute("class")
+	available := make(map[string]bool)
+	for _, class := range strings.Fields(classes) {
+		available[class] = true
+	}
+	for _, expected := range compound.Classes {
+		if !available[expected] {
+			return false
+		}
 	}
 	return true
 }

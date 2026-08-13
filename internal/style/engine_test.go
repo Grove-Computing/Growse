@@ -132,6 +132,32 @@ button:hover { color: blue }
 	}
 }
 
+func TestComputeMatchesUniversalAndCompoundSelectors(t *testing.T) {
+	document := dom.NewDocument()
+	article := document.CreateElement("article", map[string]string{
+		"id": "story", "class": "card featured",
+	})
+	other := document.CreateElement("article", map[string]string{"class": "card"})
+	appendNode(t, document, document.Root, article)
+	appendNode(t, document, document.Root, other)
+	stylesheet, err := css.Parse(strings.NewReader(`
+* { font-size: 18px }
+article.card.featured#story { color: red }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	computed := Compute(document, stylesheet)
+	articleStyle, _ := computed.For(article)
+	otherStyle, _ := computed.For(other)
+	if articleStyle.FontSize != 18 || otherStyle.FontSize != 18 {
+		t.Fatalf("universal font sizes = (%v, %v), want 18", articleStyle.FontSize, otherStyle.FontSize)
+	}
+	if articleStyle.Color != 0xff0000ff || otherStyle.Color == 0xff0000ff {
+		t.Fatalf("compound colors = (%#x, %#x)", articleStyle.Color, otherStyle.Color)
+	}
+}
+
 func appendNode(t *testing.T, document *dom.Document, parent, child *dom.Node) {
 	t.Helper()
 	if err := document.AppendChild(parent, child); err != nil {

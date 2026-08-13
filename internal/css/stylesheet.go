@@ -73,20 +73,46 @@ const (
 	SelectorClass
 	SelectorID
 	SelectorTagClass
+	SelectorUniversal
+	SelectorCompound
 )
 
-// Selector is a parsed simple selector.
+// CompoundSelector is a sequence of simple selectors without a combinator.
+type CompoundSelector struct {
+	Universal bool
+	Type      string
+	IDs       []string
+	Classes   []string
+	Hover     bool
+}
+
+// Selector is a parsed selector. The legacy fields remain populated for the
+// original four selector forms while Compounds is the canonical AST.
 type Selector struct {
-	Kind  SelectorKind
-	Tag   string
-	Class string
-	ID    string
-	Hover bool
+	Kind      SelectorKind
+	Tag       string
+	Class     string
+	ID        string
+	Hover     bool
+	Compounds []CompoundSelector
 }
 
 // Specificity returns the selector's (ID, class, tag) specificity tuple.
 func (s Selector) Specificity() [3]int {
 	var result [3]int
+	if len(s.Compounds) != 0 {
+		for _, compound := range s.Compounds {
+			result[0] += len(compound.IDs)
+			result[1] += len(compound.Classes)
+			if compound.Hover {
+				result[1]++
+			}
+			if compound.Type != "" {
+				result[2]++
+			}
+		}
+		return result
+	}
 	if s.ID != "" {
 		result[0]++
 	}

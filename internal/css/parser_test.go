@@ -30,6 +30,37 @@ body > p { color: red }
 	}
 }
 
+func TestParseTypeUniversalAndCompoundSelectors(t *testing.T) {
+	stylesheet, err := Parse(strings.NewReader(`
+* { color: black }
+article.card.featured { color: blue }
+#app.primary.ready { color: green }
+main#content.page.active { color: red }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := len(stylesheet.Rules), 4; got != want {
+		t.Fatalf("rule count = %d, want %d", got, want)
+	}
+	selectors := []Selector{
+		stylesheet.Rules[0].Selectors[0], stylesheet.Rules[1].Selectors[0],
+		stylesheet.Rules[2].Selectors[0], stylesheet.Rules[3].Selectors[0],
+	}
+	if selectors[0].Kind != SelectorUniversal || !selectors[0].Compounds[0].Universal {
+		t.Fatalf("universal selector = %#v", selectors[0])
+	}
+	if got, want := selectors[1].Compounds[0].Classes, []string{"card", "featured"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("classes = %v, want %v", got, want)
+	}
+	if got, want := selectors[2].Specificity(), [3]int{1, 2, 0}; got != want {
+		t.Fatalf("compound specificity = %v, want %v", got, want)
+	}
+	if got, want := selectors[3].Specificity(), [3]int{1, 2, 1}; got != want {
+		t.Fatalf("typed compound specificity = %v, want %v", got, want)
+	}
+}
+
 func TestParseBuildsTypedRuleSelectorAndValueModel(t *testing.T) {
 	stylesheet, err := Parse(strings.NewReader(`main.card { width: calc(100% - 2rem); content: "hello"; background: url(image.png) }`))
 	if err != nil {

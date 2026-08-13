@@ -153,26 +153,67 @@ func parseSelector(value string) (Selector, bool) {
 	if hover {
 		value = strings.TrimSuffix(value, ":hover")
 	}
-	if value == "" || strings.ContainsAny(value, " >+~[:*") {
+	if value == "" || strings.ContainsAny(value, " >+~[:") {
 		return Selector{}, false
 	}
-	if strings.HasPrefix(value, "#") && validName(value[1:]) {
-		return Selector{Kind: SelectorID, ID: value[1:], Hover: hover}, true
-	}
-	if strings.HasPrefix(value, ".") && validName(value[1:]) {
-		return Selector{Kind: SelectorClass, Class: value[1:], Hover: hover}, true
-	}
-	if index := strings.IndexByte(value, '.'); index > 0 && strings.Count(value, ".") == 1 {
-		tag, class := strings.ToLower(value[:index]), value[index+1:]
-		if validName(tag) && validName(class) {
-			return Selector{Kind: SelectorTagClass, Tag: tag, Class: class, Hover: hover}, true
+
+	compound := CompoundSelector{Hover: hover}
+	position := 0
+	if value[0] == '*' {
+		compound.Universal = true
+		position++
+	} else if value[0] != '.' && value[0] != '#' {
+		end := selectorNameEnd(value, position)
+		if end == position || !validName(value[position:end]) {
+			return Selector{}, false
 		}
+		compound.Type = strings.ToLower(value[position:end])
+		position = end
+	}
+	for position < len(value) {
+		prefix := value[position]
+		if prefix != '.' && prefix != '#' {
+			return Selector{}, false
+		}
+		position++
+		end := selectorNameEnd(value, position)
+		if end == position || !validName(value[position:end]) {
+			return Selector{}, false
+		}
+		name := value[position:end]
+		if prefix == '.' {
+			compound.Classes = append(compound.Classes, name)
+		} else {
+			compound.IDs = append(compound.IDs, name)
+		}
+		position = end
+	}
+	if !compound.Universal && compound.Type == "" && len(compound.IDs) == 0 && len(compound.Classes) == 0 {
 		return Selector{}, false
 	}
-	if validName(value) {
-		return Selector{Kind: SelectorTag, Tag: strings.ToLower(value), Hover: hover}, true
+
+	selector := Selector{Kind: SelectorCompound, Hover: hover, Compounds: []CompoundSelector{compound}}
+	if compound.Universal && compound.Type == "" && len(compound.IDs) == 0 && len(compound.Classes) == 0 {
+		selector.Kind = SelectorUniversal
 	}
-	return Selector{}, false
+	if !compound.Universal && len(compound.IDs) == 0 && len(compound.Classes) == 0 {
+		selector.Kind, selector.Tag = SelectorTag, compound.Type
+	} else if !compound.Universal && compound.Type == "" && len(compound.IDs) == 0 && len(compound.Classes) == 1 {
+		selector.Kind, selector.Class = SelectorClass, compound.Classes[0]
+	} else if !compound.Universal && compound.Type == "" && len(compound.IDs) == 1 && len(compound.Classes) == 0 {
+		selector.Kind, selector.ID = SelectorID, compound.IDs[0]
+	} else if !compound.Universal && compound.Type != "" && len(compound.IDs) == 0 && len(compound.Classes) == 1 {
+		selector.Kind, selector.Tag, selector.Class = SelectorTagClass, compound.Type, compound.Classes[0]
+	}
+	return selector, true
+}
+
+func selectorNameEnd(value string, start int) int {
+	position := start
+	for position < len(value) && value[position] != '.' && value[position] != '#' {
+		position++
+	}
+	return position
 }
 
 func validName(value string) bool {
