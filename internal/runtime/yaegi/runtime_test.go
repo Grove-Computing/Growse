@@ -283,6 +283,33 @@ func main() {
 	}
 }
 
+func TestRuntimeAddsAndRemovesClasses(t *testing.T) {
+	document := dommodel.NewDocument()
+	item := document.CreateElement("li", map[string]string{"id": "item", "class": "todo pending"})
+	if err := document.AppendChild(document.Root, item); err != nil {
+		t.Fatal(err)
+	}
+	runtime := New()
+	scripts := []runtimemodel.Script{{Source: `package main
+import "growse/dom"
+func main() {
+	item := dom.GetElementByID("item")
+	item.AddClass("completed")
+	item.RemoveClass("pending")
+}`}}
+	environment := runtimemodel.Environment{Document: document, Events: events.NewDispatcher()}
+
+	if err := runtime.Load(context.Background(), scripts, environment); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if got, ok := item.Attribute("class"); !ok || got != "todo completed" {
+		t.Fatalf("class = (%q, %v), want (todo completed, true)", got, ok)
+	}
+}
+
 func TestRuntimeDispatchesWebGoOnClick(t *testing.T) {
 	document := dommodel.NewDocument()
 	button := document.CreateElement("button", map[string]string{"id": "increment"})

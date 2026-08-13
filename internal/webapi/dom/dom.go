@@ -148,6 +148,48 @@ func (element *Element) SetAttribute(name, value string) bool {
 	return true
 }
 
+// AddClass は重複を避けてクラスを追加する。
+func (element *Element) AddClass(className string) bool {
+	if !validClassName(className) {
+		return false
+	}
+	classes, _ := element.GetAttribute("class")
+	for _, class := range strings.Fields(classes) {
+		if class == className {
+			return false
+		}
+	}
+	if classes = strings.Join(strings.Fields(classes), " "); classes != "" {
+		classes += " "
+	}
+	return element.SetAttribute("class", classes+className)
+}
+
+// RemoveClass は指定したクラスを要素から削除する。
+func (element *Element) RemoveClass(className string) bool {
+	if !validClassName(className) {
+		return false
+	}
+	classes, ok := element.GetAttribute("class")
+	if !ok {
+		return false
+	}
+	fields := strings.Fields(classes)
+	result := fields[:0]
+	removed := false
+	for _, class := range fields {
+		if class == className {
+			removed = true
+			continue
+		}
+		result = append(result, class)
+	}
+	if !removed {
+		return false
+	}
+	return element.SetAttribute("class", strings.Join(result, " "))
+}
+
 // Text は要素と子孫のテキストを返す。
 func (element *Element) Text() string {
 	if element == nil || element.document == nil {
@@ -199,6 +241,21 @@ func validAttributeName(value string) bool {
 	for _, character := range value {
 		if character != '-' && character != '_' && character != ':' &&
 			(character < 'a' || character > 'z') &&
+			(character < '0' || character > '9') {
+			return false
+		}
+	}
+	return true
+}
+
+func validClassName(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, character := range value {
+		if character != '-' && character != '_' &&
+			(character < 'a' || character > 'z') &&
+			(character < 'A' || character > 'Z') &&
 			(character < '0' || character > '9') {
 			return false
 		}

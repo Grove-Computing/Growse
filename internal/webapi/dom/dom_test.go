@@ -263,6 +263,48 @@ func TestAttributeRejectsInvalidNameAndRemovedElement(t *testing.T) {
 	}
 }
 
+func TestAddAndRemoveClass(t *testing.T) {
+	document := dommodel.NewDocument()
+	node := document.CreateElement("li", map[string]string{"id": "item", "class": "todo active"})
+	if err := document.AppendChild(document.Root, node); err != nil {
+		t.Fatal(err)
+	}
+	mutations := 0
+	element := New(document, events.NewDispatcher(), func() { mutations++ }).GetElementByID("item")
+
+	if !element.AddClass("completed") {
+		t.Fatal("AddClass(completed) = false, want true")
+	}
+	if element.AddClass("completed") {
+		t.Fatal("duplicate AddClass(completed) = true, want false")
+	}
+	if !element.RemoveClass("active") {
+		t.Fatal("RemoveClass(active) = false, want true")
+	}
+	if element.RemoveClass("missing") {
+		t.Fatal("RemoveClass(missing) = true, want false")
+	}
+	if got, ok := element.GetAttribute("class"); !ok || got != "todo completed" {
+		t.Fatalf("class = (%q, %v), want (todo completed, true)", got, ok)
+	}
+	if got, want := mutations, 2; got != want {
+		t.Fatalf("mutation count = %d, want %d", got, want)
+	}
+}
+
+func TestClassOperationsRejectInvalidClassName(t *testing.T) {
+	api := New(dommodel.NewDocument(), events.NewDispatcher(), nil)
+	element := api.CreateElement("div")
+	for _, className := range []string{"", "two classes", ".class", "<class>"} {
+		if element.AddClass(className) {
+			t.Fatalf("AddClass(%q) = true, want false", className)
+		}
+		if element.RemoveClass(className) {
+			t.Fatalf("RemoveClass(%q) = true, want false", className)
+		}
+	}
+}
+
 func TestOnClickRegistersHandler(t *testing.T) {
 	document := dommodel.NewDocument()
 	button := document.CreateElement("button", map[string]string{"id": "button"})
