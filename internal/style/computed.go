@@ -91,10 +91,67 @@ const (
 	OverflowScroll
 )
 
+// BackgroundImageKind identifies the single background layer supported by Growse.
+type BackgroundImageKind uint8
+
+const (
+	BackgroundImageNone BackgroundImageKind = iota
+	BackgroundImageURL
+	BackgroundImageLinearGradient
+)
+
+// GradientStop is one color stop in a linear gradient. Position is normalized
+// to the [0, 1] range after omitted stops have been distributed.
+type GradientStop struct {
+	Color    uint32
+	Position float32
+}
+
+// BackgroundImage is either one URL image or one linear gradient.
+type BackgroundImage struct {
+	Kind          BackgroundImageKind
+	URL           string
+	GradientAngle float32
+	GradientStops []GradientStop
+}
+
+// BackgroundRepeat stores repetition independently for each axis.
+type BackgroundRepeat struct {
+	X bool
+	Y bool
+}
+
+// BackgroundPosition is a position inside the background positioning area.
+type BackgroundPosition struct {
+	X LengthPercentage
+	Y LengthPercentage
+}
+
+// BackgroundSizeKind identifies automatic, intrinsic-ratio, or explicit sizing.
+type BackgroundSizeKind uint8
+
+const (
+	BackgroundSizeAuto BackgroundSizeKind = iota
+	BackgroundSizeCover
+	BackgroundSizeContain
+	BackgroundSizeExplicit
+)
+
+// BackgroundSize contains the size of the single background layer.
+type BackgroundSize struct {
+	Kind   BackgroundSizeKind
+	Width  SizeValue
+	Height SizeValue
+}
+
 // ComputedStyle contains the MVP properties consumed by layout and paint.
 type ComputedStyle struct {
 	Color            uint32
 	BackgroundColor  uint32
+	BackgroundImage  BackgroundImage
+	BackgroundRepeat BackgroundRepeat
+	BackgroundPos    BackgroundPosition
+	BackgroundSize   BackgroundSize
 	FontSize         float32
 	FontWeight       int
 	LineHeight       float32

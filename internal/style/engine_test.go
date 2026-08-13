@@ -700,6 +700,45 @@ func TestComputeResolvesOverflowShorthandAndAxes(t *testing.T) {
 	}
 }
 
+func TestComputeResolvesSingleBackgroundLayerProperties(t *testing.T) {
+	document := dom.NewDocument()
+	gradient := document.CreateElement("div", map[string]string{"class": "gradient"})
+	image := document.CreateElement("div", map[string]string{"class": "image"})
+	appendNode(t, document, document.Root, gradient)
+	appendNode(t, document, document.Root, image)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.gradient {
+  background-image: linear-gradient(to right, red 20%, rgba(0, 0, 255, .5));
+  background-repeat: no-repeat;
+  background-position: right bottom;
+  background-size: 50% auto;
+}
+.image { background-image: url("images/card.png"); background-repeat: repeat-x; }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	computed := Compute(document, stylesheet)
+	gradientStyle, _ := computed.For(gradient)
+	if gradientStyle.BackgroundImage.Kind != BackgroundImageLinearGradient || gradientStyle.BackgroundImage.GradientAngle != 90 {
+		t.Fatalf("gradient = %#v", gradientStyle.BackgroundImage)
+	}
+	stops := gradientStyle.BackgroundImage.GradientStops
+	if len(stops) != 2 || stops[0] != (GradientStop{Color: 0xff0000ff, Position: .2}) || stops[1] != (GradientStop{Color: 0x0000ff80, Position: 1}) {
+		t.Fatalf("gradient stops = %#v", stops)
+	}
+	if gradientStyle.BackgroundRepeat.X || gradientStyle.BackgroundRepeat.Y || gradientStyle.BackgroundPos.X.Percentage != 100 || gradientStyle.BackgroundPos.Y.Percentage != 100 {
+		t.Fatalf("background repeat/position = %#v / %#v", gradientStyle.BackgroundRepeat, gradientStyle.BackgroundPos)
+	}
+	if gradientStyle.BackgroundSize.Kind != BackgroundSizeExplicit || gradientStyle.BackgroundSize.Width.Value.Percentage != 50 || gradientStyle.BackgroundSize.Height.Kind != SizeAuto {
+		t.Fatalf("background size = %#v", gradientStyle.BackgroundSize)
+	}
+	imageStyle, _ := computed.For(image)
+	if imageStyle.BackgroundImage.Kind != BackgroundImageURL || imageStyle.BackgroundImage.URL != "images/card.png" || !imageStyle.BackgroundRepeat.X || imageStyle.BackgroundRepeat.Y {
+		t.Fatalf("image background = %#v / %#v", imageStyle.BackgroundImage, imageStyle.BackgroundRepeat)
+	}
+}
+
 func parseTestSelector(t *testing.T, value string) css.Selector {
 	t.Helper()
 	stylesheet, err := css.Parse(strings.NewReader(value + " { color: red }"))

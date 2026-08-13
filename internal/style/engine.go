@@ -103,7 +103,8 @@ func computeNode(node *dom.Node, parent ComputedStyle, stylesheet *css.Styleshee
 func initialStyle() ComputedStyle {
 	return ComputedStyle{
 		Color: defaultTextColor, BackgroundColor: transparent, FontSize: 16, FontWeight: 400,
-		Width: SizeValue{Kind: SizeAuto}, Height: SizeValue{Kind: SizeAuto},
+		BackgroundRepeat: BackgroundRepeat{X: true, Y: true},
+		Width:            SizeValue{Kind: SizeAuto}, Height: SizeValue{Kind: SizeAuto},
 		MinWidth: SizeValue{Kind: SizeLength}, MinHeight: SizeValue{Kind: SizeLength},
 		MaxWidth: SizeValue{Kind: SizeNone}, MaxHeight: SizeValue{Kind: SizeNone},
 	}
@@ -114,7 +115,8 @@ func inheritedStyle(parent ComputedStyle) ComputedStyle {
 		Color: parent.Color, FontSize: parent.FontSize, FontWeight: parent.FontWeight,
 		LineHeight: parent.LineHeight, WhiteSpace: parent.WhiteSpace,
 		BackgroundColor: transparent, Display: DisplayInline,
-		Width: SizeValue{Kind: SizeAuto}, Height: SizeValue{Kind: SizeAuto},
+		BackgroundRepeat: BackgroundRepeat{X: true, Y: true},
+		Width:            SizeValue{Kind: SizeAuto}, Height: SizeValue{Kind: SizeAuto},
 		MinWidth: SizeValue{Kind: SizeLength}, MinHeight: SizeValue{Kind: SizeLength},
 		MaxWidth: SizeValue{Kind: SizeNone}, MaxHeight: SizeValue{Kind: SizeNone},
 	}
@@ -225,6 +227,62 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
 			if parsed, valid := resolveColor(resolved, parent.BackgroundColor, transparent, false, computed.Color); valid {
 				computed.BackgroundColor = parsed
+			}
+		}
+	}
+	if value, ok := winners["background-image"]; ok {
+		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
+			switch parseGlobalKeyword(resolved) {
+			case globalInherit:
+				computed.BackgroundImage = parent.BackgroundImage
+			case globalInitial, globalUnset:
+				computed.BackgroundImage = BackgroundImage{}
+			default:
+				if parsed, valid := parseBackgroundImage(resolved, computed.Color); valid {
+					computed.BackgroundImage = parsed
+				}
+			}
+		}
+	}
+	if value, ok := winners["background-repeat"]; ok {
+		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
+			switch parseGlobalKeyword(resolved) {
+			case globalInherit:
+				computed.BackgroundRepeat = parent.BackgroundRepeat
+			case globalInitial, globalUnset:
+				computed.BackgroundRepeat = BackgroundRepeat{X: true, Y: true}
+			default:
+				if parsed, valid := parseBackgroundRepeat(resolved); valid {
+					computed.BackgroundRepeat = parsed
+				}
+			}
+		}
+	}
+	if value, ok := winners["background-position"]; ok {
+		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
+			switch parseGlobalKeyword(resolved) {
+			case globalInherit:
+				computed.BackgroundPos = parent.BackgroundPos
+			case globalInitial, globalUnset:
+				computed.BackgroundPos = BackgroundPosition{}
+			default:
+				if parsed, valid := parseBackgroundPosition(resolved, fontContext); valid {
+					computed.BackgroundPos = parsed
+				}
+			}
+		}
+	}
+	if value, ok := winners["background-size"]; ok {
+		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
+			switch parseGlobalKeyword(resolved) {
+			case globalInherit:
+				computed.BackgroundSize = parent.BackgroundSize
+			case globalInitial, globalUnset:
+				computed.BackgroundSize = BackgroundSize{}
+			default:
+				if parsed, valid := parseBackgroundSize(resolved, fontContext); valid {
+					computed.BackgroundSize = parsed
+				}
 			}
 		}
 	}
