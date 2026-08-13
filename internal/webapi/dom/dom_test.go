@@ -211,6 +211,58 @@ func TestRemoveRejectsDetachedElementWithoutMutation(t *testing.T) {
 	}
 }
 
+func TestGetAndSetAttribute(t *testing.T) {
+	document := dommodel.NewDocument()
+	node := document.CreateElement("div", map[string]string{"id": "item", "class": "before"})
+	if err := document.AppendChild(document.Root, node); err != nil {
+		t.Fatal(err)
+	}
+	mutations := 0
+	element := New(document, events.NewDispatcher(), func() { mutations++ }).GetElementByID("item")
+
+	if got, ok := element.GetAttribute(" CLASS "); !ok || got != "before" {
+		t.Fatalf("GetAttribute(class) = (%q, %v), want (before, true)", got, ok)
+	}
+	if !element.SetAttribute("DATA-ID", "42") {
+		t.Fatal("SetAttribute(data-id) = false, want true")
+	}
+	if got, ok := element.GetAttribute("data-id"); !ok || got != "42" {
+		t.Fatalf("GetAttribute(data-id) = (%q, %v), want (42, true)", got, ok)
+	}
+	if element.SetAttribute("data-id", "42") {
+		t.Fatal("SetAttribute(data-id) = true for unchanged value")
+	}
+	if got, want := mutations, 1; got != want {
+		t.Fatalf("mutation count = %d, want %d", got, want)
+	}
+}
+
+func TestAttributeRejectsInvalidNameAndRemovedElement(t *testing.T) {
+	document := dommodel.NewDocument()
+	node := document.CreateElement("div", map[string]string{"id": "item"})
+	if err := document.AppendChild(document.Root, node); err != nil {
+		t.Fatal(err)
+	}
+	element := New(document, events.NewDispatcher(), nil).GetElementByID("item")
+	for _, name := range []string{"", "data id", "<id>"} {
+		if element.SetAttribute(name, "value") {
+			t.Fatalf("SetAttribute(%q) = true, want false", name)
+		}
+		if value, ok := element.GetAttribute(name); ok || value != "" {
+			t.Fatalf("GetAttribute(%q) = (%q, %v), want empty false", name, value, ok)
+		}
+	}
+	if !element.Remove() {
+		t.Fatal("Remove() = false, want true")
+	}
+	if element.SetAttribute("id", "new") {
+		t.Fatal("SetAttribute() = true for removed element")
+	}
+	if value, ok := element.GetAttribute("id"); ok || value != "" {
+		t.Fatalf("GetAttribute() = (%q, %v) for removed element", value, ok)
+	}
+}
+
 func TestOnClickRegistersHandler(t *testing.T) {
 	document := dommodel.NewDocument()
 	button := document.CreateElement("button", map[string]string{"id": "button"})

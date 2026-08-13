@@ -125,6 +125,28 @@ func (d *Document) QuerySelector(value string) (*Node, bool) {
 	return querySelector(d.Root, selector)
 }
 
+// SetAttribute は要素の属性を設定し、値が変化した場合にtrueを返す。
+func (d *Document) SetAttribute(id NodeID, name, value string) bool {
+	if d == nil || name == "" {
+		return false
+	}
+	node, ok := d.nodes[id]
+	if !ok || node.Type != NodeElement {
+		return false
+	}
+	if current, exists := node.Attribute(name); exists && current == value {
+		return false
+	}
+	if node.Attributes == nil {
+		node.Attributes = make(map[string]string)
+	}
+	node.Attributes[name] = value
+	if name == "id" {
+		d.rebuildIDIndex()
+	}
+	return true
+}
+
 // SetTextContent は指定したノードの子を1つのテキストノードへ置き換える。
 func (d *Document) SetTextContent(id NodeID, value string) bool {
 	if d == nil {

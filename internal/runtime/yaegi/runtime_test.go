@@ -254,6 +254,35 @@ func main() { dom.GetElementByID("item").Remove() }`}}
 	}
 }
 
+func TestRuntimeGetsAndSetsAttributes(t *testing.T) {
+	document := dommodel.NewDocument()
+	item := document.CreateElement("li", map[string]string{"id": "item", "data-state": "before"})
+	if err := document.AppendChild(document.Root, item); err != nil {
+		t.Fatal(err)
+	}
+	runtime := New()
+	scripts := []runtimemodel.Script{{Source: `package main
+import "growse/dom"
+func main() {
+	item := dom.GetElementByID("item")
+	value, ok := item.GetAttribute("data-state")
+	if ok && value == "before" {
+		item.SetAttribute("data-state", "after")
+	}
+}`}}
+	environment := runtimemodel.Environment{Document: document, Events: events.NewDispatcher()}
+
+	if err := runtime.Load(context.Background(), scripts, environment); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if got, ok := item.Attribute("data-state"); !ok || got != "after" {
+		t.Fatalf("data-state = (%q, %v), want (after, true)", got, ok)
+	}
+}
+
 func TestRuntimeDispatchesWebGoOnClick(t *testing.T) {
 	document := dommodel.NewDocument()
 	button := document.CreateElement("button", map[string]string{"id": "increment"})

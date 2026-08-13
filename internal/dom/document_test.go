@@ -216,6 +216,41 @@ func TestQuerySelectorIgnoresDetachedElement(t *testing.T) {
 	}
 }
 
+func TestSetAttributeUpdatesValueAndIDIndex(t *testing.T) {
+	document := NewDocument()
+	element := document.CreateElement("div", map[string]string{"id": "before"})
+	if err := document.AppendChild(document.Root, element); err != nil {
+		t.Fatal(err)
+	}
+
+	if !document.SetAttribute(element.ID, "id", "after") {
+		t.Fatal("SetAttribute() = false, want true")
+	}
+	if got, ok := element.Attribute("id"); !ok || got != "after" {
+		t.Fatalf("Attribute(id) = (%q, %v), want (after, true)", got, ok)
+	}
+	if _, ok := document.GetElementByID("before"); ok {
+		t.Fatal("old id remains indexed")
+	}
+	if got, ok := document.GetElementByID("after"); !ok || got != element {
+		t.Fatalf("GetElementByID(after) = (%p, %v), want (%p, true)", got, ok, element)
+	}
+	if document.SetAttribute(element.ID, "id", "after") {
+		t.Fatal("SetAttribute() = true for unchanged value")
+	}
+}
+
+func TestSetAttributeInitializesAttributeMap(t *testing.T) {
+	document := NewDocument()
+	element := document.CreateElement("input", nil)
+	if !document.SetAttribute(element.ID, "value", "hello") {
+		t.Fatal("SetAttribute() = false, want true")
+	}
+	if got, ok := element.Attribute("value"); !ok || got != "hello" {
+		t.Fatalf("Attribute(value) = (%q, %v), want (hello, true)", got, ok)
+	}
+}
+
 func TestSetTextContentReplacesDescendantsAndIndexes(t *testing.T) {
 	document := NewDocument()
 	parent := document.CreateElement("p", map[string]string{"id": "message"})

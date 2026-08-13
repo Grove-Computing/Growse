@@ -117,6 +117,37 @@ func (element *Element) Remove() bool {
 	return true
 }
 
+// GetAttribute は要素に設定された属性値を返す。
+func (element *Element) GetAttribute(name string) (string, bool) {
+	if element == nil || element.document == nil {
+		return "", false
+	}
+	name = strings.ToLower(strings.TrimSpace(name))
+	if !validAttributeName(name) {
+		return "", false
+	}
+	node, ok := element.document.NodeByID(element.id)
+	if !ok || node.Type != dommodel.NodeElement {
+		return "", false
+	}
+	return node.Attribute(name)
+}
+
+// SetAttribute は要素の属性値を変更する。
+func (element *Element) SetAttribute(name, value string) bool {
+	if element == nil || element.document == nil {
+		return false
+	}
+	name = strings.ToLower(strings.TrimSpace(name))
+	if !validAttributeName(name) || !element.document.SetAttribute(element.id, name, value) {
+		return false
+	}
+	if element.onMutation != nil {
+		element.onMutation()
+	}
+	return true
+}
+
 // Text は要素と子孫のテキストを返す。
 func (element *Element) Text() string {
 	if element == nil || element.document == nil {
@@ -154,6 +185,20 @@ func validTagName(value string) bool {
 		if character != '-' &&
 			(character < 'a' || character > 'z') &&
 			(character < 'A' || character > 'Z') &&
+			(character < '0' || character > '9') {
+			return false
+		}
+	}
+	return true
+}
+
+func validAttributeName(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, character := range value {
+		if character != '-' && character != '_' && character != ':' &&
+			(character < 'a' || character > 'z') &&
 			(character < '0' || character > '9') {
 			return false
 		}
