@@ -100,13 +100,21 @@ func computeNode(node *dom.Node, parent ComputedStyle, stylesheet *css.Styleshee
 }
 
 func initialStyle() ComputedStyle {
-	return ComputedStyle{Color: defaultTextColor, BackgroundColor: transparent, FontSize: 16, FontWeight: 400}
+	return ComputedStyle{
+		Color: defaultTextColor, BackgroundColor: transparent, FontSize: 16, FontWeight: 400,
+		Width: SizeValue{Kind: SizeAuto}, Height: SizeValue{Kind: SizeAuto},
+		MinWidth: SizeValue{Kind: SizeLength}, MinHeight: SizeValue{Kind: SizeLength},
+		MaxWidth: SizeValue{Kind: SizeNone}, MaxHeight: SizeValue{Kind: SizeNone},
+	}
 }
 
 func inheritedStyle(parent ComputedStyle) ComputedStyle {
 	computed := ComputedStyle{
 		Color: parent.Color, FontSize: parent.FontSize, FontWeight: parent.FontWeight,
 		BackgroundColor: transparent, Display: DisplayInline,
+		Width: SizeValue{Kind: SizeAuto}, Height: SizeValue{Kind: SizeAuto},
+		MinWidth: SizeValue{Kind: SizeLength}, MinHeight: SizeValue{Kind: SizeLength},
+		MaxWidth: SizeValue{Kind: SizeNone}, MaxHeight: SizeValue{Kind: SizeNone},
 	}
 	if len(parent.CustomProperties) != 0 {
 		computed.CustomProperties = make(map[string]string, len(parent.CustomProperties))
@@ -244,11 +252,24 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 			}
 		}
 	}
+	if value, ok := winners["box-sizing"]; ok {
+		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
+			if parsed, valid := resolveBoxSizing(resolved, parent.BoxSizing); valid {
+				computed.BoxSizing = parsed
+			}
+		}
+	}
 	lengthContext := LengthContext{
 		FontSize: computed.FontSize, RootFontSize: environment.RootFontSize,
 		ViewportWidth: environment.ViewportWidth, ViewportHeight: environment.ViewportHeight,
 		PercentageBase: environment.ViewportWidth,
 	}
+	computed.Width = resolveSizeWinner("width", computed.Width, parent.Width, winners, computed.CustomProperties, lengthContext)
+	computed.Height = resolveSizeWinner("height", computed.Height, parent.Height, winners, computed.CustomProperties, lengthContext)
+	computed.MinWidth = resolveSizeWinner("min-width", computed.MinWidth, parent.MinWidth, winners, computed.CustomProperties, lengthContext)
+	computed.MinHeight = resolveSizeWinner("min-height", computed.MinHeight, parent.MinHeight, winners, computed.CustomProperties, lengthContext)
+	computed.MaxWidth = resolveSizeWinner("max-width", computed.MaxWidth, parent.MaxWidth, winners, computed.CustomProperties, lengthContext)
+	computed.MaxHeight = resolveSizeWinner("max-height", computed.MaxHeight, parent.MaxHeight, winners, computed.CustomProperties, lengthContext)
 	computed.Margin = applyEdges(computed.Margin, parent.Margin, "margin", winners, computed.CustomProperties, lengthContext)
 	computed.Padding = applyEdges(computed.Padding, parent.Padding, "padding", winners, computed.CustomProperties, lengthContext)
 	return computed
@@ -333,6 +354,62 @@ func resolveDisplay(value string, parent Display) (Display, bool) {
 	default:
 		return parseDisplay(value)
 	}
+}
+
+func resolveBoxSizing(value string, parent BoxSizing) (BoxSizing, bool) {
+	switch parseGlobalKeyword(value) {
+	case globalInherit:
+		return parent, true
+	case globalInitial, globalUnset:
+		return BoxSizingContentBox, true
+	}
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "content-box":
+		return BoxSizingContentBox, true
+	case "border-box":
+		return BoxSizingBorderBox, true
+	default:
+		return 0, false
+	}
+}
+
+func resolveSizeWinner(property string, current, parent SizeValue, winners map[string]winner, customProperties map[string]string, context LengthContext) SizeValue {
+	candidate, ok := winners[property]
+	if !ok {
+		return current
+	}
+	resolved, ok := resolveVariables(candidate.value, customProperties)
+	if !ok {
+		return current
+	}
+	switch parseGlobalKeyword(resolved) {
+	case globalInherit:
+		return parent
+	case globalInitial, globalUnset:
+		return initialSizeValue(property)
+	}
+	value := strings.ToLower(strings.TrimSpace(resolved))
+	if (property == "width" || property == "height") && value == "auto" {
+		return SizeValue{Kind: SizeAuto}
+	}
+	if strings.HasPrefix(property, "max-") && value == "none" {
+		return SizeValue{Kind: SizeNone}
+	}
+	length, valid := ResolveLength(value, context)
+	if !valid || length.Pixels < 0 && length.Percentage == 0 {
+		return current
+	}
+	return SizeValue{Kind: SizeLength, Value: length}
+}
+
+func initialSizeValue(property string) SizeValue {
+	if property == "width" || property == "height" {
+		return SizeValue{Kind: SizeAuto}
+	}
+	if strings.HasPrefix(property, "max-") {
+		return SizeValue{Kind: SizeNone}
+	}
+	return SizeValue{Kind: SizeLength}
 }
 
 func parsePositivePixels(value string) (float32, bool) {
@@ -707,6 +784,8 @@ func parseDisplay(value string) (Display, bool) {
 		return DisplayInline, true
 	case "block":
 		return DisplayBlock, true
+	case "inline-block":
+		return DisplayInlineBlock, true
 	case "none":
 		return DisplayNone, true
 	default:

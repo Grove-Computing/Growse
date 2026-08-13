@@ -618,6 +618,35 @@ p { color: black; }
 	}
 }
 
+func TestComputeResolvesSizingAndBoxSizing(t *testing.T) {
+	document := dom.NewDocument()
+	box := document.CreateElement("div", nil)
+	appendNode(t, document, document.Root, box)
+	stylesheet, err := css.Parse(strings.NewReader(`
+div {
+  display: inline-block;
+  width: 50%; height: 10vh;
+  min-width: 200px; min-height: 40px;
+  max-width: calc(100% - 20px); max-height: none;
+  box-sizing: border-box;
+}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	computed, _ := ComputeWithEnvironment(document, stylesheet, InteractionState{}, Environment{
+		ViewportWidth: 800, ViewportHeight: 600, RootFontSize: 16,
+	}).For(box)
+	if computed.Display != DisplayInlineBlock || computed.BoxSizing != BoxSizingBorderBox {
+		t.Fatalf("display/box sizing = %#v", computed)
+	}
+	if computed.Width.Value.Percentage != 50 || computed.Height.Value.Pixels != 60 ||
+		computed.MinWidth.Value.Pixels != 200 || computed.MaxWidth.Value.Percentage != 100 || computed.MaxWidth.Value.Pixels != -20 ||
+		computed.MaxHeight.Kind != SizeNone {
+		t.Fatalf("computed sizes = %#v", computed)
+	}
+}
+
 func parseTestSelector(t *testing.T, value string) css.Selector {
 	t.Helper()
 	stylesheet, err := css.Parse(strings.NewReader(value + " { color: red }"))

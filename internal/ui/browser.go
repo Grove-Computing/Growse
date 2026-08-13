@@ -462,7 +462,7 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 	if ui.navigator != nil {
 		ui.navigator.UpdateViewport(viewportWidth, viewportHeight)
 	}
-	tree := layoutengine.Build(page.Document, page.ComputedStyles, viewportWidth)
+	tree := layoutengine.BuildWithViewport(page.Document, page.ComputedStyles, viewportWidth, viewportHeight)
 	displayList := paintmodel.Build(tree)
 	paint.Fill(gtx.Ops, rgba(displayList.Background))
 	ui.updateViewportHover(gtx, page, tree, displayList)

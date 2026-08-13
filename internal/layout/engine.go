@@ -25,6 +25,13 @@ type blockStyle struct {
 	display    stylemodel.Display
 	margin     stylemodel.Edges
 	padding    stylemodel.Edges
+	boxSizing  stylemodel.BoxSizing
+	width      stylemodel.SizeValue
+	height     stylemodel.SizeValue
+	minWidth   stylemodel.SizeValue
+	minHeight  stylemodel.SizeValue
+	maxWidth   stylemodel.SizeValue
+	maxHeight  stylemodel.SizeValue
 }
 
 type inlineRun struct {
@@ -36,6 +43,15 @@ type inlineRun struct {
 
 // Build creates a vertical block layout with a minimal inline text flow.
 func Build(document *dom.Document, computed stylemodel.Map, viewportWidth float32) *Tree {
+	return build(document, computed, viewportWidth, 0)
+}
+
+// BuildWithViewport lays out a document with definite viewport dimensions.
+func BuildWithViewport(document *dom.Document, computed stylemodel.Map, viewportWidth, viewportHeight float32) *Tree {
+	return build(document, computed, viewportWidth, viewportHeight)
+}
+
+func build(document *dom.Document, computed stylemodel.Map, viewportWidth, viewportHeight float32) *Tree {
 	if viewportWidth < pagePadding*2+1 {
 		viewportWidth = pagePadding*2 + 1
 	}
@@ -52,7 +68,7 @@ func Build(document *dom.Document, computed stylemodel.Map, viewportWidth float3
 				tree.Background = bodyStyle.BackgroundColor
 			}
 		}
-		state.walk(document.Root, pagePadding, viewportWidth-pagePadding*2)
+		state.walk(document.Root, pagePadding, viewportWidth-pagePadding*2, viewportHeight, viewportHeight > 0)
 	}
 	tree.Height = state.y + pagePadding
 	return tree
@@ -64,7 +80,7 @@ type engine struct {
 	y        float32
 }
 
-func (e *engine) walk(node *dom.Node, x, width float32) {
+func (e *engine) walk(node *dom.Node, x, width, containingHeight float32, heightDefinite bool) {
 	if node == nil {
 		return
 	}
@@ -85,11 +101,11 @@ func (e *engine) walk(node *dom.Node, x, width float32) {
 			return
 		}
 		if isTextInput(node) {
-			e.addInput(node, style, x, width)
+			e.addInput(node, style, x, width, containingHeight, heightDefinite)
 			return
 		}
 		if style.display == stylemodel.DisplayBlock {
-			e.addBlock(node, style, x, width)
+			e.addBlock(node, style, x, width, containingHeight, heightDefinite)
 			return
 		}
 		runs := e.collectInlineRuns(node, node)
@@ -100,20 +116,30 @@ func (e *engine) walk(node *dom.Node, x, width float32) {
 	}
 
 	for _, child := range node.Children {
-		e.walk(child, x, width)
+		e.walk(child, x, width, containingHeight, heightDefinite)
 	}
 }
 
-func (e *engine) addInput(node *dom.Node, style blockStyle, x, width float32) {
+func (e *engine) addInput(node *dom.Node, style blockStyle, x, width, containingHeight float32, heightDefinite bool) {
 	e.y += style.margin.Top
 	x += style.margin.Left
-	width -= style.margin.Left + style.margin.Right
-	if width > inputWidth {
-		width = inputWidth
+	availableWidth := width - style.margin.Left - style.margin.Right
+	usedWidth := inputWidth
+	if resolved, ok := resolveSize(style.width, availableWidth, true); ok {
+		usedWidth = resolved
 	}
-	if width < 1 {
-		width = 1
+	usedWidth = constrainSize(usedWidth, style.minWidth, style.maxWidth, availableWidth, true)
+	if usedWidth > availableWidth && style.width.Kind == stylemodel.SizeAuto {
+		usedWidth = availableWidth
 	}
+	if usedWidth < 1 {
+		usedWidth = 1
+	}
+	usedHeight := inputHeight
+	if resolved, ok := resolveSize(style.height, containingHeight, heightDefinite); ok {
+		usedHeight = resolved
+	}
+	usedHeight = constrainSize(usedHeight, style.minHeight, style.maxHeight, containingHeight, heightDefinite)
 	value, _ := node.Attribute("value")
 	e.tree.Boxes = append(e.tree.Boxes, Box{
 		NodeID: node.ID,
@@ -122,11 +148,11 @@ func (e *engine) addInput(node *dom.Node, style blockStyle, x, width float32) {
 		Input:  true,
 		X:      x,
 		Y:      e.y,
-		Width:  width,
-		Height: inputHeight,
+		Width:  usedWidth,
+		Height: usedHeight,
 		Color:  style.color,
 	})
-	e.y += inputHeight + style.margin.Bottom
+	e.y += usedHeight + style.margin.Bottom
 }
 
 func isTextInput(node *dom.Node) bool {
@@ -137,20 +163,47 @@ func isTextInput(node *dom.Node) bool {
 	return !ok || strings.EqualFold(strings.TrimSpace(typeValue), "text")
 }
 
-func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width float32) {
+func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containingHeight float32, heightDefinite bool) {
 	e.y += style.margin.Top
 	x += style.margin.Left
-	width -= style.margin.Left + style.margin.Right
-	if width < 1 {
-		width = 1
+	availableWidth := width - style.margin.Left - style.margin.Right
+	if availableWidth < 1 {
+		availableWidth = 1
 	}
-
+	sizingWidth := availableWidth
+	if style.boxSizing == stylemodel.BoxSizingContentBox {
+		sizingWidth -= style.padding.Left + style.padding.Right
+	}
+	if resolved, ok := resolveSize(style.width, width, true); ok {
+		sizingWidth = resolved
+	}
+	sizingWidth = constrainSize(sizingWidth, style.minWidth, style.maxWidth, width, true)
+	outerWidth := sizingWidth
+	if style.boxSizing == stylemodel.BoxSizingContentBox {
+		outerWidth += style.padding.Left + style.padding.Right
+	}
+	if outerWidth > availableWidth && style.width.Kind == stylemodel.SizeAuto {
+		outerWidth = availableWidth
+	}
+	if outerWidth < 1 {
+		outerWidth = 1
+	}
 	contentX := x + style.padding.Left
-	contentWidth := width - style.padding.Left - style.padding.Right
+	contentWidth := outerWidth - style.padding.Left - style.padding.Right
 	if contentWidth < 1 {
 		contentWidth = 1
 	}
+	boxTop := e.y
 	e.y += style.padding.Top
+	contentTop := e.y
+	declaredHeight, declaredHeightDefinite := resolveSize(style.height, containingHeight, heightDefinite)
+	childContainingHeight := declaredHeight
+	if declaredHeightDefinite && style.boxSizing == stylemodel.BoxSizingBorderBox {
+		childContainingHeight -= style.padding.Top + style.padding.Bottom
+		if childContainingHeight < 0 {
+			childContainingHeight = 0
+		}
+	}
 
 	inlineRuns := e.generatedRuns(node, true, style)
 	flushInline := func() {
@@ -168,7 +221,7 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width float32) {
 			}
 			if childStyle.display == stylemodel.DisplayBlock {
 				flushInline()
-				e.walk(child, contentX, contentWidth)
+				e.walk(child, contentX, contentWidth, childContainingHeight, declaredHeightDefinite)
 				continue
 			}
 		}
@@ -177,7 +230,41 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width float32) {
 	inlineRuns = append(inlineRuns, e.generatedRuns(node, false, style)...)
 	flushInline()
 
-	e.y += style.padding.Bottom + style.margin.Bottom
+	contentHeight := e.y - contentTop
+	sizingHeight := contentHeight
+	if declaredHeightDefinite {
+		sizingHeight = declaredHeight
+	}
+	sizingHeight = constrainSize(sizingHeight, style.minHeight, style.maxHeight, containingHeight, heightDefinite)
+	outerHeight := sizingHeight
+	if style.boxSizing == stylemodel.BoxSizingContentBox {
+		outerHeight += style.padding.Top + style.padding.Bottom
+	}
+	if outerHeight < 0 {
+		outerHeight = 0
+	}
+	e.y = boxTop + outerHeight + style.margin.Bottom
+}
+
+func resolveSize(value stylemodel.SizeValue, basis float32, basisDefinite bool) (float32, bool) {
+	if value.Kind != stylemodel.SizeLength || value.Value.Percentage != 0 && !basisDefinite {
+		return 0, false
+	}
+	resolved := value.Value.Resolve(basis)
+	if resolved < 0 {
+		resolved = 0
+	}
+	return resolved, true
+}
+
+func constrainSize(value float32, minimum, maximum stylemodel.SizeValue, basis float32, basisDefinite bool) float32 {
+	if resolved, ok := resolveSize(minimum, basis, basisDefinite); ok && value < resolved {
+		value = resolved
+	}
+	if resolved, ok := resolveSize(maximum, basis, basisDefinite); ok && value > resolved {
+		value = resolved
+	}
+	return value
 }
 
 func (e *engine) collectInlineRuns(node, owner *dom.Node) []inlineRun {
@@ -436,6 +523,10 @@ func applyComputed(block blockStyle, computed stylemodel.ComputedStyle) blockSty
 	block.display = computed.Display
 	block.margin = computed.Margin
 	block.padding = computed.Padding
+	block.boxSizing = computed.BoxSizing
+	block.width, block.height = computed.Width, computed.Height
+	block.minWidth, block.minHeight = computed.MinWidth, computed.MinHeight
+	block.maxWidth, block.maxHeight = computed.MaxWidth, computed.MaxHeight
 	return block
 }
 

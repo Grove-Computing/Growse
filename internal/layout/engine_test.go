@@ -112,6 +112,40 @@ func TestBuildAppliesBoxModelAndDisplay(t *testing.T) {
 	}
 }
 
+func TestBuildAppliesSizingConstraintsAndBoxSizing(t *testing.T) {
+	document := dom.NewDocument()
+	contentBox := document.CreateElement("div", map[string]string{"class": "content"})
+	borderBox := document.CreateElement("div", map[string]string{"class": "border"})
+	following := document.CreateElement("p", nil)
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, contentBox},
+		[2]*dom.Node{contentBox, document.CreateText("content")},
+		[2]*dom.Node{document.Root, borderBox},
+		[2]*dom.Node{borderBox, document.CreateText("border")},
+		[2]*dom.Node{document.Root, following},
+		[2]*dom.Node{following, document.CreateText("after")},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.content { width: 50%; min-width: 300px; max-width: 320px; padding: 10px; height: 40px; }
+.border { width: 50%; padding: 10px; box-sizing: border-box; height: 60px; }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := BuildWithViewport(document, style.ComputeWithEnvironment(document, stylesheet, style.InteractionState{}, style.Environment{
+		ViewportWidth: 800, ViewportHeight: 600, RootFontSize: 16,
+	}), 800, 600)
+	if got, want := tree.Boxes[0].Width, float32(320); got != want {
+		t.Fatalf("content-box text width = %v, want %v", got, want)
+	}
+	if got, want := tree.Boxes[1].Width, float32(348); got != want {
+		t.Fatalf("border-box text width = %v, want %v", got, want)
+	}
+	if got, want := tree.Boxes[2].Y, float32(32+60+60); got != want {
+		t.Fatalf("following y = %v, want %v", got, want)
+	}
+}
+
 func TestBuildPreservesInlineRunStyles(t *testing.T) {
 	document := dom.NewDocument()
 	p := document.CreateElement("p", nil)
