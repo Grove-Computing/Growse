@@ -146,7 +146,7 @@ func TestToolbarHasFixedHeight(t *testing.T) {
 	}
 
 	dims := ui.layoutToolbar(gtx)
-	if got, want := dims.Size.Y, 72; got != want {
+	if got, want := dims.Size.Y, 92; got != want {
 		t.Fatalf("toolbar height = %d, want %d", got, want)
 	}
 }
@@ -338,6 +338,140 @@ func TestPointerMoveAppliesAndClearsHoverStyle(t *testing.T) {
 	normal, _ := page.ComputedStyles.For(button)
 	if normal.Color == 0xff0000ff || normal.FontSize == 24 {
 		t.Fatalf("hover style remains after pointer leaves element: %#v", normal)
+	}
+}
+
+func TestLinkHoverShowsResolvedURLAndRestoresPageStatus(t *testing.T) {
+	document := dom.NewDocument()
+	anchor := document.CreateElement("a", map[string]string{"href": "../next?q=1"})
+	label := document.CreateElement("span", nil)
+	outside := document.CreateElement("p", nil)
+	for _, edge := range [][2]*dom.Node{
+		{document.Root, anchor},
+		{anchor, label},
+		{document.Root, outside},
+	} {
+		if err := document.AppendChild(edge[0], edge[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pageURL, err := url.Parse("https://example.com/docs/current")
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := &browser.Page{URL: pageURL, Document: document}
+	ui := NewBrowserUI(&stubNavigator{page: page}, nil)
+	ui.pageStatus = "取得完了 · HTTP 200"
+	ui.status = ui.pageStatus
+
+	ui.updateLinkPreview(page, label.ID)
+	if got, want := ui.status, "https://example.com/next?q=1"; got != want {
+		t.Fatalf("link status = %q, want %q", got, want)
+	}
+	ui.updateLinkPreview(page, outside.ID)
+	if got, want := ui.status, ui.pageStatus; got != want {
+		t.Fatalf("restored status = %q, want %q", got, want)
+	}
+}
+
+func TestLinkPreviewRedactsCredentialsAndIgnoresInvalidURL(t *testing.T) {
+	document := dom.NewDocument()
+	secret := document.CreateElement("a", map[string]string{"href": "https://alice:secret@example.com/private"})
+	invalid := document.CreateElement("a", map[string]string{"href": "http://[::1"})
+	for _, node := range []*dom.Node{secret, invalid} {
+		if err := document.AppendChild(document.Root, node); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pageURL, err := url.Parse("https://example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := &browser.Page{URL: pageURL, Document: document}
+	ui := NewBrowserUI(&stubNavigator{page: page}, nil)
+	ui.pageStatus = "通常状態"
+	ui.status = ui.pageStatus
+
+	ui.updateLinkPreview(page, secret.ID)
+	if strings.Contains(ui.status, "secret") || ui.status != "https://alice:xxxxx@example.com/private" {
+		t.Fatalf("credential link status = %q, want redacted URL", ui.status)
+	}
+	ui.updateLinkPreview(page, invalid.ID)
+	if got, want := ui.status, ui.pageStatus; got != want {
+		t.Fatalf("invalid link status = %q, want %q", got, want)
+	}
+}
+
+func TestLinkPreviewDoesNotOverrideLoadingOrErrorStatus(t *testing.T) {
+	document := dom.NewDocument()
+	anchor := document.CreateElement("a", map[string]string{"href": "/next"})
+	if err := document.AppendChild(document.Root, anchor); err != nil {
+		t.Fatal(err)
+	}
+	pageURL, err := url.Parse("https://example.com/current")
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := &browser.Page{URL: pageURL, Document: document}
+	ui := NewBrowserUI(&stubNavigator{page: page}, nil)
+
+	ui.loading = true
+	ui.status = "読み込み中"
+	ui.updateLinkPreview(page, anchor.ID)
+	if ui.status != "読み込み中" {
+		t.Fatalf("loading status was overwritten: %q", ui.status)
+	}
+	ui.loading = false
+	ui.statusHasError = true
+	ui.status = "Runtimeエラー"
+	ui.updateLinkPreview(page, anchor.ID)
+	if ui.status != "Runtimeエラー" {
+		t.Fatalf("error status was overwritten: %q", ui.status)
+	}
+}
+
+func TestPointerHoveringLinkDoesNotStartNavigation(t *testing.T) {
+	document := dom.NewDocument()
+	anchor := document.CreateElement("a", map[string]string{"href": "/next"})
+	if err := document.AppendChild(document.Root, anchor); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(anchor, document.CreateText("Next")); err != nil {
+		t.Fatal(err)
+	}
+	pageURL, err := url.Parse("https://example.com/current")
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := &browser.Page{URL: pageURL, Document: document, ComputedStyles: style.Compute(document, nil)}
+	navigator := &recordingNavigator{
+		stubNavigator: stubNavigator{page: page},
+		navigated:     make(chan string, 1),
+	}
+	ui := NewBrowserUI(navigator, nil)
+	ui.pageStatus = "通常状態"
+	ui.status = ui.pageStatus
+	router := new(input.Router)
+	gtx := layout.Context{
+		Ops:         new(op.Ops),
+		Source:      router.Source(),
+		Constraints: layout.Exact(image.Pt(800, 600)),
+		Metric:      unit.Metric{PxPerDp: 1, PxPerSp: 1},
+	}
+
+	ui.Layout(gtx)
+	router.Frame(gtx.Ops)
+	router.Queue(pointer.Event{Kind: pointer.Move, Source: pointer.Mouse, Position: f32.Pt(40, float32(toolbarHeight)+40)})
+	gtx.Reset()
+	ui.Layout(gtx)
+
+	if got, want := ui.status, "https://example.com/next"; got != want {
+		t.Fatalf("hover status = %q, want %q", got, want)
+	}
+	select {
+	case requested := <-navigator.navigated:
+		t.Fatalf("hover unexpectedly navigated to %q", requested)
+	default:
 	}
 }
 
