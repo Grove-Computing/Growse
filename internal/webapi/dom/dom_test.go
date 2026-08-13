@@ -1,6 +1,7 @@
 package dom
 
 import (
+	"reflect"
 	"testing"
 
 	dommodel "github.com/saku0512/growse/internal/dom"
@@ -396,6 +397,51 @@ func TestOnClickEventRejectsNilHandlerAndDetachedElement(t *testing.T) {
 	detached.OnClickEvent(nil)
 	if dispatcher.Dispatch(events.Event{Type: events.Click, Target: detached.id}) {
 		t.Fatal("detached element registered a click handler")
+	}
+}
+
+func TestOnMouseEnterAndLeaveProvidePublicEventData(t *testing.T) {
+	document := dommodel.NewDocument()
+	button := document.CreateElement("button", map[string]string{"id": "save"})
+	if err := document.AppendChild(document.Root, button); err != nil {
+		t.Fatal(err)
+	}
+	dispatcher := events.NewDispatcher()
+	element := New(document, dispatcher, nil).GetElementByID("save")
+	var received []Event
+	element.OnMouseEnter(func(event Event) { received = append(received, event) })
+	element.OnMouseLeave(func(event Event) { received = append(received, event) })
+
+	dispatcher.Dispatch(events.Event{Type: events.MouseEnter, Target: button.ID, X: 12, Y: 34})
+	dispatcher.Dispatch(events.Event{Type: events.MouseLeave, Target: button.ID, X: 56, Y: 78})
+
+	want := []Event{
+		{Type: "mouseenter", TargetID: "save", X: 12, Y: 34},
+		{Type: "mouseleave", TargetID: "save", X: 56, Y: 78},
+	}
+	if !reflect.DeepEqual(received, want) {
+		t.Fatalf("hover events = %#v, want %#v", received, want)
+	}
+}
+
+func TestRemoveClearsHoverEventListeners(t *testing.T) {
+	document := dommodel.NewDocument()
+	button := document.CreateElement("button", map[string]string{"id": "temporary"})
+	if err := document.AppendChild(document.Root, button); err != nil {
+		t.Fatal(err)
+	}
+	dispatcher := events.NewDispatcher()
+	element := New(document, dispatcher, nil).GetElementByID("temporary")
+	called := false
+	element.OnMouseEnter(func(Event) { called = true })
+	element.OnMouseLeave(func(Event) { called = true })
+	if !element.Remove() {
+		t.Fatal("Remove() = false, want true")
+	}
+
+	if dispatcher.Dispatch(events.Event{Type: events.MouseEnter, Target: button.ID}) ||
+		dispatcher.Dispatch(events.Event{Type: events.MouseLeave, Target: button.ID}) || called {
+		t.Fatal("removed element retained a hover event listener")
 	}
 }
 

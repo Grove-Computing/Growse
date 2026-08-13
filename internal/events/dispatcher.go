@@ -20,6 +20,10 @@ const (
 	Change Type = "change"
 	// Submit はformの送信操作を表す。
 	Submit Type = "submit"
+	// MouseEnter はポインターが要素のhover経路へ入ったことを表す。
+	MouseEnter Type = "mouseenter"
+	// MouseLeave はポインターが要素のhover経路から外れたことを表す。
+	MouseLeave Type = "mouseleave"
 )
 
 // Event はDOM要素へ配信するイベント情報を保持する。

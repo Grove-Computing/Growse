@@ -86,7 +86,7 @@ type Navigator interface {
 	SetInputValue(nodeID dom.NodeID, value string) bool
 	CommitInputValue(nodeID dom.NodeID, value string) bool
 	SubmitForm(nodeID dom.NodeID) bool
-	UpdateHover(nodeID dom.NodeID) bool
+	UpdateHover(nodeID dom.NodeID, x, y float32) bool
 	ClearHover() bool
 }
 
@@ -477,7 +477,7 @@ func (ui *BrowserUI) updateViewportHover(gtx layout.Context, tree *layoutengine.
 		ui.navigator.ClearHover()
 		return
 	}
-	ui.navigator.UpdateHover(nodeID)
+	ui.navigator.UpdateHover(nodeID, x, y)
 }
 
 func (ui *BrowserUI) handleViewportClicks(gtx layout.Context, page *browser.Page, tree *layoutengine.Tree, displayList *paintmodel.DisplayList) {

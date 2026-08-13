@@ -81,7 +81,7 @@ func (navigator *stubNavigator) SubmitForm(nodeID dom.NodeID) bool {
 	}
 	return false
 }
-func (navigator *stubNavigator) UpdateHover(nodeID dom.NodeID) bool {
+func (navigator *stubNavigator) UpdateHover(nodeID dom.NodeID, _, _ float32) bool {
 	if navigator.page == nil || navigator.page.Document == nil {
 		return false
 	}

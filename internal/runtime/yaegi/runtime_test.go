@@ -612,6 +612,56 @@ func main() {
 	}
 }
 
+func TestRuntimeDispatchesHoverEventsAndContainsPanic(t *testing.T) {
+	document := dommodel.NewDocument()
+	button := document.CreateElement("button", map[string]string{"id": "run"})
+	message := document.CreateElement("p", map[string]string{"id": "message"})
+	for _, node := range []*dommodel.Node{button, message} {
+		if err := document.AppendChild(document.Root, node); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dispatcher := events.NewDispatcher()
+	runtime := New()
+	scripts := []runtimemodel.Script{{Source: `package main
+import "growse/dom"
+func main() {
+	button := dom.GetElementByID("run")
+	message := dom.GetElementByID("message")
+	button.OnMouseEnter(func(event dom.Event) { panic("hover boom") })
+	button.OnMouseEnter(func(event dom.Event) {
+		if event.Type == "mouseenter" && event.TargetID == "run" && event.X == 12 && event.Y == 34 {
+			message.SetText("entered")
+		}
+	})
+	button.OnMouseLeave(func(event dom.Event) {
+		if event.Type == "mouseleave" {
+			message.SetText("left")
+		}
+	})
+}`}}
+	environment := runtimemodel.Environment{Document: document, Events: dispatcher}
+
+	if err := runtime.Load(context.Background(), scripts, environment); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if !dispatcher.Dispatch(events.Event{Type: events.MouseEnter, Target: button.ID, X: 12, Y: 34}) {
+		t.Fatal("mouseenter event was not handled")
+	}
+	if got, want := message.TextContent(), "entered"; got != want {
+		t.Fatalf("message after enter = %q, want %q", got, want)
+	}
+	if !dispatcher.Dispatch(events.Event{Type: events.MouseLeave, Target: button.ID, X: 56, Y: 78}) {
+		t.Fatal("mouseleave event was not handled")
+	}
+	if got, want := message.TextContent(), "left"; got != want {
+		t.Fatalf("message after leave = %q, want %q", got, want)
+	}
+}
+
 func TestRuntimeDispatchesWebGoOnClick(t *testing.T) {
 	document := dommodel.NewDocument()
 	button := document.CreateElement("button", map[string]string{"id": "increment"})

@@ -96,7 +96,7 @@ button:hover { color: red; font-size: 24px; padding: 8px; }
 	}
 
 	normalTree := layoutengine.Build(page.Document, page.ComputedStyles, 800)
-	if !browserState.UpdateHover(button.ID) {
+	if !browserState.UpdateHover(button.ID, 12, 34) {
 		t.Fatal("UpdateHover() = false, want true")
 	}
 	hoverTree := layoutengine.Build(page.Document, page.ComputedStyles, 800)

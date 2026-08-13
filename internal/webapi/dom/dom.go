@@ -123,6 +123,26 @@ func (element *Element) OnSubmit(handler func(Event)) {
 	})
 }
 
+// OnMouseEnter はポインターが要素へ入ったときのハンドラーを登録する。
+func (element *Element) OnMouseEnter(handler func(Event)) {
+	if handler == nil {
+		return
+	}
+	element.addEventListener(events.MouseEnter, func(event events.Event) {
+		handler(element.publicEvent(event))
+	})
+}
+
+// OnMouseLeave はポインターが要素から外れたときのハンドラーを登録する。
+func (element *Element) OnMouseLeave(handler func(Event)) {
+	if handler == nil {
+		return
+	}
+	element.addEventListener(events.MouseLeave, func(event events.Event) {
+		handler(element.publicEvent(event))
+	})
+}
+
 // AppendChild は未接続の子要素を接続済みの要素の末尾へ追加する。
 func (element *Element) AppendChild(child *Element) bool {
 	if element == nil || child == nil || element.document == nil || child.document != element.document {

@@ -153,7 +153,7 @@ func (b *Browser) SubmitForm(nodeID dom.NodeID) bool {
 }
 
 // UpdateHover updates the active page's hovered element path.
-func (b *Browser) UpdateHover(nodeID dom.NodeID) bool {
+func (b *Browser) UpdateHover(nodeID dom.NodeID, x, y float32) bool {
 	b.mu.Lock()
 	page := b.page
 	onMutation := b.onMutation
@@ -166,22 +166,25 @@ func (b *Browser) UpdateHover(nodeID dom.NodeID) bool {
 		b.mu.Unlock()
 		return false
 	}
+	previousPath := append([]dom.NodeID(nil), page.HoverPath...)
 	page.HoverTarget = nodeID
 	if len(path) == 0 {
 		page.HoverTarget = 0
 	}
 	page.HoverPath = path
 	page.ComputedStyles = style.ComputeWithState(page.Document, page.Stylesheet, interactionState(page))
+	dispatcher := page.Events
 	b.mu.Unlock()
 	if onMutation != nil {
 		onMutation()
 	}
+	dispatchHoverEvents(dispatcher, previousPath, path, x, y)
 	return true
 }
 
 // ClearHover clears transient hover state from the active page.
 func (b *Browser) ClearHover() bool {
-	return b.UpdateHover(0)
+	return b.UpdateHover(0, 0, 0)
 }
 
 // SetPage replaces the active page. Passing nil clears the active page.
@@ -458,6 +461,22 @@ func equalNodeIDs(left, right []dom.NodeID) bool {
 		}
 	}
 	return true
+}
+
+func dispatchHoverEvents(dispatcher *events.Dispatcher, previous, current []dom.NodeID, x, y float32) {
+	if dispatcher == nil {
+		return
+	}
+	common := 0
+	for common < len(previous) && common < len(current) && previous[common] == current[common] {
+		common++
+	}
+	for index := len(previous) - 1; index >= common; index-- {
+		dispatcher.Dispatch(events.Event{Type: events.MouseLeave, Target: previous[index], X: x, Y: y})
+	}
+	for index := common; index < len(current); index++ {
+		dispatcher.Dispatch(events.Event{Type: events.MouseEnter, Target: current[index], X: x, Y: y})
+	}
 }
 
 func runtimeOrigin(sourceURL *url.URL) string {
