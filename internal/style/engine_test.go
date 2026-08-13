@@ -562,6 +562,25 @@ p {
 	}
 }
 
+func TestComputeResolvesCurrentColorAndAlpha(t *testing.T) {
+	document := dom.NewDocument()
+	parent := document.CreateElement("div", map[string]string{"class": "parent"})
+	child := document.CreateElement("p", map[string]string{"class": "child"})
+	appendNode(t, document, document.Root, parent)
+	appendNode(t, document, parent, child)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.parent { color: rgba(10, 20, 30, 0.5); }
+.child { color: currentColor; background-color: currentColor; }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	computed, _ := Compute(document, stylesheet).For(child)
+	if computed.Color != 0x0a141e80 || computed.BackgroundColor != computed.Color {
+		t.Fatalf("currentColor style = %#v", computed)
+	}
+}
+
 func parseTestSelector(t *testing.T, value string) css.Selector {
 	t.Helper()
 	stylesheet, err := css.Parse(strings.NewReader(value + " { color: red }"))

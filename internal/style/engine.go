@@ -187,14 +187,14 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 
 	if value, ok := winners["color"]; ok {
 		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
-			if parsed, valid := resolveColor(resolved, parent.Color, defaultTextColor, true); valid {
+			if parsed, valid := resolveColor(resolved, parent.Color, defaultTextColor, true, parent.Color); valid {
 				computed.Color = parsed
 			}
 		}
 	}
 	if value, ok := winners["background-color"]; ok {
 		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
-			if parsed, valid := resolveColor(resolved, parent.BackgroundColor, transparent, false); valid {
+			if parsed, valid := resolveColor(resolved, parent.BackgroundColor, transparent, false, computed.Color); valid {
 				computed.BackgroundColor = parsed
 			}
 		}
@@ -257,7 +257,7 @@ func parseGlobalKeyword(value string) globalKeyword {
 	}
 }
 
-func resolveColor(value string, parent, initial uint32, inherited bool) (uint32, bool) {
+func resolveColor(value string, parent, initial uint32, inherited bool, currentColor uint32) (uint32, bool) {
 	switch parseGlobalKeyword(value) {
 	case globalInherit:
 		return parent, true
@@ -269,7 +269,7 @@ func resolveColor(value string, parent, initial uint32, inherited bool) (uint32,
 		}
 		return initial, true
 	default:
-		return parseColor(value)
+		return parseColor(value, currentColor)
 	}
 }
 
@@ -1006,31 +1006,4 @@ func parseFontWeight(value string) (int, bool) {
 		return 0, false
 	}
 	return weight, true
-}
-
-func parseColor(value string) (uint32, bool) {
-	value = strings.ToLower(strings.TrimSpace(value))
-	named := map[string]uint32{
-		"black": 0x000000ff, "white": 0xffffffff, "red": 0xff0000ff,
-		"green": 0x008000ff, "blue": 0x0000ffff, "gray": 0x808080ff,
-		"grey": 0x808080ff, "transparent": transparent,
-	}
-	if color, ok := named[value]; ok {
-		return color, true
-	}
-	if !strings.HasPrefix(value, "#") {
-		return 0, false
-	}
-	hex := value[1:]
-	if len(hex) == 3 {
-		hex = string([]byte{hex[0], hex[0], hex[1], hex[1], hex[2], hex[2]})
-	}
-	if len(hex) != 6 {
-		return 0, false
-	}
-	parsed, err := strconv.ParseUint(hex, 16, 32)
-	if err != nil {
-		return 0, false
-	}
-	return uint32(parsed)<<8 | 0xff, true
 }
