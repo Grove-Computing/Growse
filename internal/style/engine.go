@@ -111,7 +111,7 @@ func applyAuthorRules(node *dom.Node, computed ComputedStyle, stylesheet *css.St
 			for declarationIndex, declaration := range rule.Declarations {
 				for _, property := range expandedProperties(declaration.Property) {
 					candidate := winner{
-						value: declaration.Value, important: declaration.Important,
+						value: declaration.Value.Raw, important: declaration.Important,
 						specificity: selector.Specificity(), order: rule.Order*1000 + declarationIndex,
 					}
 					current, exists := winners[property]

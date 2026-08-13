@@ -1,6 +1,7 @@
 package css
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -26,6 +27,41 @@ body > p { color: red }
 	}
 	if !stylesheet.Rules[1].Declarations[0].Important {
 		t.Fatal("!important was not parsed")
+	}
+}
+
+func TestParseBuildsTypedRuleSelectorAndValueModel(t *testing.T) {
+	stylesheet, err := Parse(strings.NewReader(`main.card { width: calc(100% - 2rem); content: "hello"; background: url(image.png) }`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := len(stylesheet.Rules), 1; got != want {
+		t.Fatalf("rule count = %d, want %d", got, want)
+	}
+	rule := stylesheet.Rules[0]
+	if rule.Kind != RuleStyle || len(rule.Selectors) != 1 || rule.Selectors[0].Kind != SelectorTagClass {
+		t.Fatalf("typed rule and selector = %#v", rule)
+	}
+	if got, want := rule.Declarations[0].Value.Raw, "calc(100% - 2rem)"; got != want {
+		t.Fatalf("raw value = %q, want %q", got, want)
+	}
+	var kinds []ComponentKind
+	for _, component := range rule.Declarations[0].Value.Components {
+		if component.Kind != ComponentWhitespace {
+			kinds = append(kinds, component.Kind)
+		}
+	}
+	wantKinds := []ComponentKind{
+		ComponentFunction, ComponentPercentage, ComponentDelimiter, ComponentDimension, ComponentBlockEnd,
+	}
+	if !reflect.DeepEqual(kinds, wantKinds) {
+		t.Fatalf("component kinds = %v, want %v", kinds, wantKinds)
+	}
+	if got := rule.Declarations[1].Value.Components[0].Kind; got != ComponentString {
+		t.Fatalf("string component kind = %v, want %v", got, ComponentString)
+	}
+	if got := rule.Declarations[2].Value.Components[0].Kind; got != ComponentURL {
+		t.Fatalf("URL component kind = %v, want %v", got, ComponentURL)
 	}
 }
 

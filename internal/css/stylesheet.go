@@ -6,8 +6,19 @@ type Stylesheet struct {
 	Rules []Rule
 }
 
+// RuleKind identifies the grammar represented by a rule.
+type RuleKind uint8
+
+const (
+	// RuleStyle associates selectors with declarations.
+	RuleStyle RuleKind = iota
+	// RuleAt represents an at-rule. At-rule evaluation is added incrementally.
+	RuleAt
+)
+
 // Rule associates selectors with declarations.
 type Rule struct {
+	Kind         RuleKind
 	Selectors    []Selector
 	Declarations []Declaration
 	Order        int
@@ -16,8 +27,42 @@ type Rule struct {
 // Declaration is one CSS property/value pair.
 type Declaration struct {
 	Property  string
-	Value     string
+	Value     Value
 	Important bool
+}
+
+// Value is a declaration value before property-specific computation.
+// Raw preserves the serialized input while Components exposes typed CSS tokens.
+type Value struct {
+	Raw        string
+	Components []ComponentValue
+}
+
+// ComponentKind identifies a component value token.
+type ComponentKind uint8
+
+const (
+	ComponentIdentifier ComponentKind = iota
+	ComponentFunction
+	ComponentAtKeyword
+	ComponentHash
+	ComponentString
+	ComponentURL
+	ComponentNumber
+	ComponentPercentage
+	ComponentDimension
+	ComponentWhitespace
+	ComponentDelimiter
+	ComponentBlockStart
+	ComponentBlockEnd
+	ComponentComma
+	ComponentBad
+)
+
+// ComponentValue is one typed token in a declaration value.
+type ComponentValue struct {
+	Kind ComponentKind
+	Raw  string
 }
 
 // SelectorKind identifies the limited selector forms supported by the MVP.
