@@ -534,6 +534,34 @@ html { font-size: 20px; }
 	}
 }
 
+func TestComputeAppliesCalcToFontAndBoxValues(t *testing.T) {
+	document := dom.NewDocument()
+	paragraph := document.CreateElement("p", nil)
+	appendNode(t, document, document.Root, paragraph)
+	stylesheet, err := css.Parse(strings.NewReader(`
+p {
+  font-size: calc(1rem + 4px);
+  margin: calc(10% - 2px) calc(2 * 3px);
+  padding: calc(1em / 2);
+}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	computed, _ := ComputeWithEnvironment(document, stylesheet, InteractionState{}, Environment{
+		ViewportWidth: 800, ViewportHeight: 600, RootFontSize: 16,
+	}).For(paragraph)
+	if computed.FontSize != 20 {
+		t.Fatalf("calculated font size = %v, want 20", computed.FontSize)
+	}
+	if got, want := computed.Margin, (Edges{Top: 78, Right: 6, Bottom: 78, Left: 6}); got != want {
+		t.Fatalf("calculated margin = %#v, want %#v", got, want)
+	}
+	if computed.Padding != (Edges{Top: 10, Right: 10, Bottom: 10, Left: 10}) {
+		t.Fatalf("calculated padding = %#v", computed.Padding)
+	}
+}
+
 func parseTestSelector(t *testing.T, value string) css.Selector {
 	t.Helper()
 	stylesheet, err := css.Parse(strings.NewReader(value + " { color: red }"))

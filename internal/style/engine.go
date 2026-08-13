@@ -604,7 +604,10 @@ func applyEdges(edges, parent Edges, prefix string, winners map[string]winner, c
 }
 
 func parseEdgeValue(value string, side int, context LengthContext) (float32, bool) {
-	parts := strings.Fields(value)
+	parts, ok := splitCSSSpaceSeparated(value)
+	if !ok {
+		return 0, false
+	}
 	if len(parts) < 1 || len(parts) > 4 {
 		return 0, false
 	}
@@ -621,6 +624,59 @@ func parseEdgeValue(value string, side int, context LengthContext) (float32, boo
 	}
 	length, valid := ResolveLength(resolved[side], context)
 	return length.Resolve(context.PercentageBase), valid
+}
+
+func splitCSSSpaceSeparated(value string) ([]string, bool) {
+	var parts []string
+	start, depth := -1, 0
+	var quote byte
+	escaped := false
+	for position := 0; position < len(value); position++ {
+		character := value[position]
+		if quote != 0 {
+			if escaped {
+				escaped = false
+			} else if character == '\\' {
+				escaped = true
+			} else if character == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch character {
+		case '\'', '"':
+			if start < 0 {
+				start = position
+			}
+			quote = character
+		case '(':
+			if start < 0 {
+				start = position
+			}
+			depth++
+		case ')':
+			depth--
+			if depth < 0 {
+				return nil, false
+			}
+		default:
+			if isCSSWhitespaceByte(character) && depth == 0 {
+				if start >= 0 {
+					parts = append(parts, value[start:position])
+					start = -1
+				}
+			} else if start < 0 {
+				start = position
+			}
+		}
+	}
+	if quote != 0 || depth != 0 {
+		return nil, false
+	}
+	if start >= 0 {
+		parts = append(parts, value[start:])
+	}
+	return parts, true
 }
 
 func parseDisplay(value string) (Display, bool) {

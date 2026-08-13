@@ -28,7 +28,15 @@ func (value LengthPercentage) Resolve(percentageBase float32) float32 {
 
 // ResolveLength parses and resolves a CSS3 length or percentage.
 func ResolveLength(value string, context LengthContext) (LengthPercentage, bool) {
-	number, unit, ok := splitNumberAndUnit(strings.ToLower(strings.TrimSpace(value)))
+	value = strings.ToLower(strings.TrimSpace(value))
+	if strings.HasPrefix(value, "calc(") {
+		return resolveCalculation(value, context)
+	}
+	return resolveSimpleLength(value, context)
+}
+
+func resolveSimpleLength(value string, context LengthContext) (LengthPercentage, bool) {
+	number, unit, ok := splitNumberAndUnit(value)
 	if !ok || math.IsNaN(float64(number)) || math.IsInf(float64(number), 0) {
 		return LengthPercentage{}, false
 	}
@@ -122,4 +130,8 @@ func splitNumberAndUnit(value string) (float32, string, bool) {
 	}
 	number, err := strconv.ParseFloat(value[:position], 32)
 	return float32(number), value[position:], err == nil
+}
+
+func isCSSWhitespaceByte(value byte) bool {
+	return value == ' ' || value == '\t' || value == '\n' || value == '\r' || value == '\f'
 }
