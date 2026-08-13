@@ -65,6 +65,55 @@ func TestSetPageCanClearActivePage(t *testing.T) {
 	}
 }
 
+func TestSetInputValueUpdatesActiveTextInput(t *testing.T) {
+	document := dom.NewDocument()
+	input := document.CreateElement("input", map[string]string{"type": "text"})
+	if err := document.AppendChild(document.Root, input); err != nil {
+		t.Fatal(err)
+	}
+	page := NewPage(mustParseURL(t, "http://localhost"))
+	page.Document = document
+	browser := New(nil)
+	browser.SetPage(page)
+	mutations := 0
+	browser.SetOnMutation(func() { mutations++ })
+
+	if !browser.SetInputValue(input.ID, "hello") {
+		t.Fatal("SetInputValue() = false, want true")
+	}
+	if got, ok := input.Attribute("value"); !ok || got != "hello" {
+		t.Fatalf("input value = (%q, %v), want (hello, true)", got, ok)
+	}
+	if browser.SetInputValue(input.ID, "hello") {
+		t.Fatal("SetInputValue() = true for unchanged value")
+	}
+	if got, want := mutations, 1; got != want {
+		t.Fatalf("mutation count = %d, want %d", got, want)
+	}
+}
+
+func TestSetInputValueRejectsUnsupportedOrInactiveNode(t *testing.T) {
+	document := dom.NewDocument()
+	checkbox := document.CreateElement("input", map[string]string{"type": "checkbox"})
+	paragraph := document.CreateElement("p", nil)
+	detached := document.CreateElement("input", nil)
+	for _, node := range []*dom.Node{checkbox, paragraph} {
+		if err := document.AppendChild(document.Root, node); err != nil {
+			t.Fatal(err)
+		}
+	}
+	page := NewPage(mustParseURL(t, "http://localhost"))
+	page.Document = document
+	browser := New(nil)
+	browser.SetPage(page)
+
+	for _, node := range []*dom.Node{checkbox, paragraph, detached} {
+		if browser.SetInputValue(node.ID, "value") {
+			t.Fatalf("SetInputValue(%s) = true, want false", node.TagName)
+		}
+	}
+}
+
 func TestNavigateLoadsHTMLAndUpdatesPage(t *testing.T) {
 	finalURL := mustParseURL(t, "https://example.com/final")
 	browser := New(stubLoader{response: &network.Response{

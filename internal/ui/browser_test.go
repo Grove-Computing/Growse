@@ -52,6 +52,12 @@ func (navigator *stubNavigator) CanForward() bool { return true }
 func (navigator *stubNavigator) DispatchClick(dom.NodeID, float32, float32) bool {
 	return false
 }
+func (navigator *stubNavigator) SetInputValue(nodeID dom.NodeID, value string) bool {
+	if navigator.page == nil || navigator.page.Document == nil {
+		return false
+	}
+	return navigator.page.Document.SetAttribute(nodeID, "value", value)
+}
 
 func TestToolbarHasFixedHeight(t *testing.T) {
 	ui := NewBrowserUI(nil, nil)
@@ -239,6 +245,38 @@ func TestTextInputReceivesFocusFromPointerPress(t *testing.T) {
 	}
 	if !gtx.Focused(editor) {
 		t.Fatal("pointer press did not focus the input editor")
+	}
+}
+
+func TestTextInputWritesKeyboardEditsToDOM(t *testing.T) {
+	document := dom.NewDocument()
+	inputNode := document.CreateElement("input", map[string]string{"type": "text"})
+	if err := document.AppendChild(document.Root, inputNode); err != nil {
+		t.Fatal(err)
+	}
+	page := &browser.Page{Document: document, ComputedStyles: style.Compute(document, nil)}
+	ui := NewBrowserUI(&stubNavigator{page: page}, nil)
+	router := new(input.Router)
+	gtx := layout.Context{
+		Ops:         new(op.Ops),
+		Source:      router.Source(),
+		Constraints: layout.Exact(image.Pt(800, 600)),
+		Metric:      unit.Metric{PxPerDp: 1, PxPerSp: 1},
+	}
+
+	ui.layoutDocument(gtx, page)
+	router.Frame(gtx.Ops)
+	editor := ui.inputEditors[inputNode.ID]
+	gtx.Execute(key.FocusCmd{Tag: editor})
+	router.Queue(key.EditEvent{Range: key.Range{Start: 0, End: 0}, Text: "hello"})
+	gtx.Reset()
+	ui.layoutDocument(gtx, page)
+
+	if got, ok := inputNode.Attribute("value"); !ok || got != "hello" {
+		t.Fatalf("DOM input value = (%q, %v), want (hello, true)", got, ok)
+	}
+	if got, want := editor.Text(), "hello"; got != want {
+		t.Fatalf("editor text = %q, want %q", got, want)
 	}
 }
 

@@ -76,6 +76,31 @@ func (b *Browser) DispatchClick(nodeID dom.NodeID, x, y float32) bool {
 	return page.Events.Dispatch(events.Event{Type: events.Click, Target: nodeID, X: x, Y: y})
 }
 
+// SetInputValue はユーザー入力をアクティブページのテキストinputへ反映する。
+func (b *Browser) SetInputValue(nodeID dom.NodeID, value string) bool {
+	b.mu.Lock()
+	page := b.page
+	onMutation := b.onMutation
+	if page == nil || page.Document == nil {
+		b.mu.Unlock()
+		return false
+	}
+	node, ok := page.Document.NodeByID(nodeID)
+	if !ok || !isTextInput(node) || !page.Document.IsConnected(node) {
+		b.mu.Unlock()
+		return false
+	}
+	changed := page.Document.SetAttribute(nodeID, "value", value)
+	if changed {
+		page.ComputedStyles = style.Compute(page.Document, page.Stylesheet)
+	}
+	b.mu.Unlock()
+	if changed && onMutation != nil {
+		onMutation()
+	}
+	return changed
+}
+
 // SetPage replaces the active page. Passing nil clears the active page.
 func (b *Browser) SetPage(page *Page) {
 	b.mu.Lock()
@@ -309,6 +334,14 @@ func runtimeOrigin(sourceURL *url.URL) string {
 		return "unknown"
 	}
 	return sourceURL.Redacted()
+}
+
+func isTextInput(node *dom.Node) bool {
+	if node == nil || node.Type != dom.NodeElement || node.TagName != "input" {
+		return false
+	}
+	typeValue, ok := node.Attribute("type")
+	return !ok || strings.EqualFold(strings.TrimSpace(typeValue), "text")
 }
 
 func normalizeURL(rawURL string) (*url.URL, error) {

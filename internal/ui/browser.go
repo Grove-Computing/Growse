@@ -75,6 +75,7 @@ type Navigator interface {
 	CanForward() bool
 	Page() *browser.Page
 	DispatchClick(nodeID dom.NodeID, x, y float32) bool
+	SetInputValue(nodeID dom.NodeID, value string) bool
 }
 
 type navigationResult struct {
@@ -499,6 +500,15 @@ func (ui *BrowserUI) layoutDrawInput(gtx layout.Context, command paintmodel.Draw
 			ui.inputEditors[command.NodeID] = editor
 		} else if !gtx.Focused(editor) && editor.Text() != command.Value {
 			editor.SetText(command.Value)
+		}
+		for {
+			event, ok := editor.Update(gtx)
+			if !ok {
+				break
+			}
+			if _, changed := event.(widget.ChangeEvent); changed && ui.navigator != nil {
+				ui.navigator.SetInputValue(command.NodeID, editor.Text())
+			}
 		}
 		return widget.Border{
 			Color:        color.NRGBA{R: 150, G: 160, B: 175, A: 255},
