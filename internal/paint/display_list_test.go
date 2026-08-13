@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/saku0512/growse/internal/layout"
+	"github.com/saku0512/growse/internal/style"
 )
 
 func TestBuildPreservesPaintOrder(t *testing.T) {
@@ -22,6 +23,21 @@ func TestBuildPreservesPaintOrder(t *testing.T) {
 	}
 	if len(first.Runs) != 1 || first.Runs[0].Color != 0x123456ff {
 		t.Fatalf("first runs = %#v, want preserved inline style", first.Runs)
+	}
+}
+
+func TestBuildPreservesLinearGradientStops(t *testing.T) {
+	tree := &layout.Tree{Decorations: []layout.Decoration{{
+		Image: style.BackgroundImage{Kind: style.BackgroundImageLinearGradient, GradientAngle: 90, GradientStops: []style.GradientStop{{Color: 0xff0000ff}, {Color: 0x0000ffff, Position: 1}}},
+	}}}
+	list := Build(tree)
+	background, ok := list.Commands[0].(DrawBox)
+	if !ok || background.Image.Kind != style.BackgroundImageLinearGradient || len(background.Image.GradientStops) != 2 {
+		t.Fatalf("background command = %#v", list.Commands)
+	}
+	tree.Decorations[0].Image.GradientStops[0].Color = 0
+	if background.Image.GradientStops[0].Color != 0xff0000ff {
+		t.Fatal("display list shares mutable gradient stops with layout tree")
 	}
 }
 

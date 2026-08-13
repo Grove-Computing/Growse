@@ -33,6 +33,21 @@ func TestCommandClipTranslatesDocumentCoordinatesToCommandCoordinates(t *testing
 	}
 }
 
+func TestRasterLinearGradientInterpolatesAllColorStops(t *testing.T) {
+	gradient := style.BackgroundImage{
+		Kind: style.BackgroundImageLinearGradient, GradientAngle: 90,
+		GradientStops: []style.GradientStop{
+			{Color: 0xff0000ff, Position: 0},
+			{Color: 0x00ff00ff, Position: .5},
+			{Color: 0x0000ffff, Position: 1},
+		},
+	}
+	image := rasterLinearGradient(3, 1, gradient)
+	if left, middle, right := image.NRGBAAt(0, 0), image.NRGBAAt(1, 0), image.NRGBAAt(2, 0); left.R != 255 || middle.G != 255 || right.B != 255 {
+		t.Fatalf("gradient pixels = %v, %v, %v", left, middle, right)
+	}
+}
+
 type stubNavigator struct {
 	page *browser.Page
 	err  error

@@ -286,6 +286,20 @@ func TestBuildCreatesElementBackgroundBeforeItsContent(t *testing.T) {
 	}
 }
 
+func TestBuildCarriesLinearGradientIntoDecoration(t *testing.T) {
+	document := dom.NewDocument()
+	box := document.CreateElement("div", nil)
+	appendNodes(t, document, [2]*dom.Node{document.Root, box})
+	stylesheet, err := css.Parse(strings.NewReader(`div { width: 100px; height: 30px; background-image: linear-gradient(90deg, red, blue); }`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, style.Compute(document, stylesheet), 800)
+	if len(tree.Decorations) != 1 || tree.Decorations[0].Image.Kind != style.BackgroundImageLinearGradient || len(tree.Decorations[0].Image.GradientStops) != 2 {
+		t.Fatalf("gradient decoration = %#v", tree.Decorations)
+	}
+}
+
 func TestBuildPreservesInlineRunStyles(t *testing.T) {
 	document := dom.NewDocument()
 	p := document.CreateElement("p", nil)

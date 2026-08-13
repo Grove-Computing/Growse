@@ -21,6 +21,7 @@ type blockStyle struct {
 	bold       bool
 	color      uint32
 	background uint32
+	image      stylemodel.BackgroundImage
 	display    stylemodel.Display
 	margin     stylemodel.Edges
 	padding    stylemodel.Edges
@@ -234,12 +235,12 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 	}
 	boxTop := e.y
 	decorationIndex := -1
-	if style.background != 0 {
+	if style.background != 0 || style.image.Kind != stylemodel.BackgroundImageNone {
 		decorationIndex = len(e.tree.Decorations)
 		e.tree.Decorations = append(e.tree.Decorations, Decoration{
 			Order: e.nextOrder(), NodeID: node.ID,
 			Rect:       Rect{X: x, Y: boxTop, Width: outerWidth},
-			Background: style.background, Clip: cloneRect(e.clip),
+			Background: style.background, Image: cloneBackgroundImage(style.image), Clip: cloneRect(e.clip),
 		})
 	}
 	e.y += style.border.Top.Width + style.padding.Top
@@ -632,6 +633,12 @@ func cloneRect(source *Rect) *Rect {
 	return &copy
 }
 
+func cloneBackgroundImage(source stylemodel.BackgroundImage) stylemodel.BackgroundImage {
+	result := source
+	result.GradientStops = append([]stylemodel.GradientStop(nil), source.GradientStops...)
+	return result
+}
+
 func intersectClip(parent *Rect, child Rect) *Rect {
 	if parent == nil {
 		return &child
@@ -695,6 +702,7 @@ func applyComputed(block blockStyle, computed stylemodel.ComputedStyle) blockSty
 	block.bold = computed.Bold()
 	block.color = computed.Color
 	block.background = computed.BackgroundColor
+	block.image = cloneBackgroundImage(computed.BackgroundImage)
 	block.display = computed.Display
 	block.margin = computed.Margin
 	block.padding = computed.Padding

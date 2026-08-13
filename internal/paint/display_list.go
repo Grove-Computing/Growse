@@ -6,6 +6,7 @@ import (
 
 	"github.com/saku0512/growse/internal/dom"
 	"github.com/saku0512/growse/internal/layout"
+	stylemodel "github.com/saku0512/growse/internal/style"
 )
 
 // DisplayList is an ordered collection of page painting commands.
@@ -69,6 +70,7 @@ type DrawBox struct {
 	Width  float32
 	Height float32
 	Color  uint32
+	Image  stylemodel.BackgroundImage
 	Clip   *layout.Rect
 }
 
@@ -121,7 +123,7 @@ func Build(tree *layout.Tree) *DisplayList {
 			list.Commands = append(list.Commands, DrawBox{
 				NodeID: decoration.NodeID, X: decoration.X, Y: decoration.Y, Top: top,
 				Width: decoration.Width, Height: decoration.Height, Color: decoration.Background,
-				Clip: cloneLayoutRect(decoration.Clip),
+				Image: cloneBackgroundImage(decoration.Image), Clip: cloneLayoutRect(decoration.Clip),
 			})
 			previousBottom += top
 			continue
@@ -180,4 +182,10 @@ func cloneLayoutRect(source *layout.Rect) *layout.Rect {
 	}
 	copy := *source
 	return &copy
+}
+
+func cloneBackgroundImage(source stylemodel.BackgroundImage) stylemodel.BackgroundImage {
+	result := source
+	result.GradientStops = append([]stylemodel.GradientStop(nil), source.GradientStops...)
+	return result
 }

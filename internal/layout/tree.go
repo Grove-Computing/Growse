@@ -1,7 +1,10 @@
 // Package layout builds a simple visual tree from the Growse DOM.
 package layout
 
-import "github.com/saku0512/growse/internal/dom"
+import (
+	"github.com/saku0512/growse/internal/dom"
+	stylemodel "github.com/saku0512/growse/internal/style"
+)
 
 // Tree is the result of laying out one document at a specific viewport width.
 type Tree struct {
@@ -21,6 +24,7 @@ type Decoration struct {
 	NodeID dom.NodeID
 	Rect
 	Background uint32
+	Image      stylemodel.BackgroundImage
 	Clip       *Rect
 }
 

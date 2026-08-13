@@ -27,6 +27,7 @@ import (
 	"github.com/saku0512/growse/internal/dom"
 	layoutengine "github.com/saku0512/growse/internal/layout"
 	paintmodel "github.com/saku0512/growse/internal/paint"
+	stylemodel "github.com/saku0512/growse/internal/style"
 )
 
 //go:embed assets/gopher-blue.png
@@ -617,11 +618,65 @@ func layoutDrawBox(gtx layout.Context, command paintmodel.DrawBox) layout.Dimens
 		if command.Clip != nil {
 			defer commandClip(gtx, command.Clip, command.X, command.Y).Push(gtx.Ops).Pop()
 		}
-		paint.FillShape(gtx.Ops, rgba(command.Color), clip.Rect{Max: image.Pt(
-			gtx.Dp(unit.Dp(command.Width)), gtx.Dp(unit.Dp(command.Height)),
-		)}.Op())
+		width, height := gtx.Dp(unit.Dp(command.Width)), gtx.Dp(unit.Dp(command.Height))
+		bounds := clip.Rect{Max: image.Pt(width, height)}
+		if command.Color != 0 {
+			paint.FillShape(gtx.Ops, rgba(command.Color), bounds.Op())
+		}
+		if command.Image.Kind == stylemodel.BackgroundImageLinearGradient && width > 0 && height > 0 {
+			area := bounds.Push(gtx.Ops)
+			widget.Image{
+				Src: paint.NewImageOp(rasterLinearGradient(width, height, command.Image)),
+				Fit: widget.Unscaled, Scale: 1 / gtx.Metric.PxPerDp,
+			}.Layout(gtx)
+			area.Pop()
+		}
 		return layout.Dimensions{}
 	})
+}
+
+func rasterLinearGradient(width, height int, background stylemodel.BackgroundImage) *image.NRGBA {
+	result := image.NewNRGBA(image.Rect(0, 0, width, height))
+	if len(background.GradientStops) == 0 {
+		return result
+	}
+	radians := float64(background.GradientAngle) * math.Pi / 180
+	directionX, directionY := float32(math.Sin(radians)), float32(-math.Cos(radians))
+	span := float32(math.Abs(float64(directionX)))*float32(max(width-1, 0)) + float32(math.Abs(float64(directionY)))*float32(max(height-1, 0))
+	if span == 0 {
+		span = 1
+	}
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			projection := directionX*(float32(x)-float32(width-1)/2) + directionY*(float32(y)-float32(height-1)/2)
+			position := projection/span + .5
+			result.SetNRGBA(x, y, gradientColor(background.GradientStops, position))
+		}
+	}
+	return result
+}
+
+func gradientColor(stops []stylemodel.GradientStop, position float32) color.NRGBA {
+	if position <= stops[0].Position {
+		return rgba(stops[0].Color)
+	}
+	for index := 1; index < len(stops); index++ {
+		if position > stops[index].Position {
+			continue
+		}
+		left, right := stops[index-1], stops[index]
+		amount := float32(0)
+		if right.Position > left.Position {
+			amount = (position - left.Position) / (right.Position - left.Position)
+		}
+		return mixColor(rgba(left.Color), rgba(right.Color), amount)
+	}
+	return rgba(stops[len(stops)-1].Color)
+}
+
+func mixColor(left, right color.NRGBA, amount float32) color.NRGBA {
+	mix := func(a, b uint8) uint8 { return uint8(float32(a) + (float32(b)-float32(a))*amount + .5) }
+	return color.NRGBA{R: mix(left.R, right.R), G: mix(left.G, right.G), B: mix(left.B, right.B), A: mix(left.A, right.A)}
 }
 
 func (ui *BrowserUI) layoutDrawInput(gtx layout.Context, command paintmodel.DrawInput) layout.Dimensions {
