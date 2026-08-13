@@ -269,6 +269,18 @@ func TestParseInlineDeclarations(t *testing.T) {
 	}
 }
 
+func TestParsePreservesCustomPropertyNameCase(t *testing.T) {
+	stylesheet, err := Parse(strings.NewReader(`p { --Brand: red; --brand: blue; color: var(--Brand) }`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	declarations := stylesheet.Rules[0].Declarations
+	if got, want := []string{declarations[0].Property, declarations[1].Property, declarations[2].Property},
+		[]string{"--Brand", "--brand", "color"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("properties = %v, want %v", got, want)
+	}
+}
+
 func TestParseIgnoresUnknownAtRuleAndContinues(t *testing.T) {
 	stylesheet, err := Parse(strings.NewReader(`
 @growse-future example {

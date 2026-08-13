@@ -447,6 +447,55 @@ func TestComputeResolvesGlobalKeywordsByPropertyInheritance(t *testing.T) {
 	}
 }
 
+func TestComputeResolvesInheritedCustomPropertiesFallbackAndCycles(t *testing.T) {
+	document := dom.NewDocument()
+	parent := document.CreateElement("div", map[string]string{"class": "variables"})
+	inherited := document.CreateElement("p", map[string]string{"class": "inherited"})
+	caseSensitive := document.CreateElement("p", map[string]string{"class": "case-sensitive"})
+	fallback := document.CreateElement("p", map[string]string{"class": "fallback"})
+	nested := document.CreateElement("p", map[string]string{"class": "nested"})
+	cycle := document.CreateElement("p", map[string]string{"class": "cycle"})
+	reset := document.CreateElement("p", map[string]string{"class": "reset"})
+	appendNode(t, document, document.Root, parent)
+	for _, child := range []*dom.Node{inherited, caseSensitive, fallback, nested, cycle, reset} {
+		appendNode(t, document, parent, child)
+	}
+	stylesheet, err := css.Parse(strings.NewReader(`
+.variables {
+  --Brand: red; --brand: blue; --space: 6px;
+  --a: var(--b); --b: var(--a);
+}
+.inherited { color: var(--Brand); margin: var(--space); }
+.case-sensitive { color: var(--brand); }
+.fallback { color: var(--missing, green); }
+.nested { color: var(--missing, var(--brand)); }
+.cycle { color: var(--a, #123456); }
+.reset { --brand: initial; color: var(--brand, green); }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	computed := Compute(document, stylesheet)
+	inheritedStyle, _ := computed.For(inherited)
+	caseStyle, _ := computed.For(caseSensitive)
+	fallbackStyle, _ := computed.For(fallback)
+	nestedStyle, _ := computed.For(nested)
+	cycleStyle, _ := computed.For(cycle)
+	resetStyle, _ := computed.For(reset)
+	if inheritedStyle.Color != 0xff0000ff || inheritedStyle.Margin != (Edges{Top: 6, Right: 6, Bottom: 6, Left: 6}) {
+		t.Fatalf("inherited variables style = %#v", inheritedStyle)
+	}
+	if caseStyle.Color != 0x0000ffff || nestedStyle.Color != 0x0000ffff {
+		t.Fatalf("case/nested variable colors = (%#x, %#x)", caseStyle.Color, nestedStyle.Color)
+	}
+	if fallbackStyle.Color != 0x008000ff || resetStyle.Color != 0x008000ff {
+		t.Fatalf("fallback/reset colors = (%#x, %#x)", fallbackStyle.Color, resetStyle.Color)
+	}
+	if cycleStyle.Color != 0x123456ff {
+		t.Fatalf("cycle fallback color = %#x, want #123456", cycleStyle.Color)
+	}
+}
+
 func parseTestSelector(t *testing.T, value string) css.Selector {
 	t.Helper()
 	stylesheet, err := css.Parse(strings.NewReader(value + " { color: red }"))

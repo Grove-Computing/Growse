@@ -47,13 +47,16 @@ func Parse(reader io.Reader) (*Stylesheet, error) {
 				Kind: RuleStyle, Selectors: selectors, Order: len(stylesheet.Rules),
 			})
 			current = &stylesheet.Rules[len(stylesheet.Rules)-1]
-		case parser.DeclarationGrammar:
+		case parser.DeclarationGrammar, parser.CustomPropertyGrammar:
 			if current == nil {
 				continue
 			}
 			rawValue := strings.TrimSpace(tokenText(p.Values()))
 			rawValue, important := stripImportant(rawValue)
-			property := strings.ToLower(strings.TrimSpace(string(data)))
+			property := strings.TrimSpace(string(data))
+			if !strings.HasPrefix(property, "--") {
+				property = strings.ToLower(property)
+			}
 			if property != "" && rawValue != "" {
 				current.Declarations = append(current.Declarations, Declaration{
 					Property: property, Value: parseValue(rawValue), Important: important,

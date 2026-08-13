@@ -22,15 +22,16 @@ type Edges struct {
 
 // ComputedStyle contains the MVP properties consumed by layout and paint.
 type ComputedStyle struct {
-	Color           uint32
-	BackgroundColor uint32
-	FontSize        float32
-	FontWeight      int
-	Display         Display
-	Margin          Edges
-	Padding         Edges
-	BeforeContent   string
-	AfterContent    string
+	Color            uint32
+	BackgroundColor  uint32
+	FontSize         float32
+	FontWeight       int
+	Display          Display
+	Margin           Edges
+	Padding          Edges
+	BeforeContent    string
+	AfterContent     string
+	CustomProperties map[string]string
 }
 
 // Bold reports whether the computed weight should use a bold face.

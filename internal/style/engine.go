@@ -59,10 +59,17 @@ func initialStyle() ComputedStyle {
 }
 
 func inheritedStyle(parent ComputedStyle) ComputedStyle {
-	return ComputedStyle{
+	computed := ComputedStyle{
 		Color: parent.Color, FontSize: parent.FontSize, FontWeight: parent.FontWeight,
 		BackgroundColor: transparent, Display: DisplayInline,
 	}
+	if len(parent.CustomProperties) != 0 {
+		computed.CustomProperties = make(map[string]string, len(parent.CustomProperties))
+		for name, value := range parent.CustomProperties {
+			computed.CustomProperties[name] = value
+		}
+	}
+	return computed
 }
 
 func applyUADefaults(tag string, computed ComputedStyle) ComputedStyle {
@@ -142,34 +149,45 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 			}
 		}
 	}
+	computed.CustomProperties = applyCustomProperties(computed.CustomProperties, winners)
 
 	if value, ok := winners["color"]; ok {
-		if parsed, valid := resolveColor(value.value, parent.Color, defaultTextColor, true); valid {
-			computed.Color = parsed
+		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
+			if parsed, valid := resolveColor(resolved, parent.Color, defaultTextColor, true); valid {
+				computed.Color = parsed
+			}
 		}
 	}
 	if value, ok := winners["background-color"]; ok {
-		if parsed, valid := resolveColor(value.value, parent.BackgroundColor, transparent, false); valid {
-			computed.BackgroundColor = parsed
+		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
+			if parsed, valid := resolveColor(resolved, parent.BackgroundColor, transparent, false); valid {
+				computed.BackgroundColor = parsed
+			}
 		}
 	}
 	if value, ok := winners["font-size"]; ok {
-		if parsed, valid := resolveFloat(value.value, parent.FontSize, 16, true, parsePositivePixels); valid {
-			computed.FontSize = parsed
+		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
+			if parsed, valid := resolveFloat(resolved, parent.FontSize, 16, true, parsePositivePixels); valid {
+				computed.FontSize = parsed
+			}
 		}
 	}
 	if value, ok := winners["font-weight"]; ok {
-		if parsed, valid := resolveInt(value.value, parent.FontWeight, 400, true, parseFontWeight); valid {
-			computed.FontWeight = parsed
+		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
+			if parsed, valid := resolveInt(resolved, parent.FontWeight, 400, true, parseFontWeight); valid {
+				computed.FontWeight = parsed
+			}
 		}
 	}
 	if value, ok := winners["display"]; ok {
-		if parsed, valid := resolveDisplay(value.value, parent.Display); valid {
-			computed.Display = parsed
+		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
+			if parsed, valid := resolveDisplay(resolved, parent.Display); valid {
+				computed.Display = parsed
+			}
 		}
 	}
-	computed.Margin = applyEdges(computed.Margin, parent.Margin, "margin", winners)
-	computed.Padding = applyEdges(computed.Padding, parent.Padding, "padding", winners)
+	computed.Margin = applyEdges(computed.Margin, parent.Margin, "margin", winners, computed.CustomProperties)
+	computed.Padding = applyEdges(computed.Padding, parent.Padding, "padding", winners, computed.CustomProperties)
 	return computed
 }
 
@@ -259,6 +277,186 @@ func parsePositivePixels(value string) (float32, bool) {
 	return parsed, valid && parsed > 0
 }
 
+func applyCustomProperties(inherited map[string]string, winners map[string]winner) map[string]string {
+	result := inherited
+	for property, candidate := range winners {
+		if !strings.HasPrefix(property, "--") {
+			continue
+		}
+		switch parseGlobalKeyword(candidate.value) {
+		case globalInitial:
+			if result != nil {
+				delete(result, property)
+			}
+		case globalInherit, globalUnset:
+			// Custom properties inherit, so the inherited value is retained.
+		default:
+			if result == nil {
+				result = make(map[string]string)
+			}
+			result[property] = candidate.value
+		}
+	}
+	return result
+}
+
+func resolveVariables(value string, customProperties map[string]string) (string, bool) {
+	return resolveVariablesWithStack(value, customProperties, make(map[string]bool))
+}
+
+func resolveVariablesWithStack(value string, customProperties map[string]string, resolving map[string]bool) (string, bool) {
+	var result strings.Builder
+	for position := 0; position < len(value); {
+		functionStart := findVarFunction(value, position)
+		if functionStart < 0 {
+			result.WriteString(value[position:])
+			break
+		}
+		result.WriteString(value[position:functionStart])
+		open := functionStart + 3
+		end, ok := cssFunctionEnd(value, open)
+		if !ok {
+			return "", false
+		}
+		name, fallback, hasFallback := splitVarArguments(value[open+1 : end])
+		name = strings.TrimSpace(name)
+		if !strings.HasPrefix(name, "--") || !validCustomPropertyName(name) {
+			return "", false
+		}
+		replacement, found := customProperties[name]
+		resolved := ""
+		if found && !resolving[name] {
+			resolving[name] = true
+			resolved, found = resolveVariablesWithStack(replacement, customProperties, resolving)
+			delete(resolving, name)
+		} else {
+			found = false
+		}
+		if !found {
+			if !hasFallback {
+				return "", false
+			}
+			resolved, found = resolveVariablesWithStack(fallback, customProperties, resolving)
+			if !found {
+				return "", false
+			}
+		}
+		result.WriteString(resolved)
+		position = end + 1
+	}
+	return result.String(), true
+}
+
+func findVarFunction(value string, start int) int {
+	var quote byte
+	escaped := false
+	for position := start; position+4 <= len(value); position++ {
+		character := value[position]
+		if quote != 0 {
+			if escaped {
+				escaped = false
+			} else if character == '\\' {
+				escaped = true
+			} else if character == quote {
+				quote = 0
+			}
+			continue
+		}
+		if character == '\'' || character == '"' {
+			quote = character
+			continue
+		}
+		if strings.EqualFold(value[position:position+4], "var(") &&
+			(position == 0 || !isCSSNameByte(value[position-1])) {
+			return position
+		}
+	}
+	return -1
+}
+
+func cssFunctionEnd(value string, open int) (int, bool) {
+	if open >= len(value) || value[open] != '(' {
+		return 0, false
+	}
+	depth := 1
+	var quote byte
+	escaped := false
+	for position := open + 1; position < len(value); position++ {
+		character := value[position]
+		if quote != 0 {
+			if escaped {
+				escaped = false
+			} else if character == '\\' {
+				escaped = true
+			} else if character == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch character {
+		case '\'', '"':
+			quote = character
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return position, true
+			}
+		}
+	}
+	return 0, false
+}
+
+func splitVarArguments(value string) (string, string, bool) {
+	depth := 0
+	var quote byte
+	escaped := false
+	for position := 0; position < len(value); position++ {
+		character := value[position]
+		if quote != 0 {
+			if escaped {
+				escaped = false
+			} else if character == '\\' {
+				escaped = true
+			} else if character == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch character {
+		case '\'', '"':
+			quote = character
+		case '(':
+			depth++
+		case ')':
+			depth--
+		case ',':
+			if depth == 0 {
+				return value[:position], value[position+1:], true
+			}
+		}
+	}
+	return value, "", false
+}
+
+func validCustomPropertyName(value string) bool {
+	if len(value) <= 2 {
+		return false
+	}
+	for position := 2; position < len(value); position++ {
+		if !isCSSNameByte(value[position]) {
+			return false
+		}
+	}
+	return true
+}
+
+func isCSSNameByte(value byte) bool {
+	return value == '-' || value == '_' || value >= 'a' && value <= 'z' ||
+		value >= 'A' && value <= 'Z' || value >= '0' && value <= '9' || value >= 0x80
+}
+
 func applyGeneratedContent(node *dom.Node, computed ComputedStyle, stylesheet *css.Stylesheet, state InteractionState) ComputedStyle {
 	if stylesheet == nil {
 		return computed
@@ -292,7 +490,11 @@ func applyGeneratedContent(node *dom.Node, computed ComputedStyle, stylesheet *c
 			}
 		}
 		if found {
-			if content, valid := parseGeneratedContent(selected.value); valid {
+			resolved, valid := resolveVariables(selected.value, computed.CustomProperties)
+			if !valid {
+				continue
+			}
+			if content, valid := parseGeneratedContent(resolved); valid {
 				*target.destination = content
 			}
 		}
@@ -324,7 +526,7 @@ func expandedProperties(property string) []string {
 	}
 }
 
-func applyEdges(edges, parent Edges, prefix string, winners map[string]winner) Edges {
+func applyEdges(edges, parent Edges, prefix string, winners map[string]winner, customProperties map[string]string) Edges {
 	properties := []string{prefix + "-top", prefix + "-right", prefix + "-bottom", prefix + "-left"}
 	values := []*float32{&edges.Top, &edges.Right, &edges.Bottom, &edges.Left}
 	parentValues := []float32{parent.Top, parent.Right, parent.Bottom, parent.Left}
@@ -333,15 +535,19 @@ func applyEdges(edges, parent Edges, prefix string, winners map[string]winner) E
 		if !ok {
 			continue
 		}
+		resolved, ok := resolveVariables(candidate.value, customProperties)
+		if !ok {
+			continue
+		}
 		var parsed float32
 		var valid bool
-		switch parseGlobalKeyword(candidate.value) {
+		switch parseGlobalKeyword(resolved) {
 		case globalInherit:
 			parsed, valid = parentValues[index], true
 		case globalInitial, globalUnset:
 			parsed, valid = 0, true
 		default:
-			parsed, valid = parseEdgeValue(candidate.value, index)
+			parsed, valid = parseEdgeValue(resolved, index)
 		}
 		if valid {
 			*values[index] = parsed
