@@ -367,3 +367,34 @@ func TestOnClickRegistersHandler(t *testing.T) {
 		t.Fatal("registered click handler was not called")
 	}
 }
+
+func TestOnClickEventProvidesPublicEventData(t *testing.T) {
+	document := dommodel.NewDocument()
+	input := document.CreateElement("input", map[string]string{"id": "query", "value": "gopher"})
+	if err := document.AppendChild(document.Root, input); err != nil {
+		t.Fatal(err)
+	}
+	dispatcher := events.NewDispatcher()
+	element := New(document, dispatcher, nil).GetElementByID("query")
+	var received Event
+	element.OnClickEvent(func(event Event) { received = event })
+
+	if !dispatcher.Dispatch(events.Event{Type: events.Click, Target: input.ID, X: 12, Y: 34}) {
+		t.Fatal("click event was not handled")
+	}
+	if received.Type != "click" || received.TargetID != "query" || received.Value != "gopher" || received.X != 12 || received.Y != 34 {
+		t.Fatalf("event = %#v, want click data", received)
+	}
+}
+
+func TestOnClickEventRejectsNilHandlerAndDetachedElement(t *testing.T) {
+	document := dommodel.NewDocument()
+	dispatcher := events.NewDispatcher()
+	api := New(document, dispatcher, nil)
+	detached := api.CreateElement("button")
+	detached.OnClickEvent(func(Event) {})
+	detached.OnClickEvent(nil)
+	if dispatcher.Dispatch(events.Event{Type: events.Click, Target: detached.id}) {
+		t.Fatal("detached element registered a click handler")
+	}
+}

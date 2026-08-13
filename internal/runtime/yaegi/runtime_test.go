@@ -338,6 +338,44 @@ func main() {
 	}
 }
 
+func TestRuntimeReceivesClickEventData(t *testing.T) {
+	document := dommodel.NewDocument()
+	button := document.CreateElement("button", map[string]string{"id": "save"})
+	message := document.CreateElement("p", map[string]string{"id": "message"})
+	for _, node := range []*dommodel.Node{button, message} {
+		if err := document.AppendChild(document.Root, node); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dispatcher := events.NewDispatcher()
+	runtime := New()
+	scripts := []runtimemodel.Script{{Source: `package main
+import "growse/dom"
+func main() {
+	button := dom.GetElementByID("save")
+	message := dom.GetElementByID("message")
+	button.OnClickEvent(func(event dom.Event) {
+		if event.Type == "click" && event.TargetID == "save" && event.X == 12 && event.Y == 34 {
+			message.SetText("received")
+		}
+	})
+}`}}
+	environment := runtimemodel.Environment{Document: document, Events: dispatcher}
+
+	if err := runtime.Load(context.Background(), scripts, environment); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if !dispatcher.Dispatch(events.Event{Type: events.Click, Target: button.ID, X: 12, Y: 34}) {
+		t.Fatal("click event was not handled")
+	}
+	if got, want := message.TextContent(), "received"; got != want {
+		t.Fatalf("message = %q, want %q", got, want)
+	}
+}
+
 func TestRuntimeDispatchesWebGoOnClick(t *testing.T) {
 	document := dommodel.NewDocument()
 	button := document.CreateElement("button", map[string]string{"id": "increment"})

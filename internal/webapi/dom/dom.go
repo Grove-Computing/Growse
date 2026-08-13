@@ -23,6 +23,15 @@ type Element struct {
 	onMutation func()
 }
 
+// Event はWebGoへ公開するDOMイベント情報である。
+type Event struct {
+	Type     string
+	TargetID string
+	Value    string
+	X        float32
+	Y        float32
+}
+
 // New はDocumentに結び付いたDOM APIを生成する。
 func New(document *dommodel.Document, dispatcher *events.Dispatcher, onMutation func()) *API {
 	return &API{document: document, events: dispatcher, onMutation: onMutation}
@@ -66,14 +75,21 @@ func (api *API) CreateElement(tagName string) *Element {
 
 // OnClick は要素のクリックイベントへハンドラーを登録する。
 func (element *Element) OnClick(handler func()) {
-	if element == nil || element.document == nil || element.events == nil || handler == nil {
+	if handler == nil {
 		return
 	}
-	if _, ok := element.document.NodeByID(element.id); !ok {
-		return
-	}
-	element.events.AddEventListener(element.id, events.Click, func(events.Event) {
+	element.addEventListener(events.Click, func(events.Event) {
 		handler()
+	})
+}
+
+// OnClickEvent はクリックイベント情報を受け取るハンドラーを登録する。
+func (element *Element) OnClickEvent(handler func(Event)) {
+	if handler == nil {
+		return
+	}
+	element.addEventListener(events.Click, func(event events.Event) {
+		handler(element.publicEvent(event))
 	})
 }
 
@@ -250,6 +266,34 @@ func (element *Element) textInputNode() (*dommodel.Node, bool) {
 		return nil, false
 	}
 	return node, true
+}
+
+func (element *Element) addEventListener(eventType events.Type, listener events.Listener) bool {
+	if element == nil || element.document == nil || element.events == nil || listener == nil {
+		return false
+	}
+	node, ok := element.document.NodeByID(element.id)
+	if !ok || !element.document.IsConnected(node) {
+		return false
+	}
+	element.events.AddEventListener(element.id, eventType, listener)
+	return true
+}
+
+func (element *Element) publicEvent(event events.Event) Event {
+	result := Event{Type: string(event.Type), X: event.X, Y: event.Y}
+	if element == nil || element.document == nil {
+		return result
+	}
+	node, ok := element.document.NodeByID(event.Target)
+	if !ok {
+		return result
+	}
+	result.TargetID, _ = node.Attribute("id")
+	if node.TagName == "input" {
+		result.Value, _ = node.Attribute("value")
+	}
+	return result
 }
 
 func validTagName(value string) bool {
