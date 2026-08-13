@@ -264,7 +264,43 @@ func matchesCompound(node *dom.Node, compound css.CompoundSelector, state Intera
 			return false
 		}
 	}
+	for _, attribute := range compound.Attributes {
+		if !matchesAttribute(node, attribute) {
+			return false
+		}
+	}
 	return true
+}
+
+func matchesAttribute(node *dom.Node, selector css.AttributeSelector) bool {
+	value, present := node.Attribute(selector.Name)
+	if selector.Matcher == css.AttributePresent {
+		return present
+	}
+	if !present {
+		return false
+	}
+	switch selector.Matcher {
+	case css.AttributeExact:
+		return value == selector.Value
+	case css.AttributeIncludes:
+		for _, word := range strings.Fields(value) {
+			if word == selector.Value {
+				return true
+			}
+		}
+		return false
+	case css.AttributeDashMatch:
+		return value == selector.Value || strings.HasPrefix(value, selector.Value+"-")
+	case css.AttributePrefix:
+		return selector.Value != "" && strings.HasPrefix(value, selector.Value)
+	case css.AttributeSuffix:
+		return selector.Value != "" && strings.HasSuffix(value, selector.Value)
+	case css.AttributeSubstring:
+		return selector.Value != "" && strings.Contains(value, selector.Value)
+	default:
+		return false
+	}
 }
 
 func outranks(candidate, current winner) bool {

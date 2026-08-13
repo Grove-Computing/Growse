@@ -158,6 +158,37 @@ article.card.featured#story { color: red }
 	}
 }
 
+func TestComputeMatchesAttributeSelectors(t *testing.T) {
+	document := dom.NewDocument()
+	input := document.CreateElement("input", map[string]string{
+		"disabled": "", "type": "text", "class": "field item", "lang": "ja-JP",
+		"data-url": "https://example.test/docs/guide.pdf",
+	})
+	other := document.CreateElement("input", map[string]string{
+		"type": "number", "class": "field", "lang": "en",
+		"data-url": "http://example.test/help.txt",
+	})
+	appendNode(t, document, document.Root, input)
+	appendNode(t, document, document.Root, other)
+	stylesheet, err := css.Parse(strings.NewReader(`
+input[disabled][type="text"] { color: red }
+[class~="item"][lang|="ja"] { font-size: 21px }
+[data-url^="https"][data-url$=".pdf"][data-url*="/docs/"] { font-weight: bold }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	computed := Compute(document, stylesheet)
+	matched, _ := computed.For(input)
+	unmatched, _ := computed.For(other)
+	if matched.Color != 0xff0000ff || matched.FontSize != 21 || !matched.Bold() {
+		t.Fatalf("matched style = %#v", matched)
+	}
+	if unmatched.Color == 0xff0000ff || unmatched.FontSize == 21 || unmatched.Bold() {
+		t.Fatalf("unmatched style = %#v", unmatched)
+	}
+}
+
 func appendNode(t *testing.T, document *dom.Document, parent, child *dom.Node) {
 	t.Helper()
 	if err := document.AppendChild(parent, child); err != nil {

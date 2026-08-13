@@ -61,6 +61,54 @@ main#content.page.active { color: red }
 	}
 }
 
+func TestParseAttributeSelectors(t *testing.T) {
+	stylesheet, err := Parse(strings.NewReader(`
+[disabled] { color: red }
+input[type="text"] { color: red }
+[class~="item"] { color: red }
+[lang|="ja"] { color: red }
+a[href^="https"][href$='.pdf'][href*="/docs/"] { color: red }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := len(stylesheet.Rules), 5; got != want {
+		t.Fatalf("rule count = %d, want %d", got, want)
+	}
+	wantMatchers := []AttributeMatcher{
+		AttributePresent, AttributeExact, AttributeIncludes, AttributeDashMatch,
+	}
+	for index, want := range wantMatchers {
+		attributes := stylesheet.Rules[index].Selectors[0].Compounds[0].Attributes
+		if len(attributes) != 1 || attributes[0].Matcher != want {
+			t.Fatalf("rule %d attributes = %#v, want matcher %v", index, attributes, want)
+		}
+	}
+	last := stylesheet.Rules[4].Selectors[0]
+	attributes := last.Compounds[0].Attributes
+	if got, want := []AttributeMatcher{attributes[0].Matcher, attributes[1].Matcher, attributes[2].Matcher},
+		[]AttributeMatcher{AttributePrefix, AttributeSuffix, AttributeSubstring}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("attribute matchers = %v, want %v", got, want)
+	}
+	if got, want := last.Specificity(), [3]int{0, 3, 1}; got != want {
+		t.Fatalf("specificity = %v, want %v", got, want)
+	}
+}
+
+func TestParseSelectorListKeepsCommaInsideAttributeValue(t *testing.T) {
+	stylesheet, err := Parse(strings.NewReader(`[data-value="a,b"], p { color: red }`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := len(stylesheet.Rules[0].Selectors), 2; got != want {
+		t.Fatalf("selector count = %d, want %d", got, want)
+	}
+	attribute := stylesheet.Rules[0].Selectors[0].Compounds[0].Attributes[0]
+	if got, want := attribute.Value, "a,b"; got != want {
+		t.Fatalf("attribute value = %q, want %q", got, want)
+	}
+}
+
 func TestParseBuildsTypedRuleSelectorAndValueModel(t *testing.T) {
 	stylesheet, err := Parse(strings.NewReader(`main.card { width: calc(100% - 2rem); content: "hello"; background: url(image.png) }`))
 	if err != nil {
