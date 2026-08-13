@@ -70,6 +70,30 @@ type Borders struct {
 	Left   BorderSide
 }
 
+// RadiusValue is one possibly elliptical corner radius.
+type RadiusValue struct {
+	X LengthPercentage
+	Y LengthPercentage
+}
+
+// BorderRadii contains corner radii in clockwise order.
+type BorderRadii struct {
+	TopLeft     RadiusValue
+	TopRight    RadiusValue
+	BottomRight RadiusValue
+	BottomLeft  RadiusValue
+}
+
+// TextDecorationLine is a bit set of line decorations.
+type TextDecorationLine uint8
+
+const (
+	TextDecorationNone        TextDecorationLine = 0
+	TextDecorationUnderline   TextDecorationLine = 1 << 0
+	TextDecorationOverline    TextDecorationLine = 1 << 1
+	TextDecorationLineThrough TextDecorationLine = 1 << 2
+)
+
 // WhiteSpace controls collapsing, newline preservation and wrapping.
 type WhiteSpace uint8
 
@@ -169,6 +193,10 @@ type ComputedStyle struct {
 	Margin           Edges
 	Padding          Edges
 	Border           Borders
+	BorderRadius     BorderRadii
+	TextDecoration   TextDecorationLine
+	DecorationColor  uint32
+	Opacity          float32
 	BeforeContent    string
 	AfterContent     string
 	CustomProperties map[string]string

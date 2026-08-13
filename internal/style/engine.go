@@ -104,7 +104,8 @@ func initialStyle() ComputedStyle {
 	return ComputedStyle{
 		Color: defaultTextColor, BackgroundColor: transparent, FontSize: 16, FontWeight: 400,
 		BackgroundRepeat: BackgroundRepeat{X: true, Y: true},
-		Width:            SizeValue{Kind: SizeAuto}, Height: SizeValue{Kind: SizeAuto},
+		DecorationColor:  defaultTextColor, Opacity: 1,
+		Width: SizeValue{Kind: SizeAuto}, Height: SizeValue{Kind: SizeAuto},
 		MinWidth: SizeValue{Kind: SizeLength}, MinHeight: SizeValue{Kind: SizeLength},
 		MaxWidth: SizeValue{Kind: SizeNone}, MaxHeight: SizeValue{Kind: SizeNone},
 	}
@@ -116,7 +117,8 @@ func inheritedStyle(parent ComputedStyle) ComputedStyle {
 		LineHeight: parent.LineHeight, WhiteSpace: parent.WhiteSpace,
 		BackgroundColor: transparent, Display: DisplayInline,
 		BackgroundRepeat: BackgroundRepeat{X: true, Y: true},
-		Width:            SizeValue{Kind: SizeAuto}, Height: SizeValue{Kind: SizeAuto},
+		DecorationColor:  parent.Color, Opacity: 1,
+		Width: SizeValue{Kind: SizeAuto}, Height: SizeValue{Kind: SizeAuto},
 		MinWidth: SizeValue{Kind: SizeLength}, MinHeight: SizeValue{Kind: SizeLength},
 		MaxWidth: SizeValue{Kind: SizeNone}, MaxHeight: SizeValue{Kind: SizeNone},
 	}
@@ -227,6 +229,36 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
 			if parsed, valid := resolveColor(resolved, parent.BackgroundColor, transparent, false, computed.Color); valid {
 				computed.BackgroundColor = parsed
+			}
+		}
+	}
+	if value, ok := winners["text-decoration-line"]; ok {
+		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
+			switch parseGlobalKeyword(resolved) {
+			case globalInherit:
+				computed.TextDecoration = parent.TextDecoration
+			case globalInitial, globalUnset:
+				computed.TextDecoration = TextDecorationNone
+			default:
+				if parsed, valid := parseTextDecorationLine(resolved); valid {
+					computed.TextDecoration = parsed
+				}
+			}
+		}
+	}
+	if value, ok := winners["text-decoration-color"]; ok {
+		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
+			if parsed, valid := resolveColor(resolved, parent.DecorationColor, computed.Color, false, computed.Color); valid {
+				computed.DecorationColor = parsed
+			}
+		}
+	} else {
+		computed.DecorationColor = computed.Color
+	}
+	if value, ok := winners["opacity"]; ok {
+		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
+			if parsed, valid := resolveFloat(resolved, parent.Opacity, 1, false, parseOpacity); valid {
+				computed.Opacity = parsed
 			}
 		}
 	}
@@ -361,6 +393,7 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 	computed.Margin = applyEdges(computed.Margin, parent.Margin, "margin", winners, computed.CustomProperties, lengthContext)
 	computed.Padding = applyEdges(computed.Padding, parent.Padding, "padding", winners, computed.CustomProperties, lengthContext)
 	computed.Border = applyBorders(computed.Border, parent.Border, winners, computed.CustomProperties, lengthContext, computed.Color)
+	computed.BorderRadius = applyBorderRadii(computed.BorderRadius, parent.BorderRadius, winners, computed.CustomProperties, lengthContext)
 	return computed
 }
 
@@ -826,6 +859,8 @@ func expandedProperties(property string) []string {
 		return []string{property + "-width", property + "-style", property + "-color"}
 	case "overflow":
 		return []string{"overflow-x", "overflow-y"}
+	case "border-radius":
+		return []string{"border-top-left-radius", "border-top-right-radius", "border-bottom-right-radius", "border-bottom-left-radius"}
 	default:
 		return []string{property}
 	}

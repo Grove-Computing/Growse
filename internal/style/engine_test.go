@@ -739,6 +739,33 @@ func TestComputeResolvesSingleBackgroundLayerProperties(t *testing.T) {
 	}
 }
 
+func TestComputeResolvesRadiusDecorationAndOpacity(t *testing.T) {
+	document := dom.NewDocument()
+	box := document.CreateElement("div", nil)
+	appendNode(t, document, document.Root, box)
+	stylesheet, err := css.Parse(strings.NewReader(`
+div {
+  color: #123456;
+  border-radius: 10px 20% 30px / 4px 8px;
+  border-bottom-left-radius: 7px 9px;
+  text-decoration-line: underline line-through;
+  text-decoration-color: rgba(255, 0, 0, .5);
+  opacity: .4;
+}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	computed, _ := Compute(document, stylesheet).For(box)
+	if computed.BorderRadius.TopLeft.X.Pixels != 10 || computed.BorderRadius.TopLeft.Y.Pixels != 4 ||
+		computed.BorderRadius.TopRight.X.Percentage != 20 || computed.BorderRadius.BottomRight.X.Pixels != 30 ||
+		computed.BorderRadius.BottomLeft.X.Pixels != 7 || computed.BorderRadius.BottomLeft.Y.Pixels != 9 {
+		t.Fatalf("border radius = %#v", computed.BorderRadius)
+	}
+	if computed.TextDecoration != TextDecorationUnderline|TextDecorationLineThrough || computed.DecorationColor != 0xff000080 || computed.Opacity != .4 {
+		t.Fatalf("decoration/opacity = %v / %#x / %v", computed.TextDecoration, computed.DecorationColor, computed.Opacity)
+	}
+}
+
 func parseTestSelector(t *testing.T, value string) css.Selector {
 	t.Helper()
 	stylesheet, err := css.Parse(strings.NewReader(value + " { color: red }"))
