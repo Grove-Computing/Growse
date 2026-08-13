@@ -8,7 +8,7 @@ on:
       - "v*.*.*"
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-${{ github.ref }}
@@ -19,9 +19,37 @@ env:
   RELEASE_TAG: ${{ github.ref_name }}
 
 jobs:
-  release:
-    name: Build and publish Linux release
-    runs-on: ubuntu-24.04
+  build:
+    name: Build ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux amd64
+            runner: ubuntu-24.04
+            goos: linux
+            goarch: amd64
+            cgo_enabled: "1"
+            artifact: linux_amd64
+          - name: macOS Intel
+            runner: macos-15-intel
+            goos: darwin
+            goarch: amd64
+            cgo_enabled: "1"
+            artifact: macos_amd64
+          - name: macOS Apple Silicon
+            runner: macos-15
+            goos: darwin
+            goarch: arm64
+            cgo_enabled: "1"
+            artifact: macos_arm64
+          - name: Windows amd64
+            runner: windows-2025
+            goos: windows
+            goarch: amd64
+            cgo_enabled: "0"
+            artifact: windows_amd64
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     steps:
       - name: Checkout release tag
@@ -44,6 +72,8 @@ jobs:
           cache-dependency-path: go.sum
 
       - name: Install Gio Linux dependencies
+        if: runner.os == 'Linux'
+        shell: bash
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
@@ -52,43 +82,136 @@ jobs:
             libffi-dev libxcursor-dev libvulkan-dev
 
       - name: Download modules
+        shell: bash
         run: go mod download
 
       - name: Run tests
+        shell: bash
         run: go test ./...
 
-      - name: Build Linux amd64 binary
-        env:
-          CGO_ENABLED: "1"
-          GOARCH: amd64
-          GOOS: linux
-        run: |
-          mkdir -p dist/package
-          go build -trimpath -ldflags="-s -w" -o dist/package/growse ./cmd/growse
-
-      - name: Package release archive
+      - name: Build executable
         shell: bash
+        env:
+          CGO_ENABLED: ${{ matrix.cgo_enabled }}
+          GOARCH: ${{ matrix.goarch }}
+          GOOS: ${{ matrix.goos }}
         run: |
-          cp README.md dist/package/
           mkdir -p dist/package/examples/counter
+          output="dist/package/growse"
+          ldflags="-s -w"
+          if [[ "$GOOS" == "windows" ]]; then
+            output="${output}.exe"
+            ldflags="$ldflags -H windowsgui"
+          fi
+          go build -trimpath -ldflags="$ldflags" -o "$output" ./cmd/growse
+          cp README.md dist/package/
           cp examples/counter/index.html dist/package/examples/counter/
           cp examples/counter/style.css dist/package/examples/counter/
           cp examples/counter/_app.go dist/package/examples/counter/
-          archive_name="growse_${RELEASE_TAG}_linux_amd64.tar.gz"
+
+      - name: Package Unix archive
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          archive_name="growse_${RELEASE_TAG}_${{ matrix.artifact }}.tar.gz"
           tar -czf "dist/$archive_name" -C dist/package .
-          cd dist
-          sha256sum "$archive_name" > "$archive_name.sha256"
+          if command -v sha256sum >/dev/null 2>&1; then
+            (cd dist && sha256sum "$archive_name" > "$archive_name.sha256")
+          else
+            (cd dist && shasum -a 256 "$archive_name" > "$archive_name.sha256")
+          fi
+
+      - name: Package Windows archive
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $archiveName = "growse_${env:RELEASE_TAG}_${{ matrix.artifact }}.zip"
+          Compress-Archive -Path "dist/package/*" -DestinationPath "dist/$archiveName"
+          $hash = (Get-FileHash "dist/$archiveName" -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $archiveName" | Set-Content "dist/$archiveName.sha256" -Encoding ascii
+
+      - name: Upload release files
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-${{ matrix.artifact }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  docker:
+    name: Publish Docker image
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set image name
+        shell: bash
+        run: echo "IMAGE_NAME=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+
+      - name: Log in to GitHub Container Registry
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: printf '%s' "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+
+      - name: Build Docker image
+        shell: bash
+        run: |
+          docker build \
+            --label "org.opencontainers.image.created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --label "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+            --label "org.opencontainers.image.version=$RELEASE_TAG" \
+            --tag "$IMAGE_NAME:$RELEASE_TAG" \
+            --tag "$IMAGE_NAME:latest" \
+            .
+
+      - name: Push Docker image
+        shell: bash
+        run: |
+          docker push "$IMAGE_NAME:$RELEASE_TAG"
+          docker push "$IMAGE_NAME:latest"
+
+  publish:
+    name: Publish GitHub Release
+    needs:
+      - build
+      - docker
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download release files
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
 
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          archive="dist/growse_${RELEASE_TAG}_linux_amd64.tar.gz"
-          checksum="${archive}.sha256"
-          gh release create "$RELEASE_TAG" \
-            "$archive#Growse Linux amd64" \
-            "$checksum#SHA-256 checksum" \
+          gh release create "$RELEASE_TAG" dist/* install.sh \
+            --repo "$GITHUB_REPOSITORY" \
             --verify-tag \
             --title "Growse $RELEASE_TAG" \
             --generate-notes

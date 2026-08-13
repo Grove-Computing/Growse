@@ -8,7 +8,9 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io/fs"
 	"reflect"
+	"strings"
 	"sync"
 	"testing/fstest"
 
@@ -74,7 +76,7 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 	if r.stopped {
 		return errors.New("runtime already stopped")
 	}
-	r.interpreter = interp.New(interp.Options{GoPath: ".", SourcecodeFilesystem: files})
+	r.interpreter = interp.New(interp.Options{GoPath: ".", SourcecodeFilesystem: portableFS{FS: files}})
 	console := consoleapi.New(environment.ConsoleLog)
 	dom := domapi.New(environment.Document, environment.Events, environment.OnMutation)
 	if err := r.interpreter.Use(interp.Exports{
@@ -93,6 +95,15 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 	}
 	r.loaded = true
 	return nil
+}
+
+// portableFS はOS固有の区切り文字をio/fs形式へ正規化する。
+type portableFS struct {
+	fs.FS
+}
+
+func (filesystem portableFS) Open(name string) (fs.File, error) {
+	return filesystem.FS.Open(strings.ReplaceAll(name, `\`, "/"))
 }
 
 // Start はロード済みの全ファイルを評価し、main.mainを一度呼び出す。

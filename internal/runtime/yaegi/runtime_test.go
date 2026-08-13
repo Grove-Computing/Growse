@@ -2,8 +2,10 @@ package yaegi
 
 import (
 	"context"
+	"io"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	dommodel "github.com/saku0512/growse/internal/dom"
 	"github.com/saku0512/growse/internal/events"
@@ -33,6 +35,24 @@ func TestRuntimeStartsMainAfterLoadingMultipleScripts(t *testing.T) {
 	}
 	if !value.Bool() {
 		t.Fatal("main() was not invoked")
+	}
+}
+
+func TestPortableFSNormalizesWindowsSeparators(t *testing.T) {
+	filesystem := portableFS{FS: fstest.MapFS{
+		"src/main/page/main.go": {Data: []byte("package main")},
+	}}
+	file, err := filesystem.Open(`src\main\page\main.go`)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer file.Close()
+	content, err := io.ReadAll(file)
+	if err != nil {
+		t.Fatalf("ReadAll() error = %v", err)
+	}
+	if got, want := string(content), "package main"; got != want {
+		t.Fatalf("content = %q, want %q", got, want)
 	}
 }
 

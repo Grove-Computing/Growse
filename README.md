@@ -40,6 +40,30 @@ GitHub Actionsでは、Linuxのraceテストと70%の最低カバレッジ、`go
 make ci
 ```
 
+## リリース
+
+`v0.1.0`のようなバージョンタグをpushすると、GitHub ActionsがLinux amd64、macOS Intel、macOS Apple Silicon、Windows amd64向けのアーカイブとSHA-256チェックサムをGitHub Releaseへ公開します。
+
+Linux、macOS、Git Bashを利用できるWindowsでは、次のコマンドで最新版を`~/.local/bin`へインストールできます。ダウンロードしたアーカイブはインストール前にSHA-256チェックサムを検証します。
+
+```sh
+wget -qO- https://github.com/saku0512/growse/releases/latest/download/install.sh | bash
+```
+
+特定バージョンやインストール先を指定する場合は環境変数を利用します。
+
+```sh
+wget -qO- https://github.com/saku0512/growse/releases/latest/download/install.sh | GROWSE_VERSION=v0.1.0 GROWSE_INSTALL_DIR=/usr/local/bin bash
+```
+
+同時にLinux amd64のDockerイメージをGitHub Container Registryへ、バージョンタグと`latest`タグで公開します。
+
+```sh
+docker pull ghcr.io/saku0512/growse:v0.1.0
+```
+
+GrowseはGUIアプリケーションのため、コンテナから起動する場合はホストのディスプレイサーバーとGPUデバイスをコンテナへ接続する必要があります。
+
 ## Go Gopher のクレジット
 
 The Go Gopher was designed by Renée French.

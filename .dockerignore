@@ -1,0 +1,6 @@
+.git
+.github
+coverage.out
+dist
+growse
+*.test
