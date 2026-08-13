@@ -25,6 +25,12 @@ func Parse(reader io.Reader) (*Stylesheet, error) {
 		grammar, _, data := p.Next()
 		switch grammar {
 		case parser.ErrorGrammar:
+			if p.HasParseError() {
+				// CSS Syntax errors invalidate the current construct, not the
+				// complete stylesheet. The parser has already consumed through
+				// the relevant recovery boundary.
+				continue
+			}
 			if err := p.Err(); err != nil && !errors.Is(err, io.EOF) {
 				return nil, fmt.Errorf("parse CSS: %w", err)
 			}
@@ -53,6 +59,10 @@ func Parse(reader io.Reader) (*Stylesheet, error) {
 				})
 			}
 		case parser.EndRulesetGrammar:
+			current = nil
+		case parser.AtRuleGrammar, parser.BeginAtRuleGrammar, parser.EndAtRuleGrammar:
+			// At-rules are ignored until their individual evaluators are
+			// implemented. Do not attach declarations to the preceding rule.
 			current = nil
 		}
 	}

@@ -75,6 +75,49 @@ func TestParseIgnoresUnsupportedSelectors(t *testing.T) {
 	}
 }
 
+func TestParseRecoversFromInvalidDeclaration(t *testing.T) {
+	stylesheet, err := Parse(strings.NewReader(`
+p {
+	color red;
+	font-size: 18px;
+	broken: ;
+	color: blue;
+}
+h1 { font-weight: bold }
+`))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if got, want := len(stylesheet.Rules), 2; got != want {
+		t.Fatalf("rule count = %d, want %d", got, want)
+	}
+	declarations := stylesheet.Rules[0].Declarations
+	if got, want := len(declarations), 2; got != want {
+		t.Fatalf("valid declaration count = %d, want %d", got, want)
+	}
+	if declarations[0].Property != "font-size" || declarations[1].Property != "color" {
+		t.Fatalf("recovered declarations = %#v", declarations)
+	}
+}
+
+func TestParseIgnoresUnknownAtRuleAndContinues(t *testing.T) {
+	stylesheet, err := Parse(strings.NewReader(`
+@growse-future example {
+	.ignored { color: red }
+}
+p { color: blue }
+`))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if got, want := len(stylesheet.Rules), 1; got != want {
+		t.Fatalf("rule count = %d, want %d", got, want)
+	}
+	if got, want := stylesheet.Rules[0].Selectors[0].Tag, "p"; got != want {
+		t.Fatalf("remaining selector = %q, want %q", got, want)
+	}
+}
+
 func TestParseSupportedHoverSelectors(t *testing.T) {
 	stylesheet, err := Parse(strings.NewReader(`
 button:hover, #save:hover, .todo:hover, li.todo:hover { color: red }
