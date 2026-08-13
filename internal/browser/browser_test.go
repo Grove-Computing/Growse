@@ -121,6 +121,28 @@ func TestSetInputValueRejectsUnsupportedOrInactiveNode(t *testing.T) {
 	}
 }
 
+func TestCommitInputValueDispatchesChangeEvent(t *testing.T) {
+	document := dom.NewDocument()
+	input := document.CreateElement("input", map[string]string{"id": "query", "value": "hello"})
+	if err := document.AppendChild(document.Root, input); err != nil {
+		t.Fatal(err)
+	}
+	page := NewPage(mustParseURL(t, "http://localhost"))
+	page.Document = document
+	page.Events = events.NewDispatcher()
+	var received events.Event
+	page.Events.AddEventListener(input.ID, events.Change, func(event events.Event) { received = event })
+	browser := New(nil)
+	browser.SetPage(page)
+
+	if !browser.CommitInputValue(input.ID, "hello") {
+		t.Fatal("CommitInputValue() = false, want handled event")
+	}
+	if received.Type != events.Change || received.Target != input.ID || received.Value != "hello" {
+		t.Fatalf("change event = %#v, want committed value", received)
+	}
+}
+
 func TestNavigateLoadsHTMLAndUpdatesPage(t *testing.T) {
 	finalURL := mustParseURL(t, "https://example.com/final")
 	browser := New(stubLoader{response: &network.Response{

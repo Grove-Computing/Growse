@@ -16,6 +16,8 @@ const (
 	Click Type = "click"
 	// Input はユーザー操作で入力値が変化したイベントを表す。
 	Input Type = "input"
+	// Change は入力の編集が確定したイベントを表す。
+	Change Type = "change"
 )
 
 // Event はDOM要素へ配信するイベント情報を保持する。

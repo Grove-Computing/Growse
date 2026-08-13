@@ -103,6 +103,16 @@ func (element *Element) OnInput(handler func(Event)) {
 	})
 }
 
+// OnChange は入力の編集確定ハンドラーを登録する。
+func (element *Element) OnChange(handler func(Event)) {
+	if handler == nil {
+		return
+	}
+	element.addEventListener(events.Change, func(event events.Event) {
+		handler(element.publicEvent(event))
+	})
+}
+
 // AppendChild は未接続の子要素を接続済みの要素の末尾へ追加する。
 func (element *Element) AppendChild(child *Element) bool {
 	if element == nil || child == nil || element.document == nil || child.document != element.document {

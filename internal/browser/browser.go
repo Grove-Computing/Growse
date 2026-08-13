@@ -105,6 +105,24 @@ func (b *Browser) SetInputValue(nodeID dom.NodeID, value string) bool {
 	return changed
 }
 
+// CommitInputValue はテキストinputの編集確定をchangeイベントとして配信する。
+func (b *Browser) CommitInputValue(nodeID dom.NodeID, value string) bool {
+	b.mu.RLock()
+	page := b.page
+	if page == nil || page.Document == nil || page.Events == nil {
+		b.mu.RUnlock()
+		return false
+	}
+	node, ok := page.Document.NodeByID(nodeID)
+	if !ok || !isTextInput(node) || !page.Document.IsConnected(node) {
+		b.mu.RUnlock()
+		return false
+	}
+	dispatcher := page.Events
+	b.mu.RUnlock()
+	return dispatcher.Dispatch(events.Event{Type: events.Change, Target: nodeID, Value: value})
+}
+
 // SetPage replaces the active page. Passing nil clears the active page.
 func (b *Browser) SetPage(page *Page) {
 	b.mu.Lock()

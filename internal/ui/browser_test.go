@@ -18,6 +18,7 @@ import (
 
 	"github.com/saku0512/growse/internal/browser"
 	"github.com/saku0512/growse/internal/dom"
+	"github.com/saku0512/growse/internal/events"
 	paintmodel "github.com/saku0512/growse/internal/paint"
 	"github.com/saku0512/growse/internal/style"
 )
@@ -57,6 +58,12 @@ func (navigator *stubNavigator) SetInputValue(nodeID dom.NodeID, value string) b
 		return false
 	}
 	return navigator.page.Document.SetAttribute(nodeID, "value", value)
+}
+func (navigator *stubNavigator) CommitInputValue(nodeID dom.NodeID, value string) bool {
+	if navigator.page == nil || navigator.page.Events == nil {
+		return false
+	}
+	return navigator.page.Events.Dispatch(events.Event{Type: events.Change, Target: nodeID, Value: value})
 }
 
 func TestToolbarHasFixedHeight(t *testing.T) {
@@ -277,6 +284,51 @@ func TestTextInputWritesKeyboardEditsToDOM(t *testing.T) {
 	}
 	if got, want := editor.Text(), "hello"; got != want {
 		t.Fatalf("editor text = %q, want %q", got, want)
+	}
+}
+
+func TestTextInputEnterDispatchesChangeAfterEdit(t *testing.T) {
+	document := dom.NewDocument()
+	inputNode := document.CreateElement("input", map[string]string{"id": "query"})
+	if err := document.AppendChild(document.Root, inputNode); err != nil {
+		t.Fatal(err)
+	}
+	page := &browser.Page{
+		Document: document, ComputedStyles: style.Compute(document, nil), Events: events.NewDispatcher(),
+	}
+	var changes []events.Event
+	page.Events.AddEventListener(inputNode.ID, events.Change, func(event events.Event) {
+		changes = append(changes, event)
+	})
+	ui := NewBrowserUI(&stubNavigator{page: page}, nil)
+	router := new(input.Router)
+	gtx := layout.Context{
+		Ops:         new(op.Ops),
+		Source:      router.Source(),
+		Constraints: layout.Exact(image.Pt(800, 600)),
+		Metric:      unit.Metric{PxPerDp: 1, PxPerSp: 1},
+	}
+
+	ui.layoutDocument(gtx, page)
+	router.Frame(gtx.Ops)
+	editor := ui.inputEditors[inputNode.ID]
+	gtx.Execute(key.FocusCmd{Tag: editor})
+	gtx.Reset()
+	ui.layoutDocument(gtx, page)
+	router.Frame(gtx.Ops)
+	router.Queue(key.EditEvent{Range: key.Range{Start: 0, End: 0}, Text: "hello"})
+	gtx.Reset()
+	ui.layoutDocument(gtx, page)
+	router.Frame(gtx.Ops)
+	router.Queue(key.Event{Name: key.NameReturn, State: key.Press})
+	gtx.Reset()
+	ui.layoutDocument(gtx, page)
+
+	if got, want := len(changes), 1; got != want {
+		t.Fatalf("change event count = %d, want %d", got, want)
+	}
+	if changes[0].Value != "hello" {
+		t.Fatalf("change value = %q, want hello", changes[0].Value)
 	}
 }
 

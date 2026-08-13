@@ -420,3 +420,22 @@ func TestOnInputProvidesUpdatedValue(t *testing.T) {
 		t.Fatalf("event = %#v, want updated input data", received)
 	}
 }
+
+func TestOnChangeProvidesCommittedValue(t *testing.T) {
+	document := dommodel.NewDocument()
+	input := document.CreateElement("input", map[string]string{"id": "query", "value": "committed"})
+	if err := document.AppendChild(document.Root, input); err != nil {
+		t.Fatal(err)
+	}
+	dispatcher := events.NewDispatcher()
+	element := New(document, dispatcher, nil).GetElementByID("query")
+	var received Event
+	element.OnChange(func(event Event) { received = event })
+
+	if !dispatcher.Dispatch(events.Event{Type: events.Change, Target: input.ID, Value: "committed"}) {
+		t.Fatal("change event was not handled")
+	}
+	if received.Type != "change" || received.TargetID != "query" || received.Value != "committed" {
+		t.Fatalf("event = %#v, want committed input data", received)
+	}
+}

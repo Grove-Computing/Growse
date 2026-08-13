@@ -415,6 +415,40 @@ func main() {
 	}
 }
 
+func TestRuntimeReceivesChangeEvent(t *testing.T) {
+	document := dommodel.NewDocument()
+	input := document.CreateElement("input", map[string]string{"id": "query", "value": "done"})
+	message := document.CreateElement("p", map[string]string{"id": "message"})
+	for _, node := range []*dommodel.Node{input, message} {
+		if err := document.AppendChild(document.Root, node); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dispatcher := events.NewDispatcher()
+	runtime := New()
+	scripts := []runtimemodel.Script{{Source: `package main
+import "growse/dom"
+func main() {
+	dom.GetElementByID("query").OnChange(func(event dom.Event) {
+		dom.GetElementByID("message").SetText(event.Type + ":" + event.Value)
+	})
+}`}}
+	environment := runtimemodel.Environment{Document: document, Events: dispatcher}
+
+	if err := runtime.Load(context.Background(), scripts, environment); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if !dispatcher.Dispatch(events.Event{Type: events.Change, Target: input.ID, Value: "done"}) {
+		t.Fatal("change event was not handled")
+	}
+	if got, want := message.TextContent(), "change:done"; got != want {
+		t.Fatalf("message = %q, want %q", got, want)
+	}
+}
+
 func TestRuntimeDispatchesWebGoOnClick(t *testing.T) {
 	document := dommodel.NewDocument()
 	button := document.CreateElement("button", map[string]string{"id": "increment"})
