@@ -27,6 +27,7 @@ func Parse(reader io.Reader) (*Stylesheet, error) {
 		media   []MediaQuery
 	}
 	var atRules []atRuleFrame
+	importsAllowed := true
 
 	for {
 		grammar, _, data := p.Next()
@@ -43,6 +44,9 @@ func Parse(reader io.Reader) (*Stylesheet, error) {
 			}
 			return stylesheet, nil
 		case parser.BeginRulesetGrammar:
+			if len(atRules) == 0 {
+				importsAllowed = false
+			}
 			active := true
 			var mediaGroups [][]MediaQuery
 			for _, frame := range atRules {
@@ -86,9 +90,20 @@ func Parse(reader io.Reader) (*Stylesheet, error) {
 		case parser.EndRulesetGrammar:
 			current = nil
 		case parser.AtRuleGrammar:
+			name := strings.ToLower(strings.TrimSpace(string(data)))
+			if len(atRules) == 0 && name == "@import" && importsAllowed {
+				if importRule, ok := parseImportRule(tokenText(p.Values())); ok {
+					stylesheet.Imports = append(stylesheet.Imports, importRule)
+				}
+			} else if len(atRules) == 0 && name != "@charset" {
+				importsAllowed = false
+			}
 			current = nil
 		case parser.BeginAtRuleGrammar:
 			name := strings.ToLower(strings.TrimSpace(string(data)))
+			if len(atRules) == 0 {
+				importsAllowed = false
+			}
 			frame := atRuleFrame{active: false}
 			if name == "@media" {
 				frame.active, frame.isMedia = true, true

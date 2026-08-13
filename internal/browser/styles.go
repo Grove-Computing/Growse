@@ -17,37 +17,129 @@ type stylesheetSource struct {
 	href   string
 }
 
+const (
+	maxCSSImportDepth     = 8
+	maxCSSStylesheetCount = 32
+	maxCSSTotalBytes      = 8 << 20
+)
+
+type stylesheetLoadState struct {
+	client     ResourceLoader
+	origin     *url.URL
+	activeURLs map[string]bool
+	fetches    int
+	totalBytes int
+}
+
 func (b *Browser) loadStyles(ctx context.Context, client ResourceLoader, pageURL *url.URL, document *dom.Document) (*css.Stylesheet, error) {
 	combined := &css.Stylesheet{}
+	state := &stylesheetLoadState{client: client, origin: pageURL, activeURLs: make(map[string]bool)}
 	for _, source := range collectStylesheets(document.Root) {
-		var content []byte
 		if source.inline != "" {
-			content = []byte(source.inline)
-		} else {
-			stylesheetURL, err := pageURL.Parse(source.href)
-			if err != nil || !sameOrigin(pageURL, stylesheetURL) {
+			content := []byte(source.inline)
+			if !state.consumeBytes(len(content)) {
 				continue
 			}
-			response, err := client.Get(ctx, stylesheetURL)
+			parsed, err := state.loadContent(ctx, content, pageURL, 0)
 			if err != nil {
-				continue
+				return nil, fmt.Errorf("parse stylesheet: %w", err)
 			}
-			if response.ContentType != "" {
-				mediaType, _, err := mime.ParseMediaType(response.ContentType)
-				if err != nil || mediaType != "text/css" {
-					continue
-				}
-			}
-			content = response.Body
+			combined.Append(parsed)
+			continue
 		}
-
-		parsed, err := css.Parse(bytes.NewReader(content))
+		stylesheetURL, err := pageURL.Parse(source.href)
 		if err != nil {
-			return nil, fmt.Errorf("parse stylesheet: %w", err)
+			continue
+		}
+		parsed, err := state.loadExternal(ctx, stylesheetURL, 0)
+		if err != nil {
+			continue
 		}
 		combined.Append(parsed)
 	}
 	return combined, nil
+}
+
+func (state *stylesheetLoadState) loadContent(ctx context.Context, content []byte, baseURL *url.URL, depth int) (*css.Stylesheet, error) {
+	parsed, err := css.Parse(bytes.NewReader(content))
+	if err != nil {
+		return nil, err
+	}
+	combined := &css.Stylesheet{}
+	for _, importRule := range parsed.Imports {
+		importURL, err := baseURL.Parse(importRule.URL)
+		if err != nil {
+			continue
+		}
+		imported, err := state.loadExternal(ctx, importURL, depth+1)
+		if err != nil {
+			continue
+		}
+		if len(importRule.Media) != 0 {
+			for index := range imported.Rules {
+				imported.Rules[index].Media = append(
+					[][]css.MediaQuery{append([]css.MediaQuery(nil), importRule.Media...)},
+					imported.Rules[index].Media...,
+				)
+			}
+		}
+		combined.Append(imported)
+	}
+	combined.Append(parsed)
+	return combined, nil
+}
+
+func (state *stylesheetLoadState) loadExternal(ctx context.Context, requestedURL *url.URL, depth int) (*css.Stylesheet, error) {
+	empty := &css.Stylesheet{}
+	if requestedURL == nil || depth > maxCSSImportDepth || state.fetches >= maxCSSStylesheetCount ||
+		!sameOrigin(state.origin, requestedURL) {
+		return empty, nil
+	}
+	requested := *requestedURL
+	requested.Fragment = ""
+	key := requested.String()
+	if state.activeURLs[key] {
+		return empty, nil
+	}
+	state.activeURLs[key] = true
+	defer delete(state.activeURLs, key)
+	state.fetches++
+	response, err := state.client.Get(ctx, &requested)
+	if err != nil || response == nil {
+		return empty, err
+	}
+	finalURL := response.URL
+	if finalURL == nil {
+		finalURL = &requested
+	}
+	if !sameOrigin(state.origin, finalURL) || !isCSSContentType(response.ContentType) || !state.consumeBytes(len(response.Body)) {
+		return empty, nil
+	}
+	finalKey := finalURL.String()
+	if finalKey != key {
+		if state.activeURLs[finalKey] {
+			return empty, nil
+		}
+		state.activeURLs[finalKey] = true
+		defer delete(state.activeURLs, finalKey)
+	}
+	return state.loadContent(ctx, response.Body, finalURL, depth)
+}
+
+func (state *stylesheetLoadState) consumeBytes(size int) bool {
+	if size < 0 || size > maxCSSTotalBytes-state.totalBytes {
+		return false
+	}
+	state.totalBytes += size
+	return true
+}
+
+func isCSSContentType(contentType string) bool {
+	if contentType == "" {
+		return true
+	}
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	return err == nil && mediaType == "text/css"
 }
 
 func collectStylesheets(root *dom.Node) []stylesheetSource {

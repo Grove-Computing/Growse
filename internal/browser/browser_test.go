@@ -556,6 +556,65 @@ func TestNavigateLoadsInlineAndSameOriginStylesheets(t *testing.T) {
 	}
 }
 
+func TestNavigateLoadsSameOriginImportsWithMediaAndStopsCycles(t *testing.T) {
+	pageURL := mustParseURL(t, "https://example.com/index.html")
+	baseURL := mustParseURL(t, "https://example.com/css/base.css")
+	colorsURL := mustParseURL(t, "https://example.com/css/colors.css")
+	loader := &routeLoader{responses: map[string]*network.Response{
+		pageURL.String(): {
+			URL: pageURL, StatusCode: 200, ContentType: "text/html",
+			Body: []byte(`<style>
+@import "/css/base.css";
+.hero { background-color: blue; }
+</style><h1 class="hero">Hello</h1>`),
+		},
+		baseURL.String(): {
+			URL: baseURL, StatusCode: 200, ContentType: "text/css",
+			Body: []byte(`
+@import "colors.css" screen and (min-width: 1000px);
+@import "https://evil.example/ignored.css";
+.hero { font-size: 20px; }
+`),
+		},
+		colorsURL.String(): {
+			URL: colorsURL, StatusCode: 200, ContentType: "text/css",
+			Body: []byte(`@import "base.css"; .hero { color: red; }`),
+		},
+	}}
+	browser := New(loader)
+	page, err := browser.Navigate(context.Background(), pageURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := loader.requested, []string{pageURL.String(), baseURL.String(), colorsURL.String()}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("stylesheet requests = %v, want %v", got, want)
+	}
+	heading, ok := page.Document.QuerySelector("h1")
+	if !ok {
+		t.Fatal("heading was not found")
+	}
+	computed, _ := page.ComputedStyles.For(heading)
+	if computed.Color != 0xff0000ff || computed.FontSize != 20 || computed.BackgroundColor != 0x0000ffff {
+		t.Fatalf("imported style = %#v", computed)
+	}
+}
+
+func TestStylesheetLoadLimits(t *testing.T) {
+	state := &stylesheetLoadState{totalBytes: maxCSSTotalBytes - 1}
+	if !state.consumeBytes(1) || state.consumeBytes(1) {
+		t.Fatal("stylesheet total byte limit was not enforced")
+	}
+	loader := &routeLoader{responses: map[string]*network.Response{}}
+	state = &stylesheetLoadState{
+		client: loader, origin: mustParseURL(t, "https://example.com/"),
+		activeURLs: make(map[string]bool), fetches: maxCSSStylesheetCount,
+	}
+	stylesheet, err := state.loadExternal(context.Background(), mustParseURL(t, "https://example.com/extra.css"), 0)
+	if err != nil || len(stylesheet.Rules) != 0 || len(loader.requested) != 0 {
+		t.Fatalf("fetch limit result = sheet:%#v err:%v requests:%v", stylesheet, err, loader.requested)
+	}
+}
+
 func TestNormalizeURL(t *testing.T) {
 	tests := []struct {
 		name    string

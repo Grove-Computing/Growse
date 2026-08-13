@@ -328,6 +328,29 @@ func TestParseMediaQueriesAndNestedRules(t *testing.T) {
 	}
 }
 
+func TestParseImportsOnlyAtStylesheetStart(t *testing.T) {
+	stylesheet, err := Parse(strings.NewReader(`
+@charset "utf-8";
+@import "base.css";
+@import url(theme.css) screen and (min-width: 600px);
+p { color: red }
+@import "late.css";
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := len(stylesheet.Imports), 2; got != want {
+		t.Fatalf("import count = %d, want %d", got, want)
+	}
+	if stylesheet.Imports[0].URL != "base.css" || len(stylesheet.Imports[0].Media) != 0 {
+		t.Fatalf("unconditional import = %#v", stylesheet.Imports[0])
+	}
+	second := stylesheet.Imports[1]
+	if second.URL != "theme.css" || len(second.Media) != 1 || second.Media[0].Type != "screen" || second.Media[0].Features[0].Name != "min-width" {
+		t.Fatalf("conditional import = %#v", second)
+	}
+}
+
 func TestParseSupportedHoverSelectors(t *testing.T) {
 	stylesheet, err := Parse(strings.NewReader(`
 button:hover, #save:hover, .todo:hover, li.todo:hover { color: red }

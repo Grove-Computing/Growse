@@ -3,7 +3,14 @@ package css
 
 // Stylesheet is an ordered collection of CSS rules.
 type Stylesheet struct {
-	Rules []Rule
+	Rules   []Rule
+	Imports []ImportRule
+}
+
+// ImportRule references a stylesheet and an optional media query list.
+type ImportRule struct {
+	URL   string
+	Media []MediaQuery
 }
 
 // RuleKind identifies the grammar represented by a rule.
