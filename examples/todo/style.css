@@ -1,0 +1,42 @@
+body {
+    background-color: #f8fafc;
+    color: #0f172a;
+}
+
+.container {
+    padding: 32px;
+}
+
+h1 {
+    color: #0f766e;
+    font-size: 32px;
+}
+
+form {
+    background-color: white;
+    padding: 16px;
+}
+
+input {
+    background-color: white;
+    color: #0f172a;
+    font-size: 20px;
+    padding: 8px;
+}
+
+button {
+    background-color: #ccfbf1;
+    color: #115e59;
+    font-size: 18px;
+    padding: 8px 16px;
+}
+
+.todo {
+    background-color: white;
+    padding: 12px;
+}
+
+.completed {
+    background-color: #d1fae5;
+    color: #166534;
+}
