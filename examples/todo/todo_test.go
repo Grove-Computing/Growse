@@ -60,7 +60,24 @@ func TestTodoDemoAddCompleteAndDelete(t *testing.T) {
 	}
 
 	toggle, ok := page.Document.GetElementByID("toggle-1")
-	if !ok || !browserState.DispatchClick(toggle.ID, 0, 0) {
+	if !ok {
+		t.Fatal("todo completion button was not found")
+	}
+	normalToggle, ok := page.ComputedStyles.For(toggle)
+	if !ok || normalToggle.BackgroundColor != 0xccfbf1ff {
+		t.Fatalf("normal todo button style = %#v, want default background", normalToggle)
+	}
+	if !browserState.UpdateHover(toggle.ID, 12, 34) {
+		t.Fatal("todo completion button hover was not applied")
+	}
+	hoveredToggle, ok := page.ComputedStyles.For(toggle)
+	if !ok || hoveredToggle.BackgroundColor != 0x99f6e4ff || hoveredToggle.Color != 0x134e4aff {
+		t.Fatalf("hovered todo button style = %#v, want hover colors", hoveredToggle)
+	}
+	if !browserState.ClearHover() {
+		t.Fatal("todo completion button hover was not cleared")
+	}
+	if !browserState.DispatchClick(toggle.ID, 0, 0) {
 		t.Fatal("todo completion click was not handled")
 	}
 	if classes, ok := item.Attribute("class"); !ok || classes != "todo completed" {
