@@ -330,6 +330,33 @@ a:link, input:focus, input:enabled, input:disabled, input:checked { color: red }
 	}
 }
 
+func TestParseBeforeAndAfterPseudoElements(t *testing.T) {
+	stylesheet, err := Parse(strings.NewReader(`p.note::before, main > p::after { content: "marker" }`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	selectors := stylesheet.Rules[0].Selectors
+	if got, want := len(selectors), 2; got != want {
+		t.Fatalf("selector count = %d, want %d", got, want)
+	}
+	if got := selectors[0].Compounds[0].PseudoElement; got != PseudoElementBefore {
+		t.Fatalf("first pseudo-element = %v, want before", got)
+	}
+	if got := selectors[1].Compounds[1].PseudoElement; got != PseudoElementAfter {
+		t.Fatalf("second pseudo-element = %v, want after", got)
+	}
+	if got, want := selectors[0].Specificity(), [3]int{0, 1, 2}; got != want {
+		t.Fatalf("specificity = %v, want %v", got, want)
+	}
+}
+
+func TestDecodeStringHandlesCSSEscapes(t *testing.T) {
+	got, ok := DecodeString(`"go\000070 her"`)
+	if !ok || got != "gopher" {
+		t.Fatalf("DecodeString() = (%q, %v), want (gopher, true)", got, ok)
+	}
+}
+
 func TestParseIgnoresUnsupportedHoverSelectors(t *testing.T) {
 	stylesheet, err := Parse(strings.NewReader(`
 :hover, div:hover:hover, button:active, button:hover::before { color: red }

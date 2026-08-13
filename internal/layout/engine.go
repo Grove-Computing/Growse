@@ -92,9 +92,9 @@ func (e *engine) walk(node *dom.Node, x, width float32) {
 			e.addBlock(node, style, x, width)
 			return
 		}
-		text := e.inlineText(node)
-		if text != "" {
-			e.addInlineRuns(node.ID, node.TagName, e.collectInlineRuns(node, node), style, x, width)
+		runs := e.collectInlineRuns(node, node)
+		if len(runs) != 0 {
+			e.addInlineRuns(node.ID, node.TagName, runs, style, x, width)
 		}
 		return
 	}
@@ -152,7 +152,7 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width float32) {
 	}
 	e.y += style.padding.Top
 
-	var inlineRuns []inlineRun
+	inlineRuns := e.generatedRuns(node, true, style)
 	flushInline := func() {
 		if len(inlineRuns) != 0 {
 			e.addInlineRuns(node.ID, node.TagName, inlineRuns, style, contentX, contentWidth)
@@ -174,6 +174,7 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width float32) {
 		}
 		inlineRuns = append(inlineRuns, e.collectInlineRuns(child, node)...)
 	}
+	inlineRuns = append(inlineRuns, e.generatedRuns(node, false, style)...)
 	flushInline()
 
 	e.y += style.padding.Bottom + style.margin.Bottom
@@ -198,11 +199,27 @@ func (e *engine) collectInlineRuns(node, owner *dom.Node) []inlineRun {
 		return []inlineRun{{nodeID: node.ID, tag: node.TagName, text: "\n", style: style}}
 	}
 
-	var result []inlineRun
+	result := e.generatedRuns(node, true, style)
 	for _, child := range node.Children {
 		result = append(result, e.collectInlineRuns(child, node)...)
 	}
+	result = append(result, e.generatedRuns(node, false, style)...)
 	return result
+}
+
+func (e *engine) generatedRuns(node *dom.Node, before bool, style blockStyle) []inlineRun {
+	computed, ok := e.computed.For(node)
+	if !ok {
+		return nil
+	}
+	text, tag := computed.AfterContent, "::after"
+	if before {
+		text, tag = computed.BeforeContent, "::before"
+	}
+	if text == "" {
+		return nil
+	}
+	return []inlineRun{{nodeID: node.ID, tag: tag, text: text, style: style}}
 }
 
 func (e *engine) inlineText(node *dom.Node) string {

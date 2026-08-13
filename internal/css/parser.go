@@ -168,6 +168,11 @@ func parseSelector(value string) (Selector, bool) {
 		}
 		compounds = append(compounds, compound)
 	}
+	for _, compound := range compounds[:len(compounds)-1] {
+		if compound.PseudoElement != PseudoElementNone {
+			return Selector{}, false
+		}
+	}
 	selector := Selector{Kind: SelectorCompound, Compounds: compounds, Combinators: combinators}
 	if len(compounds) != 1 {
 		return selector, true
@@ -208,6 +213,9 @@ func parseCompoundSelector(value string) (CompoundSelector, bool) {
 		position = end
 	}
 	for position < len(value) {
+		if compound.PseudoElement != PseudoElementNone {
+			return CompoundSelector{}, false
+		}
 		prefix := value[position]
 		switch prefix {
 		case '.', '#':
@@ -235,6 +243,15 @@ func parseCompoundSelector(value string) (CompoundSelector, bool) {
 			compound.Attributes = append(compound.Attributes, attribute)
 			position = end + 1
 		case ':':
+			if position+1 < len(value) && value[position+1] == ':' {
+				pseudoElement, next, ok := parsePseudoElement(value, position)
+				if !ok {
+					return CompoundSelector{}, false
+				}
+				compound.PseudoElement = pseudoElement
+				position = next
+				continue
+			}
 			pseudo, next, ok := parsePseudoClass(value, position)
 			if !ok {
 				return CompoundSelector{}, false
@@ -249,10 +266,32 @@ func parseCompoundSelector(value string) (CompoundSelector, bool) {
 			return CompoundSelector{}, false
 		}
 	}
-	if !compound.Universal && compound.Type == "" && len(compound.IDs) == 0 && len(compound.Classes) == 0 && len(compound.Attributes) == 0 && len(compound.Pseudos) == 0 && !compound.Hover {
+	if !compound.Universal && compound.Type == "" && len(compound.IDs) == 0 && len(compound.Classes) == 0 && len(compound.Attributes) == 0 && len(compound.Pseudos) == 0 && !compound.Hover && compound.PseudoElement == PseudoElementNone {
 		return CompoundSelector{}, false
 	}
 	return compound, true
+}
+
+func parsePseudoElement(value string, start int) (PseudoElementKind, int, bool) {
+	nameStart := start + 2
+	if nameStart >= len(value) {
+		return PseudoElementNone, 0, false
+	}
+	nameEnd := nameStart
+	for nameEnd < len(value) && value[nameEnd] != '.' && value[nameEnd] != '#' && value[nameEnd] != '[' && value[nameEnd] != ':' && value[nameEnd] != '(' {
+		nameEnd++
+	}
+	if nameEnd == nameStart || !validName(value[nameStart:nameEnd]) {
+		return PseudoElementNone, 0, false
+	}
+	switch strings.ToLower(value[nameStart:nameEnd]) {
+	case "before":
+		return PseudoElementBefore, nameEnd, true
+	case "after":
+		return PseudoElementAfter, nameEnd, true
+	default:
+		return PseudoElementNone, 0, false
+	}
 }
 
 func splitComplexSelector(value string) ([]string, []Combinator, bool) {
@@ -440,7 +479,7 @@ func parsePseudoClass(value string, start int) (*PseudoClass, int, bool) {
 			return nil, 0, false
 		}
 		negation, ok := parseCompoundSelector(*argument)
-		if !ok || simpleSelectorCount(negation) != 1 || containsNegation(negation) {
+		if !ok || simpleSelectorCount(negation) != 1 || containsNegation(negation) || negation.PseudoElement != PseudoElementNone {
 			return nil, 0, false
 		}
 		pseudo.Kind, pseudo.Negation = PseudoNot, &negation
@@ -549,6 +588,9 @@ func simpleSelectorCount(compound CompoundSelector) int {
 		count++
 	}
 	if compound.Hover {
+		count++
+	}
+	if compound.PseudoElement != PseudoElementNone {
 		count++
 	}
 	return count
@@ -679,8 +721,8 @@ func parseAttributeSelector(value string) (AttributeSelector, bool) {
 }
 
 func unquoteCSSString(value string) string {
-	if len(value) >= 2 && (value[0] == '\'' || value[0] == '"') && value[len(value)-1] == value[0] {
-		return value[1 : len(value)-1]
+	if decoded, ok := DecodeString(value); ok {
+		return decoded
 	}
 	return value
 }

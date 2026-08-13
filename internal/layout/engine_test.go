@@ -145,6 +145,39 @@ func TestBuildPreservesInlineRunStyles(t *testing.T) {
 	}
 }
 
+func TestBuildIncludesGeneratedContentInLayoutAndHitTesting(t *testing.T) {
+	document := dom.NewDocument()
+	paragraph := document.CreateElement("p", nil)
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, paragraph},
+		[2]*dom.Node{paragraph, document.CreateText("middle")},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`
+p::before { content: "before "; }
+p::after { content: " after"; }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, style.Compute(document, stylesheet), 800)
+	if got, want := len(tree.Boxes), 1; got != want {
+		t.Fatalf("box count = %d, want %d", got, want)
+	}
+	box := tree.Boxes[0]
+	if got, want := box.Text, "before middle after"; got != want {
+		t.Fatalf("generated text = %q, want %q", got, want)
+	}
+	if got, want := len(box.Runs), 3; got != want {
+		t.Fatalf("run count = %d, want %d", got, want)
+	}
+	if box.Runs[0].Tag != "::before" || box.Runs[2].Tag != "::after" {
+		t.Fatalf("generated runs = %#v", box.Runs)
+	}
+	if got, ok := HitTest(tree, box.X+1, box.Y+1); !ok || got != paragraph.ID {
+		t.Fatalf("generated content hit = (%d, %v), want paragraph %d", got, ok, paragraph.ID)
+	}
+}
+
 func TestBuildCreatesTextInputBox(t *testing.T) {
 	document := dom.NewDocument()
 	input := document.CreateElement("input", map[string]string{"type": "text", "value": "hello"})

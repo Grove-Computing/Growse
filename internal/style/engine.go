@@ -42,6 +42,7 @@ func computeNode(node *dom.Node, parent ComputedStyle, stylesheet *css.Styleshee
 	} else if node.Type == dom.NodeElement {
 		computed = applyUADefaults(node.TagName, computed)
 		computed = applyAuthorRules(node, computed, stylesheet, state)
+		computed = applyGeneratedContent(node, computed, stylesheet, state)
 		result[node.ID] = computed
 	} else if node.Type == dom.NodeText {
 		result[node.ID] = computed
@@ -105,6 +106,9 @@ func applyAuthorRules(node *dom.Node, computed ComputedStyle, stylesheet *css.St
 	winners := make(map[string]winner)
 	for _, rule := range stylesheet.Rules {
 		for _, selector := range rule.Selectors {
+			if selectorPseudoElement(selector) != css.PseudoElementNone {
+				continue
+			}
 			if !matches(node, selector, state) {
 				continue
 			}
@@ -151,6 +155,62 @@ func applyAuthorRules(node *dom.Node, computed ComputedStyle, stylesheet *css.St
 	computed.Margin = applyEdges(computed.Margin, "margin", winners)
 	computed.Padding = applyEdges(computed.Padding, "padding", winners)
 	return computed
+}
+
+func applyGeneratedContent(node *dom.Node, computed ComputedStyle, stylesheet *css.Stylesheet, state InteractionState) ComputedStyle {
+	if stylesheet == nil {
+		return computed
+	}
+	for _, target := range []struct {
+		kind        css.PseudoElementKind
+		destination *string
+	}{
+		{css.PseudoElementBefore, &computed.BeforeContent},
+		{css.PseudoElementAfter, &computed.AfterContent},
+	} {
+		var selected winner
+		found := false
+		for _, rule := range stylesheet.Rules {
+			for _, selector := range rule.Selectors {
+				if selectorPseudoElement(selector) != target.kind || !matches(node, selector, state) {
+					continue
+				}
+				for declarationIndex, declaration := range rule.Declarations {
+					if declaration.Property != "content" {
+						continue
+					}
+					candidate := winner{
+						value: declaration.Value.Raw, important: declaration.Important,
+						specificity: selector.Specificity(), order: rule.Order*1000 + declarationIndex,
+					}
+					if !found || outranks(candidate, selected) {
+						selected, found = candidate, true
+					}
+				}
+			}
+		}
+		if found {
+			if content, valid := parseGeneratedContent(selected.value); valid {
+				*target.destination = content
+			}
+		}
+	}
+	return computed
+}
+
+func selectorPseudoElement(selector css.Selector) css.PseudoElementKind {
+	if len(selector.Compounds) == 0 {
+		return css.PseudoElementNone
+	}
+	return selector.Compounds[len(selector.Compounds)-1].PseudoElement
+}
+
+func parseGeneratedContent(value string) (string, bool) {
+	value = strings.TrimSpace(value)
+	if strings.EqualFold(value, "none") || strings.EqualFold(value, "normal") {
+		return "", true
+	}
+	return css.DecodeString(value)
 }
 
 func expandedProperties(property string) []string {

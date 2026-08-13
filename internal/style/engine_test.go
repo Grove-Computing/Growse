@@ -312,6 +312,31 @@ func TestMatchesInteractionAndFormStatePseudoClasses(t *testing.T) {
 	}
 }
 
+func TestComputeGeneratesBeforeAndAfterStringContent(t *testing.T) {
+	document := dom.NewDocument()
+	paragraph := document.CreateElement("p", map[string]string{"class": "note"})
+	appendNode(t, document, document.Root, paragraph)
+	stylesheet, err := css.Parse(strings.NewReader(`
+p::before { content: "default" }
+.note::before { content: "Before "; }
+.note::after { content: " After" !important; }
+p::after { content: none; }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	computed, _ := Compute(document, stylesheet).For(paragraph)
+	if got, want := computed.BeforeContent, "Before "; got != want {
+		t.Fatalf("before content = %q, want %q", got, want)
+	}
+	if got, want := computed.AfterContent, " After"; got != want {
+		t.Fatalf("after content = %q, want %q", got, want)
+	}
+	if computed.Color != defaultTextColor {
+		t.Fatalf("pseudo-element rule leaked into element color: %#x", computed.Color)
+	}
+}
+
 func parseTestSelector(t *testing.T, value string) css.Selector {
 	t.Helper()
 	stylesheet, err := css.Parse(strings.NewReader(value + " { color: red }"))

@@ -29,6 +29,8 @@ type ComputedStyle struct {
 	Display         Display
 	Margin          Edges
 	Padding         Edges
+	BeforeContent   string
+	AfterContent    string
 }
 
 // Bold reports whether the computed weight should use a bold face.

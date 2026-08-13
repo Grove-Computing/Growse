@@ -79,14 +79,24 @@ const (
 
 // CompoundSelector is a sequence of simple selectors without a combinator.
 type CompoundSelector struct {
-	Universal  bool
-	Type       string
-	IDs        []string
-	Classes    []string
-	Attributes []AttributeSelector
-	Pseudos    []PseudoClass
-	Hover      bool
+	Universal     bool
+	Type          string
+	IDs           []string
+	Classes       []string
+	Attributes    []AttributeSelector
+	Pseudos       []PseudoClass
+	Hover         bool
+	PseudoElement PseudoElementKind
 }
+
+// PseudoElementKind identifies generated content attached to an element.
+type PseudoElementKind uint8
+
+const (
+	PseudoElementNone PseudoElementKind = iota
+	PseudoElementBefore
+	PseudoElementAfter
+)
 
 // PseudoClassKind identifies a supported pseudo-class condition.
 type PseudoClassKind uint8
@@ -193,6 +203,9 @@ func compoundSpecificity(compound CompoundSelector) [3]int {
 		result[1]++
 	}
 	if compound.Type != "" {
+		result[2]++
+	}
+	if compound.PseudoElement != PseudoElementNone {
 		result[2]++
 	}
 	for _, pseudo := range compound.Pseudos {
