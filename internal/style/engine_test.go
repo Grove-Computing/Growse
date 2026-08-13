@@ -337,6 +337,23 @@ p::after { content: none; }
 	}
 }
 
+func TestSelectorListUsesSpecificityOfMatchingSelector(t *testing.T) {
+	document := dom.NewDocument()
+	target := document.CreateElement("div", map[string]string{"class": "target"})
+	appendNode(t, document, document.Root, target)
+	stylesheet, err := css.Parse(strings.NewReader(`
+#other, .target { color: red }
+div.target { color: blue }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	computed, _ := Compute(document, stylesheet).For(target)
+	if got, want := computed.Color, uint32(0x0000ffff); got != want {
+		t.Fatalf("selector-list cascade color = %#x, want %#x", got, want)
+	}
+}
+
 func parseTestSelector(t *testing.T, value string) css.Selector {
 	t.Helper()
 	stylesheet, err := css.Parse(strings.NewReader(value + " { color: red }"))

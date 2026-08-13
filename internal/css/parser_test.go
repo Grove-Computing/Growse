@@ -350,6 +350,23 @@ func TestParseBeforeAndAfterPseudoElements(t *testing.T) {
 	}
 }
 
+func TestSelectorSpecificityCountsEveryComponent(t *testing.T) {
+	stylesheet, err := Parse(strings.NewReader(`
+main#app.card[lang]:hover:first-child:not(.skip)::before { content: "x" }
+body #dialog > *.action { color: red }
+* { color: black }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wants := [][3]int{{1, 5, 2}, {1, 1, 1}, {0, 0, 0}}
+	for index, want := range wants {
+		if got := stylesheet.Rules[index].Selectors[0].Specificity(); got != want {
+			t.Fatalf("selector %d specificity = %v, want %v", index, got, want)
+		}
+	}
+}
+
 func TestDecodeStringHandlesCSSEscapes(t *testing.T) {
 	got, ok := DecodeString(`"go\000070 her"`)
 	if !ok || got != "gopher" {
