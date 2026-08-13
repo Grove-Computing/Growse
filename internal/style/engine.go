@@ -318,7 +318,91 @@ func matchesCompound(node *dom.Node, compound css.CompoundSelector, state Intera
 			return false
 		}
 	}
+	for _, pseudo := range compound.Pseudos {
+		if !matchesPseudoClass(node, pseudo, state) {
+			return false
+		}
+	}
 	return true
+}
+
+func matchesPseudoClass(node *dom.Node, pseudo css.PseudoClass, state InteractionState) bool {
+	switch pseudo.Kind {
+	case css.PseudoRoot:
+		return node.Parent != nil && node.Parent.Type == dom.NodeDocument
+	case css.PseudoEmpty:
+		for _, child := range node.Children {
+			if child.Type == dom.NodeElement || child.Type == dom.NodeText && child.Text != "" {
+				return false
+			}
+		}
+		return true
+	case css.PseudoFirstChild:
+		return elementPosition(node, false, false) == 1
+	case css.PseudoLastChild:
+		return elementPosition(node, true, false) == 1
+	case css.PseudoOnlyChild:
+		return elementPosition(node, false, false) == 1 && elementPosition(node, true, false) == 1
+	case css.PseudoFirstOfType:
+		return elementPosition(node, false, true) == 1
+	case css.PseudoLastOfType:
+		return elementPosition(node, true, true) == 1
+	case css.PseudoOnlyOfType:
+		return elementPosition(node, false, true) == 1 && elementPosition(node, true, true) == 1
+	case css.PseudoNthChild:
+		return matchesNth(elementPosition(node, false, false), pseudo.A, pseudo.B)
+	case css.PseudoNthLastChild:
+		return matchesNth(elementPosition(node, true, false), pseudo.A, pseudo.B)
+	case css.PseudoNthOfType:
+		return matchesNth(elementPosition(node, false, true), pseudo.A, pseudo.B)
+	case css.PseudoNthLastOfType:
+		return matchesNth(elementPosition(node, true, true), pseudo.A, pseudo.B)
+	case css.PseudoNot:
+		return pseudo.Negation != nil && !matchesCompound(node, *pseudo.Negation, state)
+	default:
+		return false
+	}
+}
+
+func elementPosition(node *dom.Node, fromEnd, sameType bool) int {
+	if node == nil || node.Parent == nil {
+		return 0
+	}
+	position := 0
+	if fromEnd {
+		for index := len(node.Parent.Children) - 1; index >= 0; index-- {
+			sibling := node.Parent.Children[index]
+			if sibling.Type != dom.NodeElement || sameType && sibling.TagName != node.TagName {
+				continue
+			}
+			position++
+			if sibling == node {
+				return position
+			}
+		}
+		return 0
+	}
+	for _, sibling := range node.Parent.Children {
+		if sibling.Type != dom.NodeElement || sameType && sibling.TagName != node.TagName {
+			continue
+		}
+		position++
+		if sibling == node {
+			return position
+		}
+	}
+	return 0
+}
+
+func matchesNth(position, a, b int) bool {
+	if position <= 0 {
+		return false
+	}
+	if a == 0 {
+		return position == b
+	}
+	difference := position - b
+	return difference%a == 0 && difference/a >= 0
 }
 
 func matchesAttribute(node *dom.Node, selector css.AttributeSelector) bool {

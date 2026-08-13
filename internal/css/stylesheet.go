@@ -84,7 +84,36 @@ type CompoundSelector struct {
 	IDs        []string
 	Classes    []string
 	Attributes []AttributeSelector
+	Pseudos    []PseudoClass
 	Hover      bool
+}
+
+// PseudoClassKind identifies a supported pseudo-class condition.
+type PseudoClassKind uint8
+
+const (
+	PseudoRoot PseudoClassKind = iota
+	PseudoEmpty
+	PseudoFirstChild
+	PseudoLastChild
+	PseudoOnlyChild
+	PseudoFirstOfType
+	PseudoLastOfType
+	PseudoOnlyOfType
+	PseudoNthChild
+	PseudoNthLastChild
+	PseudoNthOfType
+	PseudoNthLastOfType
+	PseudoNot
+)
+
+// PseudoClass stores a pseudo-class and its parsed arguments. Nth expressions
+// use A*n+B, while :not() stores its Level 3 simple-selector argument.
+type PseudoClass struct {
+	Kind     PseudoClassKind
+	A        int
+	B        int
+	Negation *CompoundSelector
 }
 
 // AttributeMatcher identifies how an attribute value is compared.
@@ -134,14 +163,7 @@ func (s Selector) Specificity() [3]int {
 	var result [3]int
 	if len(s.Compounds) != 0 {
 		for _, compound := range s.Compounds {
-			result[0] += len(compound.IDs)
-			result[1] += len(compound.Classes) + len(compound.Attributes)
-			if compound.Hover {
-				result[1]++
-			}
-			if compound.Type != "" {
-				result[2]++
-			}
+			addSpecificity(&result, compoundSpecificity(compound))
 		}
 		return result
 	}
@@ -158,4 +180,28 @@ func (s Selector) Specificity() [3]int {
 		result[2]++
 	}
 	return result
+}
+
+func compoundSpecificity(compound CompoundSelector) [3]int {
+	result := [3]int{len(compound.IDs), len(compound.Classes) + len(compound.Attributes), 0}
+	if compound.Hover {
+		result[1]++
+	}
+	if compound.Type != "" {
+		result[2]++
+	}
+	for _, pseudo := range compound.Pseudos {
+		if pseudo.Kind == PseudoNot && pseudo.Negation != nil {
+			addSpecificity(&result, compoundSpecificity(*pseudo.Negation))
+		} else {
+			result[1]++
+		}
+	}
+	return result
+}
+
+func addSpecificity(target *[3]int, addition [3]int) {
+	for index := range target {
+		target[index] += addition[index]
+	}
 }

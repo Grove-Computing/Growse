@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 
 	parse "github.com/tdewolff/parse/v2"
@@ -144,9 +145,12 @@ func parseSelectorList(value string) []Selector {
 	}
 	selectors := make([]Selector, 0, len(parts))
 	for _, part := range parts {
-		if selector, ok := parseSelector(strings.TrimSpace(part)); ok {
-			selectors = append(selectors, selector)
+		selector, ok := parseSelector(strings.TrimSpace(part))
+		if !ok {
+			// One invalid selector invalidates the complete selector list.
+			return nil
 		}
+		selectors = append(selectors, selector)
 	}
 	return selectors
 }
@@ -186,20 +190,16 @@ func parseSelector(value string) (Selector, bool) {
 }
 
 func parseCompoundSelector(value string) (CompoundSelector, bool) {
-	hover := strings.HasSuffix(value, ":hover")
-	if hover {
-		value = strings.TrimSuffix(value, ":hover")
-	}
 	if value == "" {
 		return CompoundSelector{}, false
 	}
 
-	compound := CompoundSelector{Hover: hover}
+	compound := CompoundSelector{}
 	position := 0
 	if value[0] == '*' {
 		compound.Universal = true
 		position++
-	} else if value[0] != '.' && value[0] != '#' && value[0] != '[' {
+	} else if value[0] != '.' && value[0] != '#' && value[0] != '[' && value[0] != ':' {
 		end := selectorNameEnd(value, position)
 		if end == position || !validName(value[position:end]) {
 			return CompoundSelector{}, false
@@ -234,11 +234,22 @@ func parseCompoundSelector(value string) (CompoundSelector, bool) {
 			}
 			compound.Attributes = append(compound.Attributes, attribute)
 			position = end + 1
+		case ':':
+			pseudo, next, ok := parsePseudoClass(value, position)
+			if !ok {
+				return CompoundSelector{}, false
+			}
+			if pseudo == nil {
+				compound.Hover = true
+			} else {
+				compound.Pseudos = append(compound.Pseudos, *pseudo)
+			}
+			position = next
 		default:
 			return CompoundSelector{}, false
 		}
 	}
-	if !compound.Universal && compound.Type == "" && len(compound.IDs) == 0 && len(compound.Classes) == 0 && len(compound.Attributes) == 0 {
+	if !compound.Universal && compound.Type == "" && len(compound.IDs) == 0 && len(compound.Classes) == 0 && len(compound.Attributes) == 0 && len(compound.Pseudos) == 0 && !compound.Hover {
 		return CompoundSelector{}, false
 	}
 	return compound, true
@@ -354,10 +365,191 @@ func explicitCombinator(character byte) (Combinator, bool) {
 
 func selectorNameEnd(value string, start int) int {
 	position := start
-	for position < len(value) && value[position] != '.' && value[position] != '#' && value[position] != '[' {
+	for position < len(value) && value[position] != '.' && value[position] != '#' && value[position] != '[' && value[position] != ':' {
 		position++
 	}
 	return position
+}
+
+func parsePseudoClass(value string, start int) (*PseudoClass, int, bool) {
+	if start+1 >= len(value) || value[start+1] == ':' {
+		return nil, 0, false
+	}
+	nameStart := start + 1
+	nameEnd := nameStart
+	for nameEnd < len(value) && value[nameEnd] != '(' && value[nameEnd] != '.' && value[nameEnd] != '#' && value[nameEnd] != '[' && value[nameEnd] != ':' {
+		nameEnd++
+	}
+	if nameEnd == nameStart || !validName(value[nameStart:nameEnd]) {
+		return nil, 0, false
+	}
+	name := strings.ToLower(value[nameStart:nameEnd])
+	var argument *string
+	next := nameEnd
+	if nameEnd < len(value) && value[nameEnd] == '(' {
+		end, ok := parenthesisEnd(value, nameEnd)
+		if !ok {
+			return nil, 0, false
+		}
+		raw := strings.TrimSpace(value[nameEnd+1 : end])
+		argument = &raw
+		next = end + 1
+	}
+	if name == "hover" && argument == nil {
+		return nil, next, true
+	}
+	pseudo := &PseudoClass{}
+	switch name {
+	case "root":
+		pseudo.Kind = PseudoRoot
+	case "empty":
+		pseudo.Kind = PseudoEmpty
+	case "first-child":
+		pseudo.Kind = PseudoFirstChild
+	case "last-child":
+		pseudo.Kind = PseudoLastChild
+	case "only-child":
+		pseudo.Kind = PseudoOnlyChild
+	case "first-of-type":
+		pseudo.Kind = PseudoFirstOfType
+	case "last-of-type":
+		pseudo.Kind = PseudoLastOfType
+	case "only-of-type":
+		pseudo.Kind = PseudoOnlyOfType
+	case "nth-child", "nth-last-child", "nth-of-type", "nth-last-of-type":
+		if argument == nil {
+			return nil, 0, false
+		}
+		a, b, ok := parseNth(*argument)
+		if !ok {
+			return nil, 0, false
+		}
+		pseudo.A, pseudo.B = a, b
+		switch name {
+		case "nth-child":
+			pseudo.Kind = PseudoNthChild
+		case "nth-last-child":
+			pseudo.Kind = PseudoNthLastChild
+		case "nth-of-type":
+			pseudo.Kind = PseudoNthOfType
+		case "nth-last-of-type":
+			pseudo.Kind = PseudoNthLastOfType
+		}
+	case "not":
+		if argument == nil {
+			return nil, 0, false
+		}
+		negation, ok := parseCompoundSelector(*argument)
+		if !ok || simpleSelectorCount(negation) != 1 || containsNegation(negation) {
+			return nil, 0, false
+		}
+		pseudo.Kind, pseudo.Negation = PseudoNot, &negation
+	default:
+		return nil, 0, false
+	}
+	if argument != nil && pseudo.Kind < PseudoNthChild {
+		return nil, 0, false
+	}
+	return pseudo, next, true
+}
+
+func parenthesisEnd(value string, start int) (int, bool) {
+	depth := 1
+	var quote byte
+	escaped := false
+	for position := start + 1; position < len(value); position++ {
+		character := value[position]
+		if quote != 0 {
+			if escaped {
+				escaped = false
+			} else if character == '\\' {
+				escaped = true
+			} else if character == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch character {
+		case '\'', '"':
+			quote = character
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return position, true
+			}
+		}
+	}
+	return 0, false
+}
+
+func parseNth(value string) (int, int, bool) {
+	value = strings.ToLower(value)
+	value = strings.Map(func(character rune) rune {
+		if character == ' ' || character == '\t' || character == '\n' || character == '\r' || character == '\f' {
+			return -1
+		}
+		return character
+	}, value)
+	switch value {
+	case "odd":
+		return 2, 1, true
+	case "even":
+		return 2, 0, true
+	}
+	if position := strings.IndexByte(value, 'n'); position >= 0 {
+		if strings.Count(value, "n") != 1 {
+			return 0, 0, false
+		}
+		coefficient := value[:position]
+		var a int
+		var err error
+		switch coefficient {
+		case "", "+":
+			a = 1
+		case "-":
+			a = -1
+		default:
+			a, err = strconv.Atoi(coefficient)
+		}
+		if err != nil {
+			return 0, 0, false
+		}
+		b := 0
+		if constant := value[position+1:]; constant != "" {
+			if constant[0] != '+' && constant[0] != '-' {
+				return 0, 0, false
+			}
+			b, err = strconv.Atoi(constant)
+			if err != nil {
+				return 0, 0, false
+			}
+		}
+		return a, b, true
+	}
+	b, err := strconv.Atoi(value)
+	return 0, b, err == nil
+}
+
+func simpleSelectorCount(compound CompoundSelector) int {
+	count := len(compound.IDs) + len(compound.Classes) + len(compound.Attributes) + len(compound.Pseudos)
+	if compound.Type != "" || compound.Universal {
+		count++
+	}
+	if compound.Hover {
+		count++
+	}
+	return count
+}
+
+func containsNegation(compound CompoundSelector) bool {
+	for _, pseudo := range compound.Pseudos {
+		if pseudo.Kind == PseudoNot {
+			return true
+		}
+	}
+	return false
 }
 
 func splitSelectorList(value string) ([]string, bool) {

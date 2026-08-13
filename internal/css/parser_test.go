@@ -178,6 +178,59 @@ func TestParseCombinators(t *testing.T) {
 	}
 }
 
+func TestParseStructuralPseudoClasses(t *testing.T) {
+	stylesheet, err := Parse(strings.NewReader(`
+:root, :empty, p:first-child, p:last-child, p:only-child,
+p:first-of-type, p:last-of-type, p:only-of-type,
+p:nth-child(2n+1), p:nth-last-child(even),
+p:nth-of-type(-n + 3), p:nth-last-of-type(2), p:not(.hidden) { color: red }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := len(stylesheet.Rules), 1; got != want {
+		t.Fatalf("rule count = %d, want %d", got, want)
+	}
+	selectors := stylesheet.Rules[0].Selectors
+	if got, want := len(selectors), 13; got != want {
+		t.Fatalf("selector count = %d, want %d", got, want)
+	}
+	wantKinds := []PseudoClassKind{
+		PseudoRoot, PseudoEmpty, PseudoFirstChild, PseudoLastChild, PseudoOnlyChild,
+		PseudoFirstOfType, PseudoLastOfType, PseudoOnlyOfType, PseudoNthChild,
+		PseudoNthLastChild, PseudoNthOfType, PseudoNthLastOfType, PseudoNot,
+	}
+	for index, want := range wantKinds {
+		pseudos := selectors[index].Compounds[0].Pseudos
+		if len(pseudos) != 1 || pseudos[0].Kind != want {
+			t.Fatalf("selector %d pseudos = %#v, want kind %v", index, pseudos, want)
+		}
+	}
+	if got := selectors[8].Compounds[0].Pseudos[0]; got.A != 2 || got.B != 1 {
+		t.Fatalf("2n+1 = (%d, %d), want (2, 1)", got.A, got.B)
+	}
+	if got := selectors[10].Compounds[0].Pseudos[0]; got.A != -1 || got.B != 3 {
+		t.Fatalf("-n+3 = (%d, %d), want (-1, 3)", got.A, got.B)
+	}
+	if got, want := selectors[12].Specificity(), [3]int{0, 1, 1}; got != want {
+		t.Fatalf(":not specificity = %v, want %v", got, want)
+	}
+}
+
+func TestParseRejectsInvalidStructuralPseudoClasses(t *testing.T) {
+	stylesheet, err := Parse(strings.NewReader(`
+p:nth-child(wat) { color: red }
+p:not(.one.two) { color: red }
+p:not(:not(.one)) { color: red }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(stylesheet.Rules); got != 0 {
+		t.Fatalf("rule count = %d, want 0", got)
+	}
+}
+
 func TestParseRecoversFromInvalidDeclaration(t *testing.T) {
 	stylesheet, err := Parse(strings.NewReader(`
 p {

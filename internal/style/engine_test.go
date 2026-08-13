@@ -230,6 +230,66 @@ h1 ~ .general { background-color: blue }
 	}
 }
 
+func TestMatchesStructuralPseudoClasses(t *testing.T) {
+	document := dom.NewDocument()
+	html := document.CreateElement("html", nil)
+	body := document.CreateElement("body", nil)
+	parent := document.CreateElement("div", nil)
+	first := document.CreateElement("p", nil)
+	space := document.CreateText(" ")
+	onlyType := document.CreateElement("span", nil)
+	second := document.CreateElement("p", nil)
+	last := document.CreateElement("p", map[string]string{"class": "excluded"})
+	onlyParent := document.CreateElement("section", nil)
+	onlyChild := document.CreateElement("em", nil)
+	appendNode(t, document, document.Root, html)
+	appendNode(t, document, html, body)
+	appendNode(t, document, body, parent)
+	appendNode(t, document, parent, first)
+	appendNode(t, document, parent, space)
+	appendNode(t, document, parent, onlyType)
+	appendNode(t, document, parent, second)
+	appendNode(t, document, parent, last)
+	appendNode(t, document, body, onlyParent)
+	appendNode(t, document, onlyParent, onlyChild)
+
+	tests := []struct {
+		selector string
+		node     *dom.Node
+		want     bool
+	}{
+		{":root", html, true}, {":root", body, false},
+		{":empty", first, true}, {":empty", parent, false},
+		{"p:first-child", first, true}, {"p:last-child", last, true},
+		{"em:only-child", onlyChild, true}, {"span:only-of-type", onlyType, true},
+		{"p:first-of-type", first, true}, {"p:last-of-type", last, true},
+		{"p:nth-child(odd)", second, true}, {"p:nth-last-child(2)", second, true},
+		{"p:nth-of-type(2n)", second, true}, {"p:nth-last-of-type(2)", second, true},
+		{"p:nth-of-type(-n+2)", last, false},
+		{"p:not(.excluded)", first, true}, {"p:not(.excluded)", last, false},
+	}
+	for _, test := range tests {
+		t.Run(test.selector, func(t *testing.T) {
+			selector := parseTestSelector(t, test.selector)
+			if got := matches(test.node, selector, InteractionState{}); got != test.want {
+				t.Fatalf("matches(%q) = %v, want %v", test.selector, got, test.want)
+			}
+		})
+	}
+}
+
+func parseTestSelector(t *testing.T, value string) css.Selector {
+	t.Helper()
+	stylesheet, err := css.Parse(strings.NewReader(value + " { color: red }"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stylesheet.Rules) != 1 || len(stylesheet.Rules[0].Selectors) != 1 {
+		t.Fatalf("selector %q was not parsed", value)
+	}
+	return stylesheet.Rules[0].Selectors[0]
+}
+
 func appendNode(t *testing.T, document *dom.Document, parent, child *dom.Node) {
 	t.Helper()
 	if err := document.AppendChild(parent, child); err != nil {
