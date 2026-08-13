@@ -77,6 +77,18 @@ func (d *Document) GetElementByID(id string) (*Node, bool) {
 	return node, ok
 }
 
+// QuerySelector は対応する単純セレクターに最初に一致する要素を返す。
+func (d *Document) QuerySelector(value string) (*Node, bool) {
+	if d == nil || d.Root == nil {
+		return nil, false
+	}
+	selector, ok := parseSimpleSelector(strings.TrimSpace(value))
+	if !ok {
+		return nil, false
+	}
+	return querySelector(d.Root, selector)
+}
+
 // SetTextContent は指定したノードの子を1つのテキストノードへ置き換える。
 func (d *Document) SetTextContent(id NodeID, value string) bool {
 	if d == nil {
@@ -203,4 +215,85 @@ func findElement(node *Node, tagName string) *Node {
 		}
 	}
 	return nil
+}
+
+type simpleSelector struct {
+	tag   string
+	id    string
+	class string
+}
+
+func parseSimpleSelector(value string) (simpleSelector, bool) {
+	if value == "" || strings.ContainsAny(value, " >+~[:*") {
+		return simpleSelector{}, false
+	}
+	if strings.HasPrefix(value, "#") && validSelectorName(value[1:]) {
+		return simpleSelector{id: value[1:]}, true
+	}
+	if strings.HasPrefix(value, ".") && validSelectorName(value[1:]) {
+		return simpleSelector{class: value[1:]}, true
+	}
+	if index := strings.IndexByte(value, '.'); index > 0 && strings.Count(value, ".") == 1 {
+		tag, class := strings.ToLower(value[:index]), value[index+1:]
+		if validSelectorName(tag) && validSelectorName(class) {
+			return simpleSelector{tag: tag, class: class}, true
+		}
+		return simpleSelector{}, false
+	}
+	if validSelectorName(value) {
+		return simpleSelector{tag: strings.ToLower(value)}, true
+	}
+	return simpleSelector{}, false
+}
+
+func validSelectorName(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, character := range value {
+		if character != '-' && character != '_' &&
+			(character < 'a' || character > 'z') &&
+			(character < 'A' || character > 'Z') &&
+			(character < '0' || character > '9') {
+			return false
+		}
+	}
+	return true
+}
+
+func querySelector(node *Node, selector simpleSelector) (*Node, bool) {
+	if matchesSimpleSelector(node, selector) {
+		return node, true
+	}
+	for _, child := range node.Children {
+		if found, ok := querySelector(child, selector); ok {
+			return found, true
+		}
+	}
+	return nil, false
+}
+
+func matchesSimpleSelector(node *Node, selector simpleSelector) bool {
+	if node == nil || node.Type != NodeElement {
+		return false
+	}
+	if selector.tag != "" && node.TagName != selector.tag {
+		return false
+	}
+	if selector.id != "" {
+		id, _ := node.Attribute("id")
+		if id != selector.id {
+			return false
+		}
+	}
+	if selector.class != "" {
+		classes, _ := node.Attribute("class")
+		for _, class := range strings.Fields(classes) {
+			if class == selector.class {
+				return true
+			}
+		}
+		return false
+	}
+	return true
 }

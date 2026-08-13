@@ -38,6 +38,18 @@ func (api *API) GetElementByID(id string) *Element {
 	return &Element{document: api.document, id: node.ID, events: api.events, onMutation: api.onMutation}
 }
 
+// QuerySelector は対応する単純セレクターに最初に一致する要素を返す。
+func (api *API) QuerySelector(selector string) *Element {
+	if api == nil || api.document == nil {
+		return nil
+	}
+	node, ok := api.document.QuerySelector(selector)
+	if !ok {
+		return nil
+	}
+	return &Element{document: api.document, id: node.ID, events: api.events, onMutation: api.onMutation}
+}
+
 // OnClick は要素のクリックイベントへハンドラーを登録する。
 func (element *Element) OnClick(handler func()) {
 	if element == nil || element.document == nil || element.events == nil || handler == nil {

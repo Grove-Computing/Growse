@@ -39,6 +39,35 @@ func TestGetElementByIDReturnsNilForUnknownElement(t *testing.T) {
 	}
 }
 
+func TestQuerySelectorReadsFirstMatchingElement(t *testing.T) {
+	document := dommodel.NewDocument()
+	first := document.CreateElement("p", map[string]string{"class": "message"})
+	second := document.CreateElement("p", map[string]string{"class": "message"})
+	for _, node := range []*dommodel.Node{first, second} {
+		if err := document.AppendChild(document.Root, node); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := document.AppendChild(first, document.CreateText("first")); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(second, document.CreateText("second")); err != nil {
+		t.Fatal(err)
+	}
+
+	element := New(document, events.NewDispatcher(), nil).QuerySelector("p.message")
+	if element == nil || element.Text() != "first" {
+		t.Fatalf("QuerySelector() = %#v, want first matching element", element)
+	}
+}
+
+func TestQuerySelectorReturnsNilForUnsupportedSelector(t *testing.T) {
+	api := New(dommodel.NewDocument(), events.NewDispatcher(), nil)
+	if element := api.QuerySelector("main p"); element != nil {
+		t.Fatalf("QuerySelector() = %#v, want nil", element)
+	}
+}
+
 func TestOnClickRegistersHandler(t *testing.T) {
 	document := dommodel.NewDocument()
 	button := document.CreateElement("button", map[string]string{"id": "button"})

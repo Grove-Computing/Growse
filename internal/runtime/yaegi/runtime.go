@@ -86,6 +86,7 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 		"growse/dom/dom": {
 			"Element":        reflect.ValueOf((*domapi.Element)(nil)),
 			"GetElementByID": reflect.ValueOf(dom.GetElementByID),
+			"QuerySelector":  reflect.ValueOf(dom.QuerySelector),
 		},
 		"growse/strconv/strconv": {
 			"Itoa": reflect.ValueOf(strconvapi.Itoa),

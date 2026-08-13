@@ -57,6 +57,67 @@ func TestAppendChildRejectsNodeFromAnotherDocument(t *testing.T) {
 	}
 }
 
+func TestQuerySelectorReturnsFirstMatchingElement(t *testing.T) {
+	document := NewDocument()
+	body := document.CreateElement("body", nil)
+	first := document.CreateElement("DIV", map[string]string{"id": "first", "class": "card featured"})
+	second := document.CreateElement("div", map[string]string{"id": "second", "class": "card"})
+	for _, edge := range [][2]*Node{
+		{document.Root, body},
+		{body, first},
+		{body, second},
+	} {
+		if err := document.AppendChild(edge[0], edge[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	tests := []struct {
+		selector string
+		want     *Node
+	}{
+		{selector: "div", want: first},
+		{selector: "DIV", want: first},
+		{selector: "#second", want: second},
+		{selector: ".featured", want: first},
+		{selector: "div.card", want: first},
+		{selector: "  #first  ", want: first},
+	}
+	for _, test := range tests {
+		t.Run(test.selector, func(t *testing.T) {
+			got, ok := document.QuerySelector(test.selector)
+			if !ok || got != test.want {
+				t.Fatalf("QuerySelector(%q) = (%p, %v), want (%p, true)", test.selector, got, ok, test.want)
+			}
+		})
+	}
+}
+
+func TestQuerySelectorRejectsUnsupportedOrUnknownSelector(t *testing.T) {
+	document := NewDocument()
+	child := document.CreateElement("div", map[string]string{"id": "message", "class": "card"})
+	if err := document.AppendChild(document.Root, child); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, selector := range []string{"", "div span", "div#message", "div.card.featured", "*", "[id]", ":hover", "#unknown"} {
+		t.Run(selector, func(t *testing.T) {
+			if got, ok := document.QuerySelector(selector); ok || got != nil {
+				t.Fatalf("QuerySelector(%q) = (%p, %v), want (nil, false)", selector, got, ok)
+			}
+		})
+	}
+}
+
+func TestQuerySelectorIgnoresDetachedElement(t *testing.T) {
+	document := NewDocument()
+	document.CreateElement("p", map[string]string{"id": "detached"})
+
+	if got, ok := document.QuerySelector("#detached"); ok || got != nil {
+		t.Fatalf("QuerySelector() = (%p, %v), want (nil, false)", got, ok)
+	}
+}
+
 func TestSetTextContentReplacesDescendantsAndIndexes(t *testing.T) {
 	document := NewDocument()
 	parent := document.CreateElement("p", map[string]string{"id": "message"})

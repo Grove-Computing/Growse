@@ -121,6 +121,37 @@ func main() {
 	}
 }
 
+func TestRuntimeExposesQuerySelector(t *testing.T) {
+	document := dommodel.NewDocument()
+	message := document.CreateElement("p", map[string]string{"class": "message featured"})
+	if err := document.AppendChild(document.Root, message); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(message, document.CreateText("before")); err != nil {
+		t.Fatal(err)
+	}
+	runtime := New()
+	scripts := []runtimemodel.Script{{Source: `package main
+import "growse/dom"
+func main() {
+	element := dom.QuerySelector("p.featured")
+	if element != nil {
+		element.SetText("after")
+	}
+}`}}
+	environment := runtimemodel.Environment{Document: document, Events: events.NewDispatcher()}
+
+	if err := runtime.Load(context.Background(), scripts, environment); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if got, want := message.TextContent(), "after"; got != want {
+		t.Fatalf("TextContent() = %q, want %q", got, want)
+	}
+}
+
 func TestRuntimeDispatchesWebGoOnClick(t *testing.T) {
 	document := dommodel.NewDocument()
 	button := document.CreateElement("button", map[string]string{"id": "increment"})
