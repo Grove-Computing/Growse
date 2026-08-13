@@ -310,6 +310,34 @@ func main() {
 	}
 }
 
+func TestRuntimeGetsAndSetsInputValue(t *testing.T) {
+	document := dommodel.NewDocument()
+	input := document.CreateElement("input", map[string]string{"id": "input", "value": "before"})
+	if err := document.AppendChild(document.Root, input); err != nil {
+		t.Fatal(err)
+	}
+	runtime := New()
+	scripts := []runtimemodel.Script{{Source: `package main
+import "growse/dom"
+func main() {
+	input := dom.GetElementByID("input")
+	if input.Value() == "before" {
+		input.SetValue("after")
+	}
+}`}}
+	environment := runtimemodel.Environment{Document: document, Events: events.NewDispatcher()}
+
+	if err := runtime.Load(context.Background(), scripts, environment); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if got, ok := input.Attribute("value"); !ok || got != "after" {
+		t.Fatalf("input value = (%q, %v), want (after, true)", got, ok)
+	}
+}
+
 func TestRuntimeDispatchesWebGoOnClick(t *testing.T) {
 	document := dommodel.NewDocument()
 	button := document.CreateElement("button", map[string]string{"id": "increment"})

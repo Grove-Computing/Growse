@@ -190,6 +190,24 @@ func (element *Element) RemoveClass(className string) bool {
 	return element.SetAttribute("class", strings.Join(result, " "))
 }
 
+// Value はテキストinputの現在値を返す。
+func (element *Element) Value() string {
+	node, ok := element.textInputNode()
+	if !ok {
+		return ""
+	}
+	value, _ := node.Attribute("value")
+	return value
+}
+
+// SetValue はテキストinputの現在値を変更する。
+func (element *Element) SetValue(value string) bool {
+	if _, ok := element.textInputNode(); !ok {
+		return false
+	}
+	return element.SetAttribute("value", value)
+}
+
 // Text は要素と子孫のテキストを返す。
 func (element *Element) Text() string {
 	if element == nil || element.document == nil {
@@ -217,6 +235,21 @@ func (api *API) element(node *dommodel.Node) *Element {
 		return nil
 	}
 	return &Element{document: api.document, id: node.ID, events: api.events, onMutation: api.onMutation}
+}
+
+func (element *Element) textInputNode() (*dommodel.Node, bool) {
+	if element == nil || element.document == nil {
+		return nil, false
+	}
+	node, ok := element.document.NodeByID(element.id)
+	if !ok || node.Type != dommodel.NodeElement || node.TagName != "input" {
+		return nil, false
+	}
+	typeValue, hasType := node.Attribute("type")
+	if hasType && !strings.EqualFold(strings.TrimSpace(typeValue), "text") {
+		return nil, false
+	}
+	return node, true
 }
 
 func validTagName(value string) bool {

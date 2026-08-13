@@ -498,7 +498,7 @@ func (ui *BrowserUI) layoutDrawInput(gtx layout.Context, command paintmodel.Draw
 			editor.SingleLine = true
 			editor.SetText(command.Value)
 			ui.inputEditors[command.NodeID] = editor
-		} else if !gtx.Focused(editor) && editor.Text() != command.Value {
+		} else if editor.Text() != command.Value {
 			editor.SetText(command.Value)
 		}
 		for {

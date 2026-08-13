@@ -305,6 +305,53 @@ func TestClassOperationsRejectInvalidClassName(t *testing.T) {
 	}
 }
 
+func TestValueAndSetValueForTextInput(t *testing.T) {
+	document := dommodel.NewDocument()
+	input := document.CreateElement("input", map[string]string{"id": "input", "type": "text", "value": "before"})
+	if err := document.AppendChild(document.Root, input); err != nil {
+		t.Fatal(err)
+	}
+	mutations := 0
+	element := New(document, events.NewDispatcher(), func() { mutations++ }).GetElementByID("input")
+
+	if got, want := element.Value(), "before"; got != want {
+		t.Fatalf("Value() = %q, want %q", got, want)
+	}
+	if !element.SetValue("after") {
+		t.Fatal("SetValue() = false, want true")
+	}
+	if got, want := element.Value(), "after"; got != want {
+		t.Fatalf("Value() = %q, want %q", got, want)
+	}
+	if element.SetValue("after") {
+		t.Fatal("SetValue() = true for unchanged value")
+	}
+	if got, want := mutations, 1; got != want {
+		t.Fatalf("mutation count = %d, want %d", got, want)
+	}
+}
+
+func TestValueAPIIgnoresNonTextInput(t *testing.T) {
+	document := dommodel.NewDocument()
+	checkbox := document.CreateElement("input", map[string]string{"id": "checkbox", "type": "checkbox", "value": "on"})
+	paragraph := document.CreateElement("p", map[string]string{"id": "paragraph", "value": "text"})
+	for _, node := range []*dommodel.Node{checkbox, paragraph} {
+		if err := document.AppendChild(document.Root, node); err != nil {
+			t.Fatal(err)
+		}
+	}
+	api := New(document, events.NewDispatcher(), nil)
+	for _, id := range []string{"checkbox", "paragraph"} {
+		element := api.GetElementByID(id)
+		if got := element.Value(); got != "" {
+			t.Fatalf("%s.Value() = %q, want empty", id, got)
+		}
+		if element.SetValue("changed") {
+			t.Fatalf("%s.SetValue() = true, want false", id)
+		}
+	}
+}
+
 func TestOnClickRegistersHandler(t *testing.T) {
 	document := dommodel.NewDocument()
 	button := document.CreateElement("button", map[string]string{"id": "button"})
