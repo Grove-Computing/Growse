@@ -256,6 +256,19 @@ h1 { font-weight: bold }
 	}
 }
 
+func TestParseInlineDeclarations(t *testing.T) {
+	declarations, err := ParseDeclarations(`color: red; broken; color: blue !important; margin: 4px`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := len(declarations), 3; got != want {
+		t.Fatalf("declaration count = %d, want %d", got, want)
+	}
+	if declarations[1].Property != "color" || declarations[1].Value.Raw != "blue" || !declarations[1].Important {
+		t.Fatalf("important declaration = %#v", declarations[1])
+	}
+}
+
 func TestParseIgnoresUnknownAtRuleAndContinues(t *testing.T) {
 	stylesheet, err := Parse(strings.NewReader(`
 @growse-future example {

@@ -69,6 +69,18 @@ func Parse(reader io.Reader) (*Stylesheet, error) {
 	}
 }
 
+// ParseDeclarations parses the contents of an element's style attribute.
+func ParseDeclarations(value string) ([]Declaration, error) {
+	stylesheet, err := Parse(strings.NewReader("*{" + value + "}"))
+	if err != nil {
+		return nil, err
+	}
+	if len(stylesheet.Rules) == 0 {
+		return nil, nil
+	}
+	return append([]Declaration(nil), stylesheet.Rules[0].Declarations...), nil
+}
+
 func parseValue(raw string) Value {
 	result := Value{Raw: raw}
 	lexer := parser.NewLexer(parse.NewInputString(raw))

@@ -354,6 +354,57 @@ div.target { color: blue }
 	}
 }
 
+func TestCascadeOrdersOriginImportanceSpecificityAndSource(t *testing.T) {
+	document := dom.NewDocument()
+	normalInline := document.CreateElement("p", map[string]string{
+		"id": "normal", "class": "item", "style": "color: green; display: inline",
+	})
+	importantInline := document.CreateElement("p", map[string]string{
+		"id": "important", "class": "item", "style": "color: green !important",
+	})
+	sourceOrder := document.CreateElement("p", map[string]string{"class": "ordered"})
+	for _, node := range []*dom.Node{normalInline, importantInline, sourceOrder} {
+		appendNode(t, document, document.Root, node)
+	}
+	stylesheet, err := css.Parse(strings.NewReader(`
+p { display: none; }
+.item { color: blue; }
+#normal { color: red !important; }
+#important { color: red !important; }
+.ordered { color: red; }
+.ordered { color: blue; }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	computed := Compute(document, stylesheet)
+	normalStyle, _ := computed.For(normalInline)
+	importantStyle, _ := computed.For(importantInline)
+	orderedStyle, _ := computed.For(sourceOrder)
+	if normalStyle.Color != 0xff0000ff {
+		t.Fatalf("author important vs inline normal color = %#x, want red", normalStyle.Color)
+	}
+	if normalStyle.Display != DisplayInline {
+		t.Fatalf("inline style vs author/UA display = %v, want inline", normalStyle.Display)
+	}
+	if importantStyle.Color != 0x008000ff {
+		t.Fatalf("inline important color = %#x, want green", importantStyle.Color)
+	}
+	if orderedStyle.Color != 0x0000ffff {
+		t.Fatalf("source-order color = %#x, want blue", orderedStyle.Color)
+	}
+}
+
+func TestComputeAppliesInlineStyleWithoutStylesheet(t *testing.T) {
+	document := dom.NewDocument()
+	paragraph := document.CreateElement("p", map[string]string{"style": "color: blue; font-size: 20px"})
+	appendNode(t, document, document.Root, paragraph)
+	computed, _ := Compute(document, nil).For(paragraph)
+	if computed.Color != 0x0000ffff || computed.FontSize != 20 {
+		t.Fatalf("inline-only style = %#v", computed)
+	}
+}
+
 func parseTestSelector(t *testing.T, value string) css.Selector {
 	t.Helper()
 	stylesheet, err := css.Parse(strings.NewReader(value + " { color: red }"))

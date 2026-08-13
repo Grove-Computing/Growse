@@ -16,8 +16,9 @@ const (
 type winner struct {
 	value       string
 	important   bool
+	inline      bool
 	specificity [3]int
-	order       int
+	order       [2]int
 }
 
 // Compute applies UA defaults, inheritance, selector matching and cascade.
@@ -101,7 +102,7 @@ func applyUADefaults(tag string, computed ComputedStyle) ComputedStyle {
 
 func applyAuthorRules(node *dom.Node, computed ComputedStyle, stylesheet *css.Stylesheet, state InteractionState) ComputedStyle {
 	if stylesheet == nil {
-		return computed
+		stylesheet = &css.Stylesheet{}
 	}
 	winners := make(map[string]winner)
 	for _, rule := range stylesheet.Rules {
@@ -116,12 +117,27 @@ func applyAuthorRules(node *dom.Node, computed ComputedStyle, stylesheet *css.St
 				for _, property := range expandedProperties(declaration.Property) {
 					candidate := winner{
 						value: declaration.Value.Raw, important: declaration.Important,
-						specificity: selector.Specificity(), order: rule.Order*1000 + declarationIndex,
+						specificity: selector.Specificity(), order: [2]int{rule.Order, declarationIndex},
 					}
 					current, exists := winners[property]
 					if !exists || outranks(candidate, current) {
 						winners[property] = candidate
 					}
+				}
+			}
+		}
+	}
+	if inlineValue, ok := node.Attribute("style"); ok {
+		declarations, _ := css.ParseDeclarations(inlineValue)
+		for declarationIndex, declaration := range declarations {
+			for _, property := range expandedProperties(declaration.Property) {
+				candidate := winner{
+					value: declaration.Value.Raw, important: declaration.Important, inline: true,
+					order: [2]int{0, declarationIndex},
+				}
+				current, exists := winners[property]
+				if !exists || outranks(candidate, current) {
+					winners[property] = candidate
 				}
 			}
 		}
@@ -181,7 +197,7 @@ func applyGeneratedContent(node *dom.Node, computed ComputedStyle, stylesheet *c
 					}
 					candidate := winner{
 						value: declaration.Value.Raw, important: declaration.Important,
-						specificity: selector.Specificity(), order: rule.Order*1000 + declarationIndex,
+						specificity: selector.Specificity(), order: [2]int{rule.Order, declarationIndex},
 					}
 					if !found || outranks(candidate, selected) {
 						selected, found = candidate, true
@@ -540,12 +556,18 @@ func outranks(candidate, current winner) bool {
 	if candidate.important != current.important {
 		return candidate.important
 	}
+	if candidate.inline != current.inline {
+		return candidate.inline
+	}
 	for index := range candidate.specificity {
 		if candidate.specificity[index] != current.specificity[index] {
 			return candidate.specificity[index] > current.specificity[index]
 		}
 	}
-	return candidate.order >= current.order
+	if candidate.order[0] != current.order[0] {
+		return candidate.order[0] > current.order[0]
+	}
+	return candidate.order[1] >= current.order[1]
 }
 
 func parsePixels(value string) (float32, bool) {
