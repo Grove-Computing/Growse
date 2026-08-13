@@ -42,7 +42,7 @@ func computeNode(node *dom.Node, parent ComputedStyle, stylesheet *css.Styleshee
 		computed = initialStyle()
 	} else if node.Type == dom.NodeElement {
 		computed = applyUADefaults(node.TagName, computed)
-		computed = applyAuthorRules(node, computed, stylesheet, state)
+		computed = applyAuthorRules(node, computed, parent, stylesheet, state)
 		computed = applyGeneratedContent(node, computed, stylesheet, state)
 		result[node.ID] = computed
 	} else if node.Type == dom.NodeText {
@@ -100,7 +100,7 @@ func applyUADefaults(tag string, computed ComputedStyle) ComputedStyle {
 	return computed
 }
 
-func applyAuthorRules(node *dom.Node, computed ComputedStyle, stylesheet *css.Stylesheet, state InteractionState) ComputedStyle {
+func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet *css.Stylesheet, state InteractionState) ComputedStyle {
 	if stylesheet == nil {
 		stylesheet = &css.Stylesheet{}
 	}
@@ -144,33 +144,119 @@ func applyAuthorRules(node *dom.Node, computed ComputedStyle, stylesheet *css.St
 	}
 
 	if value, ok := winners["color"]; ok {
-		if parsed, valid := parseColor(value.value); valid {
+		if parsed, valid := resolveColor(value.value, parent.Color, defaultTextColor, true); valid {
 			computed.Color = parsed
 		}
 	}
 	if value, ok := winners["background-color"]; ok {
-		if parsed, valid := parseColor(value.value); valid {
+		if parsed, valid := resolveColor(value.value, parent.BackgroundColor, transparent, false); valid {
 			computed.BackgroundColor = parsed
 		}
 	}
 	if value, ok := winners["font-size"]; ok {
-		if parsed, valid := parsePixels(value.value); valid && parsed > 0 {
+		if parsed, valid := resolveFloat(value.value, parent.FontSize, 16, true, parsePositivePixels); valid {
 			computed.FontSize = parsed
 		}
 	}
 	if value, ok := winners["font-weight"]; ok {
-		if parsed, valid := parseFontWeight(value.value); valid {
+		if parsed, valid := resolveInt(value.value, parent.FontWeight, 400, true, parseFontWeight); valid {
 			computed.FontWeight = parsed
 		}
 	}
 	if value, ok := winners["display"]; ok {
-		if parsed, valid := parseDisplay(value.value); valid {
+		if parsed, valid := resolveDisplay(value.value, parent.Display); valid {
 			computed.Display = parsed
 		}
 	}
-	computed.Margin = applyEdges(computed.Margin, "margin", winners)
-	computed.Padding = applyEdges(computed.Padding, "padding", winners)
+	computed.Margin = applyEdges(computed.Margin, parent.Margin, "margin", winners)
+	computed.Padding = applyEdges(computed.Padding, parent.Padding, "padding", winners)
 	return computed
+}
+
+type globalKeyword uint8
+
+const (
+	globalNone globalKeyword = iota
+	globalInherit
+	globalInitial
+	globalUnset
+)
+
+func parseGlobalKeyword(value string) globalKeyword {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "inherit":
+		return globalInherit
+	case "initial":
+		return globalInitial
+	case "unset":
+		return globalUnset
+	default:
+		return globalNone
+	}
+}
+
+func resolveColor(value string, parent, initial uint32, inherited bool) (uint32, bool) {
+	switch parseGlobalKeyword(value) {
+	case globalInherit:
+		return parent, true
+	case globalInitial:
+		return initial, true
+	case globalUnset:
+		if inherited {
+			return parent, true
+		}
+		return initial, true
+	default:
+		return parseColor(value)
+	}
+}
+
+func resolveFloat(value string, parent, initial float32, inherited bool, parse func(string) (float32, bool)) (float32, bool) {
+	switch parseGlobalKeyword(value) {
+	case globalInherit:
+		return parent, true
+	case globalInitial:
+		return initial, true
+	case globalUnset:
+		if inherited {
+			return parent, true
+		}
+		return initial, true
+	default:
+		return parse(value)
+	}
+}
+
+func resolveInt(value string, parent, initial int, inherited bool, parse func(string) (int, bool)) (int, bool) {
+	switch parseGlobalKeyword(value) {
+	case globalInherit:
+		return parent, true
+	case globalInitial:
+		return initial, true
+	case globalUnset:
+		if inherited {
+			return parent, true
+		}
+		return initial, true
+	default:
+		return parse(value)
+	}
+}
+
+func resolveDisplay(value string, parent Display) (Display, bool) {
+	switch parseGlobalKeyword(value) {
+	case globalInherit:
+		return parent, true
+	case globalInitial, globalUnset:
+		return DisplayInline, true
+	default:
+		return parseDisplay(value)
+	}
+}
+
+func parsePositivePixels(value string) (float32, bool) {
+	parsed, valid := parsePixels(value)
+	return parsed, valid && parsed > 0
 }
 
 func applyGeneratedContent(node *dom.Node, computed ComputedStyle, stylesheet *css.Stylesheet, state InteractionState) ComputedStyle {
@@ -223,7 +309,7 @@ func selectorPseudoElement(selector css.Selector) css.PseudoElementKind {
 
 func parseGeneratedContent(value string) (string, bool) {
 	value = strings.TrimSpace(value)
-	if strings.EqualFold(value, "none") || strings.EqualFold(value, "normal") {
+	if strings.EqualFold(value, "none") || strings.EqualFold(value, "normal") || parseGlobalKeyword(value) != globalNone {
 		return "", true
 	}
 	return css.DecodeString(value)
@@ -238,15 +324,25 @@ func expandedProperties(property string) []string {
 	}
 }
 
-func applyEdges(edges Edges, prefix string, winners map[string]winner) Edges {
+func applyEdges(edges, parent Edges, prefix string, winners map[string]winner) Edges {
 	properties := []string{prefix + "-top", prefix + "-right", prefix + "-bottom", prefix + "-left"}
 	values := []*float32{&edges.Top, &edges.Right, &edges.Bottom, &edges.Left}
+	parentValues := []float32{parent.Top, parent.Right, parent.Bottom, parent.Left}
 	for index, property := range properties {
 		candidate, ok := winners[property]
 		if !ok {
 			continue
 		}
-		parsed, valid := parseEdgeValue(candidate.value, index)
+		var parsed float32
+		var valid bool
+		switch parseGlobalKeyword(candidate.value) {
+		case globalInherit:
+			parsed, valid = parentValues[index], true
+		case globalInitial, globalUnset:
+			parsed, valid = 0, true
+		default:
+			parsed, valid = parseEdgeValue(candidate.value, index)
+		}
 		if valid {
 			*values[index] = parsed
 		}

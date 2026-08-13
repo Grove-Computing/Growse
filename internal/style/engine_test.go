@@ -405,6 +405,48 @@ func TestComputeAppliesInlineStyleWithoutStylesheet(t *testing.T) {
 	}
 }
 
+func TestComputeResolvesGlobalKeywordsByPropertyInheritance(t *testing.T) {
+	document := dom.NewDocument()
+	parent := document.CreateElement("div", map[string]string{"class": "parent"})
+	child := document.CreateElement("p", map[string]string{"class": "child"})
+	inheritedDisplay := document.CreateElement("span", map[string]string{"class": "inherit-display"})
+	appendNode(t, document, document.Root, parent)
+	appendNode(t, document, parent, child)
+	appendNode(t, document, parent, inheritedDisplay)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.parent {
+  color: blue; background-color: red; font-size: 20px; font-weight: bold;
+  display: block; margin: 1px 2px 3px 4px; padding: 8px;
+}
+.child {
+  color: unset; background-color: inherit; font-size: initial; font-weight: inherit;
+  display: initial; margin: inherit; padding: unset;
+}
+.inherit-display { display: inherit; }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	computed := Compute(document, stylesheet)
+	childStyle, _ := computed.For(child)
+	if childStyle.Color != 0x0000ffff || childStyle.BackgroundColor != 0xff0000ff {
+		t.Fatalf("global color values = %#v", childStyle)
+	}
+	if childStyle.FontSize != 16 || childStyle.FontWeight != 700 || childStyle.Display != DisplayInline {
+		t.Fatalf("global font/display values = %#v", childStyle)
+	}
+	if got, want := childStyle.Margin, (Edges{Top: 1, Right: 2, Bottom: 3, Left: 4}); got != want {
+		t.Fatalf("inherited margin = %#v, want %#v", got, want)
+	}
+	if childStyle.Padding != (Edges{}) {
+		t.Fatalf("unset padding = %#v, want zero", childStyle.Padding)
+	}
+	displayStyle, _ := computed.For(inheritedDisplay)
+	if displayStyle.Display != DisplayBlock {
+		t.Fatalf("inherited display = %v, want block", displayStyle.Display)
+	}
+}
+
 func parseTestSelector(t *testing.T, value string) css.Selector {
 	t.Helper()
 	stylesheet, err := css.Parse(strings.NewReader(value + " { color: red }"))
