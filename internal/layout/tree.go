@@ -1,33 +1,75 @@
 // Package layout builds a simple visual tree from the Growse DOM.
 package layout
 
-import "github.com/saku0512/growse/internal/dom"
+import (
+	"github.com/saku0512/growse/internal/dom"
+	stylemodel "github.com/saku0512/growse/internal/style"
+)
 
 // Tree is the result of laying out one document at a specific viewport width.
 type Tree struct {
-	Width      float32
-	Height     float32
+	Width        float32
+	Height       float32
+	Background   uint32
+	Decorations  []Decoration
+	Boxes        []Box
+	ScrollWidth  float32
+	ScrollHeight float32
+}
+
+// Decoration is the border-box visual of one element. It is kept separately
+// from line boxes so backgrounds can be painted before descendant content.
+type Decoration struct {
+	Order  int
+	NodeID dom.NodeID
+	Rect
 	Background uint32
-	Boxes      []Box
+	Image      stylemodel.BackgroundImage
+	Repeat     stylemodel.BackgroundRepeat
+	Position   stylemodel.BackgroundPosition
+	Size       stylemodel.BackgroundSize
+	Border     stylemodel.Borders
+	Radius     BorderRadii
+	Opacity    float32
+	Clip       *Rect
+}
+
+// CornerRadius is one resolved elliptical radius in CSS pixels.
+type CornerRadius struct{ X, Y float32 }
+
+// BorderRadii contains resolved radii in clockwise order.
+type BorderRadii struct {
+	TopLeft, TopRight, BottomRight, BottomLeft CornerRadius
+}
+
+// Rect is a document-coordinate clipping rectangle.
+type Rect struct {
+	X, Y, Width, Height float32
 }
 
 // Box is one line of visible page content.
 type Box struct {
+	Order  int
 	NodeID dom.NodeID
 	Tag    string
 	Text   string
 	Input  bool
 
-	X      float32
-	Y      float32
-	Width  float32
-	Height float32
+	X        float32
+	Y        float32
+	Width    float32
+	Height   float32
+	Baseline float32
+	Clip     *Rect
+	Opacity  float32
 
-	FontSize   float32
-	Bold       bool
-	Color      uint32
-	Background uint32
-	Runs       []TextRun
+	FontSize        float32
+	Bold            bool
+	Color           uint32
+	Background      uint32
+	Decoration      stylemodel.TextDecorationLine
+	DecorationColor uint32
+	Runs            []TextRun
 }
 
 // TextRun is a continuously styled fragment inside one line box.
@@ -37,8 +79,12 @@ type TextRun struct {
 	Text   string
 	Width  float32
 
-	FontSize   float32
-	Bold       bool
-	Color      uint32
-	Background uint32
+	FontSize        float32
+	Bold            bool
+	Color           uint32
+	Background      uint32
+	Baseline        float32
+	Decoration      stylemodel.TextDecorationLine
+	DecorationColor uint32
+	Opacity         float32
 }

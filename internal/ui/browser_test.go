@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"image"
+	"image/color"
 	"net/url"
 	"strings"
 	"testing"
@@ -20,9 +21,64 @@ import (
 	"github.com/saku0512/growse/internal/css"
 	"github.com/saku0512/growse/internal/dom"
 	"github.com/saku0512/growse/internal/events"
+	layoutengine "github.com/saku0512/growse/internal/layout"
 	paintmodel "github.com/saku0512/growse/internal/paint"
 	"github.com/saku0512/growse/internal/style"
 )
+
+func TestCommandClipTranslatesDocumentCoordinatesToCommandCoordinates(t *testing.T) {
+	gtx := layout.Context{Metric: unit.Metric{PxPerDp: 2, PxPerSp: 2}}
+	got := commandClip(gtx, &layoutengine.Rect{X: 20, Y: 30, Width: 50, Height: 40}, 10, 15)
+	if got.Min != image.Pt(20, 30) || got.Max != image.Pt(120, 110) {
+		t.Fatalf("clip = %v, want [(20,30)-(120,110)]", got)
+	}
+}
+
+func TestRasterLinearGradientInterpolatesAllColorStops(t *testing.T) {
+	gradient := style.BackgroundImage{
+		Kind: style.BackgroundImageLinearGradient, GradientAngle: 90,
+		GradientStops: []style.GradientStop{
+			{Color: 0xff0000ff, Position: 0},
+			{Color: 0x00ff00ff, Position: .5},
+			{Color: 0x0000ffff, Position: 1},
+		},
+	}
+	image := rasterLinearGradient(3, 1, gradient)
+	if left, middle, right := image.NRGBAAt(0, 0), image.NRGBAAt(1, 0), image.NRGBAAt(2, 0); left.R != 255 || middle.G != 255 || right.B != 255 {
+		t.Fatalf("gradient pixels = %v, %v, %v", left, middle, right)
+	}
+}
+
+func TestRasterBackgroundImageRepeatsAndSizesImage(t *testing.T) {
+	source := image.NewNRGBA(image.Rect(0, 0, 2, 1))
+	source.SetNRGBA(0, 0, color.NRGBA{R: 255, A: 255})
+	source.SetNRGBA(1, 0, color.NRGBA{B: 255, A: 255})
+	repeated := rasterBackgroundImage(4, 1, source, paintmodel.DrawBox{
+		Repeat: style.BackgroundRepeat{X: true},
+	}, 1)
+	if got := []color.NRGBA{repeated.NRGBAAt(0, 0), repeated.NRGBAAt(1, 0), repeated.NRGBAAt(2, 0), repeated.NRGBAAt(3, 0)}; got[0].R != 255 || got[1].B != 255 || got[2].R != 255 || got[3].B != 255 {
+		t.Fatalf("repeated pixels = %v", got)
+	}
+
+	green := image.NewNRGBA(image.Rect(0, 0, 1, 1))
+	green.SetNRGBA(0, 0, color.NRGBA{G: 255, A: 255})
+	sized := rasterBackgroundImage(4, 1, green, paintmodel.DrawBox{
+		Size: style.BackgroundSize{Kind: style.BackgroundSizeExplicit, Width: style.SizeValue{Kind: style.SizeLength, Value: style.LengthPercentage{Percentage: 50}}},
+	}, 1)
+	if sized.NRGBAAt(0, 0).G != 255 || sized.NRGBAAt(1, 0).G != 255 || sized.NRGBAAt(2, 0).A != 0 {
+		t.Fatalf("sized pixels = %v, %v, %v", sized.NRGBAAt(0, 0), sized.NRGBAAt(1, 0), sized.NRGBAAt(2, 0))
+	}
+}
+
+func TestPixelBorderRadiiPreservesEllipticalCorners(t *testing.T) {
+	gtx := layout.Context{Metric: unit.Metric{PxPerDp: 2, PxPerSp: 2}}
+	got := pixelBorderRadii(gtx, layoutengine.BorderRadii{
+		TopLeft: layoutengine.CornerRadius{X: 8, Y: 4}, TopRight: layoutengine.CornerRadius{X: 6, Y: 6},
+	})
+	if got.TopLeft != (layoutengine.CornerRadius{X: 16, Y: 8}) || got.TopRight != (layoutengine.CornerRadius{X: 12, Y: 12}) || got.BottomRight != (layoutengine.CornerRadius{}) {
+		t.Fatalf("rounded clip = %#v", got)
+	}
+}
 
 type stubNavigator struct {
 	page *browser.Page
@@ -116,13 +172,46 @@ func (navigator *stubNavigator) ClearHover() bool {
 	navigator.recomputeHoverStyles()
 	return true
 }
+func (navigator *stubNavigator) UpdateFocus(nodeID dom.NodeID) bool {
+	if navigator.page == nil || navigator.page.Document == nil {
+		return false
+	}
+	if nodeID != 0 {
+		node, ok := navigator.page.Document.NodeByID(nodeID)
+		if !ok || node.Type != dom.NodeElement || !navigator.page.Document.IsConnected(node) {
+			nodeID = 0
+		}
+	}
+	if navigator.page.FocusTarget == nodeID {
+		return false
+	}
+	navigator.page.FocusTarget = nodeID
+	navigator.recomputeHoverStyles()
+	return true
+}
+func (navigator *stubNavigator) UpdateViewport(width, height float32) bool {
+	if navigator.page == nil || navigator.page.Document == nil || width <= 0 || height <= 0 {
+		return false
+	}
+	if navigator.page.ViewportWidth == width && navigator.page.ViewportHeight == height {
+		return false
+	}
+	navigator.page.ViewportWidth, navigator.page.ViewportHeight = width, height
+	navigator.recomputeHoverStyles()
+	return true
+}
 func (navigator *stubNavigator) recomputeHoverStyles() {
 	hovered := make(map[dom.NodeID]bool, len(navigator.page.HoverPath))
 	for _, nodeID := range navigator.page.HoverPath {
 		hovered[nodeID] = true
 	}
-	navigator.page.ComputedStyles = style.ComputeWithState(
-		navigator.page.Document, navigator.page.Stylesheet, style.InteractionState{Hovered: hovered},
+	navigator.page.ComputedStyles = style.ComputeWithEnvironment(
+		navigator.page.Document, navigator.page.Stylesheet,
+		style.InteractionState{Hovered: hovered, Focused: navigator.page.FocusTarget},
+		style.Environment{
+			ViewportWidth: navigator.page.ViewportWidth, ViewportHeight: navigator.page.ViewportHeight, RootFontSize: 16,
+			ResolutionDPI: 96, ColorScheme: "light", Hover: true, Pointer: "fine",
+		},
 	)
 }
 func equalNodeIDPath(left, right []dom.NodeID) bool {
@@ -508,6 +597,31 @@ func TestTextInputReceivesFocusFromPointerPress(t *testing.T) {
 	}
 	if !gtx.Focused(editor) {
 		t.Fatal("pointer press did not focus the input editor")
+	}
+	if got, want := page.FocusTarget, inputNode.ID; got != want {
+		t.Fatalf("page focus target = %d, want %d", got, want)
+	}
+}
+
+func TestFocusableNodeIDFindsInteractiveAncestor(t *testing.T) {
+	document := dom.NewDocument()
+	link := document.CreateElement("a", map[string]string{"href": "/next"})
+	label := document.CreateText("next")
+	plain := document.CreateElement("div", nil)
+	if err := document.AppendChild(document.Root, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(link, label); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(document.Root, plain); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := focusableNodeID(document, label.ID), link.ID; got != want {
+		t.Fatalf("link focus target = %d, want %d", got, want)
+	}
+	if got := focusableNodeID(document, plain.ID); got != 0 {
+		t.Fatalf("plain focus target = %d, want 0", got)
 	}
 }
 

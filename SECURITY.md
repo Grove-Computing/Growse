@@ -6,9 +6,9 @@
 
 | Version | Supported |
 | --- | --- |
-| 0.3.x | Yes |
+| 0.4.x | Yes |
+| 0.3.x | No |
 | 0.2.x | No |
-| 0.1.x | No |
 
 ## Reporting a Vulnerability
 
@@ -27,7 +27,7 @@
 
 ## WebGo Security Boundary
 
-Growse v0.3.0のYaegi Runtimeは、信頼できないGoコードを安全に実行するSandboxではありません。
+Growse v0.4.0のYaegi Runtimeは、信頼できないGoコードを安全に実行するSandboxではありません。
 プロセス分離、CPU時間制限、メモリ制限、およびGo標準ライブラリ全体に対する完全な制限は提供していません。
 
 WebGoの自動実行は`localhost`、`127.0.0.1`、`::1`のページと、同じく信頼済みOriginから取得したGoスクリプトに限定されます。ただし、ローカルで配信されるページやスクリプトを信頼できることは利用者自身が確認してください。
@@ -38,4 +38,8 @@ WebGoの自動実行は`localhost`、`127.0.0.1`、`::1`のページと、同じ
 
 リンク先プレビューはURLの表示だけを行い、hoverを理由とするDNS問い合わせ、HTTPリクエスト、先読み、WebGo実行は行いません。URLにパスワードが含まれる場合は伏字にしますが、表示されたリンク先と接続先を利用者自身でも確認してください。
 
-Gopherカーソルにはビルドへ埋め込んだ`internal/ui/assets/blue.svg`だけを使用します。閲覧ページから取得したSVGをカーソルとして実行時に読み込む機能はありません。
+Gopherカーソルには`internal/ui/assets/blue.svg`から生成してビルドへ埋め込んだ`gopher-blue.png`だけを使用します。閲覧ページから取得したSVGをカーソルとして実行時に読み込む機能はありません。
+
+## CSS Resource
+
+外部Stylesheetの`@import`は同一Originに限定し、循環、深度、取得数、合計サイズを制限します。Background ImageはHTTP(S)のPNG、JPEG、GIFだけを受け入れ、応答を4 MiB、Decode後の画像を1600万画素までに制限します。MIME TypeやDecodeの検証に失敗した画像は描画せず、ページ本体の表示は継続します。

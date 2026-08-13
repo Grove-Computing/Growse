@@ -1,6 +1,7 @@
 package browser
 
 import (
+	"image"
 	"net/url"
 	"strings"
 
@@ -15,20 +16,25 @@ import (
 // Runtimeの状態はスクリプト取得エラーと分けて保持し、Goコードを実行できない場合も
 // ページの表示を継続できるようにする。
 type Page struct {
-	URL            *url.URL
-	StatusCode     int
-	ContentType    string
-	Source         []byte
-	Document       *dom.Document
-	Events         *events.Dispatcher
-	Stylesheet     *css.Stylesheet
-	ComputedStyles style.Map
-	Scripts        []Script
-	ScriptErrors   []string
-	RuntimeStarted bool
-	RuntimeError   string
-	HoverTarget    dom.NodeID
-	HoverPath      []dom.NodeID
+	URL              *url.URL
+	StatusCode       int
+	ContentType      string
+	Source           []byte
+	Document         *dom.Document
+	Events           *events.Dispatcher
+	Stylesheet       *css.Stylesheet
+	ComputedStyles   style.Map
+	BackgroundImages map[string]image.Image
+	BackgroundErrors []string
+	Scripts          []Script
+	ScriptErrors     []string
+	RuntimeStarted   bool
+	RuntimeError     string
+	HoverTarget      dom.NodeID
+	HoverPath        []dom.NodeID
+	FocusTarget      dom.NodeID
+	ViewportWidth    float32
+	ViewportHeight   float32
 }
 
 // NewPage creates a page for pageURL. A nil URL is allowed for documents such

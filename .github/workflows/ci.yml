@@ -60,7 +60,7 @@ jobs:
       - name: Check module files
         run: go mod tidy -diff
 
-      - name: Test v0.3.0 installer
+      - name: Test v0.4.0 installer
         run: bash tests/install.sh
 
       - name: Run race tests with coverage

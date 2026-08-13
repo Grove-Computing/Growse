@@ -112,6 +112,239 @@ func TestBuildAppliesBoxModelAndDisplay(t *testing.T) {
 	}
 }
 
+func TestBuildAppliesSizingConstraintsAndBoxSizing(t *testing.T) {
+	document := dom.NewDocument()
+	contentBox := document.CreateElement("div", map[string]string{"class": "content"})
+	borderBox := document.CreateElement("div", map[string]string{"class": "border"})
+	following := document.CreateElement("p", nil)
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, contentBox},
+		[2]*dom.Node{contentBox, document.CreateText("content")},
+		[2]*dom.Node{document.Root, borderBox},
+		[2]*dom.Node{borderBox, document.CreateText("border")},
+		[2]*dom.Node{document.Root, following},
+		[2]*dom.Node{following, document.CreateText("after")},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.content { width: 50%; min-width: 300px; max-width: 320px; padding: 10px; height: 40px; }
+.border { width: 50%; padding: 10px; border: 3px solid red; box-sizing: border-box; height: 60px; }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := BuildWithViewport(document, style.ComputeWithEnvironment(document, stylesheet, style.InteractionState{}, style.Environment{
+		ViewportWidth: 800, ViewportHeight: 600, RootFontSize: 16,
+	}), 800, 600)
+	if got, want := tree.Boxes[0].Width, float32(320); got != want {
+		t.Fatalf("content-box text width = %v, want %v", got, want)
+	}
+	if got, want := tree.Boxes[1].Width, float32(342); got != want {
+		t.Fatalf("border-box text width = %v, want %v", got, want)
+	}
+	if got, want := tree.Boxes[2].Y, float32(32+60+60); got != want {
+		t.Fatalf("following y = %v, want %v", got, want)
+	}
+}
+
+func TestBuildCollapsesAdjacentBlockMargins(t *testing.T) {
+	document := dom.NewDocument()
+	body := document.CreateElement("body", nil)
+	first := document.CreateElement("div", map[string]string{"class": "first"})
+	second := document.CreateElement("div", map[string]string{"class": "second"})
+	third := document.CreateElement("div", map[string]string{"class": "third"})
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, body},
+		[2]*dom.Node{body, first}, [2]*dom.Node{first, document.CreateText("first")},
+		[2]*dom.Node{body, second}, [2]*dom.Node{second, document.CreateText("second")},
+		[2]*dom.Node{body, third}, [2]*dom.Node{third, document.CreateText("third")},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.first { margin-bottom: 20px; }
+.second { margin-top: 10px; margin-bottom: 20px; }
+.third { margin-top: -5px; }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, style.Compute(document, stylesheet), 800)
+	firstGap := tree.Boxes[1].Y - (tree.Boxes[0].Y + tree.Boxes[0].Height)
+	secondGap := tree.Boxes[2].Y - (tree.Boxes[1].Y + tree.Boxes[1].Height)
+	if firstGap != 20 || secondGap != 15 {
+		t.Fatalf("collapsed gaps = (%v, %v), want (20, 15)", firstGap, secondGap)
+	}
+}
+
+func TestBuildPlacesInlineBlockAsAtomicInline(t *testing.T) {
+	document := dom.NewDocument()
+	paragraph := document.CreateElement("p", nil)
+	badge := document.CreateElement("span", map[string]string{"class": "badge"})
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, paragraph},
+		[2]*dom.Node{paragraph, document.CreateText("before ")},
+		[2]*dom.Node{paragraph, badge}, [2]*dom.Node{badge, document.CreateText("badge")},
+		[2]*dom.Node{paragraph, document.CreateText(" after")},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.badge { display: inline-block; width: 100px; height: 40px; padding: 4px; border: 2px solid red; }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, style.Compute(document, stylesheet), 800)
+	if got, want := len(tree.Boxes), 1; got != want {
+		t.Fatalf("line count = %d, want %d", got, want)
+	}
+	line := tree.Boxes[0]
+	if len(line.Runs) != 3 || line.Runs[1].NodeID != badge.ID || line.Runs[1].Width != 112 {
+		t.Fatalf("inline-block runs = %#v", line.Runs)
+	}
+	if line.Height != 52 {
+		t.Fatalf("line height = %v, want 52", line.Height)
+	}
+}
+
+func TestBuildUsesFontMetricsLineHeightBaselineAndWhiteSpace(t *testing.T) {
+	document := dom.NewDocument()
+	pre := document.CreateElement("p", map[string]string{"class": "pre"})
+	normal := document.CreateElement("p", map[string]string{"class": "normal"})
+	wide := document.CreateElement("span", nil)
+	narrow := document.CreateElement("span", nil)
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, pre}, [2]*dom.Node{pre, document.CreateText("a  b\nc")},
+		[2]*dom.Node{document.Root, normal}, [2]*dom.Node{normal, wide},
+		[2]*dom.Node{wide, document.CreateText("WWW")}, [2]*dom.Node{normal, narrow},
+		[2]*dom.Node{narrow, document.CreateText("iii")},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`.pre { font-size: 20px; line-height: 40px; white-space: pre; }`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, style.Compute(document, stylesheet), 800)
+	if tree.Boxes[0].Text != "a  b" || tree.Boxes[1].Text != "c" || tree.Boxes[0].Height != 40 {
+		t.Fatalf("preformatted lines = %#v", tree.Boxes[:2])
+	}
+	if tree.Boxes[0].Baseline <= tree.Boxes[0].Y || tree.Boxes[0].Baseline >= tree.Boxes[0].Y+tree.Boxes[0].Height {
+		t.Fatalf("baseline = %v outside line %#v", tree.Boxes[0].Baseline, tree.Boxes[0])
+	}
+	normalLine := tree.Boxes[2]
+	if len(normalLine.Runs) != 2 || normalLine.Runs[0].Width <= normalLine.Runs[1].Width {
+		t.Fatalf("measured proportional runs = %#v", normalLine.Runs)
+	}
+}
+
+func TestBuildCarriesOverflowClipAndScrollExtentIntoHitTesting(t *testing.T) {
+	document := dom.NewDocument()
+	container := document.CreateElement("div", map[string]string{"class": "clip"})
+	first := document.CreateElement("p", nil)
+	second := document.CreateElement("p", nil)
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, container},
+		[2]*dom.Node{container, first}, [2]*dom.Node{first, document.CreateText(strings.Repeat("long line ", 20))},
+		[2]*dom.Node{container, second}, [2]*dom.Node{second, document.CreateText("outside")},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`.clip { width: 80px; height: 20px; overflow: hidden; white-space: nowrap; }`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, style.Compute(document, stylesheet), 800)
+	if len(tree.Boxes) != 2 || tree.Boxes[0].Clip == nil || tree.Boxes[1].Clip == nil {
+		t.Fatalf("clipped boxes = %#v", tree.Boxes)
+	}
+	if tree.ScrollWidth <= tree.Width {
+		t.Fatalf("scroll width = %v, want greater than viewport %v", tree.ScrollWidth, tree.Width)
+	}
+	outside := tree.Boxes[1]
+	if got, ok := HitTest(tree, outside.X+1, outside.Y+1); ok || got != 0 {
+		t.Fatalf("hit outside clip = (%d, %v), want miss", got, ok)
+	}
+}
+
+func TestBuildCreatesElementBackgroundBeforeItsContent(t *testing.T) {
+	document := dom.NewDocument()
+	box := document.CreateElement("div", map[string]string{"class": "card"})
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, box},
+		[2]*dom.Node{box, document.CreateText("card")},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`.card { width: 120px; padding: 8px; background-color: #123456; }`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, style.Compute(document, stylesheet), 800)
+	if len(tree.Decorations) != 1 || len(tree.Boxes) != 1 {
+		t.Fatalf("decorations/boxes = %d/%d", len(tree.Decorations), len(tree.Boxes))
+	}
+	decoration := tree.Decorations[0]
+	if decoration.NodeID != box.ID || decoration.Background != 0x123456ff || decoration.Width != 136 || decoration.Height <= tree.Boxes[0].Height {
+		t.Fatalf("background decoration = %#v", decoration)
+	}
+	if decoration.Order >= tree.Boxes[0].Order {
+		t.Fatalf("background order = %d, content order = %d", decoration.Order, tree.Boxes[0].Order)
+	}
+	if got, ok := HitTest(tree, decoration.X+2, decoration.Y+2); !ok || got != box.ID {
+		t.Fatalf("background hit = (%d, %v), want %d", got, ok, box.ID)
+	}
+}
+
+func TestBuildCarriesLinearGradientIntoDecoration(t *testing.T) {
+	document := dom.NewDocument()
+	box := document.CreateElement("div", nil)
+	appendNodes(t, document, [2]*dom.Node{document.Root, box})
+	stylesheet, err := css.Parse(strings.NewReader(`div { width: 100px; height: 30px; background-image: linear-gradient(90deg, red, blue); }`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, style.Compute(document, stylesheet), 800)
+	if len(tree.Decorations) != 1 || tree.Decorations[0].Image.Kind != style.BackgroundImageLinearGradient || len(tree.Decorations[0].Image.GradientStops) != 2 {
+		t.Fatalf("gradient decoration = %#v", tree.Decorations)
+	}
+}
+
+func TestBuildCarriesBorderRadiusDecorationAndEffectiveOpacity(t *testing.T) {
+	document := dom.NewDocument()
+	box := document.CreateElement("div", nil)
+	span := document.CreateElement("span", nil)
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, box}, [2]*dom.Node{box, span},
+		[2]*dom.Node{span, document.CreateText("decorated")},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`
+div { width: 100px; height: 40px; border: 4px solid red; border-radius: 60px; opacity: .5; }
+span { text-decoration-line: underline; text-decoration-color: blue; opacity: .5; }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, style.Compute(document, stylesheet), 800)
+	if len(tree.Decorations) != 1 || len(tree.Boxes) == 0 {
+		t.Fatalf("decorations/boxes = %#v / %#v", tree.Decorations, tree.Boxes)
+	}
+	decoration := tree.Decorations[0]
+	if decoration.Border.Top.Width != 4 || decoration.Border.Top.Color != 0xff0000ff || decoration.Opacity != .5 || decoration.Radius.TopLeft.X != 24 || decoration.Radius.TopLeft.Y != 24 {
+		t.Fatalf("decoration = %#v", decoration)
+	}
+	run := tree.Boxes[0].Runs[0]
+	if run.Decoration != style.TextDecorationUnderline || run.DecorationColor != 0x0000ffff || run.Opacity != .25 {
+		t.Fatalf("text effect run = %#v", run)
+	}
+}
+
+func TestHitTestUsesPaintedEllipticalBorderRadius(t *testing.T) {
+	tree := &Tree{Decorations: []Decoration{{
+		NodeID: 9, Rect: Rect{X: 10, Y: 20, Width: 100, Height: 50},
+		Radius: BorderRadii{
+			TopLeft: CornerRadius{X: 20, Y: 10}, TopRight: CornerRadius{X: 20, Y: 10},
+			BottomRight: CornerRadius{X: 20, Y: 10}, BottomLeft: CornerRadius{X: 20, Y: 10},
+		},
+	}}}
+	if nodeID, ok := HitTest(tree, 11, 21); ok || nodeID != 0 {
+		t.Fatalf("rounded corner hit = (%d, %v), want miss", nodeID, ok)
+	}
+	if nodeID, ok := HitTest(tree, 30, 21); !ok || nodeID != 9 {
+		t.Fatalf("rounded top hit = (%d, %v), want node 9", nodeID, ok)
+	}
+}
+
 func TestBuildPreservesInlineRunStyles(t *testing.T) {
 	document := dom.NewDocument()
 	p := document.CreateElement("p", nil)
@@ -140,8 +373,42 @@ func TestBuildPreservesInlineRunStyles(t *testing.T) {
 	if accent.Text != "Growse" || accent.Color != 0xff0000ff || accent.FontSize != 24 || !accent.Bold {
 		t.Fatalf("accent run = %#v, want styled Growse", accent)
 	}
-	if line.Height != 24*1.4 {
-		t.Fatalf("line height = %v, want largest run height", line.Height)
+	_, wantHeight, _ := measureText("Mg", 24, true)
+	if line.Height != wantHeight {
+		t.Fatalf("line height = %v, want measured %v", line.Height, wantHeight)
+	}
+}
+
+func TestBuildIncludesGeneratedContentInLayoutAndHitTesting(t *testing.T) {
+	document := dom.NewDocument()
+	paragraph := document.CreateElement("p", nil)
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, paragraph},
+		[2]*dom.Node{paragraph, document.CreateText("middle")},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`
+p::before { content: "before "; }
+p::after { content: " after"; }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, style.Compute(document, stylesheet), 800)
+	if got, want := len(tree.Boxes), 1; got != want {
+		t.Fatalf("box count = %d, want %d", got, want)
+	}
+	box := tree.Boxes[0]
+	if got, want := box.Text, "before middle after"; got != want {
+		t.Fatalf("generated text = %q, want %q", got, want)
+	}
+	if got, want := len(box.Runs), 3; got != want {
+		t.Fatalf("run count = %d, want %d", got, want)
+	}
+	if box.Runs[0].Tag != "::before" || box.Runs[2].Tag != "::after" {
+		t.Fatalf("generated runs = %#v", box.Runs)
+	}
+	if got, ok := HitTest(tree, box.X+1, box.Y+1); !ok || got != paragraph.ID {
+		t.Fatalf("generated content hit = (%d, %v), want paragraph %d", got, ok, paragraph.ID)
 	}
 }
 

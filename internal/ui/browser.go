@@ -8,25 +8,30 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	imagedraw "image/draw"
 	"image/png"
 	"log/slog"
 	"math"
 
+	"gioui.org/f32"
 	"gioui.org/font"
 	"gioui.org/gesture"
 	"gioui.org/io/pointer"
 	"gioui.org/layout"
+	"gioui.org/op"
 	"gioui.org/op/clip"
 	"gioui.org/op/paint"
 	"gioui.org/unit"
 	"gioui.org/widget"
 	"gioui.org/widget/material"
 	"golang.org/x/exp/shiny/materialdesign/icons"
+	xdraw "golang.org/x/image/draw"
 
 	"github.com/saku0512/growse/internal/browser"
 	"github.com/saku0512/growse/internal/dom"
 	layoutengine "github.com/saku0512/growse/internal/layout"
 	paintmodel "github.com/saku0512/growse/internal/paint"
+	stylemodel "github.com/saku0512/growse/internal/style"
 )
 
 //go:embed assets/gopher-blue.png
@@ -90,6 +95,8 @@ type Navigator interface {
 	SubmitForm(nodeID dom.NodeID) bool
 	UpdateHover(nodeID dom.NodeID, x, y float32) bool
 	ClearHover() bool
+	UpdateFocus(nodeID dom.NodeID) bool
+	UpdateViewport(width, height float32) bool
 }
 
 type navigationResult struct {
@@ -456,7 +463,11 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 	paint.Fill(gtx.Ops, color.NRGBA{R: 255, G: 255, B: 255, A: 255})
 
 	viewportWidth := float32(gtx.Constraints.Max.X) / gtx.Metric.PxPerDp
-	tree := layoutengine.Build(page.Document, page.ComputedStyles, viewportWidth)
+	viewportHeight := float32(gtx.Constraints.Max.Y) / gtx.Metric.PxPerDp
+	if ui.navigator != nil {
+		ui.navigator.UpdateViewport(viewportWidth, viewportHeight)
+	}
+	tree := layoutengine.BuildWithViewport(page.Document, page.ComputedStyles, viewportWidth, viewportHeight)
 	displayList := paintmodel.Build(tree)
 	paint.Fill(gtx.Ops, rgba(displayList.Background))
 	ui.updateViewportHover(gtx, page, tree, displayList)
@@ -469,6 +480,8 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 			return ui.layoutDrawText(gtx, command)
 		case paintmodel.DrawInput:
 			return ui.layoutDrawInput(gtx, command)
+		case paintmodel.DrawBox:
+			return layoutDrawBox(gtx, command, page.BackgroundImages[command.Image.URL])
 		default:
 			return layout.Dimensions{}
 		}
@@ -535,6 +548,7 @@ func (ui *BrowserUI) handleViewportClicks(gtx layout.Context, page *browser.Page
 		if !ok {
 			continue
 		}
+		ui.navigator.UpdateFocus(focusableNodeID(page.Document, nodeID))
 		if ui.navigator.DispatchClick(nodeID, x, y) {
 			continue
 		}
@@ -544,6 +558,33 @@ func (ui *BrowserUI) handleViewportClicks(gtx layout.Context, page *browser.Page
 		}
 		ui.startNavigation(linkURL.String())
 	}
+}
+
+func focusableNodeID(document *dom.Document, nodeID dom.NodeID) dom.NodeID {
+	if document == nil {
+		return 0
+	}
+	node, ok := document.NodeByID(nodeID)
+	if !ok {
+		return 0
+	}
+	for current := node; current != nil; current = current.Parent {
+		if current.Type != dom.NodeElement {
+			continue
+		}
+		if _, hasTabIndex := current.Attribute("tabindex"); hasTabIndex {
+			return current.ID
+		}
+		switch current.TagName {
+		case "input", "button", "select", "textarea":
+			return current.ID
+		case "a", "area":
+			if _, linked := current.Attribute("href"); linked {
+				return current.ID
+			}
+		}
+	}
+	return 0
 }
 
 func (ui *BrowserUI) documentPoint(position image.Point, displayList *paintmodel.DisplayList, pixelsPerDP float32) (float32, float32, bool) {
@@ -569,9 +610,268 @@ func commandDocumentY(command paintmodel.Command) (float32, bool) {
 		return command.Y - command.Top, true
 	case paintmodel.DrawInput:
 		return command.Y - command.Top, true
+	case paintmodel.DrawBox:
+		return command.Y - command.Top, true
 	default:
 		return 0, false
 	}
+}
+
+func layoutDrawBox(gtx layout.Context, command paintmodel.DrawBox, backgroundImage image.Image) layout.Dimensions {
+	return layout.Inset{Top: unit.Dp(command.Top), Left: unit.Dp(command.X)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		if command.Clip != nil {
+			defer commandClip(gtx, command.Clip, command.X, command.Y).Push(gtx.Ops).Pop()
+		}
+		width := min(gtx.Dp(unit.Dp(command.Width)), gtx.Constraints.Max.X)
+		height := min(gtx.Dp(unit.Dp(command.Height)), gtx.Constraints.Max.Y)
+		bounds := clip.Rect{Max: image.Pt(width, height)}
+		if command.Opacity < 1 {
+			defer paint.PushOpacity(gtx.Ops, max(command.Opacity, 0)).Pop()
+		}
+		rounded := roundedClip(gtx, command.Radius, width, height).Push(gtx.Ops)
+		defer rounded.Pop()
+		if command.Color != 0 {
+			paint.FillShape(gtx.Ops, rgba(command.Color), bounds.Op())
+		}
+		if command.Image.Kind == stylemodel.BackgroundImageLinearGradient && width > 0 && height > 0 {
+			area := bounds.Push(gtx.Ops)
+			widget.Image{
+				Src: paint.NewImageOp(rasterLinearGradient(width, height, command.Image)),
+				Fit: widget.Unscaled, Scale: 1 / gtx.Metric.PxPerDp,
+			}.Layout(gtx)
+			area.Pop()
+		} else if command.Image.Kind == stylemodel.BackgroundImageURL && backgroundImage != nil && width > 0 && height > 0 {
+			area := bounds.Push(gtx.Ops)
+			widget.Image{
+				Src: paint.NewImageOp(rasterBackgroundImage(width, height, backgroundImage, command, gtx.Metric.PxPerDp)),
+				Fit: widget.Unscaled, Scale: 1 / gtx.Metric.PxPerDp,
+			}.Layout(gtx)
+			area.Pop()
+		}
+		paintBoxBorder(gtx, command.Border, width, height)
+		return layout.Dimensions{}
+	})
+}
+
+func roundedClip(gtx layout.Context, radius layoutengine.BorderRadii, width, height int) clip.Op {
+	radius = pixelBorderRadii(gtx, radius)
+	if radius == (layoutengine.BorderRadii{}) {
+		return clip.Rect{Max: image.Pt(width, height)}.Op()
+	}
+	const control = float32(.55228475)
+	var path clip.Path
+	path.Begin(gtx.Ops)
+	path.MoveTo(f32.Pt(radius.TopLeft.X, 0))
+	path.LineTo(f32.Pt(float32(width)-radius.TopRight.X, 0))
+	path.CubeTo(
+		f32.Pt(float32(width)-radius.TopRight.X+radius.TopRight.X*control, 0),
+		f32.Pt(float32(width), radius.TopRight.Y-radius.TopRight.Y*control),
+		f32.Pt(float32(width), radius.TopRight.Y),
+	)
+	path.LineTo(f32.Pt(float32(width), float32(height)-radius.BottomRight.Y))
+	path.CubeTo(
+		f32.Pt(float32(width), float32(height)-radius.BottomRight.Y+radius.BottomRight.Y*control),
+		f32.Pt(float32(width)-radius.BottomRight.X+radius.BottomRight.X*control, float32(height)),
+		f32.Pt(float32(width)-radius.BottomRight.X, float32(height)),
+	)
+	path.LineTo(f32.Pt(radius.BottomLeft.X, float32(height)))
+	path.CubeTo(
+		f32.Pt(radius.BottomLeft.X-radius.BottomLeft.X*control, float32(height)),
+		f32.Pt(0, float32(height)-radius.BottomLeft.Y+radius.BottomLeft.Y*control),
+		f32.Pt(0, float32(height)-radius.BottomLeft.Y),
+	)
+	path.LineTo(f32.Pt(0, radius.TopLeft.Y))
+	path.CubeTo(
+		f32.Pt(0, radius.TopLeft.Y-radius.TopLeft.Y*control),
+		f32.Pt(radius.TopLeft.X-radius.TopLeft.X*control, 0),
+		f32.Pt(radius.TopLeft.X, 0),
+	)
+	path.Close()
+	return clip.Outline{Path: path.End()}.Op()
+}
+
+func pixelBorderRadii(gtx layout.Context, radius layoutengine.BorderRadii) layoutengine.BorderRadii {
+	convert := func(value layoutengine.CornerRadius) layoutengine.CornerRadius {
+		return layoutengine.CornerRadius{
+			X: float32(max(gtx.Dp(unit.Dp(value.X)), 0)),
+			Y: float32(max(gtx.Dp(unit.Dp(value.Y)), 0)),
+		}
+	}
+	return layoutengine.BorderRadii{
+		TopLeft: convert(radius.TopLeft), TopRight: convert(radius.TopRight),
+		BottomRight: convert(radius.BottomRight), BottomLeft: convert(radius.BottomLeft),
+	}
+}
+
+func paintBoxBorder(gtx layout.Context, border stylemodel.Borders, width, height int) {
+	paintBorderStrip(gtx, image.Rect(0, 0, width, gtx.Dp(unit.Dp(border.Top.Width))), border.Top, true)
+	rightWidth := gtx.Dp(unit.Dp(border.Right.Width))
+	paintBorderStrip(gtx, image.Rect(width-rightWidth, 0, width, height), border.Right, false)
+	bottomHeight := gtx.Dp(unit.Dp(border.Bottom.Width))
+	paintBorderStrip(gtx, image.Rect(0, height-bottomHeight, width, height), border.Bottom, true)
+	paintBorderStrip(gtx, image.Rect(0, 0, gtx.Dp(unit.Dp(border.Left.Width)), height), border.Left, false)
+}
+
+func paintBorderStrip(gtx layout.Context, rectangle image.Rectangle, side stylemodel.BorderSide, horizontal bool) {
+	if side.Width <= 0 || side.Style == stylemodel.BorderNone || rectangle.Empty() {
+		return
+	}
+	fill := func(rectangle image.Rectangle) { paint.FillShape(gtx.Ops, rgba(side.Color), clip.Rect(rectangle).Op()) }
+	switch side.Style {
+	case stylemodel.BorderDouble:
+		thickness := rectangle.Dy()
+		if !horizontal {
+			thickness = rectangle.Dx()
+		}
+		stripe := max(thickness/3, 1)
+		if horizontal {
+			fill(image.Rect(rectangle.Min.X, rectangle.Min.Y, rectangle.Max.X, rectangle.Min.Y+stripe))
+			fill(image.Rect(rectangle.Min.X, rectangle.Max.Y-stripe, rectangle.Max.X, rectangle.Max.Y))
+		} else {
+			fill(image.Rect(rectangle.Min.X, rectangle.Min.Y, rectangle.Min.X+stripe, rectangle.Max.Y))
+			fill(image.Rect(rectangle.Max.X-stripe, rectangle.Min.Y, rectangle.Max.X, rectangle.Max.Y))
+		}
+	case stylemodel.BorderDotted, stylemodel.BorderDashed:
+		thickness := max(rectangle.Dy(), 1)
+		length := rectangle.Dx()
+		if !horizontal {
+			thickness, length = max(rectangle.Dx(), 1), rectangle.Dy()
+		}
+		segment := thickness
+		if side.Style == stylemodel.BorderDashed {
+			segment *= 3
+		}
+		for offset := 0; offset < length; offset += segment + thickness {
+			end := min(offset+segment, length)
+			if horizontal {
+				fill(image.Rect(rectangle.Min.X+offset, rectangle.Min.Y, rectangle.Min.X+end, rectangle.Max.Y))
+			} else {
+				fill(image.Rect(rectangle.Min.X, rectangle.Min.Y+offset, rectangle.Max.X, rectangle.Min.Y+end))
+			}
+		}
+	default:
+		fill(rectangle)
+	}
+}
+
+func rasterBackgroundImage(width, height int, source image.Image, command paintmodel.DrawBox, pixelsPerDP float32) *image.NRGBA {
+	result := image.NewNRGBA(image.Rect(0, 0, width, height))
+	if source == nil || width <= 0 || height <= 0 || pixelsPerDP <= 0 {
+		return result
+	}
+	sourceWidth, sourceHeight := source.Bounds().Dx(), source.Bounds().Dy()
+	if sourceWidth <= 0 || sourceHeight <= 0 {
+		return result
+	}
+	boxWidth, boxHeight := float32(width)/pixelsPerDP, float32(height)/pixelsPerDP
+	tileWidth, tileHeight := float32(sourceWidth), float32(sourceHeight)
+	switch command.Size.Kind {
+	case stylemodel.BackgroundSizeCover, stylemodel.BackgroundSizeContain:
+		scaleX, scaleY := boxWidth/tileWidth, boxHeight/tileHeight
+		scale := min(scaleX, scaleY)
+		if command.Size.Kind == stylemodel.BackgroundSizeCover {
+			scale = max(scaleX, scaleY)
+		}
+		tileWidth, tileHeight = tileWidth*scale, tileHeight*scale
+	case stylemodel.BackgroundSizeExplicit:
+		widthSpecified := command.Size.Width.Kind == stylemodel.SizeLength
+		heightSpecified := command.Size.Height.Kind == stylemodel.SizeLength
+		if widthSpecified {
+			tileWidth = command.Size.Width.Value.Resolve(boxWidth)
+		}
+		if heightSpecified {
+			tileHeight = command.Size.Height.Value.Resolve(boxHeight)
+		}
+		if widthSpecified && !heightSpecified {
+			tileHeight = tileWidth * float32(sourceHeight) / float32(sourceWidth)
+		} else if heightSpecified && !widthSpecified {
+			tileWidth = tileHeight * float32(sourceWidth) / float32(sourceHeight)
+		}
+	}
+	tileWidthPixels := max(int(math.Round(float64(tileWidth*pixelsPerDP))), 1)
+	tileHeightPixels := max(int(math.Round(float64(tileHeight*pixelsPerDP))), 1)
+	if tileWidthPixels > maxBackgroundRasterDimension(width) || tileHeightPixels > maxBackgroundRasterDimension(height) {
+		return result
+	}
+	tile := image.NewNRGBA(image.Rect(0, 0, tileWidthPixels, tileHeightPixels))
+	xdraw.CatmullRom.Scale(tile, tile.Bounds(), source, source.Bounds(), imagedraw.Src, nil)
+	positionX := command.Position.X.Pixels*pixelsPerDP + command.Position.X.Percentage/100*float32(width-tileWidthPixels)
+	positionY := command.Position.Y.Pixels*pixelsPerDP + command.Position.Y.Percentage/100*float32(height-tileHeightPixels)
+	startX, startY := int(math.Round(float64(positionX))), int(math.Round(float64(positionY)))
+	if command.Repeat.X {
+		for startX > 0 {
+			startX -= tileWidthPixels
+		}
+	} else if startX >= width || startX+tileWidthPixels <= 0 {
+		return result
+	}
+	if command.Repeat.Y {
+		for startY > 0 {
+			startY -= tileHeightPixels
+		}
+	} else if startY >= height || startY+tileHeightPixels <= 0 {
+		return result
+	}
+	for y := startY; y < height; y += tileHeightPixels {
+		for x := startX; x < width; x += tileWidthPixels {
+			imagedraw.Draw(result, image.Rect(x, y, x+tileWidthPixels, y+tileHeightPixels), tile, image.Point{}, imagedraw.Over)
+			if !command.Repeat.X {
+				break
+			}
+		}
+		if !command.Repeat.Y {
+			break
+		}
+	}
+	return result
+}
+
+func maxBackgroundRasterDimension(container int) int {
+	return max(container*4, 4096)
+}
+
+func rasterLinearGradient(width, height int, background stylemodel.BackgroundImage) *image.NRGBA {
+	result := image.NewNRGBA(image.Rect(0, 0, width, height))
+	if len(background.GradientStops) == 0 {
+		return result
+	}
+	radians := float64(background.GradientAngle) * math.Pi / 180
+	directionX, directionY := float32(math.Sin(radians)), float32(-math.Cos(radians))
+	span := float32(math.Abs(float64(directionX)))*float32(max(width-1, 0)) + float32(math.Abs(float64(directionY)))*float32(max(height-1, 0))
+	if span == 0 {
+		span = 1
+	}
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			projection := directionX*(float32(x)-float32(width-1)/2) + directionY*(float32(y)-float32(height-1)/2)
+			position := projection/span + .5
+			result.SetNRGBA(x, y, gradientColor(background.GradientStops, position))
+		}
+	}
+	return result
+}
+
+func gradientColor(stops []stylemodel.GradientStop, position float32) color.NRGBA {
+	if position <= stops[0].Position {
+		return rgba(stops[0].Color)
+	}
+	for index := 1; index < len(stops); index++ {
+		if position > stops[index].Position {
+			continue
+		}
+		left, right := stops[index-1], stops[index]
+		amount := float32(0)
+		if right.Position > left.Position {
+			amount = (position - left.Position) / (right.Position - left.Position)
+		}
+		return mixColor(rgba(left.Color), rgba(right.Color), amount)
+	}
+	return rgba(stops[len(stops)-1].Color)
+}
+
+func mixColor(left, right color.NRGBA, amount float32) color.NRGBA {
+	mix := func(a, b uint8) uint8 { return uint8(float32(a) + (float32(b)-float32(a))*amount + .5) }
+	return color.NRGBA{R: mix(left.R, right.R), G: mix(left.G, right.G), B: mix(left.B, right.B), A: mix(left.A, right.A)}
 }
 
 func (ui *BrowserUI) layoutDrawInput(gtx layout.Context, command paintmodel.DrawInput) layout.Dimensions {
@@ -583,6 +883,12 @@ func (ui *BrowserUI) layoutDrawInput(gtx layout.Context, command paintmodel.Draw
 	}
 	right := unit.Dp(rightValue)
 	return layout.Inset{Top: unit.Dp(command.Top), Left: left, Right: right}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		if command.Clip != nil {
+			defer commandClip(gtx, command.Clip, command.X, command.Y).Push(gtx.Ops).Pop()
+		}
+		if command.Opacity < 1 {
+			defer paint.PushOpacity(gtx.Ops, max(command.Opacity, 0)).Pop()
+		}
 		height := gtx.Dp(unit.Dp(command.Height))
 		gtx.Constraints.Min.Y = height
 		gtx.Constraints.Max.Y = height
@@ -615,6 +921,13 @@ func (ui *BrowserUI) layoutDrawInput(gtx layout.Context, command paintmodel.Draw
 			}
 		}
 		focused := gtx.Focused(editor)
+		if focused != wasFocused && ui.navigator != nil {
+			if focused {
+				ui.navigator.UpdateFocus(command.NodeID)
+			} else {
+				ui.navigator.UpdateFocus(0)
+			}
+		}
 		if wasFocused && !focused {
 			ui.commitInput(command.NodeID, editor.Text())
 		}
@@ -651,6 +964,9 @@ func (ui *BrowserUI) layoutDrawText(gtx layout.Context, command paintmodel.DrawT
 	}
 	right := unit.Dp(rightValue)
 	return layout.Inset{Top: unit.Dp(command.Top), Left: left, Right: right}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		if command.Clip != nil {
+			defer commandClip(gtx, command.Clip, command.X, command.Y).Push(gtx.Ops).Pop()
+		}
 		height := gtx.Dp(unit.Dp(command.Height))
 		if height < 1 {
 			height = 1
@@ -670,6 +986,9 @@ func (ui *BrowserUI) layoutDrawText(gtx layout.Context, command paintmodel.DrawT
 			}
 			return layout.Flex{Alignment: layout.Baseline}.Layout(gtx, children...)
 		}
+		if command.Opacity < 1 {
+			defer paint.PushOpacity(gtx.Ops, max(command.Opacity, 0)).Pop()
+		}
 
 		label := material.Label(ui.theme, unit.Sp(command.FontSize), command.Text)
 		label.Color = rgba(command.Color)
@@ -677,14 +996,30 @@ func (ui *BrowserUI) layoutDrawText(gtx layout.Context, command paintmodel.DrawT
 		if command.Bold {
 			label.Font.Weight = font.Bold
 		}
-		return layout.W.Layout(gtx, label.Layout)
+		return layoutDecoratedLabel(gtx, label.Layout, command.Decoration, command.DecorationColor, command.Baseline, command.FontSize)
 	})
+}
+
+func commandClip(gtx layout.Context, rectangle *layoutengine.Rect, originX, originY float32) clip.Rect {
+	return clip.Rect{
+		Min: image.Pt(
+			gtx.Dp(unit.Dp(rectangle.X-originX)),
+			gtx.Dp(unit.Dp(rectangle.Y-originY)),
+		),
+		Max: image.Pt(
+			gtx.Dp(unit.Dp(rectangle.X+rectangle.Width-originX)),
+			gtx.Dp(unit.Dp(rectangle.Y+rectangle.Height-originY)),
+		),
+	}
 }
 
 func (ui *BrowserUI) layoutTextRun(gtx layout.Context, run paintmodel.TextRun, height int) layout.Dimensions {
 	gtx.Constraints.Min.X = 0
 	gtx.Constraints.Min.Y = height
 	gtx.Constraints.Max.Y = height
+	if run.Opacity < 1 {
+		defer paint.PushOpacity(gtx.Ops, max(run.Opacity, 0)).Pop()
+	}
 	text := func(gtx layout.Context) layout.Dimensions {
 		label := material.Label(ui.theme, unit.Sp(run.FontSize), run.Text)
 		label.Color = rgba(run.Color)
@@ -692,7 +1027,7 @@ func (ui *BrowserUI) layoutTextRun(gtx layout.Context, run paintmodel.TextRun, h
 		if run.Bold {
 			label.Font.Weight = font.Bold
 		}
-		return layout.W.Layout(gtx, label.Layout)
+		return layoutDecoratedLabel(gtx, label.Layout, run.Decoration, run.DecorationColor, run.Baseline, run.FontSize)
 	}
 	if run.Background == 0 {
 		return text(gtx)
@@ -704,6 +1039,32 @@ func (ui *BrowserUI) layoutTextRun(gtx layout.Context, run paintmodel.TextRun, h
 		}),
 		layout.Stacked(text),
 	)
+}
+
+func layoutDecoratedLabel(gtx layout.Context, label layout.Widget, decoration stylemodel.TextDecorationLine, decorationColor uint32, baseline, fontSize float32) layout.Dimensions {
+	macro := op.Record(gtx.Ops)
+	dimensions := label(gtx)
+	call := macro.Stop()
+	call.Add(gtx.Ops)
+	if decoration == stylemodel.TextDecorationNone || dimensions.Size.X <= 0 {
+		return dimensions
+	}
+	thickness := max(gtx.Dp(unit.Dp(fontSize/16)), 1)
+	baselinePixels := gtx.Dp(unit.Dp(baseline))
+	drawLine := func(y int) {
+		y = min(max(y, 0), max(dimensions.Size.Y-thickness, 0))
+		paint.FillShape(gtx.Ops, rgba(decorationColor), clip.Rect{Min: image.Pt(0, y), Max: image.Pt(dimensions.Size.X, y+thickness)}.Op())
+	}
+	if decoration&stylemodel.TextDecorationOverline != 0 {
+		drawLine(gtx.Dp(unit.Dp(fontSize * .1)))
+	}
+	if decoration&stylemodel.TextDecorationLineThrough != 0 {
+		drawLine(baselinePixels - gtx.Dp(unit.Dp(fontSize*.3)))
+	}
+	if decoration&stylemodel.TextDecorationUnderline != 0 {
+		drawLine(baselinePixels + thickness)
+	}
+	return dimensions
 }
 
 func rgba(value uint32) color.NRGBA {
