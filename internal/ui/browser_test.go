@@ -70,12 +70,12 @@ func TestRasterBackgroundImageRepeatsAndSizesImage(t *testing.T) {
 	}
 }
 
-func TestRoundedClipUsesResolvedCornerRadii(t *testing.T) {
+func TestPixelBorderRadiiPreservesEllipticalCorners(t *testing.T) {
 	gtx := layout.Context{Metric: unit.Metric{PxPerDp: 2, PxPerSp: 2}}
-	got := roundedClip(gtx, layoutengine.BorderRadii{
+	got := pixelBorderRadii(gtx, layoutengine.BorderRadii{
 		TopLeft: layoutengine.CornerRadius{X: 8, Y: 4}, TopRight: layoutengine.CornerRadius{X: 6, Y: 6},
-	}, 200, 100)
-	if got.NW != 8 || got.NE != 12 || got.SE != 0 || got.Rect != image.Rect(0, 0, 200, 100) {
+	})
+	if got.TopLeft != (layoutengine.CornerRadius{X: 16, Y: 8}) || got.TopRight != (layoutengine.CornerRadius{X: 12, Y: 12}) || got.BottomRight != (layoutengine.CornerRadius{}) {
 		t.Fatalf("rounded clip = %#v", got)
 	}
 }

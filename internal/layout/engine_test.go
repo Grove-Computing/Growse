@@ -329,6 +329,22 @@ span { text-decoration-line: underline; text-decoration-color: blue; opacity: .5
 	}
 }
 
+func TestHitTestUsesPaintedEllipticalBorderRadius(t *testing.T) {
+	tree := &Tree{Decorations: []Decoration{{
+		NodeID: 9, Rect: Rect{X: 10, Y: 20, Width: 100, Height: 50},
+		Radius: BorderRadii{
+			TopLeft: CornerRadius{X: 20, Y: 10}, TopRight: CornerRadius{X: 20, Y: 10},
+			BottomRight: CornerRadius{X: 20, Y: 10}, BottomLeft: CornerRadius{X: 20, Y: 10},
+		},
+	}}}
+	if nodeID, ok := HitTest(tree, 11, 21); ok || nodeID != 0 {
+		t.Fatalf("rounded corner hit = (%d, %v), want miss", nodeID, ok)
+	}
+	if nodeID, ok := HitTest(tree, 30, 21); !ok || nodeID != 9 {
+		t.Fatalf("rounded top hit = (%d, %v), want node 9", nodeID, ok)
+	}
+}
+
 func TestBuildPreservesInlineRunStyles(t *testing.T) {
 	document := dom.NewDocument()
 	p := document.CreateElement("p", nil)

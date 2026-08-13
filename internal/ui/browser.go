@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"math"
 
+	"gioui.org/f32"
 	"gioui.org/font"
 	"gioui.org/gesture"
 	"gioui.org/io/pointer"
@@ -652,14 +653,53 @@ func layoutDrawBox(gtx layout.Context, command paintmodel.DrawBox, backgroundIma
 	})
 }
 
-func roundedClip(gtx layout.Context, radius layoutengine.BorderRadii, width, height int) clip.RRect {
-	corner := func(value layoutengine.CornerRadius) int {
-		return max(gtx.Dp(unit.Dp(min(value.X, value.Y))), 0)
+func roundedClip(gtx layout.Context, radius layoutengine.BorderRadii, width, height int) clip.Op {
+	radius = pixelBorderRadii(gtx, radius)
+	if radius == (layoutengine.BorderRadii{}) {
+		return clip.Rect{Max: image.Pt(width, height)}.Op()
 	}
-	return clip.RRect{
-		Rect: image.Rect(0, 0, width, height),
-		NW:   corner(radius.TopLeft), NE: corner(radius.TopRight),
-		SE: corner(radius.BottomRight), SW: corner(radius.BottomLeft),
+	const control = float32(.55228475)
+	var path clip.Path
+	path.Begin(gtx.Ops)
+	path.MoveTo(f32.Pt(radius.TopLeft.X, 0))
+	path.LineTo(f32.Pt(float32(width)-radius.TopRight.X, 0))
+	path.CubeTo(
+		f32.Pt(float32(width)-radius.TopRight.X+radius.TopRight.X*control, 0),
+		f32.Pt(float32(width), radius.TopRight.Y-radius.TopRight.Y*control),
+		f32.Pt(float32(width), radius.TopRight.Y),
+	)
+	path.LineTo(f32.Pt(float32(width), float32(height)-radius.BottomRight.Y))
+	path.CubeTo(
+		f32.Pt(float32(width), float32(height)-radius.BottomRight.Y+radius.BottomRight.Y*control),
+		f32.Pt(float32(width)-radius.BottomRight.X+radius.BottomRight.X*control, float32(height)),
+		f32.Pt(float32(width)-radius.BottomRight.X, float32(height)),
+	)
+	path.LineTo(f32.Pt(radius.BottomLeft.X, float32(height)))
+	path.CubeTo(
+		f32.Pt(radius.BottomLeft.X-radius.BottomLeft.X*control, float32(height)),
+		f32.Pt(0, float32(height)-radius.BottomLeft.Y+radius.BottomLeft.Y*control),
+		f32.Pt(0, float32(height)-radius.BottomLeft.Y),
+	)
+	path.LineTo(f32.Pt(0, radius.TopLeft.Y))
+	path.CubeTo(
+		f32.Pt(0, radius.TopLeft.Y-radius.TopLeft.Y*control),
+		f32.Pt(radius.TopLeft.X-radius.TopLeft.X*control, 0),
+		f32.Pt(radius.TopLeft.X, 0),
+	)
+	path.Close()
+	return clip.Outline{Path: path.End()}.Op()
+}
+
+func pixelBorderRadii(gtx layout.Context, radius layoutengine.BorderRadii) layoutengine.BorderRadii {
+	convert := func(value layoutengine.CornerRadius) layoutengine.CornerRadius {
+		return layoutengine.CornerRadius{
+			X: float32(max(gtx.Dp(unit.Dp(value.X)), 0)),
+			Y: float32(max(gtx.Dp(unit.Dp(value.Y)), 0)),
+		}
+	}
+	return layoutengine.BorderRadii{
+		TopLeft: convert(radius.TopLeft), TopRight: convert(radius.TopRight),
+		BottomRight: convert(radius.BottomRight), BottomLeft: convert(radius.BottomLeft),
 	}
 }
 

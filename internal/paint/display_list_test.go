@@ -74,6 +74,19 @@ func TestBuildPreservesBorderRadiusDecorationAndOpacity(t *testing.T) {
 	}
 }
 
+func TestBuildUsesExactLayoutDecorationGeometry(t *testing.T) {
+	tree := &layout.Tree{Decorations: []layout.Decoration{{
+		NodeID: 12, Rect: layout.Rect{X: 14, Y: 25, Width: 120, Height: 60},
+		Radius: layout.BorderRadii{TopLeft: layout.CornerRadius{X: 18, Y: 9}},
+		Clip:   &layout.Rect{X: 10, Y: 20, Width: 100, Height: 50},
+	}}}
+	command := Build(tree).Commands[0].(DrawBox)
+	if command.NodeID != 12 || command.X != 14 || command.Y != 25 || command.Width != 120 || command.Height != 60 ||
+		command.Radius != tree.Decorations[0].Radius || command.Clip == tree.Decorations[0].Clip || *command.Clip != *tree.Decorations[0].Clip {
+		t.Fatalf("paint geometry = %#v, layout = %#v", command, tree.Decorations[0])
+	}
+}
+
 func TestBuildCreatesInputCommand(t *testing.T) {
 	tree := &layout.Tree{Width: 400, Height: 100, Boxes: []layout.Box{{
 		NodeID: 7, Tag: "input", Text: "hello", Input: true,
