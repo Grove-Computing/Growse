@@ -1,6 +1,7 @@
 STATICCHECK_VERSION ?= 2026.1
 GOVULNCHECK_VERSION ?= v1.6.0
 ACTIONLINT_VERSION ?= v1.7.12
+PROJECT_GO := $(shell go env GOROOT)/bin/go
 
 .PHONY: test race vet staticcheck vulncheck actionlint installer-test fmt-check tidy-check quality ci
 
@@ -14,13 +15,13 @@ vet:
 	go vet ./...
 
 staticcheck:
-	go run honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION) ./...
+	GOTOOLCHAIN=local $(PROJECT_GO) run honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION) ./...
 
 vulncheck:
-	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
+	GOTOOLCHAIN=local $(PROJECT_GO) run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
 
 actionlint:
-	go run github.com/rhysd/actionlint/cmd/actionlint@$(ACTIONLINT_VERSION)
+	GOTOOLCHAIN=local $(PROJECT_GO) run github.com/rhysd/actionlint/cmd/actionlint@$(ACTIONLINT_VERSION)
 
 installer-test:
 	bash tests/install.sh
