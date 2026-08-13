@@ -40,6 +40,10 @@ GitHub Actionsでは、Linuxのraceテストと70%の最低カバレッジ、`go
 make ci
 ```
 
+## セキュリティ
+
+WebGo Runtimeは、信頼できないGoコードを安全に実行するSandboxではありません。信頼できるローカルページだけを開いてください。脆弱性の非公開報告方法とサポート対象は[SECURITY.md](SECURITY.md)を参照してください。
+
 ## リリース
 
 `v0.1.0`のようなバージョンタグをpushすると、GitHub ActionsがLinux amd64、macOS Intel、macOS Apple Silicon、Windows amd64向けのアーカイブとSHA-256チェックサムをGitHub Releaseへ公開します。
