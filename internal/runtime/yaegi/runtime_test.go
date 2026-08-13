@@ -576,6 +576,42 @@ func main() {
 	}
 }
 
+func TestRuntimeContainsWebGoHandlerPanicAndContinues(t *testing.T) {
+	document := dommodel.NewDocument()
+	button := document.CreateElement("button", map[string]string{"id": "run"})
+	message := document.CreateElement("p", map[string]string{"id": "message"})
+	for _, node := range []*dommodel.Node{button, message} {
+		if err := document.AppendChild(document.Root, node); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dispatcher := events.NewDispatcher()
+	runtime := New()
+	scripts := []runtimemodel.Script{{Source: `package main
+import "growse/dom"
+func main() {
+	button := dom.GetElementByID("run")
+	button.OnClick(func() { panic("webgo boom") })
+	button.OnClick(func() {
+		dom.GetElementByID("message").SetText("continued")
+	})
+}`}}
+	environment := runtimemodel.Environment{Document: document, Events: dispatcher}
+
+	if err := runtime.Load(context.Background(), scripts, environment); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if !dispatcher.Dispatch(events.Event{Type: events.Click, Target: button.ID}) {
+		t.Fatal("click event was not handled")
+	}
+	if got, want := message.TextContent(), "continued"; got != want {
+		t.Fatalf("message = %q, want %q", got, want)
+	}
+}
+
 func TestRuntimeDispatchesWebGoOnClick(t *testing.T) {
 	document := dommodel.NewDocument()
 	button := document.CreateElement("button", map[string]string{"id": "increment"})
