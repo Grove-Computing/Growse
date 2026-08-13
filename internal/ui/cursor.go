@@ -156,6 +156,9 @@ func (ui *BrowserUI) handlePointerEvents(gtx layout.Context) {
 		switch event.Kind {
 		case pointer.Leave, pointer.Cancel:
 			ui.pointer.inside = false
+			if ui.navigator != nil {
+				ui.navigator.ClearHover()
+			}
 		default:
 			ui.pointer.position = event.Position
 			ui.pointer.inside = true

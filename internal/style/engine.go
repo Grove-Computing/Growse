@@ -22,28 +22,33 @@ type winner struct {
 
 // Compute applies UA defaults, inheritance, selector matching and cascade.
 func Compute(document *dom.Document, stylesheet *css.Stylesheet) Map {
+	return ComputeWithState(document, stylesheet, InteractionState{})
+}
+
+// ComputeWithState applies styles using transient browser interaction state.
+func ComputeWithState(document *dom.Document, stylesheet *css.Stylesheet, state InteractionState) Map {
 	result := make(Map)
 	if document == nil || document.Root == nil {
 		return result
 	}
-	computeNode(document.Root, initialStyle(), stylesheet, result)
+	computeNode(document.Root, initialStyle(), stylesheet, state, result)
 	return result
 }
 
-func computeNode(node *dom.Node, parent ComputedStyle, stylesheet *css.Stylesheet, result Map) {
+func computeNode(node *dom.Node, parent ComputedStyle, stylesheet *css.Stylesheet, state InteractionState, result Map) {
 	computed := inheritedStyle(parent)
 	if node.Type == dom.NodeDocument {
 		computed = initialStyle()
 	} else if node.Type == dom.NodeElement {
 		computed = applyUADefaults(node.TagName, computed)
-		computed = applyAuthorRules(node, computed, stylesheet)
+		computed = applyAuthorRules(node, computed, stylesheet, state)
 		result[node.ID] = computed
 	} else if node.Type == dom.NodeText {
 		result[node.ID] = computed
 	}
 
 	for _, child := range node.Children {
-		computeNode(child, computed, stylesheet, result)
+		computeNode(child, computed, stylesheet, state, result)
 	}
 }
 
@@ -93,14 +98,14 @@ func applyUADefaults(tag string, computed ComputedStyle) ComputedStyle {
 	return computed
 }
 
-func applyAuthorRules(node *dom.Node, computed ComputedStyle, stylesheet *css.Stylesheet) ComputedStyle {
+func applyAuthorRules(node *dom.Node, computed ComputedStyle, stylesheet *css.Stylesheet, state InteractionState) ComputedStyle {
 	if stylesheet == nil {
 		return computed
 	}
 	winners := make(map[string]winner)
 	for _, rule := range stylesheet.Rules {
 		for _, selector := range rule.Selectors {
-			if !matches(node, selector) {
+			if !matches(node, selector, state) {
 				continue
 			}
 			for declarationIndex, declaration := range rule.Declarations {
@@ -205,11 +210,14 @@ func parseDisplay(value string) (Display, bool) {
 	}
 }
 
-func matches(node *dom.Node, selector css.Selector) bool {
+func matches(node *dom.Node, selector css.Selector, state InteractionState) bool {
 	if node == nil || node.Type != dom.NodeElement {
 		return false
 	}
 	if selector.Tag != "" && node.TagName != selector.Tag {
+		return false
+	}
+	if selector.Hover && !state.Hovered[node.ID] {
 		return false
 	}
 	if selector.ID != "" {

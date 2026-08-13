@@ -10,6 +10,7 @@ import (
 	"image/color"
 	"image/png"
 	"log/slog"
+	"math"
 
 	"gioui.org/font"
 	"gioui.org/gesture"
@@ -85,6 +86,8 @@ type Navigator interface {
 	SetInputValue(nodeID dom.NodeID, value string) bool
 	CommitInputValue(nodeID dom.NodeID, value string) bool
 	SubmitForm(nodeID dom.NodeID) bool
+	UpdateHover(nodeID dom.NodeID) bool
+	ClearHover() bool
 }
 
 type navigationResult struct {
@@ -187,6 +190,9 @@ func (ui *BrowserUI) startNavigation(rawURL string) {
 }
 
 func (ui *BrowserUI) startPageLoad(status string, load func(context.Context) (*browser.Page, error)) {
+	if ui.navigator != nil {
+		ui.navigator.ClearHover()
+	}
 	if ui.cancelNavigation != nil {
 		ui.cancelNavigation()
 	}
@@ -254,6 +260,9 @@ func (ui *BrowserUI) consumeNavigationResult() {
 // Close cancels an in-flight navigation when the window closes.
 func (ui *BrowserUI) Close() {
 	ui.navigationID++
+	if ui.navigator != nil {
+		ui.navigator.ClearHover()
+	}
 	if ui.cancelNavigation != nil {
 		ui.cancelNavigation()
 	}
@@ -427,6 +436,7 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 	tree := layoutengine.Build(page.Document, page.ComputedStyles, viewportWidth)
 	displayList := paintmodel.Build(tree)
 	paint.Fill(gtx.Ops, rgba(displayList.Background))
+	ui.updateViewportHover(gtx, tree, displayList)
 	ui.handleViewportClicks(gtx, page, tree, displayList)
 
 	area := clip.Rect{Max: gtx.Constraints.Max}.Push(gtx.Ops)
@@ -445,6 +455,29 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 	pass.Pop()
 	area.Pop()
 	return dimensions
+}
+
+func (ui *BrowserUI) updateViewportHover(gtx layout.Context, tree *layoutengine.Tree, displayList *paintmodel.DisplayList) {
+	if ui.navigator == nil {
+		return
+	}
+	viewportY := ui.pointer.position.Y - float32(gtx.Dp(toolbarHeight))
+	if !ui.pointer.inside || viewportY < 0 || viewportY >= float32(gtx.Constraints.Max.Y) {
+		ui.navigator.ClearHover()
+		return
+	}
+	position := image.Pt(int(math.Round(float64(ui.pointer.position.X))), int(math.Round(float64(viewportY))))
+	x, y, ok := ui.documentPoint(position, displayList, gtx.Metric.PxPerDp)
+	if !ok {
+		ui.navigator.ClearHover()
+		return
+	}
+	nodeID, ok := layoutengine.HitTest(tree, x, y)
+	if !ok {
+		ui.navigator.ClearHover()
+		return
+	}
+	ui.navigator.UpdateHover(nodeID)
 }
 
 func (ui *BrowserUI) handleViewportClicks(gtx layout.Context, page *browser.Page, tree *layoutengine.Tree, displayList *paintmodel.DisplayList) {

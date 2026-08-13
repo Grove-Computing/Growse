@@ -99,7 +99,7 @@ func (b *Browser) SetInputValue(nodeID dom.NodeID, value string) bool {
 	}
 	changed := page.Document.SetAttribute(nodeID, "value", value)
 	if changed {
-		page.ComputedStyles = style.Compute(page.Document, page.Stylesheet)
+		page.ComputedStyles = style.ComputeWithState(page.Document, page.Stylesheet, interactionState(page))
 	}
 	dispatcher := page.Events
 	b.mu.Unlock()
@@ -150,6 +150,38 @@ func (b *Browser) SubmitForm(nodeID dom.NodeID) bool {
 		return false
 	}
 	return dispatcher.Dispatch(events.Event{Type: events.Submit, Target: form.ID})
+}
+
+// UpdateHover updates the active page's hovered element path.
+func (b *Browser) UpdateHover(nodeID dom.NodeID) bool {
+	b.mu.Lock()
+	page := b.page
+	onMutation := b.onMutation
+	if page == nil || page.Document == nil {
+		b.mu.Unlock()
+		return false
+	}
+	path := hoverPath(page.Document, nodeID)
+	if equalNodeIDs(page.HoverPath, path) {
+		b.mu.Unlock()
+		return false
+	}
+	page.HoverTarget = nodeID
+	if len(path) == 0 {
+		page.HoverTarget = 0
+	}
+	page.HoverPath = path
+	page.ComputedStyles = style.ComputeWithState(page.Document, page.Stylesheet, interactionState(page))
+	b.mu.Unlock()
+	if onMutation != nil {
+		onMutation()
+	}
+	return true
+}
+
+// ClearHover clears transient hover state from the active page.
+func (b *Browser) ClearHover() bool {
+	return b.UpdateHover(0)
 }
 
 // SetPage replaces the active page. Passing nil clears the active page.
@@ -360,7 +392,11 @@ func startRuntime(ctx context.Context, factory runtimemodel.Factory, page *Page,
 		Events:   page.Events,
 		BaseURL:  cloneURL(page.URL),
 		OnMutation: func() {
-			page.ComputedStyles = style.Compute(page.Document, page.Stylesheet)
+			page.HoverPath = hoverPath(page.Document, page.HoverTarget)
+			if len(page.HoverPath) == 0 {
+				page.HoverTarget = 0
+			}
+			page.ComputedStyles = style.ComputeWithState(page.Document, page.Stylesheet, interactionState(page))
 			if onMutation != nil {
 				onMutation()
 			}
@@ -378,6 +414,50 @@ func startRuntime(ctx context.Context, factory runtimemodel.Factory, page *Page,
 	}
 	page.RuntimeStarted = true
 	return pageRuntime
+}
+
+func hoverPath(document *dom.Document, nodeID dom.NodeID) []dom.NodeID {
+	if document == nil || nodeID == 0 {
+		return nil
+	}
+	node, ok := document.NodeByID(nodeID)
+	if !ok || !document.IsConnected(node) {
+		return nil
+	}
+	for node != nil && node.Type != dom.NodeElement {
+		node = node.Parent
+	}
+	var reversed []dom.NodeID
+	for current := node; current != nil; current = current.Parent {
+		if current.Type == dom.NodeElement {
+			reversed = append(reversed, current.ID)
+		}
+	}
+	path := make([]dom.NodeID, len(reversed))
+	for index := range reversed {
+		path[len(reversed)-1-index] = reversed[index]
+	}
+	return path
+}
+
+func interactionState(page *Page) style.InteractionState {
+	state := style.InteractionState{Hovered: make(map[dom.NodeID]bool, len(page.HoverPath))}
+	for _, nodeID := range page.HoverPath {
+		state.Hovered[nodeID] = true
+	}
+	return state
+}
+
+func equalNodeIDs(left, right []dom.NodeID) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func runtimeOrigin(sourceURL *url.URL) string {

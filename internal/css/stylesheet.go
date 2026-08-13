@@ -36,6 +36,7 @@ type Selector struct {
 	Tag   string
 	Class string
 	ID    string
+	Hover bool
 }
 
 // Specificity returns the selector's (ID, class, tag) specificity tuple.
@@ -45,6 +46,9 @@ func (s Selector) Specificity() [3]int {
 		result[0]++
 	}
 	if s.Class != "" {
+		result[1]++
+	}
+	if s.Hover {
 		result[1]++
 	}
 	if s.Tag != "" {

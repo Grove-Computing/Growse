@@ -27,6 +27,8 @@ type Page struct {
 	ScriptErrors   []string
 	RuntimeStarted bool
 	RuntimeError   string
+	HoverTarget    dom.NodeID
+	HoverPath      []dom.NodeID
 }
 
 // NewPage creates a page for pageURL. A nil URL is allowed for documents such

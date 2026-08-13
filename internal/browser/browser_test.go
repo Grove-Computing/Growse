@@ -4,11 +4,15 @@ import (
 	"context"
 	"errors"
 	"net/url"
+	"reflect"
+	"strings"
 	"testing"
 
+	"github.com/saku0512/growse/internal/css"
 	"github.com/saku0512/growse/internal/dom"
 	"github.com/saku0512/growse/internal/events"
 	"github.com/saku0512/growse/internal/network"
+	"github.com/saku0512/growse/internal/style"
 )
 
 type stubLoader struct {
@@ -189,6 +193,73 @@ func TestDispatchClickSubmitsSubmitButton(t *testing.T) {
 
 	if !browser.DispatchClick(button.ID, 0, 0) || !submitted {
 		t.Fatal("submit button click did not submit its form")
+	}
+}
+
+func TestUpdateHoverTracksAncestorPathAndRecomputesStyles(t *testing.T) {
+	document := dom.NewDocument()
+	button := document.CreateElement("button", map[string]string{"id": "save"})
+	label := document.CreateElement("span", map[string]string{"id": "label"})
+	if err := document.AppendChild(document.Root, button); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(button, label); err != nil {
+		t.Fatal(err)
+	}
+	stylesheet, err := css.Parse(strings.NewReader(`button:hover { color: red } span:hover { font-size: 24px }`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := NewPage(mustParseURL(t, "http://localhost"))
+	page.Document = document
+	page.Stylesheet = stylesheet
+	page.ComputedStyles = style.Compute(document, stylesheet)
+	browser := New(nil)
+	browser.SetPage(page)
+	invalidations := 0
+	browser.SetOnMutation(func() { invalidations++ })
+
+	if !browser.UpdateHover(label.ID) {
+		t.Fatal("UpdateHover() = false, want changed")
+	}
+	if got, want := page.HoverPath, []dom.NodeID{button.ID, label.ID}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("hover path = %v, want %v", got, want)
+	}
+	buttonStyle, _ := page.ComputedStyles.For(button)
+	labelStyle, _ := page.ComputedStyles.For(label)
+	if buttonStyle.Color != 0xff0000ff || labelStyle.FontSize != 24 {
+		t.Fatalf("hover styles = button:%#v label:%#v", buttonStyle, labelStyle)
+	}
+	if browser.UpdateHover(label.ID) {
+		t.Fatal("same hover path requested a recalculation")
+	}
+	if !browser.ClearHover() || len(page.HoverPath) != 0 || page.HoverTarget != 0 {
+		t.Fatalf("ClearHover left state target:%d path:%v", page.HoverTarget, page.HoverPath)
+	}
+	buttonStyle, _ = page.ComputedStyles.For(button)
+	if buttonStyle.Color == 0xff0000ff {
+		t.Fatal("hover style remains after ClearHover")
+	}
+	if got, want := invalidations, 2; got != want {
+		t.Fatalf("invalidation count = %d, want %d", got, want)
+	}
+}
+
+func TestUpdateHoverRejectsRemovedElement(t *testing.T) {
+	document := dom.NewDocument()
+	button := document.CreateElement("button", nil)
+	if err := document.AppendChild(document.Root, button); err != nil {
+		t.Fatal(err)
+	}
+	page := NewPage(mustParseURL(t, "http://localhost"))
+	page.Document = document
+	browser := New(nil)
+	browser.SetPage(page)
+	if _, ok := document.Remove(button.ID); !ok {
+		t.Fatal("Remove() = false, want true")
+	}
+	if browser.UpdateHover(button.ID) || len(page.HoverPath) != 0 {
+		t.Fatal("removed element became hovered")
 	}
 }
 

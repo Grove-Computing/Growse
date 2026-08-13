@@ -17,6 +17,7 @@ import (
 	"gioui.org/unit"
 
 	"github.com/saku0512/growse/internal/browser"
+	"github.com/saku0512/growse/internal/css"
 	"github.com/saku0512/growse/internal/dom"
 	"github.com/saku0512/growse/internal/events"
 	paintmodel "github.com/saku0512/growse/internal/paint"
@@ -79,6 +80,61 @@ func (navigator *stubNavigator) SubmitForm(nodeID dom.NodeID) bool {
 		}
 	}
 	return false
+}
+func (navigator *stubNavigator) UpdateHover(nodeID dom.NodeID) bool {
+	if navigator.page == nil || navigator.page.Document == nil {
+		return false
+	}
+	node, ok := navigator.page.Document.NodeByID(nodeID)
+	if !ok || !navigator.page.Document.IsConnected(node) {
+		return navigator.ClearHover()
+	}
+	var reversed []dom.NodeID
+	for current := node; current != nil; current = current.Parent {
+		if current.Type == dom.NodeElement {
+			reversed = append(reversed, current.ID)
+		}
+	}
+	path := make([]dom.NodeID, len(reversed))
+	for index := range reversed {
+		path[len(reversed)-1-index] = reversed[index]
+	}
+	if equalNodeIDPath(navigator.page.HoverPath, path) {
+		return false
+	}
+	navigator.page.HoverTarget = nodeID
+	navigator.page.HoverPath = path
+	navigator.recomputeHoverStyles()
+	return true
+}
+func (navigator *stubNavigator) ClearHover() bool {
+	if navigator.page == nil || len(navigator.page.HoverPath) == 0 {
+		return false
+	}
+	navigator.page.HoverTarget = 0
+	navigator.page.HoverPath = nil
+	navigator.recomputeHoverStyles()
+	return true
+}
+func (navigator *stubNavigator) recomputeHoverStyles() {
+	hovered := make(map[dom.NodeID]bool, len(navigator.page.HoverPath))
+	for _, nodeID := range navigator.page.HoverPath {
+		hovered[nodeID] = true
+	}
+	navigator.page.ComputedStyles = style.ComputeWithState(
+		navigator.page.Document, navigator.page.Stylesheet, style.InteractionState{Hovered: hovered},
+	)
+}
+func equalNodeIDPath(left, right []dom.NodeID) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func TestToolbarHasFixedHeight(t *testing.T) {
@@ -231,6 +287,57 @@ func TestDocumentPointIncludesListScrollOffset(t *testing.T) {
 	x, y, ok := ui.documentPoint(image.Pt(40, 18), displayList, 2)
 	if !ok || x != 20 || y != 75 {
 		t.Fatalf("documentPoint() = (%v, %v, %v), want (20, 75, true)", x, y, ok)
+	}
+}
+
+func TestPointerMoveAppliesAndClearsHoverStyle(t *testing.T) {
+	document := dom.NewDocument()
+	button := document.CreateElement("button", map[string]string{"id": "save"})
+	if err := document.AppendChild(document.Root, button); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(button, document.CreateText("Save")); err != nil {
+		t.Fatal(err)
+	}
+	stylesheet, err := css.Parse(strings.NewReader(`button:hover { color: red; font-size: 24px }`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := &browser.Page{Document: document, Stylesheet: stylesheet, ComputedStyles: style.Compute(document, stylesheet)}
+	navigator := &stubNavigator{page: page}
+	ui := NewBrowserUI(navigator, nil)
+	router := new(input.Router)
+	gtx := layout.Context{
+		Ops:         new(op.Ops),
+		Source:      router.Source(),
+		Constraints: layout.Exact(image.Pt(800, 600)),
+		Metric:      unit.Metric{PxPerDp: 1, PxPerSp: 1},
+	}
+
+	ui.Layout(gtx)
+	router.Frame(gtx.Ops)
+	router.Queue(pointer.Event{Kind: pointer.Move, Source: pointer.Mouse, Position: f32.Pt(40, float32(toolbarHeight)+40)})
+	gtx.Reset()
+	ui.Layout(gtx)
+
+	if page.HoverTarget != button.ID {
+		t.Fatalf("hover target = %d, want %d", page.HoverTarget, button.ID)
+	}
+	hovered, _ := page.ComputedStyles.For(button)
+	if hovered.Color != 0xff0000ff || hovered.FontSize != 24 {
+		t.Fatalf("hovered style = %#v", hovered)
+	}
+
+	router.Frame(gtx.Ops)
+	router.Queue(pointer.Event{Kind: pointer.Move, Source: pointer.Mouse, Position: f32.Pt(700, float32(toolbarHeight)+500)})
+	gtx.Reset()
+	ui.Layout(gtx)
+	if page.HoverTarget != 0 || len(page.HoverPath) != 0 {
+		t.Fatalf("hover state remains target:%d path:%v", page.HoverTarget, page.HoverPath)
+	}
+	normal, _ := page.ComputedStyles.For(button)
+	if normal.Color == 0xff0000ff || normal.FontSize == 24 {
+		t.Fatalf("hover style remains after pointer leaves element: %#v", normal)
 	}
 }
 
