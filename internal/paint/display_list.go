@@ -23,11 +23,12 @@ type Command interface {
 type DrawText struct {
 	Text string
 
-	X      float32
-	Y      float32
-	Top    float32
-	Width  float32
-	Height float32
+	X        float32
+	Y        float32
+	Top      float32
+	Width    float32
+	Height   float32
+	Baseline float32
 
 	FontSize   float32
 	Bold       bool
@@ -63,6 +64,7 @@ type TextRun struct {
 	Bold       bool
 	Color      uint32
 	Background uint32
+	Baseline   float32
 }
 
 // Build creates a display list from a layout tree.
@@ -104,12 +106,14 @@ func Build(tree *layout.Tree) *DisplayList {
 			Bold:       box.Bold,
 			Color:      box.Color,
 			Background: box.Background,
+			Baseline:   box.Baseline,
 		}
 		command.Runs = make([]TextRun, 0, len(box.Runs))
 		for _, run := range box.Runs {
 			command.Runs = append(command.Runs, TextRun{
 				NodeID: run.NodeID, Tag: run.Tag, Text: run.Text, Width: run.Width,
 				FontSize: run.FontSize, Bold: run.Bold, Color: run.Color, Background: run.Background,
+				Baseline: run.Baseline,
 			})
 		}
 		list.Commands = append(list.Commands, command)

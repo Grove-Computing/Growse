@@ -672,6 +672,20 @@ div {
 	}
 }
 
+func TestComputeResolvesLineHeightAndWhiteSpace(t *testing.T) {
+	document := dom.NewDocument()
+	paragraph := document.CreateElement("p", nil)
+	appendNode(t, document, document.Root, paragraph)
+	stylesheet, err := css.Parse(strings.NewReader(`p { font-size: 20px; line-height: 1.5; white-space: pre-wrap; }`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	computed, _ := Compute(document, stylesheet).For(paragraph)
+	if computed.LineHeight != 30 || computed.WhiteSpace != WhiteSpacePreWrap {
+		t.Fatalf("text style = %#v", computed)
+	}
+}
+
 func parseTestSelector(t *testing.T, value string) css.Selector {
 	t.Helper()
 	stylesheet, err := css.Parse(strings.NewReader(value + " { color: red }"))

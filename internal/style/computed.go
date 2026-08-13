@@ -70,12 +70,25 @@ type Borders struct {
 	Left   BorderSide
 }
 
+// WhiteSpace controls collapsing, newline preservation and wrapping.
+type WhiteSpace uint8
+
+const (
+	WhiteSpaceNormal WhiteSpace = iota
+	WhiteSpaceNowrap
+	WhiteSpacePre
+	WhiteSpacePreWrap
+	WhiteSpacePreLine
+)
+
 // ComputedStyle contains the MVP properties consumed by layout and paint.
 type ComputedStyle struct {
 	Color            uint32
 	BackgroundColor  uint32
 	FontSize         float32
 	FontWeight       int
+	LineHeight       float32
+	WhiteSpace       WhiteSpace
 	Display          Display
 	BoxSizing        BoxSizing
 	Width            SizeValue

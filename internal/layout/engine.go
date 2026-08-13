@@ -3,7 +3,6 @@ package layout
 import (
 	"strings"
 	"unicode"
-	"unicode/utf8"
 
 	"github.com/saku0512/growse/internal/dom"
 	stylemodel "github.com/saku0512/growse/internal/style"
@@ -33,6 +32,8 @@ type blockStyle struct {
 	minHeight  stylemodel.SizeValue
 	maxWidth   stylemodel.SizeValue
 	maxHeight  stylemodel.SizeValue
+	lineHeight float32
+	whiteSpace stylemodel.WhiteSpace
 }
 
 type inlineRun struct {
@@ -370,7 +371,7 @@ func (e *engine) addText(nodeID dom.NodeID, tag, text string, style blockStyle, 
 func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, container blockStyle, x, width float32) {
 	var lineRuns []TextRun
 	var lineText strings.Builder
-	var usedWidth, lineHeight float32
+	var usedWidth, lineHeight, lineAscent float32
 	var pendingSpace *inlineRun
 
 	flushLine := func() {
@@ -385,11 +386,12 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 			X: x, Y: e.y, Width: width, Height: lineHeight,
 			FontSize: container.fontSize, Bold: container.bold, Color: container.color,
 			Background: container.background, Runs: append([]TextRun(nil), lineRuns...),
+			Baseline: e.y + lineAscent,
 		})
 		e.y += lineHeight
 		lineRuns = lineRuns[:0]
 		lineText.Reset()
-		usedWidth, lineHeight, pendingSpace = 0, 0, nil
+		usedWidth, lineHeight, lineAscent, pendingSpace = 0, 0, 0, nil
 	}
 
 	appendPiece := func(run inlineRun, text string, pieceWidth float32) {
@@ -398,6 +400,8 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 			FontSize: run.style.fontSize, Bold: run.style.bold,
 			Color: run.style.color, Background: run.style.background,
 		}
+		runHeight, runAscent := usedLineMetrics(run)
+		textRun.Baseline = e.y + runAscent
 		if len(lineRuns) > 0 && sameTextStyle(lineRuns[len(lineRuns)-1], textRun) {
 			lineRuns[len(lineRuns)-1].Text += text
 			lineRuns[len(lineRuns)-1].Width += pieceWidth
@@ -406,19 +410,19 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 		}
 		lineText.WriteString(text)
 		usedWidth += pieceWidth
-		height := run.style.fontSize * 1.4
-		if run.height > height {
-			height = run.height
-		}
+		height := runHeight
 		if height > lineHeight {
 			lineHeight = height
+		}
+		if runAscent > lineAscent {
+			lineAscent = runAscent
 		}
 	}
 
 	for _, token := range tokenizeInlineRuns(runs) {
 		if token.atomic {
 			token.width, token.height = resolveAtomicSize(token, width)
-			if usedWidth > 0 && usedWidth+token.width > width {
+			if usedWidth > 0 && usedWidth+token.width > width && wrapsWhitespace(token.style.whiteSpace) {
 				flushLine()
 			}
 			appendPiece(token, token.text, token.width)
@@ -429,6 +433,14 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 			continue
 		}
 		if token.text == " " {
+			if preservesSpaces(token.style.whiteSpace) {
+				spaceWidth, _, _ := measureText(" ", token.style.fontSize, token.style.bold)
+				if usedWidth > 0 && usedWidth+spaceWidth > width && wrapsWhitespace(token.style.whiteSpace) {
+					flushLine()
+				}
+				appendPiece(token, " ", spaceWidth)
+				continue
+			}
 			if len(lineRuns) > 0 {
 				copy := token
 				pendingSpace = &copy
@@ -438,10 +450,10 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 
 		spaceWidth := float32(0)
 		if pendingSpace != nil {
-			spaceWidth = estimatedTextWidth(" ", pendingSpace.style.fontSize)
+			spaceWidth, _, _ = measureText(" ", pendingSpace.style.fontSize, pendingSpace.style.bold)
 		}
-		wordWidth := estimatedTextWidth(token.text, token.style.fontSize)
-		if usedWidth > 0 && usedWidth+spaceWidth+wordWidth > width {
+		wordWidth, _, _ := measureText(token.text, token.style.fontSize, token.style.bold)
+		if usedWidth > 0 && usedWidth+spaceWidth+wordWidth > width && wrapsWhitespace(token.style.whiteSpace) {
 			flushLine()
 			spaceWidth = 0
 		}
@@ -453,18 +465,23 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 		remaining := []rune(token.text)
 		for len(remaining) > 0 {
 			available := width - usedWidth
-			characters := int(available / estimatedTextWidth("m", token.style.fontSize))
+			mWidth, _, _ := measureText("m", token.style.fontSize, token.style.bold)
+			characters := int(available / max(mWidth, float32(1)))
 			if characters < 1 {
-				flushLine()
-				continue
+				if wrapsWhitespace(token.style.whiteSpace) {
+					flushLine()
+					continue
+				}
+				characters = len(remaining)
 			}
 			if characters > len(remaining) {
 				characters = len(remaining)
 			}
 			piece := string(remaining[:characters])
-			appendPiece(token, piece, estimatedTextWidth(piece, token.style.fontSize))
+			pieceWidth, _, _ := measureText(piece, token.style.fontSize, token.style.bold)
+			appendPiece(token, piece, pieceWidth)
 			remaining = remaining[characters:]
-			if len(remaining) > 0 {
+			if len(remaining) > 0 && wrapsWhitespace(token.style.whiteSpace) {
 				flushLine()
 			}
 		}
@@ -492,12 +509,18 @@ func tokenizeInlineRuns(runs []inlineRun) []inlineRun {
 		for _, character := range run.text {
 			if character == '\n' {
 				flushWord()
-				token := run
-				token.text = "\n"
-				tokens = append(tokens, token)
+				if preservesNewlines(run.style.whiteSpace) {
+					token := run
+					token.text = "\n"
+					tokens = append(tokens, token)
+				} else if len(tokens) == 0 || tokens[len(tokens)-1].text != " " {
+					token := run
+					token.text = " "
+					tokens = append(tokens, token)
+				}
 			} else if unicode.IsSpace(character) {
 				flushWord()
-				if len(tokens) == 0 || tokens[len(tokens)-1].text != " " {
+				if preservesSpaces(run.style.whiteSpace) || len(tokens) == 0 || tokens[len(tokens)-1].text != " " {
 					token := run
 					token.text = " "
 					tokens = append(tokens, token)
@@ -514,7 +537,7 @@ func tokenizeInlineRuns(runs []inlineRun) []inlineRun {
 func resolveAtomicSize(run inlineRun, containingWidth float32) (float32, float32) {
 	horizontal := run.style.padding.Left + run.style.padding.Right + run.style.border.Left.Width + run.style.border.Right.Width
 	vertical := run.style.padding.Top + run.style.padding.Bottom + run.style.border.Top.Width + run.style.border.Bottom.Width
-	width := estimatedTextWidth(normalizeWhitespace(run.text), run.style.fontSize)
+	width, _, _ := measureText(normalizeWhitespace(run.text), run.style.fontSize, run.style.bold)
 	if resolved, ok := resolveSize(run.style.width, containingWidth, true); ok {
 		width = resolved
 	}
@@ -536,8 +559,16 @@ func sameTextStyle(left, right TextRun) bool {
 		left.Bold == right.Bold && left.Color == right.Color && left.Background == right.Background
 }
 
-func estimatedTextWidth(text string, fontSize float32) float32 {
-	return float32(utf8.RuneCountInString(text)) * fontSize * 0.58
+func preservesSpaces(value stylemodel.WhiteSpace) bool {
+	return value == stylemodel.WhiteSpacePre || value == stylemodel.WhiteSpacePreWrap
+}
+
+func preservesNewlines(value stylemodel.WhiteSpace) bool {
+	return value == stylemodel.WhiteSpacePre || value == stylemodel.WhiteSpacePreWrap || value == stylemodel.WhiteSpacePreLine
+}
+
+func wrapsWhitespace(value stylemodel.WhiteSpace) bool {
+	return value != stylemodel.WhiteSpaceNowrap && value != stylemodel.WhiteSpacePre
 }
 
 func (e *engine) styleFor(node *dom.Node) blockStyle {
@@ -601,6 +632,7 @@ func applyComputed(block blockStyle, computed stylemodel.ComputedStyle) blockSty
 	block.width, block.height = computed.Width, computed.Height
 	block.minWidth, block.minHeight = computed.MinWidth, computed.MinHeight
 	block.maxWidth, block.maxHeight = computed.MaxWidth, computed.MaxHeight
+	block.lineHeight, block.whiteSpace = computed.LineHeight, computed.WhiteSpace
 	return block
 }
 

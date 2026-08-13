@@ -203,6 +203,35 @@ func TestBuildPlacesInlineBlockAsAtomicInline(t *testing.T) {
 	}
 }
 
+func TestBuildUsesFontMetricsLineHeightBaselineAndWhiteSpace(t *testing.T) {
+	document := dom.NewDocument()
+	pre := document.CreateElement("p", map[string]string{"class": "pre"})
+	normal := document.CreateElement("p", map[string]string{"class": "normal"})
+	wide := document.CreateElement("span", nil)
+	narrow := document.CreateElement("span", nil)
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, pre}, [2]*dom.Node{pre, document.CreateText("a  b\nc")},
+		[2]*dom.Node{document.Root, normal}, [2]*dom.Node{normal, wide},
+		[2]*dom.Node{wide, document.CreateText("WWW")}, [2]*dom.Node{normal, narrow},
+		[2]*dom.Node{narrow, document.CreateText("iii")},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`.pre { font-size: 20px; line-height: 40px; white-space: pre; }`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, style.Compute(document, stylesheet), 800)
+	if tree.Boxes[0].Text != "a  b" || tree.Boxes[1].Text != "c" || tree.Boxes[0].Height != 40 {
+		t.Fatalf("preformatted lines = %#v", tree.Boxes[:2])
+	}
+	if tree.Boxes[0].Baseline <= tree.Boxes[0].Y || tree.Boxes[0].Baseline >= tree.Boxes[0].Y+tree.Boxes[0].Height {
+		t.Fatalf("baseline = %v outside line %#v", tree.Boxes[0].Baseline, tree.Boxes[0])
+	}
+	normalLine := tree.Boxes[2]
+	if len(normalLine.Runs) != 2 || normalLine.Runs[0].Width <= normalLine.Runs[1].Width {
+		t.Fatalf("measured proportional runs = %#v", normalLine.Runs)
+	}
+}
+
 func TestBuildPreservesInlineRunStyles(t *testing.T) {
 	document := dom.NewDocument()
 	p := document.CreateElement("p", nil)
@@ -231,8 +260,9 @@ func TestBuildPreservesInlineRunStyles(t *testing.T) {
 	if accent.Text != "Growse" || accent.Color != 0xff0000ff || accent.FontSize != 24 || !accent.Bold {
 		t.Fatalf("accent run = %#v, want styled Growse", accent)
 	}
-	if line.Height != 24*1.4 {
-		t.Fatalf("line height = %v, want largest run height", line.Height)
+	_, wantHeight, _ := measureText("Mg", 24, true)
+	if line.Height != wantHeight {
+		t.Fatalf("line height = %v, want measured %v", line.Height, wantHeight)
 	}
 }
 

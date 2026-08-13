@@ -18,10 +18,11 @@ type Box struct {
 	Text   string
 	Input  bool
 
-	X      float32
-	Y      float32
-	Width  float32
-	Height float32
+	X        float32
+	Y        float32
+	Width    float32
+	Height   float32
+	Baseline float32
 
 	FontSize   float32
 	Bold       bool
@@ -41,4 +42,5 @@ type TextRun struct {
 	Bold       bool
 	Color      uint32
 	Background uint32
+	Baseline   float32
 }

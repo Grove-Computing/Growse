@@ -112,6 +112,7 @@ func initialStyle() ComputedStyle {
 func inheritedStyle(parent ComputedStyle) ComputedStyle {
 	computed := ComputedStyle{
 		Color: parent.Color, FontSize: parent.FontSize, FontWeight: parent.FontWeight,
+		LineHeight: parent.LineHeight, WhiteSpace: parent.WhiteSpace,
 		BackgroundColor: transparent, Display: DisplayInline,
 		Width: SizeValue{Kind: SizeAuto}, Height: SizeValue{Kind: SizeAuto},
 		MinWidth: SizeValue{Kind: SizeLength}, MinHeight: SizeValue{Kind: SizeLength},
@@ -243,6 +244,20 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
 			if parsed, valid := resolveInt(resolved, parent.FontWeight, 400, true, parseFontWeight); valid {
 				computed.FontWeight = parsed
+			}
+		}
+	}
+	if value, ok := winners["line-height"]; ok {
+		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
+			if parsed, valid := resolveLineHeight(resolved, parent.LineHeight, computed.FontSize, fontContext); valid {
+				computed.LineHeight = parsed
+			}
+		}
+	}
+	if value, ok := winners["white-space"]; ok {
+		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
+			if parsed, valid := resolveWhiteSpace(resolved, parent.WhiteSpace); valid {
+				computed.WhiteSpace = parsed
 			}
 		}
 	}
@@ -417,6 +432,49 @@ func initialSizeValue(property string) SizeValue {
 func parsePositivePixels(value string) (float32, bool) {
 	parsed, valid := parsePixels(value)
 	return parsed, valid && parsed > 0
+}
+
+func resolveLineHeight(value string, parent, fontSize float32, context LengthContext) (float32, bool) {
+	switch parseGlobalKeyword(value) {
+	case globalInherit, globalUnset:
+		return parent, true
+	case globalInitial:
+		return 0, true
+	}
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "normal" {
+		return 0, true
+	}
+	if multiplier, err := strconv.ParseFloat(value, 32); err == nil {
+		return float32(multiplier) * fontSize, multiplier >= 0
+	}
+	context.FontSize, context.PercentageBase = fontSize, fontSize
+	length, ok := ResolveLength(value, context)
+	resolved := length.Resolve(fontSize)
+	return resolved, ok && resolved >= 0
+}
+
+func resolveWhiteSpace(value string, parent WhiteSpace) (WhiteSpace, bool) {
+	switch parseGlobalKeyword(value) {
+	case globalInherit, globalUnset:
+		return parent, true
+	case globalInitial:
+		return WhiteSpaceNormal, true
+	}
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "normal":
+		return WhiteSpaceNormal, true
+	case "nowrap":
+		return WhiteSpaceNowrap, true
+	case "pre":
+		return WhiteSpacePre, true
+	case "pre-wrap":
+		return WhiteSpacePreWrap, true
+	case "pre-line":
+		return WhiteSpacePreLine, true
+	default:
+		return 0, false
+	}
 }
 
 func applyCustomProperties(inherited map[string]string, winners map[string]winner) map[string]string {
