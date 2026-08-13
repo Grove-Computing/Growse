@@ -1,0 +1,80 @@
+:root {
+    --ink: #172033;
+    --accent: #2563eb;
+    --panel: #f8fafc;
+    --space: 12px;
+}
+
+body {
+    background-color: #e8eef8;
+    color: var(--ink);
+}
+
+.showcase {
+    width: calc(100% - 64px);
+    max-width: 880px;
+    margin: 24px auto;
+}
+
+.hero {
+    padding: calc(var(--space) * 2);
+    border: 2px solid #1d4ed8;
+    border-radius: 18px 36px / 24px 12px;
+    background-color: #1e3a8a;
+    background-image: linear-gradient(120deg, #1e3a8a 0%, #2563eb 55%, #38bdf8 100%);
+    color: white;
+}
+
+.hero .eyebrow {
+    text-decoration-line: underline;
+    text-decoration-color: #bae6fd;
+}
+
+.cards {
+    margin-top: 20px;
+}
+
+.card {
+    display: inline-block;
+    width: calc(50% - 28px);
+    min-height: 150px;
+    margin: 8px;
+    padding: 16px;
+    border: 2px solid #93c5fd;
+    border-radius: 14px;
+    background-color: var(--panel);
+}
+
+.card[data-kind="cascade"] > h2 {
+    color: var(--accent);
+}
+
+.card.muted {
+    opacity: .72;
+}
+
+.badge {
+    display: inline-block;
+    padding: 4px 10px;
+    border: 1px solid #60a5fa;
+    border-radius: 12px;
+    background-color: #dbeafe;
+    color: #1e40af;
+}
+
+.overflow-demo {
+    height: 28px;
+    margin-top: 16px;
+    padding: 8px;
+    border: 2px dashed #64748b;
+    overflow: hidden;
+    white-space: nowrap;
+    background-color: white;
+}
+
+@media screen and (max-width: 640px) {
+    .card {
+        display: block;
+        width: auto;
+    }
+}
