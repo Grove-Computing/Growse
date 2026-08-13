@@ -261,6 +261,20 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 			}
 		}
 	}
+	if value, ok := winners["overflow-x"]; ok {
+		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
+			if parsed, valid := resolveOverflow(resolved, parent.OverflowX); valid {
+				computed.OverflowX = parsed
+			}
+		}
+	}
+	if value, ok := winners["overflow-y"]; ok {
+		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
+			if parsed, valid := resolveOverflow(resolved, parent.OverflowY); valid {
+				computed.OverflowY = parsed
+			}
+		}
+	}
 	if value, ok := winners["display"]; ok {
 		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
 			if parsed, valid := resolveDisplay(resolved, parent.Display); valid {
@@ -472,6 +486,27 @@ func resolveWhiteSpace(value string, parent WhiteSpace) (WhiteSpace, bool) {
 		return WhiteSpacePreWrap, true
 	case "pre-line":
 		return WhiteSpacePreLine, true
+	default:
+		return 0, false
+	}
+}
+
+func resolveOverflow(value string, parent Overflow) (Overflow, bool) {
+	switch parseGlobalKeyword(value) {
+	case globalInherit:
+		return parent, true
+	case globalInitial, globalUnset:
+		return OverflowVisible, true
+	}
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "visible":
+		return OverflowVisible, true
+	case "hidden":
+		return OverflowHidden, true
+	case "auto":
+		return OverflowAuto, true
+	case "scroll":
+		return OverflowScroll, true
 	default:
 		return 0, false
 	}
@@ -731,6 +766,8 @@ func expandedProperties(property string) []string {
 		return []string{"border-top-" + component, "border-right-" + component, "border-bottom-" + component, "border-left-" + component}
 	case "border-top", "border-right", "border-bottom", "border-left":
 		return []string{property + "-width", property + "-style", property + "-color"}
+	case "overflow":
+		return []string{"overflow-x", "overflow-y"}
 	default:
 		return []string{property}
 	}

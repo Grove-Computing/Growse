@@ -8,10 +8,12 @@ import (
 
 // DisplayList is an ordered collection of page painting commands.
 type DisplayList struct {
-	Width      float32
-	Height     float32
-	Background uint32
-	Commands   []Command
+	Width        float32
+	Height       float32
+	ScrollWidth  float32
+	ScrollHeight float32
+	Background   uint32
+	Commands     []Command
 }
 
 // Command is implemented by every display-list operation.
@@ -29,6 +31,7 @@ type DrawText struct {
 	Width    float32
 	Height   float32
 	Baseline float32
+	Clip     *layout.Rect
 
 	FontSize   float32
 	Bold       bool
@@ -49,6 +52,7 @@ type DrawInput struct {
 	Width  float32
 	Height float32
 	Color  uint32
+	Clip   *layout.Rect
 }
 
 func (DrawInput) paintCommand() {}
@@ -73,7 +77,10 @@ func Build(tree *layout.Tree) *DisplayList {
 		return &DisplayList{}
 	}
 
-	list := &DisplayList{Width: tree.Width, Height: tree.Height, Background: tree.Background}
+	list := &DisplayList{
+		Width: tree.Width, Height: tree.Height, ScrollWidth: tree.ScrollWidth,
+		ScrollHeight: tree.ScrollHeight, Background: tree.Background,
+	}
 	list.Commands = make([]Command, 0, len(tree.Boxes))
 	previousBottom := float32(0)
 	for _, box := range tree.Boxes {
@@ -91,6 +98,7 @@ func Build(tree *layout.Tree) *DisplayList {
 				Width:  box.Width,
 				Height: box.Height,
 				Color:  box.Color,
+				Clip:   cloneLayoutRect(box.Clip),
 			})
 			previousBottom = box.Y + box.Height
 			continue
@@ -107,6 +115,7 @@ func Build(tree *layout.Tree) *DisplayList {
 			Color:      box.Color,
 			Background: box.Background,
 			Baseline:   box.Baseline,
+			Clip:       cloneLayoutRect(box.Clip),
 		}
 		command.Runs = make([]TextRun, 0, len(box.Runs))
 		for _, run := range box.Runs {
@@ -120,4 +129,12 @@ func Build(tree *layout.Tree) *DisplayList {
 		previousBottom = box.Y + box.Height
 	}
 	return list
+}
+
+func cloneLayoutRect(source *layout.Rect) *layout.Rect {
+	if source == nil {
+		return nil
+	}
+	copy := *source
+	return &copy
 }

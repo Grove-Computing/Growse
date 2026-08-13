@@ -9,6 +9,9 @@ func HitTest(tree *Tree, x, y float32) (dom.NodeID, bool) {
 	}
 	for boxIndex := len(tree.Boxes) - 1; boxIndex >= 0; boxIndex-- {
 		box := tree.Boxes[boxIndex]
+		if box.Clip != nil && !containsPoint(box.Clip.X, box.Clip.Y, box.Clip.Width, box.Clip.Height, x, y) {
+			continue
+		}
 		if !containsPoint(box.X, box.Y, box.Width, box.Height, x, y) {
 			continue
 		}

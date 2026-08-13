@@ -34,6 +34,8 @@ type blockStyle struct {
 	maxHeight  stylemodel.SizeValue
 	lineHeight float32
 	whiteSpace stylemodel.WhiteSpace
+	overflowX  stylemodel.Overflow
+	overflowY  stylemodel.Overflow
 }
 
 type inlineRun struct {
@@ -76,6 +78,18 @@ func build(document *dom.Document, computed stylemodel.Map, viewportWidth, viewp
 		state.walk(document.Root, pagePadding, viewportWidth-pagePadding*2, viewportHeight, viewportHeight > 0)
 	}
 	tree.Height = state.y + pagePadding
+	tree.ScrollWidth, tree.ScrollHeight = tree.Width, tree.Height
+	for _, box := range tree.Boxes {
+		contentWidth := box.Width
+		if len(box.Runs) != 0 {
+			contentWidth = 0
+			for _, run := range box.Runs {
+				contentWidth += run.Width
+			}
+		}
+		tree.ScrollWidth = max(tree.ScrollWidth, box.X+contentWidth+pagePadding)
+		tree.ScrollHeight = max(tree.ScrollHeight, box.Y+box.Height+pagePadding)
+	}
 	return tree
 }
 
@@ -83,6 +97,7 @@ type engine struct {
 	tree     *Tree
 	computed stylemodel.Map
 	y        float32
+	clip     *Rect
 }
 
 func (e *engine) walk(node *dom.Node, x, width, containingHeight float32, heightDefinite bool) {
@@ -156,6 +171,7 @@ func (e *engine) addInput(node *dom.Node, style blockStyle, x, width, containing
 		Width:  usedWidth,
 		Height: usedHeight,
 		Color:  style.color,
+		Clip:   cloneRect(e.clip),
 	})
 	e.y += usedHeight + style.margin.Bottom
 }
@@ -215,6 +231,17 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 			childContainingHeight = 0
 		}
 	}
+	previousClip := e.clip
+	if (style.overflowX != stylemodel.OverflowVisible || style.overflowY != stylemodel.OverflowVisible) && declaredHeightDefinite {
+		clipHeight := declaredHeight
+		if style.boxSizing == stylemodel.BoxSizingContentBox {
+			clipHeight += style.padding.Top + style.padding.Bottom
+		}
+		e.clip = intersectClip(previousClip, Rect{
+			X: x + style.border.Left.Width, Y: boxTop + style.border.Top.Width,
+			Width: outerWidth - horizontalBorder, Height: clipHeight,
+		})
+	}
 
 	inlineRuns := e.generatedRuns(node, true, style)
 	previousBlock := false
@@ -258,6 +285,7 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 	}
 	inlineRuns = append(inlineRuns, e.generatedRuns(node, false, style)...)
 	flushInline()
+	e.clip = previousClip
 
 	contentHeight := e.y - contentTop
 	sizingHeight := contentHeight
@@ -386,7 +414,7 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 			X: x, Y: e.y, Width: width, Height: lineHeight,
 			FontSize: container.fontSize, Bold: container.bold, Color: container.color,
 			Background: container.background, Runs: append([]TextRun(nil), lineRuns...),
-			Baseline: e.y + lineAscent,
+			Baseline: e.y + lineAscent, Clip: cloneRect(e.clip),
 		})
 		e.y += lineHeight
 		lineRuns = lineRuns[:0]
@@ -571,6 +599,24 @@ func wrapsWhitespace(value stylemodel.WhiteSpace) bool {
 	return value != stylemodel.WhiteSpaceNowrap && value != stylemodel.WhiteSpacePre
 }
 
+func cloneRect(source *Rect) *Rect {
+	if source == nil {
+		return nil
+	}
+	copy := *source
+	return &copy
+}
+
+func intersectClip(parent *Rect, child Rect) *Rect {
+	if parent == nil {
+		return &child
+	}
+	left, top := max(parent.X, child.X), max(parent.Y, child.Y)
+	right := min(parent.X+parent.Width, child.X+child.Width)
+	bottom := min(parent.Y+parent.Height, child.Y+child.Height)
+	return &Rect{X: left, Y: top, Width: max(right-left, float32(0)), Height: max(bottom-top, float32(0))}
+}
+
 func (e *engine) styleFor(node *dom.Node) blockStyle {
 	style := uaStyle(node.TagName)
 	if computed, ok := e.computed.For(node); ok {
@@ -633,6 +679,7 @@ func applyComputed(block blockStyle, computed stylemodel.ComputedStyle) blockSty
 	block.minWidth, block.minHeight = computed.MinWidth, computed.MinHeight
 	block.maxWidth, block.maxHeight = computed.MaxWidth, computed.MaxHeight
 	block.lineHeight, block.whiteSpace = computed.LineHeight, computed.WhiteSpace
+	block.overflowX, block.overflowY = computed.OverflowX, computed.OverflowY
 	return block
 }
 

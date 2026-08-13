@@ -617,6 +617,9 @@ func (ui *BrowserUI) layoutDrawInput(gtx layout.Context, command paintmodel.Draw
 	}
 	right := unit.Dp(rightValue)
 	return layout.Inset{Top: unit.Dp(command.Top), Left: left, Right: right}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		if command.Clip != nil {
+			defer commandClip(gtx, command.Clip, command.X, command.Y).Push(gtx.Ops).Pop()
+		}
 		height := gtx.Dp(unit.Dp(command.Height))
 		gtx.Constraints.Min.Y = height
 		gtx.Constraints.Max.Y = height
@@ -692,6 +695,9 @@ func (ui *BrowserUI) layoutDrawText(gtx layout.Context, command paintmodel.DrawT
 	}
 	right := unit.Dp(rightValue)
 	return layout.Inset{Top: unit.Dp(command.Top), Left: left, Right: right}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		if command.Clip != nil {
+			defer commandClip(gtx, command.Clip, command.X, command.Y).Push(gtx.Ops).Pop()
+		}
 		height := gtx.Dp(unit.Dp(command.Height))
 		if height < 1 {
 			height = 1
@@ -720,6 +726,19 @@ func (ui *BrowserUI) layoutDrawText(gtx layout.Context, command paintmodel.DrawT
 		}
 		return layout.W.Layout(gtx, label.Layout)
 	})
+}
+
+func commandClip(gtx layout.Context, rectangle *layoutengine.Rect, originX, originY float32) clip.Rect {
+	return clip.Rect{
+		Min: image.Pt(
+			gtx.Dp(unit.Dp(rectangle.X-originX)),
+			gtx.Dp(unit.Dp(rectangle.Y-originY)),
+		),
+		Max: image.Pt(
+			gtx.Dp(unit.Dp(rectangle.X+rectangle.Width-originX)),
+			gtx.Dp(unit.Dp(rectangle.Y+rectangle.Height-originY)),
+		),
+	}
 }
 
 func (ui *BrowserUI) layoutTextRun(gtx layout.Context, run paintmodel.TextRun, height int) layout.Dimensions {

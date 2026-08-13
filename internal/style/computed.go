@@ -81,6 +81,16 @@ const (
 	WhiteSpacePreLine
 )
 
+// Overflow controls clipping and scroll-container creation on one axis.
+type Overflow uint8
+
+const (
+	OverflowVisible Overflow = iota
+	OverflowHidden
+	OverflowAuto
+	OverflowScroll
+)
+
 // ComputedStyle contains the MVP properties consumed by layout and paint.
 type ComputedStyle struct {
 	Color            uint32
@@ -89,6 +99,8 @@ type ComputedStyle struct {
 	FontWeight       int
 	LineHeight       float32
 	WhiteSpace       WhiteSpace
+	OverflowX        Overflow
+	OverflowY        Overflow
 	Display          Display
 	BoxSizing        BoxSizing
 	Width            SizeValue

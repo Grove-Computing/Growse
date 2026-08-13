@@ -232,6 +232,33 @@ func TestBuildUsesFontMetricsLineHeightBaselineAndWhiteSpace(t *testing.T) {
 	}
 }
 
+func TestBuildCarriesOverflowClipAndScrollExtentIntoHitTesting(t *testing.T) {
+	document := dom.NewDocument()
+	container := document.CreateElement("div", map[string]string{"class": "clip"})
+	first := document.CreateElement("p", nil)
+	second := document.CreateElement("p", nil)
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, container},
+		[2]*dom.Node{container, first}, [2]*dom.Node{first, document.CreateText(strings.Repeat("long line ", 20))},
+		[2]*dom.Node{container, second}, [2]*dom.Node{second, document.CreateText("outside")},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`.clip { width: 80px; height: 20px; overflow: hidden; white-space: nowrap; }`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, style.Compute(document, stylesheet), 800)
+	if len(tree.Boxes) != 2 || tree.Boxes[0].Clip == nil || tree.Boxes[1].Clip == nil {
+		t.Fatalf("clipped boxes = %#v", tree.Boxes)
+	}
+	if tree.ScrollWidth <= tree.Width {
+		t.Fatalf("scroll width = %v, want greater than viewport %v", tree.ScrollWidth, tree.Width)
+	}
+	outside := tree.Boxes[1]
+	if got, ok := HitTest(tree, outside.X+1, outside.Y+1); ok || got != 0 {
+		t.Fatalf("hit outside clip = (%d, %v), want miss", got, ok)
+	}
+}
+
 func TestBuildPreservesInlineRunStyles(t *testing.T) {
 	document := dom.NewDocument()
 	p := document.CreateElement("p", nil)

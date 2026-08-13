@@ -20,9 +20,18 @@ import (
 	"github.com/saku0512/growse/internal/css"
 	"github.com/saku0512/growse/internal/dom"
 	"github.com/saku0512/growse/internal/events"
+	layoutengine "github.com/saku0512/growse/internal/layout"
 	paintmodel "github.com/saku0512/growse/internal/paint"
 	"github.com/saku0512/growse/internal/style"
 )
+
+func TestCommandClipTranslatesDocumentCoordinatesToCommandCoordinates(t *testing.T) {
+	gtx := layout.Context{Metric: unit.Metric{PxPerDp: 2, PxPerSp: 2}}
+	got := commandClip(gtx, &layoutengine.Rect{X: 20, Y: 30, Width: 50, Height: 40}, 10, 15)
+	if got.Min != image.Pt(20, 30) || got.Max != image.Pt(120, 110) {
+		t.Fatalf("clip = %v, want [(20,30)-(120,110)]", got)
+	}
+}
 
 type stubNavigator struct {
 	page *browser.Page

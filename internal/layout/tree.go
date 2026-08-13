@@ -5,10 +5,17 @@ import "github.com/saku0512/growse/internal/dom"
 
 // Tree is the result of laying out one document at a specific viewport width.
 type Tree struct {
-	Width      float32
-	Height     float32
-	Background uint32
-	Boxes      []Box
+	Width        float32
+	Height       float32
+	Background   uint32
+	Boxes        []Box
+	ScrollWidth  float32
+	ScrollHeight float32
+}
+
+// Rect is a document-coordinate clipping rectangle.
+type Rect struct {
+	X, Y, Width, Height float32
 }
 
 // Box is one line of visible page content.
@@ -23,6 +30,7 @@ type Box struct {
 	Width    float32
 	Height   float32
 	Baseline float32
+	Clip     *Rect
 
 	FontSize   float32
 	Bold       bool

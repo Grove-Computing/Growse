@@ -686,6 +686,20 @@ func TestComputeResolvesLineHeightAndWhiteSpace(t *testing.T) {
 	}
 }
 
+func TestComputeResolvesOverflowShorthandAndAxes(t *testing.T) {
+	document := dom.NewDocument()
+	box := document.CreateElement("div", nil)
+	appendNode(t, document, document.Root, box)
+	stylesheet, err := css.Parse(strings.NewReader(`div { overflow: hidden; overflow-x: scroll; }`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	computed, _ := Compute(document, stylesheet).For(box)
+	if computed.OverflowX != OverflowScroll || computed.OverflowY != OverflowHidden {
+		t.Fatalf("overflow = (%v, %v)", computed.OverflowX, computed.OverflowY)
+	}
+}
+
 func parseTestSelector(t *testing.T, value string) css.Selector {
 	t.Helper()
 	stylesheet, err := css.Parse(strings.NewReader(value + " { color: red }"))
