@@ -29,6 +29,7 @@ type Page struct {
 	RuntimeError   string
 	HoverTarget    dom.NodeID
 	HoverPath      []dom.NodeID
+	FocusTarget    dom.NodeID
 }
 
 // NewPage creates a page for pageURL. A nil URL is allowed for documents such

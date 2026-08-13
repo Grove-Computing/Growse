@@ -187,6 +187,29 @@ func (b *Browser) ClearHover() bool {
 	return b.UpdateHover(0, 0, 0)
 }
 
+// UpdateFocus updates the element which matches the :focus pseudo-class.
+func (b *Browser) UpdateFocus(nodeID dom.NodeID) bool {
+	b.mu.Lock()
+	page := b.page
+	onMutation := b.onMutation
+	if page == nil || page.Document == nil {
+		b.mu.Unlock()
+		return false
+	}
+	target := validFocusTarget(page.Document, nodeID)
+	if page.FocusTarget == target {
+		b.mu.Unlock()
+		return false
+	}
+	page.FocusTarget = target
+	page.ComputedStyles = style.ComputeWithState(page.Document, page.Stylesheet, interactionState(page))
+	b.mu.Unlock()
+	if onMutation != nil {
+		onMutation()
+	}
+	return true
+}
+
 // SetPage replaces the active page. Passing nil clears the active page.
 func (b *Browser) SetPage(page *Page) {
 	b.mu.Lock()
@@ -399,6 +422,7 @@ func startRuntime(ctx context.Context, factory runtimemodel.Factory, page *Page,
 			if len(page.HoverPath) == 0 {
 				page.HoverTarget = 0
 			}
+			page.FocusTarget = validFocusTarget(page.Document, page.FocusTarget)
 			page.ComputedStyles = style.ComputeWithState(page.Document, page.Stylesheet, interactionState(page))
 			if onMutation != nil {
 				onMutation()
@@ -444,11 +468,24 @@ func hoverPath(document *dom.Document, nodeID dom.NodeID) []dom.NodeID {
 }
 
 func interactionState(page *Page) style.InteractionState {
-	state := style.InteractionState{Hovered: make(map[dom.NodeID]bool, len(page.HoverPath))}
+	state := style.InteractionState{
+		Hovered: make(map[dom.NodeID]bool, len(page.HoverPath)), Focused: page.FocusTarget,
+	}
 	for _, nodeID := range page.HoverPath {
 		state.Hovered[nodeID] = true
 	}
 	return state
+}
+
+func validFocusTarget(document *dom.Document, nodeID dom.NodeID) dom.NodeID {
+	if document == nil || nodeID == 0 {
+		return 0
+	}
+	node, ok := document.NodeByID(nodeID)
+	if !ok || node.Type != dom.NodeElement || !document.IsConnected(node) {
+		return 0
+	}
+	return node.ID
 }
 
 func equalNodeIDs(left, right []dom.NodeID) bool {

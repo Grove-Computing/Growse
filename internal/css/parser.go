@@ -444,10 +444,21 @@ func parsePseudoClass(value string, start int) (*PseudoClass, int, bool) {
 			return nil, 0, false
 		}
 		pseudo.Kind, pseudo.Negation = PseudoNot, &negation
+	case "link":
+		pseudo.Kind = PseudoLink
+	case "focus":
+		pseudo.Kind = PseudoFocus
+	case "enabled":
+		pseudo.Kind = PseudoEnabled
+	case "disabled":
+		pseudo.Kind = PseudoDisabled
+	case "checked":
+		pseudo.Kind = PseudoChecked
 	default:
 		return nil, 0, false
 	}
-	if argument != nil && pseudo.Kind < PseudoNthChild {
+	if argument != nil && pseudo.Kind != PseudoNthChild && pseudo.Kind != PseudoNthLastChild &&
+		pseudo.Kind != PseudoNthOfType && pseudo.Kind != PseudoNthLastOfType && pseudo.Kind != PseudoNot {
 		return nil, 0, false
 	}
 	return pseudo, next, true

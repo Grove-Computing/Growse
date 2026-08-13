@@ -90,6 +90,7 @@ type Navigator interface {
 	SubmitForm(nodeID dom.NodeID) bool
 	UpdateHover(nodeID dom.NodeID, x, y float32) bool
 	ClearHover() bool
+	UpdateFocus(nodeID dom.NodeID) bool
 }
 
 type navigationResult struct {
@@ -535,6 +536,7 @@ func (ui *BrowserUI) handleViewportClicks(gtx layout.Context, page *browser.Page
 		if !ok {
 			continue
 		}
+		ui.navigator.UpdateFocus(focusableNodeID(page.Document, nodeID))
 		if ui.navigator.DispatchClick(nodeID, x, y) {
 			continue
 		}
@@ -544,6 +546,33 @@ func (ui *BrowserUI) handleViewportClicks(gtx layout.Context, page *browser.Page
 		}
 		ui.startNavigation(linkURL.String())
 	}
+}
+
+func focusableNodeID(document *dom.Document, nodeID dom.NodeID) dom.NodeID {
+	if document == nil {
+		return 0
+	}
+	node, ok := document.NodeByID(nodeID)
+	if !ok {
+		return 0
+	}
+	for current := node; current != nil; current = current.Parent {
+		if current.Type != dom.NodeElement {
+			continue
+		}
+		if _, hasTabIndex := current.Attribute("tabindex"); hasTabIndex {
+			return current.ID
+		}
+		switch current.TagName {
+		case "input", "button", "select", "textarea":
+			return current.ID
+		case "a", "area":
+			if _, linked := current.Attribute("href"); linked {
+				return current.ID
+			}
+		}
+	}
+	return 0
 }
 
 func (ui *BrowserUI) documentPoint(position image.Point, displayList *paintmodel.DisplayList, pixelsPerDP float32) (float32, float32, bool) {
@@ -615,6 +644,13 @@ func (ui *BrowserUI) layoutDrawInput(gtx layout.Context, command paintmodel.Draw
 			}
 		}
 		focused := gtx.Focused(editor)
+		if focused != wasFocused && ui.navigator != nil {
+			if focused {
+				ui.navigator.UpdateFocus(command.NodeID)
+			} else {
+				ui.navigator.UpdateFocus(0)
+			}
+		}
 		if wasFocused && !focused {
 			ui.commitInput(command.NodeID, editor.Text())
 		}

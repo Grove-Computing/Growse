@@ -245,6 +245,47 @@ func TestUpdateHoverTracksAncestorPathAndRecomputesStyles(t *testing.T) {
 	}
 }
 
+func TestUpdateFocusRecomputesStyles(t *testing.T) {
+	document := dom.NewDocument()
+	input := document.CreateElement("input", nil)
+	if err := document.AppendChild(document.Root, input); err != nil {
+		t.Fatal(err)
+	}
+	stylesheet, err := css.Parse(strings.NewReader(`input:focus { color: red; font-size: 24px }`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := NewPage(mustParseURL(t, "http://localhost"))
+	page.Document = document
+	page.Stylesheet = stylesheet
+	page.ComputedStyles = style.Compute(document, stylesheet)
+	browser := New(nil)
+	browser.SetPage(page)
+	invalidations := 0
+	browser.SetOnMutation(func() { invalidations++ })
+
+	if !browser.UpdateFocus(input.ID) || page.FocusTarget != input.ID {
+		t.Fatalf("focused target = %d, want %d", page.FocusTarget, input.ID)
+	}
+	focused, _ := page.ComputedStyles.For(input)
+	if focused.Color != 0xff0000ff || focused.FontSize != 24 {
+		t.Fatalf("focused style = %#v", focused)
+	}
+	if browser.UpdateFocus(input.ID) {
+		t.Fatal("same focus target requested a recalculation")
+	}
+	if !browser.UpdateFocus(0) || page.FocusTarget != 0 {
+		t.Fatalf("cleared focus target = %d", page.FocusTarget)
+	}
+	normal, _ := page.ComputedStyles.For(input)
+	if normal.Color == 0xff0000ff || normal.FontSize == 24 {
+		t.Fatalf("focus style remains after clearing: %#v", normal)
+	}
+	if invalidations != 2 {
+		t.Fatalf("invalidation count = %d, want 2", invalidations)
+	}
+}
+
 func TestUpdateHoverRejectsRemovedElement(t *testing.T) {
 	document := dom.NewDocument()
 	button := document.CreateElement("button", nil)

@@ -105,6 +105,11 @@ const (
 	PseudoNthOfType
 	PseudoNthLastOfType
 	PseudoNot
+	PseudoLink
+	PseudoFocus
+	PseudoEnabled
+	PseudoDisabled
+	PseudoChecked
 )
 
 // PseudoClass stores a pseudo-class and its parsed arguments. Nth expressions

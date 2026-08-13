@@ -359,9 +359,49 @@ func matchesPseudoClass(node *dom.Node, pseudo css.PseudoClass, state Interactio
 		return matchesNth(elementPosition(node, true, true), pseudo.A, pseudo.B)
 	case css.PseudoNot:
 		return pseudo.Negation != nil && !matchesCompound(node, *pseudo.Negation, state)
+	case css.PseudoLink:
+		_, hasReference := node.Attribute("href")
+		return (node.TagName == "a" || node.TagName == "area") && hasReference
+	case css.PseudoFocus:
+		return state.Focused != 0 && state.Focused == node.ID
+	case css.PseudoEnabled:
+		return isFormControl(node) && !isDisabled(node)
+	case css.PseudoDisabled:
+		return isFormControl(node) && isDisabled(node)
+	case css.PseudoChecked:
+		if node.TagName == "option" {
+			_, selected := node.Attribute("selected")
+			return selected
+		}
+		inputType, _ := node.Attribute("type")
+		_, checked := node.Attribute("checked")
+		return node.TagName == "input" && checked && (strings.EqualFold(inputType, "checkbox") || strings.EqualFold(inputType, "radio"))
 	default:
 		return false
 	}
+}
+
+func isFormControl(node *dom.Node) bool {
+	if node == nil {
+		return false
+	}
+	switch node.TagName {
+	case "button", "input", "select", "textarea", "option", "optgroup", "fieldset":
+		return true
+	default:
+		return false
+	}
+}
+
+func isDisabled(node *dom.Node) bool {
+	_, disabled := node.Attribute("disabled")
+	if disabled {
+		return true
+	}
+	if node.TagName == "option" && node.Parent != nil && node.Parent.TagName == "optgroup" {
+		_, disabled = node.Parent.Attribute("disabled")
+	}
+	return disabled
 }
 
 func elementPosition(node *dom.Node, fromEnd, sameType bool) int {

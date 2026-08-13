@@ -116,13 +116,31 @@ func (navigator *stubNavigator) ClearHover() bool {
 	navigator.recomputeHoverStyles()
 	return true
 }
+func (navigator *stubNavigator) UpdateFocus(nodeID dom.NodeID) bool {
+	if navigator.page == nil || navigator.page.Document == nil {
+		return false
+	}
+	if nodeID != 0 {
+		node, ok := navigator.page.Document.NodeByID(nodeID)
+		if !ok || node.Type != dom.NodeElement || !navigator.page.Document.IsConnected(node) {
+			nodeID = 0
+		}
+	}
+	if navigator.page.FocusTarget == nodeID {
+		return false
+	}
+	navigator.page.FocusTarget = nodeID
+	navigator.recomputeHoverStyles()
+	return true
+}
 func (navigator *stubNavigator) recomputeHoverStyles() {
 	hovered := make(map[dom.NodeID]bool, len(navigator.page.HoverPath))
 	for _, nodeID := range navigator.page.HoverPath {
 		hovered[nodeID] = true
 	}
 	navigator.page.ComputedStyles = style.ComputeWithState(
-		navigator.page.Document, navigator.page.Stylesheet, style.InteractionState{Hovered: hovered},
+		navigator.page.Document, navigator.page.Stylesheet,
+		style.InteractionState{Hovered: hovered, Focused: navigator.page.FocusTarget},
 	)
 }
 func equalNodeIDPath(left, right []dom.NodeID) bool {
@@ -508,6 +526,31 @@ func TestTextInputReceivesFocusFromPointerPress(t *testing.T) {
 	}
 	if !gtx.Focused(editor) {
 		t.Fatal("pointer press did not focus the input editor")
+	}
+	if got, want := page.FocusTarget, inputNode.ID; got != want {
+		t.Fatalf("page focus target = %d, want %d", got, want)
+	}
+}
+
+func TestFocusableNodeIDFindsInteractiveAncestor(t *testing.T) {
+	document := dom.NewDocument()
+	link := document.CreateElement("a", map[string]string{"href": "/next"})
+	label := document.CreateText("next")
+	plain := document.CreateElement("div", nil)
+	if err := document.AppendChild(document.Root, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(link, label); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(document.Root, plain); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := focusableNodeID(document, label.ID), link.ID; got != want {
+		t.Fatalf("link focus target = %d, want %d", got, want)
+	}
+	if got := focusableNodeID(document, plain.ID); got != 0 {
+		t.Fatalf("plain focus target = %d, want 0", got)
 	}
 }
 

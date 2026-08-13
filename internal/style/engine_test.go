@@ -278,6 +278,40 @@ func TestMatchesStructuralPseudoClasses(t *testing.T) {
 	}
 }
 
+func TestMatchesInteractionAndFormStatePseudoClasses(t *testing.T) {
+	document := dom.NewDocument()
+	link := document.CreateElement("a", map[string]string{"href": "/next"})
+	anchor := document.CreateElement("a", nil)
+	enabled := document.CreateElement("input", map[string]string{"type": "text"})
+	disabled := document.CreateElement("input", map[string]string{"disabled": ""})
+	checked := document.CreateElement("input", map[string]string{"type": "checkbox", "checked": ""})
+	selected := document.CreateElement("option", map[string]string{"selected": ""})
+	for _, node := range []*dom.Node{link, anchor, enabled, disabled, checked, selected} {
+		appendNode(t, document, document.Root, node)
+	}
+	state := InteractionState{Hovered: map[dom.NodeID]bool{link.ID: true}, Focused: enabled.ID}
+	tests := []struct {
+		selector string
+		node     *dom.Node
+		want     bool
+	}{
+		{"a:link", link, true}, {"a:link", anchor, false},
+		{"a:hover", link, true}, {"a:focus", link, false},
+		{"input:focus", enabled, true}, {"input:enabled", enabled, true},
+		{"input:disabled", enabled, false}, {"input:disabled", disabled, true},
+		{"input:enabled", disabled, false}, {"input:checked", checked, true},
+		{"option:checked", selected, true}, {"input:checked", enabled, false},
+	}
+	for _, test := range tests {
+		t.Run(test.selector+test.node.TagName, func(t *testing.T) {
+			selector := parseTestSelector(t, test.selector)
+			if got := matches(test.node, selector, state); got != test.want {
+				t.Fatalf("matches(%q) = %v, want %v", test.selector, got, test.want)
+			}
+		})
+	}
+}
+
 func parseTestSelector(t *testing.T, value string) css.Selector {
 	t.Helper()
 	stylesheet, err := css.Parse(strings.NewReader(value + " { color: red }"))

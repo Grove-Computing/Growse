@@ -307,6 +307,29 @@ button:hover, #save:hover, .todo:hover, li.todo:hover { color: red }
 	}
 }
 
+func TestParseInteractionAndFormStatePseudoClasses(t *testing.T) {
+	stylesheet, err := Parse(strings.NewReader(`
+a:link, input:focus, input:enabled, input:disabled, input:checked { color: red }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	selectors := stylesheet.Rules[0].Selectors
+	wantKinds := []PseudoClassKind{PseudoLink, PseudoFocus, PseudoEnabled, PseudoDisabled, PseudoChecked}
+	if got, want := len(selectors), len(wantKinds); got != want {
+		t.Fatalf("selector count = %d, want %d", got, want)
+	}
+	for index, want := range wantKinds {
+		pseudos := selectors[index].Compounds[0].Pseudos
+		if len(pseudos) != 1 || pseudos[0].Kind != want {
+			t.Fatalf("selector %d pseudos = %#v, want kind %v", index, pseudos, want)
+		}
+		if got, want := selectors[index].Specificity(), [3]int{0, 1, 1}; got != want {
+			t.Fatalf("selector %d specificity = %v, want %v", index, got, want)
+		}
+	}
+}
+
 func TestParseIgnoresUnsupportedHoverSelectors(t *testing.T) {
 	stylesheet, err := Parse(strings.NewReader(`
 :hover, div:hover:hover, button:active, button:hover::before { color: red }
