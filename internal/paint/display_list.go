@@ -36,26 +36,30 @@ type DrawText struct {
 	Baseline float32
 	Clip     *layout.Rect
 
-	FontSize   float32
-	Bold       bool
-	Color      uint32
-	Background uint32
-	Runs       []TextRun
+	FontSize        float32
+	Bold            bool
+	Color           uint32
+	Background      uint32
+	Decoration      stylemodel.TextDecorationLine
+	DecorationColor uint32
+	Opacity         float32
+	Runs            []TextRun
 }
 
 func (DrawText) paintCommand() {}
 
 // DrawInput は編集可能な1行テキスト入力を描画する。
 type DrawInput struct {
-	NodeID dom.NodeID
-	Value  string
-	X      float32
-	Y      float32
-	Top    float32
-	Width  float32
-	Height float32
-	Color  uint32
-	Clip   *layout.Rect
+	NodeID  dom.NodeID
+	Value   string
+	X       float32
+	Y       float32
+	Top     float32
+	Width   float32
+	Height  float32
+	Color   uint32
+	Opacity float32
+	Clip    *layout.Rect
 }
 
 func (DrawInput) paintCommand() {}
@@ -74,6 +78,9 @@ type DrawBox struct {
 	Repeat   stylemodel.BackgroundRepeat
 	Position stylemodel.BackgroundPosition
 	Size     stylemodel.BackgroundSize
+	Border   stylemodel.Borders
+	Radius   layout.BorderRadii
+	Opacity  float32
 	Clip     *layout.Rect
 }
 
@@ -86,11 +93,14 @@ type TextRun struct {
 	Text   string
 	Width  float32
 
-	FontSize   float32
-	Bold       bool
-	Color      uint32
-	Background uint32
-	Baseline   float32
+	FontSize        float32
+	Bold            bool
+	Color           uint32
+	Background      uint32
+	Baseline        float32
+	Decoration      stylemodel.TextDecorationLine
+	DecorationColor uint32
+	Opacity         float32
 }
 
 // Build creates a display list from a layout tree.
@@ -128,6 +138,7 @@ func Build(tree *layout.Tree) *DisplayList {
 				Width: decoration.Width, Height: decoration.Height, Color: decoration.Background,
 				Image: cloneBackgroundImage(decoration.Image), Repeat: decoration.Repeat,
 				Position: decoration.Position, Size: decoration.Size, Clip: cloneLayoutRect(decoration.Clip),
+				Border: decoration.Border, Radius: decoration.Radius, Opacity: decoration.Opacity,
 			})
 			previousBottom += top
 			continue
@@ -139,15 +150,16 @@ func Build(tree *layout.Tree) *DisplayList {
 		}
 		if box.Input {
 			list.Commands = append(list.Commands, DrawInput{
-				NodeID: box.NodeID,
-				Value:  box.Text,
-				X:      box.X,
-				Y:      box.Y,
-				Top:    top,
-				Width:  box.Width,
-				Height: box.Height,
-				Color:  box.Color,
-				Clip:   cloneLayoutRect(box.Clip),
+				NodeID:  box.NodeID,
+				Value:   box.Text,
+				X:       box.X,
+				Y:       box.Y,
+				Top:     top,
+				Width:   box.Width,
+				Height:  box.Height,
+				Color:   box.Color,
+				Opacity: box.Opacity,
+				Clip:    cloneLayoutRect(box.Clip),
 			})
 			previousBottom = box.Y + box.Height
 			continue
@@ -163,15 +175,17 @@ func Build(tree *layout.Tree) *DisplayList {
 			Bold:       box.Bold,
 			Color:      box.Color,
 			Background: box.Background,
-			Baseline:   box.Baseline,
-			Clip:       cloneLayoutRect(box.Clip),
+			Decoration: box.Decoration, DecorationColor: box.DecorationColor, Opacity: box.Opacity,
+			Baseline: box.Baseline - box.Y,
+			Clip:     cloneLayoutRect(box.Clip),
 		}
 		command.Runs = make([]TextRun, 0, len(box.Runs))
 		for _, run := range box.Runs {
 			command.Runs = append(command.Runs, TextRun{
 				NodeID: run.NodeID, Tag: run.Tag, Text: run.Text, Width: run.Width,
 				FontSize: run.FontSize, Bold: run.Bold, Color: run.Color, Background: run.Background,
-				Baseline: run.Baseline,
+				Baseline: run.Baseline - box.Y, Decoration: run.Decoration,
+				DecorationColor: run.DecorationColor, Opacity: run.Opacity,
 			})
 		}
 		list.Commands = append(list.Commands, command)

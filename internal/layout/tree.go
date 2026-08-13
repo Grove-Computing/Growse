@@ -28,7 +28,18 @@ type Decoration struct {
 	Repeat     stylemodel.BackgroundRepeat
 	Position   stylemodel.BackgroundPosition
 	Size       stylemodel.BackgroundSize
+	Border     stylemodel.Borders
+	Radius     BorderRadii
+	Opacity    float32
 	Clip       *Rect
+}
+
+// CornerRadius is one resolved elliptical radius in CSS pixels.
+type CornerRadius struct{ X, Y float32 }
+
+// BorderRadii contains resolved radii in clockwise order.
+type BorderRadii struct {
+	TopLeft, TopRight, BottomRight, BottomLeft CornerRadius
 }
 
 // Rect is a document-coordinate clipping rectangle.
@@ -50,12 +61,15 @@ type Box struct {
 	Height   float32
 	Baseline float32
 	Clip     *Rect
+	Opacity  float32
 
-	FontSize   float32
-	Bold       bool
-	Color      uint32
-	Background uint32
-	Runs       []TextRun
+	FontSize        float32
+	Bold            bool
+	Color           uint32
+	Background      uint32
+	Decoration      stylemodel.TextDecorationLine
+	DecorationColor uint32
+	Runs            []TextRun
 }
 
 // TextRun is a continuously styled fragment inside one line box.
@@ -65,9 +79,12 @@ type TextRun struct {
 	Text   string
 	Width  float32
 
-	FontSize   float32
-	Bold       bool
-	Color      uint32
-	Background uint32
-	Baseline   float32
+	FontSize        float32
+	Bold            bool
+	Color           uint32
+	Background      uint32
+	Baseline        float32
+	Decoration      stylemodel.TextDecorationLine
+	DecorationColor uint32
+	Opacity         float32
 }

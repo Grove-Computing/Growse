@@ -53,6 +53,27 @@ func TestBuildPreservesBackgroundImagePlacement(t *testing.T) {
 	}
 }
 
+func TestBuildPreservesBorderRadiusDecorationAndOpacity(t *testing.T) {
+	tree := &layout.Tree{
+		Decorations: []layout.Decoration{{
+			Border: style.Borders{Top: style.BorderSide{Width: 2, Style: style.BorderDashed, Color: 0xff0000ff}},
+			Radius: layout.BorderRadii{TopLeft: layout.CornerRadius{X: 8, Y: 4}}, Opacity: .5,
+		}},
+		Boxes: []layout.Box{{Order: 1, Y: 10, Runs: []layout.TextRun{{
+			Text: "line", Decoration: style.TextDecorationLineThrough, DecorationColor: 0x0000ffff, Opacity: .25,
+		}}}},
+	}
+	list := Build(tree)
+	background := list.Commands[0].(DrawBox)
+	text := list.Commands[1].(DrawText)
+	if background.Border.Top.Style != style.BorderDashed || background.Radius.TopLeft.X != 8 || background.Opacity != .5 {
+		t.Fatalf("background effect = %#v", background)
+	}
+	if text.Runs[0].Decoration != style.TextDecorationLineThrough || text.Runs[0].DecorationColor != 0x0000ffff || text.Runs[0].Opacity != .25 {
+		t.Fatalf("text effect = %#v", text.Runs[0])
+	}
+}
+
 func TestBuildCreatesInputCommand(t *testing.T) {
 	tree := &layout.Tree{Width: 400, Height: 100, Boxes: []layout.Box{{
 		NodeID: 7, Tag: "input", Text: "hello", Input: true,

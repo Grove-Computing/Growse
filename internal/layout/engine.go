@@ -17,39 +17,44 @@ const (
 )
 
 type blockStyle struct {
-	fontSize       float32
-	bold           bool
-	color          uint32
-	background     uint32
-	image          stylemodel.BackgroundImage
-	repeat         stylemodel.BackgroundRepeat
-	position       stylemodel.BackgroundPosition
-	backgroundSize stylemodel.BackgroundSize
-	display        stylemodel.Display
-	margin         stylemodel.Edges
-	padding        stylemodel.Edges
-	border         stylemodel.Borders
-	boxSizing      stylemodel.BoxSizing
-	width          stylemodel.SizeValue
-	height         stylemodel.SizeValue
-	minWidth       stylemodel.SizeValue
-	minHeight      stylemodel.SizeValue
-	maxWidth       stylemodel.SizeValue
-	maxHeight      stylemodel.SizeValue
-	lineHeight     float32
-	whiteSpace     stylemodel.WhiteSpace
-	overflowX      stylemodel.Overflow
-	overflowY      stylemodel.Overflow
+	fontSize        float32
+	bold            bool
+	color           uint32
+	background      uint32
+	image           stylemodel.BackgroundImage
+	repeat          stylemodel.BackgroundRepeat
+	position        stylemodel.BackgroundPosition
+	backgroundSize  stylemodel.BackgroundSize
+	radius          stylemodel.BorderRadii
+	decoration      stylemodel.TextDecorationLine
+	decorationColor uint32
+	opacity         float32
+	display         stylemodel.Display
+	margin          stylemodel.Edges
+	padding         stylemodel.Edges
+	border          stylemodel.Borders
+	boxSizing       stylemodel.BoxSizing
+	width           stylemodel.SizeValue
+	height          stylemodel.SizeValue
+	minWidth        stylemodel.SizeValue
+	minHeight       stylemodel.SizeValue
+	maxWidth        stylemodel.SizeValue
+	maxHeight       stylemodel.SizeValue
+	lineHeight      float32
+	whiteSpace      stylemodel.WhiteSpace
+	overflowX       stylemodel.Overflow
+	overflowY       stylemodel.Overflow
 }
 
 type inlineRun struct {
-	nodeID dom.NodeID
-	tag    string
-	text   string
-	style  blockStyle
-	atomic bool
-	width  float32
-	height float32
+	nodeID  dom.NodeID
+	tag     string
+	text    string
+	style   blockStyle
+	atomic  bool
+	width   float32
+	height  float32
+	opacity float32
 }
 
 // Build creates a vertical block layout with a minimal inline text flow.
@@ -72,6 +77,7 @@ func build(document *dom.Document, computed stylemodel.Map, viewportWidth, viewp
 		tree:     tree,
 		computed: computed,
 		y:        pagePadding,
+		opacity:  1,
 	}
 	if document != nil {
 		if body := findElement(document.Root, "body"); body != nil {
@@ -107,6 +113,7 @@ type engine struct {
 	y        float32
 	clip     *Rect
 	order    int
+	opacity  float32
 }
 
 func (e *engine) nextOrder() int {
@@ -177,17 +184,18 @@ func (e *engine) addInput(node *dom.Node, style blockStyle, x, width, containing
 	usedHeight = constrainSize(usedHeight, style.minHeight, style.maxHeight, containingHeight, heightDefinite)
 	value, _ := node.Attribute("value")
 	e.tree.Boxes = append(e.tree.Boxes, Box{
-		Order:  e.nextOrder(),
-		NodeID: node.ID,
-		Tag:    node.TagName,
-		Text:   value,
-		Input:  true,
-		X:      x,
-		Y:      e.y,
-		Width:  usedWidth,
-		Height: usedHeight,
-		Color:  style.color,
-		Clip:   cloneRect(e.clip),
+		Order:   e.nextOrder(),
+		NodeID:  node.ID,
+		Tag:     node.TagName,
+		Text:    value,
+		Input:   true,
+		X:       x,
+		Y:       e.y,
+		Width:   usedWidth,
+		Height:  usedHeight,
+		Color:   style.color,
+		Clip:    cloneRect(e.clip),
+		Opacity: e.opacity * style.opacity,
 	})
 	e.y += usedHeight + style.margin.Bottom
 }
@@ -201,6 +209,8 @@ func isTextInput(node *dom.Node) bool {
 }
 
 func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containingHeight float32, heightDefinite bool, topMargin *float32) {
+	previousOpacity := e.opacity
+	e.opacity *= style.opacity
 	if topMargin == nil {
 		e.y += style.margin.Top
 	} else {
@@ -238,13 +248,14 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 	}
 	boxTop := e.y
 	decorationIndex := -1
-	if style.background != 0 || style.image.Kind != stylemodel.BackgroundImageNone {
+	if style.background != 0 || style.image.Kind != stylemodel.BackgroundImageNone || hasVisibleBorder(style.border) {
 		decorationIndex = len(e.tree.Decorations)
 		e.tree.Decorations = append(e.tree.Decorations, Decoration{
 			Order: e.nextOrder(), NodeID: node.ID,
 			Rect:       Rect{X: x, Y: boxTop, Width: outerWidth},
 			Background: style.background, Image: cloneBackgroundImage(style.image),
 			Repeat: style.repeat, Position: style.position, Size: style.backgroundSize, Clip: cloneRect(e.clip),
+			Border: style.border, Opacity: e.opacity,
 		})
 	}
 	e.y += style.border.Top.Width + style.padding.Top
@@ -328,8 +339,10 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 	}
 	if decorationIndex >= 0 {
 		e.tree.Decorations[decorationIndex].Height = outerHeight
+		e.tree.Decorations[decorationIndex].Radius = resolveBorderRadii(style.radius, outerWidth, outerHeight)
 	}
 	e.y = boxTop + outerHeight + style.margin.Bottom
+	e.opacity = previousOpacity
 }
 
 func collapseMargins(first, second float32) float32 {
@@ -360,36 +373,45 @@ func constrainSize(value float32, minimum, maximum stylemodel.SizeValue, basis f
 }
 
 func (e *engine) collectInlineRuns(node, owner *dom.Node) []inlineRun {
+	return e.collectInlineRunsWithOpacity(node, owner, e.opacity)
+}
+
+func (e *engine) collectInlineRunsWithOpacity(node, owner *dom.Node, opacity float32) []inlineRun {
 	if node == nil {
 		return nil
 	}
 	if node.Type == dom.NodeText {
-		style := e.styleFor(node)
-		return []inlineRun{{nodeID: owner.ID, tag: owner.TagName, text: node.Text, style: style}}
+		style := e.styleFor(owner)
+		return []inlineRun{{nodeID: owner.ID, tag: owner.TagName, text: node.Text, style: style, opacity: opacity}}
 	}
 	if node.Type != dom.NodeElement {
 		return nil
 	}
 	style := e.styleFor(node)
+	opacity *= style.opacity
 	if style.display == stylemodel.DisplayNone {
 		return nil
 	}
 	if style.display == stylemodel.DisplayInlineBlock {
-		return []inlineRun{{nodeID: node.ID, tag: node.TagName, text: e.inlineText(node), style: style, atomic: true}}
+		return []inlineRun{{nodeID: node.ID, tag: node.TagName, text: e.inlineText(node), style: style, atomic: true, opacity: opacity}}
 	}
 	if node.TagName == "br" {
-		return []inlineRun{{nodeID: node.ID, tag: node.TagName, text: "\n", style: style}}
+		return []inlineRun{{nodeID: node.ID, tag: node.TagName, text: "\n", style: style, opacity: opacity}}
 	}
 
-	result := e.generatedRuns(node, true, style)
+	result := e.generatedRunsWithOpacity(node, true, style, opacity)
 	for _, child := range node.Children {
-		result = append(result, e.collectInlineRuns(child, node)...)
+		result = append(result, e.collectInlineRunsWithOpacity(child, node, opacity)...)
 	}
-	result = append(result, e.generatedRuns(node, false, style)...)
+	result = append(result, e.generatedRunsWithOpacity(node, false, style, opacity)...)
 	return result
 }
 
 func (e *engine) generatedRuns(node *dom.Node, before bool, style blockStyle) []inlineRun {
+	return e.generatedRunsWithOpacity(node, before, style, e.opacity)
+}
+
+func (e *engine) generatedRunsWithOpacity(node *dom.Node, before bool, style blockStyle, opacity float32) []inlineRun {
 	computed, ok := e.computed.For(node)
 	if !ok {
 		return nil
@@ -401,7 +423,7 @@ func (e *engine) generatedRuns(node *dom.Node, before bool, style blockStyle) []
 	if text == "" {
 		return nil
 	}
-	return []inlineRun{{nodeID: node.ID, tag: tag, text: text, style: style}}
+	return []inlineRun{{nodeID: node.ID, tag: tag, text: text, style: style, opacity: opacity}}
 }
 
 func (e *engine) inlineText(node *dom.Node) string {
@@ -422,7 +444,7 @@ func (e *engine) inlineText(node *dom.Node) string {
 }
 
 func (e *engine) addText(nodeID dom.NodeID, tag, text string, style blockStyle, x, width float32) {
-	e.addInlineRuns(nodeID, tag, []inlineRun{{nodeID: nodeID, tag: tag, text: text, style: style}}, style, x, width)
+	e.addInlineRuns(nodeID, tag, []inlineRun{{nodeID: nodeID, tag: tag, text: text, style: style, opacity: e.opacity * style.opacity}}, style, x, width)
 }
 
 func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, container blockStyle, x, width float32) {
@@ -443,6 +465,7 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 			NodeID: nodeID, Tag: tag, Text: lineText.String(),
 			X: x, Y: e.y, Width: width, Height: lineHeight,
 			FontSize: container.fontSize, Bold: container.bold, Color: container.color,
+			Opacity: e.opacity, Decoration: container.decoration, DecorationColor: container.decorationColor,
 			Runs:     append([]TextRun(nil), lineRuns...),
 			Baseline: e.y + lineAscent, Clip: cloneRect(e.clip),
 		})
@@ -457,6 +480,7 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 			NodeID: run.nodeID, Tag: run.tag, Text: text, Width: pieceWidth,
 			FontSize: run.style.fontSize, Bold: run.style.bold,
 			Color: run.style.color, Background: run.style.background,
+			Decoration: run.style.decoration, DecorationColor: run.style.decorationColor, Opacity: run.opacity,
 		}
 		runHeight, runAscent := usedLineMetrics(run)
 		textRun.Baseline = e.y + runAscent
@@ -614,7 +638,8 @@ func resolveAtomicSize(run inlineRun, containingWidth float32) (float32, float32
 
 func sameTextStyle(left, right TextRun) bool {
 	return left.NodeID == right.NodeID && left.Tag == right.Tag && left.FontSize == right.FontSize &&
-		left.Bold == right.Bold && left.Color == right.Color && left.Background == right.Background
+		left.Bold == right.Bold && left.Color == right.Color && left.Background == right.Background &&
+		left.Decoration == right.Decoration && left.DecorationColor == right.DecorationColor && left.Opacity == right.Opacity
 }
 
 func preservesSpaces(value stylemodel.WhiteSpace) bool {
@@ -651,6 +676,40 @@ func intersectClip(parent *Rect, child Rect) *Rect {
 	right := min(parent.X+parent.Width, child.X+child.Width)
 	bottom := min(parent.Y+parent.Height, child.Y+child.Height)
 	return &Rect{X: left, Y: top, Width: max(right-left, float32(0)), Height: max(bottom-top, float32(0))}
+}
+
+func hasVisibleBorder(border stylemodel.Borders) bool {
+	return border.Top.Width > 0 || border.Right.Width > 0 || border.Bottom.Width > 0 || border.Left.Width > 0
+}
+
+func resolveBorderRadii(source stylemodel.BorderRadii, width, height float32) BorderRadii {
+	resolve := func(value stylemodel.RadiusValue) CornerRadius {
+		return CornerRadius{X: value.X.Resolve(width), Y: value.Y.Resolve(height)}
+	}
+	result := BorderRadii{
+		TopLeft: resolve(source.TopLeft), TopRight: resolve(source.TopRight),
+		BottomRight: resolve(source.BottomRight), BottomLeft: resolve(source.BottomLeft),
+	}
+	scale := float32(1)
+	ratio := func(limit, sum float32) float32 {
+		if sum > limit && sum > 0 {
+			return limit / sum
+		}
+		return 1
+	}
+	for _, ratio := range []float32{
+		ratio(width, result.TopLeft.X+result.TopRight.X),
+		ratio(width, result.BottomLeft.X+result.BottomRight.X),
+		ratio(height, result.TopLeft.Y+result.BottomLeft.Y),
+		ratio(height, result.TopRight.Y+result.BottomRight.Y),
+	} {
+		scale = min(scale, ratio)
+	}
+	for _, radius := range []*CornerRadius{&result.TopLeft, &result.TopRight, &result.BottomRight, &result.BottomLeft} {
+		radius.X *= scale
+		radius.Y *= scale
+	}
+	return result
 }
 
 func (e *engine) styleFor(node *dom.Node) blockStyle {
@@ -698,7 +757,7 @@ func uaStyle(tag string) blockStyle {
 }
 
 func defaultStyle() blockStyle {
-	return blockStyle{fontSize: 16, color: textColor, display: stylemodel.DisplayInline}
+	return blockStyle{fontSize: 16, color: textColor, decorationColor: textColor, opacity: 1, display: stylemodel.DisplayInline}
 }
 
 func applyComputed(block blockStyle, computed stylemodel.ComputedStyle) blockStyle {
@@ -710,6 +769,10 @@ func applyComputed(block blockStyle, computed stylemodel.ComputedStyle) blockSty
 	block.repeat = computed.BackgroundRepeat
 	block.position = computed.BackgroundPos
 	block.backgroundSize = computed.BackgroundSize
+	block.radius = computed.BorderRadius
+	block.decoration = computed.TextDecoration
+	block.decorationColor = computed.DecorationColor
+	block.opacity = computed.Opacity
 	block.display = computed.Display
 	block.margin = computed.Margin
 	block.padding = computed.Padding

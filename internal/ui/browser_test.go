@@ -70,6 +70,16 @@ func TestRasterBackgroundImageRepeatsAndSizesImage(t *testing.T) {
 	}
 }
 
+func TestRoundedClipUsesResolvedCornerRadii(t *testing.T) {
+	gtx := layout.Context{Metric: unit.Metric{PxPerDp: 2, PxPerSp: 2}}
+	got := roundedClip(gtx, layoutengine.BorderRadii{
+		TopLeft: layoutengine.CornerRadius{X: 8, Y: 4}, TopRight: layoutengine.CornerRadius{X: 6, Y: 6},
+	}, 200, 100)
+	if got.NW != 8 || got.NE != 12 || got.SE != 0 || got.Rect != image.Rect(0, 0, 200, 100) {
+		t.Fatalf("rounded clip = %#v", got)
+	}
+}
+
 type stubNavigator struct {
 	page *browser.Page
 	err  error

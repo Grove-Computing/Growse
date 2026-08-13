@@ -300,6 +300,35 @@ func TestBuildCarriesLinearGradientIntoDecoration(t *testing.T) {
 	}
 }
 
+func TestBuildCarriesBorderRadiusDecorationAndEffectiveOpacity(t *testing.T) {
+	document := dom.NewDocument()
+	box := document.CreateElement("div", nil)
+	span := document.CreateElement("span", nil)
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, box}, [2]*dom.Node{box, span},
+		[2]*dom.Node{span, document.CreateText("decorated")},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`
+div { width: 100px; height: 40px; border: 4px solid red; border-radius: 60px; opacity: .5; }
+span { text-decoration-line: underline; text-decoration-color: blue; opacity: .5; }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, style.Compute(document, stylesheet), 800)
+	if len(tree.Decorations) != 1 || len(tree.Boxes) == 0 {
+		t.Fatalf("decorations/boxes = %#v / %#v", tree.Decorations, tree.Boxes)
+	}
+	decoration := tree.Decorations[0]
+	if decoration.Border.Top.Width != 4 || decoration.Border.Top.Color != 0xff0000ff || decoration.Opacity != .5 || decoration.Radius.TopLeft.X != 24 || decoration.Radius.TopLeft.Y != 24 {
+		t.Fatalf("decoration = %#v", decoration)
+	}
+	run := tree.Boxes[0].Runs[0]
+	if run.Decoration != style.TextDecorationUnderline || run.DecorationColor != 0x0000ffff || run.Opacity != .25 {
+		t.Fatalf("text effect run = %#v", run)
+	}
+}
+
 func TestBuildPreservesInlineRunStyles(t *testing.T) {
 	document := dom.NewDocument()
 	p := document.CreateElement("p", nil)
