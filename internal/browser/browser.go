@@ -94,9 +94,13 @@ func (b *Browser) SetInputValue(nodeID dom.NodeID, value string) bool {
 	if changed {
 		page.ComputedStyles = style.Compute(page.Document, page.Stylesheet)
 	}
+	dispatcher := page.Events
 	b.mu.Unlock()
 	if changed && onMutation != nil {
 		onMutation()
+	}
+	if changed && dispatcher != nil {
+		dispatcher.Dispatch(events.Event{Type: events.Input, Target: nodeID, Value: value})
 	}
 	return changed
 }

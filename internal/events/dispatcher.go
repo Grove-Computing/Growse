@@ -11,8 +11,12 @@ import (
 // Type はDOMイベントの種類を表す。
 type Type string
 
-// Click はポインターによるクリックイベントを表す。
-const Click Type = "click"
+const (
+	// Click はポインターによるクリックイベントを表す。
+	Click Type = "click"
+	// Input はユーザー操作で入力値が変化したイベントを表す。
+	Input Type = "input"
+)
 
 // Event はDOM要素へ配信するイベント情報を保持する。
 type Event struct {
@@ -20,6 +24,7 @@ type Event struct {
 	Target dom.NodeID
 	X      float32
 	Y      float32
+	Value  string
 }
 
 // Listener はイベントを処理する関数である。

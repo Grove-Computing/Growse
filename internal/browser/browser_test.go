@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/saku0512/growse/internal/dom"
+	"github.com/saku0512/growse/internal/events"
 	"github.com/saku0512/growse/internal/network"
 )
 
@@ -73,6 +74,9 @@ func TestSetInputValueUpdatesActiveTextInput(t *testing.T) {
 	}
 	page := NewPage(mustParseURL(t, "http://localhost"))
 	page.Document = document
+	page.Events = events.NewDispatcher()
+	var inputEvent events.Event
+	page.Events.AddEventListener(input.ID, events.Input, func(event events.Event) { inputEvent = event })
 	browser := New(nil)
 	browser.SetPage(page)
 	mutations := 0
@@ -89,6 +93,9 @@ func TestSetInputValueUpdatesActiveTextInput(t *testing.T) {
 	}
 	if got, want := mutations, 1; got != want {
 		t.Fatalf("mutation count = %d, want %d", got, want)
+	}
+	if inputEvent.Type != events.Input || inputEvent.Target != input.ID || inputEvent.Value != "hello" {
+		t.Fatalf("input event = %#v, want updated value", inputEvent)
 	}
 }
 

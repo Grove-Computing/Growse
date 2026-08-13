@@ -93,6 +93,16 @@ func (element *Element) OnClickEvent(handler func(Event)) {
 	})
 }
 
+// OnInput はユーザー操作による入力値変更のハンドラーを登録する。
+func (element *Element) OnInput(handler func(Event)) {
+	if handler == nil {
+		return
+	}
+	element.addEventListener(events.Input, func(event events.Event) {
+		handler(element.publicEvent(event))
+	})
+}
+
 // AppendChild は未接続の子要素を接続済みの要素の末尾へ追加する。
 func (element *Element) AppendChild(child *Element) bool {
 	if element == nil || child == nil || element.document == nil || child.document != element.document {
@@ -281,7 +291,7 @@ func (element *Element) addEventListener(eventType events.Type, listener events.
 }
 
 func (element *Element) publicEvent(event events.Event) Event {
-	result := Event{Type: string(event.Type), X: event.X, Y: event.Y}
+	result := Event{Type: string(event.Type), Value: event.Value, X: event.X, Y: event.Y}
 	if element == nil || element.document == nil {
 		return result
 	}

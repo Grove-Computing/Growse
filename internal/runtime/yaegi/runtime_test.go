@@ -376,6 +376,45 @@ func main() {
 	}
 }
 
+func TestRuntimeReceivesInputEvent(t *testing.T) {
+	document := dommodel.NewDocument()
+	input := document.CreateElement("input", map[string]string{"id": "query"})
+	message := document.CreateElement("p", map[string]string{"id": "message"})
+	for _, node := range []*dommodel.Node{input, message} {
+		if err := document.AppendChild(document.Root, node); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dispatcher := events.NewDispatcher()
+	runtime := New()
+	scripts := []runtimemodel.Script{{Source: `package main
+import "growse/dom"
+func main() {
+	dom.GetElementByID("query").OnInput(func(event dom.Event) {
+		if event.Type == "input" {
+			dom.GetElementByID("message").SetText(event.Value)
+		}
+	})
+}`}}
+	environment := runtimemodel.Environment{Document: document, Events: dispatcher}
+
+	if err := runtime.Load(context.Background(), scripts, environment); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if !document.SetAttribute(input.ID, "value", "gopher") {
+		t.Fatal("SetAttribute(value) = false, want true")
+	}
+	if !dispatcher.Dispatch(events.Event{Type: events.Input, Target: input.ID, Value: "gopher"}) {
+		t.Fatal("input event was not handled")
+	}
+	if got, want := message.TextContent(), "gopher"; got != want {
+		t.Fatalf("message = %q, want %q", got, want)
+	}
+}
+
 func TestRuntimeDispatchesWebGoOnClick(t *testing.T) {
 	document := dommodel.NewDocument()
 	button := document.CreateElement("button", map[string]string{"id": "increment"})

@@ -398,3 +398,25 @@ func TestOnClickEventRejectsNilHandlerAndDetachedElement(t *testing.T) {
 		t.Fatal("detached element registered a click handler")
 	}
 }
+
+func TestOnInputProvidesUpdatedValue(t *testing.T) {
+	document := dommodel.NewDocument()
+	input := document.CreateElement("input", map[string]string{"id": "query", "value": "before"})
+	if err := document.AppendChild(document.Root, input); err != nil {
+		t.Fatal(err)
+	}
+	dispatcher := events.NewDispatcher()
+	element := New(document, dispatcher, nil).GetElementByID("query")
+	var received Event
+	element.OnInput(func(event Event) { received = event })
+	if !document.SetAttribute(input.ID, "value", "after") {
+		t.Fatal("SetAttribute(value) = false, want true")
+	}
+
+	if !dispatcher.Dispatch(events.Event{Type: events.Input, Target: input.ID, Value: "after"}) {
+		t.Fatal("input event was not handled")
+	}
+	if received.Type != "input" || received.TargetID != "query" || received.Value != "after" {
+		t.Fatalf("event = %#v, want updated input data", received)
+	}
+}
