@@ -68,6 +68,38 @@ func TestQuerySelectorReturnsNilForUnsupportedSelector(t *testing.T) {
 	}
 }
 
+func TestCreateElementCreatesDetachedDocumentElement(t *testing.T) {
+	document := dommodel.NewDocument()
+	api := New(document, events.NewDispatcher(), nil)
+
+	element := api.CreateElement("  LI  ")
+	if element == nil {
+		t.Fatal("CreateElement() = nil")
+	}
+	node, ok := document.NodeByID(element.id)
+	if !ok {
+		t.Fatal("created element is not owned by the document")
+	}
+	if got, want := node.TagName, "li"; got != want {
+		t.Fatalf("TagName = %q, want %q", got, want)
+	}
+	if node.Parent != nil {
+		t.Fatalf("Parent = %#v, want nil", node.Parent)
+	}
+	if got, want := document.ElementCount(), 0; got != want {
+		t.Fatalf("ElementCount() = %d, want %d before attachment", got, want)
+	}
+}
+
+func TestCreateElementRejectsInvalidTagName(t *testing.T) {
+	api := New(dommodel.NewDocument(), events.NewDispatcher(), nil)
+	for _, tagName := range []string{"", "   ", "div span", "<div>", "input/"} {
+		if element := api.CreateElement(tagName); element != nil {
+			t.Fatalf("CreateElement(%q) = %#v, want nil", tagName, element)
+		}
+	}
+}
+
 func TestOnClickRegistersHandler(t *testing.T) {
 	document := dommodel.NewDocument()
 	button := document.CreateElement("button", map[string]string{"id": "button"})

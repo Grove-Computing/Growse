@@ -152,6 +152,34 @@ func main() {
 	}
 }
 
+func TestRuntimeExposesCreateElement(t *testing.T) {
+	document := dommodel.NewDocument()
+	runtime := New()
+	scripts := []runtimemodel.Script{{Source: `package main
+import "growse/dom"
+var Created *dom.Element
+func main() { Created = dom.CreateElement("section") }`}}
+	environment := runtimemodel.Environment{Document: document, Events: events.NewDispatcher()}
+
+	if err := runtime.Load(context.Background(), scripts, environment); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	packageSymbols := runtime.interpreter.Symbols("page")["page"]
+	created, ok := packageSymbols["Created"]
+	if !ok || created.IsNil() {
+		t.Fatal("CreateElement() did not return a WebGo element")
+	}
+	if got, want := document.NodeCount(), 1; got != want {
+		t.Fatalf("NodeCount() = %d, want %d", got, want)
+	}
+	if got, want := document.ElementCount(), 0; got != want {
+		t.Fatalf("ElementCount() = %d, want %d before attachment", got, want)
+	}
+}
+
 func TestRuntimeDispatchesWebGoOnClick(t *testing.T) {
 	document := dommodel.NewDocument()
 	button := document.CreateElement("button", map[string]string{"id": "increment"})

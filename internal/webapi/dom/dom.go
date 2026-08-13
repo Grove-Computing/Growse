@@ -2,6 +2,8 @@
 package dom
 
 import (
+	"strings"
+
 	dommodel "github.com/saku0512/growse/internal/dom"
 	"github.com/saku0512/growse/internal/events"
 )
@@ -35,7 +37,7 @@ func (api *API) GetElementByID(id string) *Element {
 	if !ok || node.Type != dommodel.NodeElement {
 		return nil
 	}
-	return &Element{document: api.document, id: node.ID, events: api.events, onMutation: api.onMutation}
+	return api.element(node)
 }
 
 // QuerySelector は対応する単純セレクターに最初に一致する要素を返す。
@@ -47,7 +49,19 @@ func (api *API) QuerySelector(selector string) *Element {
 	if !ok {
 		return nil
 	}
-	return &Element{document: api.document, id: node.ID, events: api.events, onMutation: api.onMutation}
+	return api.element(node)
+}
+
+// CreateElement はDocumentが所有する未接続の要素を作成する。
+func (api *API) CreateElement(tagName string) *Element {
+	if api == nil || api.document == nil {
+		return nil
+	}
+	tagName = strings.TrimSpace(tagName)
+	if !validTagName(tagName) {
+		return nil
+	}
+	return api.element(api.document.CreateElement(tagName, nil))
 }
 
 // OnClick は要素のクリックイベントへハンドラーを登録する。
@@ -83,4 +97,26 @@ func (element *Element) SetText(value string) {
 	if element.onMutation != nil {
 		element.onMutation()
 	}
+}
+
+func (api *API) element(node *dommodel.Node) *Element {
+	if api == nil || node == nil {
+		return nil
+	}
+	return &Element{document: api.document, id: node.ID, events: api.events, onMutation: api.onMutation}
+}
+
+func validTagName(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, character := range value {
+		if character != '-' &&
+			(character < 'a' || character > 'z') &&
+			(character < 'A' || character > 'Z') &&
+			(character < '0' || character > '9') {
+			return false
+		}
+	}
+	return true
 }
