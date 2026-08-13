@@ -65,6 +65,7 @@ func (state *stylesheetLoadState) loadContent(ctx context.Context, content []byt
 	if err != nil {
 		return nil, err
 	}
+	css.ResolveResourceURLs(parsed, baseURL)
 	combined := &css.Stylesheet{}
 	for _, importRule := range parsed.Imports {
 		importURL, err := baseURL.Parse(importRule.URL)

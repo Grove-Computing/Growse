@@ -358,19 +358,22 @@ func (b *Browser) load(ctx context.Context, pageURL *url.URL, commit historyComm
 		return nil, fmt.Errorf("load styles for %s: %w", pageURL.Redacted(), err)
 	}
 	computedStyles := style.Compute(document, stylesheet)
+	backgroundImages, backgroundErrors := loadBackgroundImages(ctx, client, computedStyles)
 	scripts, scriptErrors := loadScripts(ctx, client, response.URL, document)
 
 	page := &Page{
-		URL:            cloneURL(response.URL),
-		StatusCode:     response.StatusCode,
-		ContentType:    response.ContentType,
-		Source:         append([]byte(nil), response.Body...),
-		Document:       document,
-		Events:         events.NewDispatcher(),
-		Stylesheet:     stylesheet,
-		ComputedStyles: computedStyles,
-		Scripts:        scripts,
-		ScriptErrors:   scriptErrors,
+		URL:              cloneURL(response.URL),
+		StatusCode:       response.StatusCode,
+		ContentType:      response.ContentType,
+		Source:           append([]byte(nil), response.Body...),
+		Document:         document,
+		Events:           events.NewDispatcher(),
+		Stylesheet:       stylesheet,
+		ComputedStyles:   computedStyles,
+		BackgroundImages: backgroundImages,
+		BackgroundErrors: backgroundErrors,
+		Scripts:          scripts,
+		ScriptErrors:     scriptErrors,
 	}
 	pageRuntime := startRuntime(ctx, runtimeFactory, page, onMutation)
 	if err := ctx.Err(); err != nil {
