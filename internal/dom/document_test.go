@@ -1,6 +1,9 @@
 package dom
 
-import "testing"
+import (
+	"slices"
+	"testing"
+)
 
 func TestNodeByIDReturnsDocumentNode(t *testing.T) {
 	document := NewDocument()
@@ -91,6 +94,64 @@ func TestAppendChildIndexesDetachedSubtreeWhenAttached(t *testing.T) {
 	}
 	if got, ok := document.GetElementByID("child"); !ok || got != child {
 		t.Fatalf("GetElementByID(child) = (%p, %v), want (%p, true)", got, ok, child)
+	}
+}
+
+func TestRemoveDeletesConnectedSubtreeAndIndexes(t *testing.T) {
+	document := NewDocument()
+	parent := document.CreateElement("main", map[string]string{"id": "parent"})
+	child := document.CreateElement("section", map[string]string{"id": "child"})
+	grandchild := document.CreateElement("span", map[string]string{"id": "grandchild"})
+	for _, edge := range [][2]*Node{
+		{document.Root, parent},
+		{parent, child},
+		{child, grandchild},
+	} {
+		if err := document.AppendChild(edge[0], edge[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	removed, ok := document.Remove(child.ID)
+	if !ok {
+		t.Fatal("Remove() = false, want true")
+	}
+	if want := []NodeID{child.ID, grandchild.ID}; !slices.Equal(removed, want) {
+		t.Fatalf("removed IDs = %v, want %v", removed, want)
+	}
+	if len(parent.Children) != 0 || child.Parent != nil {
+		t.Fatalf("removed child remains attached: parent children=%v child parent=%v", parent.Children, child.Parent)
+	}
+	for _, id := range removed {
+		if _, exists := document.NodeByID(id); exists {
+			t.Fatalf("removed node %d remains indexed", id)
+		}
+	}
+	for _, id := range []string{"child", "grandchild"} {
+		if _, exists := document.GetElementByID(id); exists {
+			t.Fatalf("removed element %q remains in id index", id)
+		}
+	}
+}
+
+func TestRemoveRejectsRootDetachedAndAlreadyRemovedNode(t *testing.T) {
+	document := NewDocument()
+	attached := document.CreateElement("main", nil)
+	detached := document.CreateElement("section", nil)
+	if err := document.AppendChild(document.Root, attached); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := document.Remove(document.Root.ID); ok {
+		t.Fatal("Remove(root) = true, want false")
+	}
+	if _, ok := document.Remove(detached.ID); ok {
+		t.Fatal("Remove(detached) = true, want false")
+	}
+	if _, ok := document.Remove(attached.ID); !ok {
+		t.Fatal("first Remove(attached) = false, want true")
+	}
+	if _, ok := document.Remove(attached.ID); ok {
+		t.Fatal("second Remove(attached) = true, want false")
 	}
 }
 

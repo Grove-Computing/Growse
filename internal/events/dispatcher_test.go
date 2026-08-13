@@ -42,3 +42,18 @@ func TestDispatchReportsUnhandledEvent(t *testing.T) {
 		t.Fatal("Dispatch() = true for event without listeners")
 	}
 }
+
+func TestRemoveEventListenersRemovesSpecifiedNodes(t *testing.T) {
+	dispatcher := NewDispatcher()
+	dispatcher.AddEventListener(1, Click, func(Event) {})
+	dispatcher.AddEventListener(2, Click, func(Event) {})
+
+	dispatcher.RemoveEventListeners(1)
+
+	if dispatcher.Dispatch(Event{Type: Click, Target: 1}) {
+		t.Fatal("removed node event was handled")
+	}
+	if !dispatcher.Dispatch(Event{Type: Click, Target: 2}) {
+		t.Fatal("unrelated node event listener was removed")
+	}
+}

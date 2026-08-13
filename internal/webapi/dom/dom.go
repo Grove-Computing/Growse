@@ -99,6 +99,24 @@ func (element *Element) AppendChild(child *Element) bool {
 	return true
 }
 
+// Remove は要素自身とその子孫をDocumentから削除する。
+func (element *Element) Remove() bool {
+	if element == nil || element.document == nil {
+		return false
+	}
+	removed, ok := element.document.Remove(element.id)
+	if !ok {
+		return false
+	}
+	if element.events != nil {
+		element.events.RemoveEventListeners(removed...)
+	}
+	if element.onMutation != nil {
+		element.onMutation()
+	}
+	return true
+}
+
 // Text は要素と子孫のテキストを返す。
 func (element *Element) Text() string {
 	if element == nil || element.document == nil {

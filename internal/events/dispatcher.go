@@ -51,6 +51,18 @@ func (dispatcher *Dispatcher) AddEventListener(nodeID dom.NodeID, eventType Type
 	byType[eventType] = append(byType[eventType], listener)
 }
 
+// RemoveEventListeners は指定したノードに登録された全リスナーを削除する。
+func (dispatcher *Dispatcher) RemoveEventListeners(nodeIDs ...dom.NodeID) {
+	if dispatcher == nil {
+		return
+	}
+	dispatcher.mu.Lock()
+	defer dispatcher.mu.Unlock()
+	for _, nodeID := range nodeIDs {
+		delete(dispatcher.listeners, nodeID)
+	}
+}
+
 // Dispatch は対象ノードへ登録されたリスナーを登録順に呼び出す。
 func (dispatcher *Dispatcher) Dispatch(event Event) bool {
 	if dispatcher == nil {

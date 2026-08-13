@@ -80,6 +80,33 @@ func (d *Document) IsConnected(node *Node) bool {
 	return false
 }
 
+// Remove は接続済み要素とその子孫をDocumentから削除し、削除したNodeIDを返す。
+func (d *Document) Remove(id NodeID) ([]NodeID, bool) {
+	if d == nil {
+		return nil, false
+	}
+	node, ok := d.nodes[id]
+	if !ok || node == d.Root || node.Type != NodeElement || !d.IsConnected(node) || node.Parent == nil {
+		return nil, false
+	}
+	parent := node.Parent
+	index := -1
+	for childIndex, child := range parent.Children {
+		if child == node {
+			index = childIndex
+			break
+		}
+	}
+	if index < 0 {
+		return nil, false
+	}
+	removed := collectNodeIDs(node, nil)
+	parent.Children = append(parent.Children[:index], parent.Children[index+1:]...)
+	d.removeSubtree(node)
+	d.rebuildIDIndex()
+	return removed, true
+}
+
 // GetElementByID returns the first element with the given id attribute.
 func (d *Document) GetElementByID(id string) (*Node, bool) {
 	node, ok := d.byID[id]
@@ -209,6 +236,17 @@ func countElements(node *Node) int {
 		count += countElements(child)
 	}
 	return count
+}
+
+func collectNodeIDs(node *Node, ids []NodeID) []NodeID {
+	if node == nil {
+		return ids
+	}
+	ids = append(ids, node.ID)
+	for _, child := range node.Children {
+		ids = collectNodeIDs(child, ids)
+	}
+	return ids
 }
 
 func findElement(node *Node, tagName string) *Node {

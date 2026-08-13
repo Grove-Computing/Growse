@@ -161,6 +161,56 @@ func TestAppendChildRejectsInvalidRelationshipsWithoutMutation(t *testing.T) {
 	}
 }
 
+func TestRemoveDeletesElementAndDescendants(t *testing.T) {
+	document := dommodel.NewDocument()
+	parentNode := document.CreateElement("main", map[string]string{"id": "parent"})
+	childNode := document.CreateElement("section", map[string]string{"id": "child"})
+	grandchildNode := document.CreateElement("button", map[string]string{"id": "grandchild"})
+	for _, edge := range [][2]*dommodel.Node{
+		{document.Root, parentNode},
+		{parentNode, childNode},
+		{childNode, grandchildNode},
+	} {
+		if err := document.AppendChild(edge[0], edge[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mutations := 0
+	dispatcher := events.NewDispatcher()
+	api := New(document, dispatcher, func() { mutations++ })
+	child := api.GetElementByID("child")
+	grandchild := api.GetElementByID("grandchild")
+	called := false
+	grandchild.OnClick(func() { called = true })
+
+	if !child.Remove() {
+		t.Fatal("Remove() = false, want true")
+	}
+	if child.Remove() {
+		t.Fatal("second Remove() = true, want false")
+	}
+	if len(parentNode.Children) != 0 {
+		t.Fatalf("parent child count = %d, want 0", len(parentNode.Children))
+	}
+	if dispatcher.Dispatch(events.Event{Type: events.Click, Target: grandchildNode.ID}) || called {
+		t.Fatal("removed descendant click handler was invoked")
+	}
+	if got, want := mutations, 1; got != want {
+		t.Fatalf("mutation count = %d, want %d", got, want)
+	}
+}
+
+func TestRemoveRejectsDetachedElementWithoutMutation(t *testing.T) {
+	mutations := 0
+	api := New(dommodel.NewDocument(), events.NewDispatcher(), func() { mutations++ })
+	if api.CreateElement("div").Remove() {
+		t.Fatal("Remove(detached) = true, want false")
+	}
+	if mutations != 0 {
+		t.Fatalf("mutation count = %d, want 0", mutations)
+	}
+}
+
 func TestOnClickRegistersHandler(t *testing.T) {
 	document := dommodel.NewDocument()
 	button := document.CreateElement("button", map[string]string{"id": "button"})
