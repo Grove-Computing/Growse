@@ -16,6 +16,7 @@ type Box struct {
 	NodeID dom.NodeID
 	Tag    string
 	Text   string
+	Input  bool
 
 	X      float32
 	Y      float32
