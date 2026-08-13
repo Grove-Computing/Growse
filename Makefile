@@ -2,7 +2,7 @@ STATICCHECK_VERSION ?= 2026.1
 GOVULNCHECK_VERSION ?= v1.6.0
 ACTIONLINT_VERSION ?= v1.7.12
 
-.PHONY: test race vet staticcheck vulncheck actionlint fmt-check tidy-check quality ci
+.PHONY: test race vet staticcheck vulncheck actionlint installer-test fmt-check tidy-check quality ci
 
 test:
 	go test ./...
@@ -22,6 +22,9 @@ vulncheck:
 actionlint:
 	go run github.com/rhysd/actionlint/cmd/actionlint@$(ACTIONLINT_VERSION)
 
+installer-test:
+	bash tests/install.sh
+
 fmt-check:
 	@test -z "$$(gofmt -l .)" || (gofmt -l . && exit 1)
 
@@ -30,4 +33,4 @@ tidy-check:
 
 quality: fmt-check tidy-check vet staticcheck actionlint
 
-ci: quality race vulncheck
+ci: quality race vulncheck installer-test
