@@ -55,7 +55,7 @@ func loadGopherCursor() (image.Image, error) {
 
 func rasterizeGopherCursor(source []byte) (image.Image, error) {
 	if len(source) == 0 {
-		return nil, errors.New("Gopher cursor SVG is empty")
+		return nil, errors.New("gopher cursor SVG is empty")
 	}
 	icon, err := oksvg.ReadIconStream(bytes.NewReader(source), oksvg.StrictErrorMode)
 	if err != nil {
@@ -72,7 +72,7 @@ func rasterizeGopherCursor(source []byte) (image.Image, error) {
 	width := int(math.Ceil(icon.ViewBox.W))
 	height := int(math.Ceil(icon.ViewBox.H))
 	if width <= 0 || height <= 0 {
-		return nil, errors.New("Gopher cursor SVG has an invalid viewBox")
+		return nil, errors.New("gopher cursor SVG has an invalid viewBox")
 	}
 
 	result := image.NewRGBA(image.Rect(0, 0, width, height))
@@ -88,7 +88,7 @@ func svgViewBox(source []byte) ([4]float64, error) {
 		token, err := decoder.Token()
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				return [4]float64{}, errors.New("Gopher cursor SVG has no viewBox")
+				return [4]float64{}, errors.New("gopher cursor SVG has no viewBox")
 			}
 			return [4]float64{}, err
 		}
@@ -102,21 +102,21 @@ func svgViewBox(source []byte) ([4]float64, error) {
 			}
 			fields := strings.Fields(strings.ReplaceAll(attribute.Value, ",", " "))
 			if len(fields) != 4 {
-				return [4]float64{}, errors.New("Gopher cursor SVG has an invalid viewBox")
+				return [4]float64{}, errors.New("gopher cursor SVG has an invalid viewBox")
 			}
 			var result [4]float64
 			for index, field := range fields {
 				result[index], err = strconv.ParseFloat(field, 64)
 				if err != nil {
-					return [4]float64{}, errors.New("Gopher cursor SVG has an invalid viewBox")
+					return [4]float64{}, errors.New("gopher cursor SVG has an invalid viewBox")
 				}
 			}
 			if result[2] <= 0 || result[3] <= 0 {
-				return [4]float64{}, errors.New("Gopher cursor SVG has an invalid viewBox")
+				return [4]float64{}, errors.New("gopher cursor SVG has an invalid viewBox")
 			}
 			return result, nil
 		}
-		return [4]float64{}, errors.New("Gopher cursor SVG has no viewBox")
+		return [4]float64{}, errors.New("gopher cursor SVG has no viewBox")
 	}
 }
 
