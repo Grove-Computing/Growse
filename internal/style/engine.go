@@ -534,11 +534,6 @@ func initialSizeValue(property string) SizeValue {
 	return SizeValue{Kind: SizeLength}
 }
 
-func parsePositivePixels(value string) (float32, bool) {
-	parsed, valid := parsePixels(value)
-	return parsed, valid && parsed > 0
-}
-
 func resolveLineHeight(value string, parent, fontSize float32, context LengthContext) (float32, bool) {
 	switch parseGlobalKeyword(value) {
 	case globalInherit, globalUnset:
@@ -1428,24 +1423,6 @@ func outranks(candidate, current winner) bool {
 		return candidate.order[0] > current.order[0]
 	}
 	return candidate.order[1] >= current.order[1]
-}
-
-func parsePixels(value string) (float32, bool) {
-	value = strings.ToLower(strings.TrimSpace(value))
-	if !strings.HasSuffix(value, "px") {
-		return 0, false
-	}
-	number, err := strconv.ParseFloat(strings.TrimSpace(strings.TrimSuffix(value, "px")), 32)
-	return float32(number), err == nil
-}
-
-func parseLength(value string) (float32, bool) {
-	value = strings.ToLower(strings.TrimSpace(value))
-	if value == "0" {
-		return 0, true
-	}
-	parsed, ok := parsePixels(value)
-	return parsed, ok && parsed >= 0
 }
 
 func parseFontWeight(value string) (int, bool) {
