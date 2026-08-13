@@ -77,6 +77,28 @@ func (element *Element) OnClick(handler func()) {
 	})
 }
 
+// AppendChild は未接続の子要素を接続済みの要素の末尾へ追加する。
+func (element *Element) AppendChild(child *Element) bool {
+	if element == nil || child == nil || element.document == nil || child.document != element.document {
+		return false
+	}
+	parentNode, parentOK := element.document.NodeByID(element.id)
+	childNode, childOK := element.document.NodeByID(child.id)
+	if !parentOK || !childOK || parentNode.Type != dommodel.NodeElement || childNode.Type != dommodel.NodeElement {
+		return false
+	}
+	if !element.document.IsConnected(parentNode) || element.document.IsConnected(childNode) || childNode.Parent != nil {
+		return false
+	}
+	if err := element.document.AppendChild(parentNode, childNode); err != nil {
+		return false
+	}
+	if element.onMutation != nil {
+		element.onMutation()
+	}
+	return true
+}
+
 // Text は要素と子孫のテキストを返す。
 func (element *Element) Text() string {
 	if element == nil || element.document == nil {

@@ -63,12 +63,21 @@ func (d *Document) AppendChild(parent, child *Node) error {
 
 	child.Parent = parent
 	parent.Children = append(parent.Children, child)
-	if id, ok := child.Attribute("id"); ok && id != "" {
-		if _, exists := d.byID[id]; !exists {
-			d.byID[id] = child
+	d.rebuildIDIndex()
+	return nil
+}
+
+// IsConnected はノードがDocumentのルートツリーに接続されているかを返す。
+func (d *Document) IsConnected(node *Node) bool {
+	if d == nil || node == nil || node.document != d || d.Root == nil {
+		return false
+	}
+	for current := node; current != nil; current = current.Parent {
+		if current == d.Root {
+			return true
 		}
 	}
-	return nil
+	return false
 }
 
 // GetElementByID returns the first element with the given id attribute.

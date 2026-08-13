@@ -57,6 +57,43 @@ func TestAppendChildRejectsNodeFromAnotherDocument(t *testing.T) {
 	}
 }
 
+func TestIsConnectedDistinguishesAttachedAndDetachedNodes(t *testing.T) {
+	document := NewDocument()
+	attached := document.CreateElement("main", nil)
+	detached := document.CreateElement("section", nil)
+	if err := document.AppendChild(document.Root, attached); err != nil {
+		t.Fatal(err)
+	}
+
+	if !document.IsConnected(document.Root) || !document.IsConnected(attached) {
+		t.Fatal("root and attached element should be connected")
+	}
+	if document.IsConnected(detached) {
+		t.Fatal("detached element should not be connected")
+	}
+	if document.IsConnected(NewDocument().Root) {
+		t.Fatal("foreign document root should not be connected")
+	}
+}
+
+func TestAppendChildIndexesDetachedSubtreeWhenAttached(t *testing.T) {
+	document := NewDocument()
+	parent := document.CreateElement("section", map[string]string{"id": "parent"})
+	child := document.CreateElement("p", map[string]string{"id": "child"})
+	if err := document.AppendChild(parent, child); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := document.GetElementByID("child"); ok {
+		t.Fatal("detached subtree must not appear in the id index")
+	}
+	if err := document.AppendChild(document.Root, parent); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := document.GetElementByID("child"); !ok || got != child {
+		t.Fatalf("GetElementByID(child) = (%p, %v), want (%p, true)", got, ok, child)
+	}
+}
+
 func TestQuerySelectorReturnsFirstMatchingElement(t *testing.T) {
 	document := NewDocument()
 	body := document.CreateElement("body", nil)

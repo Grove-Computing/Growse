@@ -100,6 +100,67 @@ func TestCreateElementRejectsInvalidTagName(t *testing.T) {
 	}
 }
 
+func TestAppendChildAttachesCreatedElementAndNotifiesMutation(t *testing.T) {
+	document := dommodel.NewDocument()
+	listNode := document.CreateElement("ul", map[string]string{"id": "list"})
+	if err := document.AppendChild(document.Root, listNode); err != nil {
+		t.Fatal(err)
+	}
+	mutations := 0
+	api := New(document, events.NewDispatcher(), func() { mutations++ })
+	list := api.GetElementByID("list")
+	item := api.CreateElement("li")
+
+	if !list.AppendChild(item) {
+		t.Fatal("AppendChild() = false, want true")
+	}
+	itemNode, ok := document.NodeByID(item.id)
+	if !ok || itemNode.Parent != listNode || !document.IsConnected(itemNode) {
+		t.Fatalf("created item was not attached: %#v", itemNode)
+	}
+	if got, want := mutations, 1; got != want {
+		t.Fatalf("mutation count = %d, want %d", got, want)
+	}
+}
+
+func TestAppendChildRejectsInvalidRelationshipsWithoutMutation(t *testing.T) {
+	document := dommodel.NewDocument()
+	parentNode := document.CreateElement("main", map[string]string{"id": "parent"})
+	alreadyAttachedNode := document.CreateElement("p", map[string]string{"id": "attached"})
+	for _, node := range []*dommodel.Node{parentNode, alreadyAttachedNode} {
+		if err := document.AppendChild(document.Root, node); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mutations := 0
+	api := New(document, events.NewDispatcher(), func() { mutations++ })
+	parent := api.GetElementByID("parent")
+	detachedParent := api.CreateElement("section")
+	detachedChild := api.CreateElement("span")
+	foreignChild := New(dommodel.NewDocument(), events.NewDispatcher(), nil).CreateElement("span")
+	alreadyAttached := api.GetElementByID("attached")
+
+	for name, appendChild := range map[string]func() bool{
+		"nil child":       func() bool { return parent.AppendChild(nil) },
+		"detached parent": func() bool { return detachedParent.AppendChild(detachedChild) },
+		"foreign child":   func() bool { return parent.AppendChild(foreignChild) },
+		"connected child": func() bool { return parent.AppendChild(alreadyAttached) },
+		"nil parent receiver": func() bool {
+			var element *Element
+			return element.AppendChild(detachedChild)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if appendChild() {
+				t.Fatal("AppendChild() = true, want false")
+			}
+		})
+	}
+	if mutations != 0 {
+		t.Fatalf("mutation count = %d, want 0", mutations)
+	}
+}
+
 func TestOnClickRegistersHandler(t *testing.T) {
 	document := dommodel.NewDocument()
 	button := document.CreateElement("button", map[string]string{"id": "button"})
