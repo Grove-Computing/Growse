@@ -9,6 +9,7 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"log/slog"
 
 	"gioui.org/font"
 	"gioui.org/gesture"
@@ -49,22 +50,26 @@ type BrowserUI struct {
 	navigationID     uint64
 	loading          bool
 
-	backButton     widget.Clickable
-	forwardButton  widget.Clickable
-	reloadButton   widget.Clickable
-	goButton       widget.Clickable
-	pageList       widget.List
-	viewportClick  gesture.Click
-	address        widget.Editor
-	gopher         paint.ImageOp
-	backIcon       *widget.Icon
-	forwardIcon    *widget.Icon
-	reloadIcon     *widget.Icon
-	pageTitle      string
-	status         string
-	inputEditors   map[dom.NodeID]*widget.Editor
-	inputFocused   map[dom.NodeID]bool
-	inputCommitted map[dom.NodeID]string
+	backButton        widget.Clickable
+	forwardButton     widget.Clickable
+	reloadButton      widget.Clickable
+	goButton          widget.Clickable
+	pageList          widget.List
+	viewportClick     gesture.Click
+	address           widget.Editor
+	gopher            paint.ImageOp
+	gopherCursor      paint.ImageOp
+	gopherCursorReady bool
+	pointerTag        pointerTag
+	pointer           pointerState
+	backIcon          *widget.Icon
+	forwardIcon       *widget.Icon
+	reloadIcon        *widget.Icon
+	pageTitle         string
+	status            string
+	inputEditors      map[dom.NodeID]*widget.Editor
+	inputFocused      map[dom.NodeID]bool
+	inputCommitted    map[dom.NodeID]string
 }
 
 // Navigator is the browser capability used by the UI.
@@ -95,6 +100,7 @@ func NewBrowserUI(navigator Navigator, invalidate func()) *BrowserUI {
 		panic("decode embedded Go Gopher image: " + err.Error())
 	}
 
+	cursorImage, cursorErr := loadGopherCursor()
 	ui := &BrowserUI{
 		theme:          material.NewTheme(),
 		navigator:      navigator,
@@ -110,6 +116,12 @@ func NewBrowserUI(navigator Navigator, invalidate func()) *BrowserUI {
 		inputFocused:   make(map[dom.NodeID]bool),
 		inputCommitted: make(map[dom.NodeID]string),
 	}
+	if cursorErr != nil {
+		slog.Error("Gopherカーソルを初期化できませんでした", "component", "ui", "error", cursorErr)
+	} else {
+		ui.gopherCursor = paint.NewImageOp(cursorImage)
+		ui.gopherCursorReady = true
+	}
 	if ui.invalidate == nil {
 		ui.invalidate = func() {}
 	}
@@ -122,10 +134,13 @@ func NewBrowserUI(navigator Navigator, invalidate func()) *BrowserUI {
 
 // Layout draws the browser toolbar and page viewport.
 func (ui *BrowserUI) Layout(gtx layout.Context) layout.Dimensions {
+	ui.handlePointerEvents(gtx)
 	ui.handleActions(gtx)
 
 	viewport := layout.Inset{Top: toolbarHeight}.Layout(gtx, ui.layoutViewport)
 	ui.layoutToolbar(gtx)
+	ui.layoutGopherCursor(gtx)
+	ui.registerPointerTracker(gtx)
 	return viewport
 }
 
