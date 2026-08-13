@@ -174,6 +174,35 @@ func TestBuildCollapsesAdjacentBlockMargins(t *testing.T) {
 	}
 }
 
+func TestBuildPlacesInlineBlockAsAtomicInline(t *testing.T) {
+	document := dom.NewDocument()
+	paragraph := document.CreateElement("p", nil)
+	badge := document.CreateElement("span", map[string]string{"class": "badge"})
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, paragraph},
+		[2]*dom.Node{paragraph, document.CreateText("before ")},
+		[2]*dom.Node{paragraph, badge}, [2]*dom.Node{badge, document.CreateText("badge")},
+		[2]*dom.Node{paragraph, document.CreateText(" after")},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.badge { display: inline-block; width: 100px; height: 40px; padding: 4px; border: 2px solid red; }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, style.Compute(document, stylesheet), 800)
+	if got, want := len(tree.Boxes), 1; got != want {
+		t.Fatalf("line count = %d, want %d", got, want)
+	}
+	line := tree.Boxes[0]
+	if len(line.Runs) != 3 || line.Runs[1].NodeID != badge.ID || line.Runs[1].Width != 112 {
+		t.Fatalf("inline-block runs = %#v", line.Runs)
+	}
+	if line.Height != 52 {
+		t.Fatalf("line height = %v, want 52", line.Height)
+	}
+}
+
 func TestBuildPreservesInlineRunStyles(t *testing.T) {
 	document := dom.NewDocument()
 	p := document.CreateElement("p", nil)

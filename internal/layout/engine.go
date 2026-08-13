@@ -40,6 +40,9 @@ type inlineRun struct {
 	tag    string
 	text   string
 	style  blockStyle
+	atomic bool
+	width  float32
+	height float32
 }
 
 // Build creates a vertical block layout with a minimal inline text flow.
@@ -313,6 +316,9 @@ func (e *engine) collectInlineRuns(node, owner *dom.Node) []inlineRun {
 	if style.display == stylemodel.DisplayNone {
 		return nil
 	}
+	if style.display == stylemodel.DisplayInlineBlock {
+		return []inlineRun{{nodeID: node.ID, tag: node.TagName, text: e.inlineText(node), style: style, atomic: true}}
+	}
 	if node.TagName == "br" {
 		return []inlineRun{{nodeID: node.ID, tag: node.TagName, text: "\n", style: style}}
 	}
@@ -400,12 +406,24 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 		}
 		lineText.WriteString(text)
 		usedWidth += pieceWidth
-		if height := run.style.fontSize * 1.4; height > lineHeight {
+		height := run.style.fontSize * 1.4
+		if run.height > height {
+			height = run.height
+		}
+		if height > lineHeight {
 			lineHeight = height
 		}
 	}
 
 	for _, token := range tokenizeInlineRuns(runs) {
+		if token.atomic {
+			token.width, token.height = resolveAtomicSize(token, width)
+			if usedWidth > 0 && usedWidth+token.width > width {
+				flushLine()
+			}
+			appendPiece(token, token.text, token.width)
+			continue
+		}
 		if token.text == "\n" {
 			flushLine()
 			continue
@@ -457,6 +475,10 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 func tokenizeInlineRuns(runs []inlineRun) []inlineRun {
 	var tokens []inlineRun
 	for _, run := range runs {
+		if run.atomic {
+			tokens = append(tokens, run)
+			continue
+		}
 		var word strings.Builder
 		flushWord := func() {
 			if word.Len() == 0 {
@@ -487,6 +509,26 @@ func tokenizeInlineRuns(runs []inlineRun) []inlineRun {
 		flushWord()
 	}
 	return tokens
+}
+
+func resolveAtomicSize(run inlineRun, containingWidth float32) (float32, float32) {
+	horizontal := run.style.padding.Left + run.style.padding.Right + run.style.border.Left.Width + run.style.border.Right.Width
+	vertical := run.style.padding.Top + run.style.padding.Bottom + run.style.border.Top.Width + run.style.border.Bottom.Width
+	width := estimatedTextWidth(normalizeWhitespace(run.text), run.style.fontSize)
+	if resolved, ok := resolveSize(run.style.width, containingWidth, true); ok {
+		width = resolved
+	}
+	width = constrainSize(width, run.style.minWidth, run.style.maxWidth, containingWidth, true)
+	height := run.style.fontSize * 1.4
+	if resolved, ok := resolveSize(run.style.height, 0, false); ok {
+		height = resolved
+	}
+	height = constrainSize(height, run.style.minHeight, run.style.maxHeight, 0, false)
+	if run.style.boxSizing == stylemodel.BoxSizingContentBox {
+		width += horizontal
+		height += vertical
+	}
+	return max(width, float32(0)), max(height, float32(0))
 }
 
 func sameTextStyle(left, right TextRun) bool {
