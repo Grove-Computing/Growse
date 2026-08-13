@@ -105,6 +105,7 @@ func NewBrowserUI(navigator Navigator, invalidate func()) *BrowserUI {
 		ui.invalidate = func() {}
 	}
 	ui.address.SingleLine = true
+	ui.address.Submit = true
 	ui.address.SetText(defaultURL)
 	ui.pageList.Axis = layout.Vertical
 	return ui
@@ -122,6 +123,15 @@ func (ui *BrowserUI) Layout(gtx layout.Context) layout.Dimensions {
 func (ui *BrowserUI) handleActions(gtx layout.Context) {
 	ui.consumeNavigationResult()
 
+	for {
+		event, ok := ui.address.Update(gtx)
+		if !ok {
+			break
+		}
+		if submitted, ok := event.(widget.SubmitEvent); ok {
+			ui.startNavigation(submitted.Text)
+		}
+	}
 	for ui.goButton.Clicked(gtx) {
 		ui.startNavigation(ui.address.Text())
 	}

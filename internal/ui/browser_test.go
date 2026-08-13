@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"gioui.org/io/input"
+	"gioui.org/io/key"
 	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/unit"
@@ -118,6 +120,52 @@ func TestNavigationResultUpdatesAddressAndStatus(t *testing.T) {
 	}
 	if !strings.Contains(ui.status, "取得完了") || !strings.Contains(ui.status, "14 bytes") {
 		t.Fatalf("status = %q, want successful load summary", ui.status)
+	}
+}
+
+type recordingNavigator struct {
+	stubNavigator
+	navigated chan string
+}
+
+func (navigator *recordingNavigator) Navigate(_ context.Context, rawURL string) (*browser.Page, error) {
+	navigator.navigated <- rawURL
+	return navigator.page, navigator.err
+}
+
+func TestAddressEnterStartsNavigation(t *testing.T) {
+	pageURL, err := url.Parse("https://example.com/search")
+	if err != nil {
+		t.Fatal(err)
+	}
+	navigator := &recordingNavigator{
+		stubNavigator: stubNavigator{page: &browser.Page{URL: pageURL}},
+		navigated:     make(chan string, 1),
+	}
+	ui := NewBrowserUI(navigator, nil)
+	ui.address.SetText("example.com/search")
+
+	router := new(input.Router)
+	gtx := layout.Context{
+		Ops:         new(op.Ops),
+		Source:      router.Source(),
+		Constraints: layout.Exact(image.Pt(1280, 800)),
+		Metric:      unit.Metric{PxPerDp: 1, PxPerSp: 1},
+	}
+	ui.Layout(gtx)
+	router.Frame(gtx.Ops)
+	gtx.Execute(key.FocusCmd{Tag: &ui.address})
+	router.Queue(key.Event{Name: key.NameReturn, State: key.Press})
+
+	gtx.Reset()
+	ui.Layout(gtx)
+	select {
+	case got := <-navigator.navigated:
+		if want := "example.com/search"; got != want {
+			t.Fatalf("Navigate() URL = %q, want %q", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Enter did not start navigation")
 	}
 }
 
