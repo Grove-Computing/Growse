@@ -17,26 +17,29 @@ const (
 )
 
 type blockStyle struct {
-	fontSize   float32
-	bold       bool
-	color      uint32
-	background uint32
-	image      stylemodel.BackgroundImage
-	display    stylemodel.Display
-	margin     stylemodel.Edges
-	padding    stylemodel.Edges
-	border     stylemodel.Borders
-	boxSizing  stylemodel.BoxSizing
-	width      stylemodel.SizeValue
-	height     stylemodel.SizeValue
-	minWidth   stylemodel.SizeValue
-	minHeight  stylemodel.SizeValue
-	maxWidth   stylemodel.SizeValue
-	maxHeight  stylemodel.SizeValue
-	lineHeight float32
-	whiteSpace stylemodel.WhiteSpace
-	overflowX  stylemodel.Overflow
-	overflowY  stylemodel.Overflow
+	fontSize       float32
+	bold           bool
+	color          uint32
+	background     uint32
+	image          stylemodel.BackgroundImage
+	repeat         stylemodel.BackgroundRepeat
+	position       stylemodel.BackgroundPosition
+	backgroundSize stylemodel.BackgroundSize
+	display        stylemodel.Display
+	margin         stylemodel.Edges
+	padding        stylemodel.Edges
+	border         stylemodel.Borders
+	boxSizing      stylemodel.BoxSizing
+	width          stylemodel.SizeValue
+	height         stylemodel.SizeValue
+	minWidth       stylemodel.SizeValue
+	minHeight      stylemodel.SizeValue
+	maxWidth       stylemodel.SizeValue
+	maxHeight      stylemodel.SizeValue
+	lineHeight     float32
+	whiteSpace     stylemodel.WhiteSpace
+	overflowX      stylemodel.Overflow
+	overflowY      stylemodel.Overflow
 }
 
 type inlineRun struct {
@@ -240,7 +243,8 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 		e.tree.Decorations = append(e.tree.Decorations, Decoration{
 			Order: e.nextOrder(), NodeID: node.ID,
 			Rect:       Rect{X: x, Y: boxTop, Width: outerWidth},
-			Background: style.background, Image: cloneBackgroundImage(style.image), Clip: cloneRect(e.clip),
+			Background: style.background, Image: cloneBackgroundImage(style.image),
+			Repeat: style.repeat, Position: style.position, Size: style.backgroundSize, Clip: cloneRect(e.clip),
 		})
 	}
 	e.y += style.border.Top.Width + style.padding.Top
@@ -703,6 +707,9 @@ func applyComputed(block blockStyle, computed stylemodel.ComputedStyle) blockSty
 	block.color = computed.Color
 	block.background = computed.BackgroundColor
 	block.image = cloneBackgroundImage(computed.BackgroundImage)
+	block.repeat = computed.BackgroundRepeat
+	block.position = computed.BackgroundPos
+	block.backgroundSize = computed.BackgroundSize
 	block.display = computed.Display
 	block.margin = computed.Margin
 	block.padding = computed.Padding

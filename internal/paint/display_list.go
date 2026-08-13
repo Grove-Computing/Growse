@@ -63,15 +63,18 @@ func (DrawInput) paintCommand() {}
 // DrawBox paints an element background without advancing by its painted height.
 // Its Top value only moves the list cursor to the element's document position.
 type DrawBox struct {
-	NodeID dom.NodeID
-	X      float32
-	Y      float32
-	Top    float32
-	Width  float32
-	Height float32
-	Color  uint32
-	Image  stylemodel.BackgroundImage
-	Clip   *layout.Rect
+	NodeID   dom.NodeID
+	X        float32
+	Y        float32
+	Top      float32
+	Width    float32
+	Height   float32
+	Color    uint32
+	Image    stylemodel.BackgroundImage
+	Repeat   stylemodel.BackgroundRepeat
+	Position stylemodel.BackgroundPosition
+	Size     stylemodel.BackgroundSize
+	Clip     *layout.Rect
 }
 
 func (DrawBox) paintCommand() {}
@@ -123,7 +126,8 @@ func Build(tree *layout.Tree) *DisplayList {
 			list.Commands = append(list.Commands, DrawBox{
 				NodeID: decoration.NodeID, X: decoration.X, Y: decoration.Y, Top: top,
 				Width: decoration.Width, Height: decoration.Height, Color: decoration.Background,
-				Image: cloneBackgroundImage(decoration.Image), Clip: cloneLayoutRect(decoration.Clip),
+				Image: cloneBackgroundImage(decoration.Image), Repeat: decoration.Repeat,
+				Position: decoration.Position, Size: decoration.Size, Clip: cloneLayoutRect(decoration.Clip),
 			})
 			previousBottom += top
 			continue

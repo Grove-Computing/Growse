@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"image"
+	"image/color"
 	"net/url"
 	"strings"
 	"testing"
@@ -45,6 +46,27 @@ func TestRasterLinearGradientInterpolatesAllColorStops(t *testing.T) {
 	image := rasterLinearGradient(3, 1, gradient)
 	if left, middle, right := image.NRGBAAt(0, 0), image.NRGBAAt(1, 0), image.NRGBAAt(2, 0); left.R != 255 || middle.G != 255 || right.B != 255 {
 		t.Fatalf("gradient pixels = %v, %v, %v", left, middle, right)
+	}
+}
+
+func TestRasterBackgroundImageRepeatsAndSizesImage(t *testing.T) {
+	source := image.NewNRGBA(image.Rect(0, 0, 2, 1))
+	source.SetNRGBA(0, 0, color.NRGBA{R: 255, A: 255})
+	source.SetNRGBA(1, 0, color.NRGBA{B: 255, A: 255})
+	repeated := rasterBackgroundImage(4, 1, source, paintmodel.DrawBox{
+		Repeat: style.BackgroundRepeat{X: true},
+	}, 1)
+	if got := []color.NRGBA{repeated.NRGBAAt(0, 0), repeated.NRGBAAt(1, 0), repeated.NRGBAAt(2, 0), repeated.NRGBAAt(3, 0)}; got[0].R != 255 || got[1].B != 255 || got[2].R != 255 || got[3].B != 255 {
+		t.Fatalf("repeated pixels = %v", got)
+	}
+
+	green := image.NewNRGBA(image.Rect(0, 0, 1, 1))
+	green.SetNRGBA(0, 0, color.NRGBA{G: 255, A: 255})
+	sized := rasterBackgroundImage(4, 1, green, paintmodel.DrawBox{
+		Size: style.BackgroundSize{Kind: style.BackgroundSizeExplicit, Width: style.SizeValue{Kind: style.SizeLength, Value: style.LengthPercentage{Percentage: 50}}},
+	}, 1)
+	if sized.NRGBAAt(0, 0).G != 255 || sized.NRGBAAt(1, 0).G != 255 || sized.NRGBAAt(2, 0).A != 0 {
+		t.Fatalf("sized pixels = %v, %v, %v", sized.NRGBAAt(0, 0), sized.NRGBAAt(1, 0), sized.NRGBAAt(2, 0))
 	}
 }
 

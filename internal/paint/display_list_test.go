@@ -41,6 +41,18 @@ func TestBuildPreservesLinearGradientStops(t *testing.T) {
 	}
 }
 
+func TestBuildPreservesBackgroundImagePlacement(t *testing.T) {
+	tree := &layout.Tree{Decorations: []layout.Decoration{{
+		Image:  style.BackgroundImage{Kind: style.BackgroundImageURL, URL: "https://example.com/card.png"},
+		Repeat: style.BackgroundRepeat{X: true}, Position: style.BackgroundPosition{X: style.LengthPercentage{Percentage: 50}},
+		Size: style.BackgroundSize{Kind: style.BackgroundSizeContain},
+	}}}
+	background := Build(tree).Commands[0].(DrawBox)
+	if background.Image.URL != "https://example.com/card.png" || !background.Repeat.X || background.Repeat.Y || background.Position.X.Percentage != 50 || background.Size.Kind != style.BackgroundSizeContain {
+		t.Fatalf("background placement = %#v", background)
+	}
+}
+
 func TestBuildCreatesInputCommand(t *testing.T) {
 	tree := &layout.Tree{Width: 400, Height: 100, Boxes: []layout.Box{{
 		NodeID: 7, Tag: "input", Text: "hello", Input: true,

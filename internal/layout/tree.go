@@ -25,6 +25,9 @@ type Decoration struct {
 	Rect
 	Background uint32
 	Image      stylemodel.BackgroundImage
+	Repeat     stylemodel.BackgroundRepeat
+	Position   stylemodel.BackgroundPosition
+	Size       stylemodel.BackgroundSize
 	Clip       *Rect
 }
 

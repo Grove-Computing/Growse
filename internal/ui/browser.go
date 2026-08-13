@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	imagedraw "image/draw"
 	"image/png"
 	"log/slog"
 	"math"
@@ -22,6 +23,7 @@ import (
 	"gioui.org/widget"
 	"gioui.org/widget/material"
 	"golang.org/x/exp/shiny/materialdesign/icons"
+	xdraw "golang.org/x/image/draw"
 
 	"github.com/saku0512/growse/internal/browser"
 	"github.com/saku0512/growse/internal/dom"
@@ -477,7 +479,7 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 		case paintmodel.DrawInput:
 			return ui.layoutDrawInput(gtx, command)
 		case paintmodel.DrawBox:
-			return layoutDrawBox(gtx, command)
+			return layoutDrawBox(gtx, command, page.BackgroundImages[command.Image.URL])
 		default:
 			return layout.Dimensions{}
 		}
@@ -613,12 +615,13 @@ func commandDocumentY(command paintmodel.Command) (float32, bool) {
 	}
 }
 
-func layoutDrawBox(gtx layout.Context, command paintmodel.DrawBox) layout.Dimensions {
+func layoutDrawBox(gtx layout.Context, command paintmodel.DrawBox, backgroundImage image.Image) layout.Dimensions {
 	return layout.Inset{Top: unit.Dp(command.Top), Left: unit.Dp(command.X)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		if command.Clip != nil {
 			defer commandClip(gtx, command.Clip, command.X, command.Y).Push(gtx.Ops).Pop()
 		}
-		width, height := gtx.Dp(unit.Dp(command.Width)), gtx.Dp(unit.Dp(command.Height))
+		width := min(gtx.Dp(unit.Dp(command.Width)), gtx.Constraints.Max.X)
+		height := min(gtx.Dp(unit.Dp(command.Height)), gtx.Constraints.Max.Y)
 		bounds := clip.Rect{Max: image.Pt(width, height)}
 		if command.Color != 0 {
 			paint.FillShape(gtx.Ops, rgba(command.Color), bounds.Op())
@@ -630,9 +633,92 @@ func layoutDrawBox(gtx layout.Context, command paintmodel.DrawBox) layout.Dimens
 				Fit: widget.Unscaled, Scale: 1 / gtx.Metric.PxPerDp,
 			}.Layout(gtx)
 			area.Pop()
+		} else if command.Image.Kind == stylemodel.BackgroundImageURL && backgroundImage != nil && width > 0 && height > 0 {
+			area := bounds.Push(gtx.Ops)
+			widget.Image{
+				Src: paint.NewImageOp(rasterBackgroundImage(width, height, backgroundImage, command, gtx.Metric.PxPerDp)),
+				Fit: widget.Unscaled, Scale: 1 / gtx.Metric.PxPerDp,
+			}.Layout(gtx)
+			area.Pop()
 		}
 		return layout.Dimensions{}
 	})
+}
+
+func rasterBackgroundImage(width, height int, source image.Image, command paintmodel.DrawBox, pixelsPerDP float32) *image.NRGBA {
+	result := image.NewNRGBA(image.Rect(0, 0, width, height))
+	if source == nil || width <= 0 || height <= 0 || pixelsPerDP <= 0 {
+		return result
+	}
+	sourceWidth, sourceHeight := source.Bounds().Dx(), source.Bounds().Dy()
+	if sourceWidth <= 0 || sourceHeight <= 0 {
+		return result
+	}
+	boxWidth, boxHeight := float32(width)/pixelsPerDP, float32(height)/pixelsPerDP
+	tileWidth, tileHeight := float32(sourceWidth), float32(sourceHeight)
+	switch command.Size.Kind {
+	case stylemodel.BackgroundSizeCover, stylemodel.BackgroundSizeContain:
+		scaleX, scaleY := boxWidth/tileWidth, boxHeight/tileHeight
+		scale := min(scaleX, scaleY)
+		if command.Size.Kind == stylemodel.BackgroundSizeCover {
+			scale = max(scaleX, scaleY)
+		}
+		tileWidth, tileHeight = tileWidth*scale, tileHeight*scale
+	case stylemodel.BackgroundSizeExplicit:
+		widthSpecified := command.Size.Width.Kind == stylemodel.SizeLength
+		heightSpecified := command.Size.Height.Kind == stylemodel.SizeLength
+		if widthSpecified {
+			tileWidth = command.Size.Width.Value.Resolve(boxWidth)
+		}
+		if heightSpecified {
+			tileHeight = command.Size.Height.Value.Resolve(boxHeight)
+		}
+		if widthSpecified && !heightSpecified {
+			tileHeight = tileWidth * float32(sourceHeight) / float32(sourceWidth)
+		} else if heightSpecified && !widthSpecified {
+			tileWidth = tileHeight * float32(sourceWidth) / float32(sourceHeight)
+		}
+	}
+	tileWidthPixels := max(int(math.Round(float64(tileWidth*pixelsPerDP))), 1)
+	tileHeightPixels := max(int(math.Round(float64(tileHeight*pixelsPerDP))), 1)
+	if tileWidthPixels > maxBackgroundRasterDimension(width) || tileHeightPixels > maxBackgroundRasterDimension(height) {
+		return result
+	}
+	tile := image.NewNRGBA(image.Rect(0, 0, tileWidthPixels, tileHeightPixels))
+	xdraw.CatmullRom.Scale(tile, tile.Bounds(), source, source.Bounds(), imagedraw.Src, nil)
+	positionX := command.Position.X.Pixels*pixelsPerDP + command.Position.X.Percentage/100*float32(width-tileWidthPixels)
+	positionY := command.Position.Y.Pixels*pixelsPerDP + command.Position.Y.Percentage/100*float32(height-tileHeightPixels)
+	startX, startY := int(math.Round(float64(positionX))), int(math.Round(float64(positionY)))
+	if command.Repeat.X {
+		for startX > 0 {
+			startX -= tileWidthPixels
+		}
+	} else if startX >= width || startX+tileWidthPixels <= 0 {
+		return result
+	}
+	if command.Repeat.Y {
+		for startY > 0 {
+			startY -= tileHeightPixels
+		}
+	} else if startY >= height || startY+tileHeightPixels <= 0 {
+		return result
+	}
+	for y := startY; y < height; y += tileHeightPixels {
+		for x := startX; x < width; x += tileWidthPixels {
+			imagedraw.Draw(result, image.Rect(x, y, x+tileWidthPixels, y+tileHeightPixels), tile, image.Point{}, imagedraw.Over)
+			if !command.Repeat.X {
+				break
+			}
+		}
+		if !command.Repeat.Y {
+			break
+		}
+	}
+	return result
+}
+
+func maxBackgroundRasterDimension(container int) int {
+	return max(container*4, 4096)
 }
 
 func rasterLinearGradient(width, height int, background stylemodel.BackgroundImage) *image.NRGBA {

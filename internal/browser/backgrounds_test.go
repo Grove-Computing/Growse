@@ -43,3 +43,25 @@ func TestLoadBackgroundImagesRejectsUnsafeContentTypeWithoutFailingPage(t *testi
 		t.Fatalf("images/errors = %#v / %#v", images, errors)
 	}
 }
+
+func TestNavigateResolvesAndLoadsBackgroundImageFromExternalStylesheet(t *testing.T) {
+	pageURL := "https://example.com/index.html"
+	stylesheetURL := "https://example.com/styles/main.css"
+	imageURL := "https://example.com/images/card.png"
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, image.NewNRGBA(image.Rect(0, 0, 2, 2))); err != nil {
+		t.Fatal(err)
+	}
+	loader := &routeLoader{responses: map[string]*network.Response{
+		pageURL:       {URL: mustParseURL(t, pageURL), StatusCode: 200, ContentType: "text/html", Body: []byte(`<link rel="stylesheet" href="styles/main.css"><div class="card">card</div>`)},
+		stylesheetURL: {URL: mustParseURL(t, stylesheetURL), StatusCode: 200, ContentType: "text/css", Body: []byte(`.card { background-image: url('../images/card.png'); }`)},
+		imageURL:      {URL: mustParseURL(t, imageURL), StatusCode: 200, ContentType: "image/png", Body: encoded.Bytes()},
+	}}
+	page, err := New(loader).Navigate(context.Background(), pageURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.BackgroundImages[imageURL] == nil || len(page.BackgroundErrors) != 0 {
+		t.Fatalf("background images/errors = %#v / %#v", page.BackgroundImages, page.BackgroundErrors)
+	}
+}
