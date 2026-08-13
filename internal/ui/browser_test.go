@@ -8,8 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"gioui.org/f32"
 	"gioui.org/io/input"
 	"gioui.org/io/key"
+	"gioui.org/io/pointer"
 	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/unit"
@@ -17,6 +19,7 @@ import (
 	"github.com/saku0512/growse/internal/browser"
 	"github.com/saku0512/growse/internal/dom"
 	paintmodel "github.com/saku0512/growse/internal/paint"
+	"github.com/saku0512/growse/internal/style"
 )
 
 type stubNavigator struct {
@@ -200,6 +203,42 @@ func TestDocumentPointIncludesListScrollOffset(t *testing.T) {
 	x, y, ok := ui.documentPoint(image.Pt(40, 18), displayList, 2)
 	if !ok || x != 20 || y != 75 {
 		t.Fatalf("documentPoint() = (%v, %v, %v), want (20, 75, true)", x, y, ok)
+	}
+}
+
+func TestTextInputReceivesFocusFromPointerPress(t *testing.T) {
+	document := dom.NewDocument()
+	inputNode := document.CreateElement("input", map[string]string{"type": "text"})
+	if err := document.AppendChild(document.Root, inputNode); err != nil {
+		t.Fatal(err)
+	}
+	page := &browser.Page{Document: document, ComputedStyles: style.Compute(document, nil)}
+	ui := NewBrowserUI(&stubNavigator{page: page}, nil)
+	router := new(input.Router)
+	gtx := layout.Context{
+		Ops:         new(op.Ops),
+		Source:      router.Source(),
+		Constraints: layout.Exact(image.Pt(800, 600)),
+		Metric:      unit.Metric{PxPerDp: 1, PxPerSp: 1},
+	}
+
+	ui.layoutDocument(gtx, page)
+	router.Frame(gtx.Ops)
+	router.Queue(pointer.Event{
+		Buttons:  pointer.ButtonPrimary,
+		Kind:     pointer.Press,
+		Source:   pointer.Mouse,
+		Position: f32.Pt(40, 40),
+	})
+	gtx.Reset()
+	ui.layoutDocument(gtx, page)
+
+	editor := ui.inputEditors[inputNode.ID]
+	if editor == nil {
+		t.Fatal("input editor was not created")
+	}
+	if !gtx.Focused(editor) {
+		t.Fatal("pointer press did not focus the input editor")
 	}
 }
 

@@ -192,6 +192,7 @@ func (ui *BrowserUI) consumeNavigationResult() {
 			}
 			ui.loading = false
 			ui.cancelNavigation = nil
+			ui.inputEditors = make(map[dom.NodeID]*widget.Editor)
 			if result.err != nil {
 				ui.status = "読み込みエラー: " + result.err.Error()
 				return
