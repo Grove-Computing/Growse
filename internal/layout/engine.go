@@ -25,6 +25,7 @@ type blockStyle struct {
 	display    stylemodel.Display
 	margin     stylemodel.Edges
 	padding    stylemodel.Edges
+	border     stylemodel.Borders
 	boxSizing  stylemodel.BoxSizing
 	width      stylemodel.SizeValue
 	height     stylemodel.SizeValue
@@ -170,9 +171,11 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 	if availableWidth < 1 {
 		availableWidth = 1
 	}
+	horizontalBorder := style.border.Left.Width + style.border.Right.Width
+	verticalBorder := style.border.Top.Width + style.border.Bottom.Width
 	sizingWidth := availableWidth
 	if style.boxSizing == stylemodel.BoxSizingContentBox {
-		sizingWidth -= style.padding.Left + style.padding.Right
+		sizingWidth -= style.padding.Left + style.padding.Right + horizontalBorder
 	}
 	if resolved, ok := resolveSize(style.width, width, true); ok {
 		sizingWidth = resolved
@@ -180,7 +183,7 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 	sizingWidth = constrainSize(sizingWidth, style.minWidth, style.maxWidth, width, true)
 	outerWidth := sizingWidth
 	if style.boxSizing == stylemodel.BoxSizingContentBox {
-		outerWidth += style.padding.Left + style.padding.Right
+		outerWidth += style.padding.Left + style.padding.Right + horizontalBorder
 	}
 	if outerWidth > availableWidth && style.width.Kind == stylemodel.SizeAuto {
 		outerWidth = availableWidth
@@ -188,18 +191,18 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 	if outerWidth < 1 {
 		outerWidth = 1
 	}
-	contentX := x + style.padding.Left
-	contentWidth := outerWidth - style.padding.Left - style.padding.Right
+	contentX := x + style.border.Left.Width + style.padding.Left
+	contentWidth := outerWidth - style.padding.Left - style.padding.Right - horizontalBorder
 	if contentWidth < 1 {
 		contentWidth = 1
 	}
 	boxTop := e.y
-	e.y += style.padding.Top
+	e.y += style.border.Top.Width + style.padding.Top
 	contentTop := e.y
 	declaredHeight, declaredHeightDefinite := resolveSize(style.height, containingHeight, heightDefinite)
 	childContainingHeight := declaredHeight
 	if declaredHeightDefinite && style.boxSizing == stylemodel.BoxSizingBorderBox {
-		childContainingHeight -= style.padding.Top + style.padding.Bottom
+		childContainingHeight -= style.padding.Top + style.padding.Bottom + verticalBorder
 		if childContainingHeight < 0 {
 			childContainingHeight = 0
 		}
@@ -238,7 +241,7 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 	sizingHeight = constrainSize(sizingHeight, style.minHeight, style.maxHeight, containingHeight, heightDefinite)
 	outerHeight := sizingHeight
 	if style.boxSizing == stylemodel.BoxSizingContentBox {
-		outerHeight += style.padding.Top + style.padding.Bottom
+		outerHeight += style.padding.Top + style.padding.Bottom + verticalBorder
 	}
 	if outerHeight < 0 {
 		outerHeight = 0
@@ -523,6 +526,7 @@ func applyComputed(block blockStyle, computed stylemodel.ComputedStyle) blockSty
 	block.display = computed.Display
 	block.margin = computed.Margin
 	block.padding = computed.Padding
+	block.border = computed.Border
 	block.boxSizing = computed.BoxSizing
 	block.width, block.height = computed.Width, computed.Height
 	block.minWidth, block.minHeight = computed.MinWidth, computed.MinHeight

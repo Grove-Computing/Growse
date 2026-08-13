@@ -647,6 +647,31 @@ div {
 	}
 }
 
+func TestComputeExpandsBorderShorthands(t *testing.T) {
+	document := dom.NewDocument()
+	box := document.CreateElement("div", nil)
+	appendNode(t, document, document.Root, box)
+	stylesheet, err := css.Parse(strings.NewReader(`
+div {
+  color: blue;
+  border: 2px solid currentColor;
+  border-width: 1px 2px 3px 4px;
+  border-right: thick dashed red;
+  border-bottom-color: rgba(0, 255, 0, .5);
+}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	computed, _ := Compute(document, stylesheet).For(box)
+	if computed.Border.Top != (BorderSide{Width: 1, Style: BorderSolid, Color: 0x0000ffff}) ||
+		computed.Border.Right != (BorderSide{Width: 5, Style: BorderDashed, Color: 0xff0000ff}) ||
+		computed.Border.Bottom != (BorderSide{Width: 3, Style: BorderSolid, Color: 0x00ff0080}) ||
+		computed.Border.Left != (BorderSide{Width: 4, Style: BorderSolid, Color: 0x0000ffff}) {
+		t.Fatalf("computed borders = %#v", computed.Border)
+	}
+}
+
 func parseTestSelector(t *testing.T, value string) css.Selector {
 	t.Helper()
 	stylesheet, err := css.Parse(strings.NewReader(value + " { color: red }"))

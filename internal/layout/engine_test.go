@@ -127,7 +127,7 @@ func TestBuildAppliesSizingConstraintsAndBoxSizing(t *testing.T) {
 	)
 	stylesheet, err := css.Parse(strings.NewReader(`
 .content { width: 50%; min-width: 300px; max-width: 320px; padding: 10px; height: 40px; }
-.border { width: 50%; padding: 10px; box-sizing: border-box; height: 60px; }
+.border { width: 50%; padding: 10px; border: 3px solid red; box-sizing: border-box; height: 60px; }
 `))
 	if err != nil {
 		t.Fatal(err)
@@ -138,7 +138,7 @@ func TestBuildAppliesSizingConstraintsAndBoxSizing(t *testing.T) {
 	if got, want := tree.Boxes[0].Width, float32(320); got != want {
 		t.Fatalf("content-box text width = %v, want %v", got, want)
 	}
-	if got, want := tree.Boxes[1].Width, float32(348); got != want {
+	if got, want := tree.Boxes[1].Width, float32(342); got != want {
 		t.Fatalf("border-box text width = %v, want %v", got, want)
 	}
 	if got, want := tree.Boxes[2].Y, float32(32+60+60); got != want {

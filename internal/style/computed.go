@@ -44,6 +44,32 @@ type Edges struct {
 	Left   float32
 }
 
+// BorderStyle is the line style of one border side.
+type BorderStyle uint8
+
+const (
+	BorderNone BorderStyle = iota
+	BorderSolid
+	BorderDotted
+	BorderDashed
+	BorderDouble
+)
+
+// BorderSide contains the computed width, style and color of one side.
+type BorderSide struct {
+	Width float32
+	Style BorderStyle
+	Color uint32
+}
+
+// Borders contains border sides in CSS clockwise order.
+type Borders struct {
+	Top    BorderSide
+	Right  BorderSide
+	Bottom BorderSide
+	Left   BorderSide
+}
+
 // ComputedStyle contains the MVP properties consumed by layout and paint.
 type ComputedStyle struct {
 	Color            uint32
@@ -60,6 +86,7 @@ type ComputedStyle struct {
 	MaxHeight        SizeValue
 	Margin           Edges
 	Padding          Edges
+	Border           Borders
 	BeforeContent    string
 	AfterContent     string
 	CustomProperties map[string]string

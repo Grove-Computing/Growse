@@ -15,6 +15,7 @@ const (
 
 type winner struct {
 	value       string
+	source      string
 	important   bool
 	inline      bool
 	specificity [3]int
@@ -179,7 +180,7 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 			for declarationIndex, declaration := range rule.Declarations {
 				for _, property := range expandedProperties(declaration.Property) {
 					candidate := winner{
-						value: declaration.Value.Raw, important: declaration.Important,
+						value: declaration.Value.Raw, source: declaration.Property, important: declaration.Important,
 						specificity: selector.Specificity(), order: [2]int{rule.Order, declarationIndex},
 					}
 					current, exists := winners[property]
@@ -195,7 +196,7 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 		for declarationIndex, declaration := range declarations {
 			for _, property := range expandedProperties(declaration.Property) {
 				candidate := winner{
-					value: declaration.Value.Raw, important: declaration.Important, inline: true,
+					value: declaration.Value.Raw, source: declaration.Property, important: declaration.Important, inline: true,
 					order: [2]int{0, declarationIndex},
 				}
 				current, exists := winners[property]
@@ -272,6 +273,7 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 	computed.MaxHeight = resolveSizeWinner("max-height", computed.MaxHeight, parent.MaxHeight, winners, computed.CustomProperties, lengthContext)
 	computed.Margin = applyEdges(computed.Margin, parent.Margin, "margin", winners, computed.CustomProperties, lengthContext)
 	computed.Padding = applyEdges(computed.Padding, parent.Padding, "padding", winners, computed.CustomProperties, lengthContext)
+	computed.Border = applyBorders(computed.Border, parent.Border, winners, computed.CustomProperties, lengthContext, computed.Color)
 	return computed
 }
 
@@ -623,7 +625,7 @@ func applyGeneratedContent(node *dom.Node, computed ComputedStyle, stylesheet *c
 						continue
 					}
 					candidate := winner{
-						value: declaration.Value.Raw, important: declaration.Important,
+						value: declaration.Value.Raw, source: declaration.Property, important: declaration.Important,
 						specificity: selector.Specificity(), order: [2]int{rule.Order, declarationIndex},
 					}
 					if !found || outranks(candidate, selected) {
@@ -664,9 +666,26 @@ func expandedProperties(property string) []string {
 	switch property {
 	case "margin", "padding":
 		return []string{property + "-top", property + "-right", property + "-bottom", property + "-left"}
+	case "border":
+		return borderPropertyKeys("")
+	case "border-width", "border-style", "border-color":
+		component := strings.TrimPrefix(property, "border-")
+		return []string{"border-top-" + component, "border-right-" + component, "border-bottom-" + component, "border-left-" + component}
+	case "border-top", "border-right", "border-bottom", "border-left":
+		return []string{property + "-width", property + "-style", property + "-color"}
 	default:
 		return []string{property}
 	}
+}
+
+func borderPropertyKeys(_ string) []string {
+	var result []string
+	for _, side := range []string{"top", "right", "bottom", "left"} {
+		for _, component := range []string{"width", "style", "color"} {
+			result = append(result, "border-"+side+"-"+component)
+		}
+	}
+	return result
 }
 
 func applyEdges(edges, parent Edges, prefix string, winners map[string]winner, customProperties map[string]string, context LengthContext) Edges {
@@ -700,6 +719,152 @@ func applyEdges(edges, parent Edges, prefix string, winners map[string]winner, c
 		}
 	}
 	return edges
+}
+
+func applyBorders(border, parent Borders, winners map[string]winner, customProperties map[string]string, context LengthContext, currentColor uint32) Borders {
+	sides := []*BorderSide{&border.Top, &border.Right, &border.Bottom, &border.Left}
+	parentSides := []BorderSide{parent.Top, parent.Right, parent.Bottom, parent.Left}
+	sideNames := []string{"top", "right", "bottom", "left"}
+	for sideIndex, sideName := range sideNames {
+		for _, component := range []string{"width", "style", "color"} {
+			candidate, ok := winners["border-"+sideName+"-"+component]
+			if !ok {
+				continue
+			}
+			resolved, ok := resolveVariables(candidate.value, customProperties)
+			if !ok {
+				continue
+			}
+			switch parseGlobalKeyword(resolved) {
+			case globalInherit:
+				setBorderComponent(sides[sideIndex], component, parentSides[sideIndex])
+				continue
+			case globalInitial, globalUnset:
+				setBorderComponent(sides[sideIndex], component, BorderSide{Color: currentColor})
+				continue
+			}
+			value, ok := borderComponentValue(candidate.source, component, sideIndex, resolved)
+			if !ok {
+				continue
+			}
+			switch component {
+			case "width":
+				width, valid := parseBorderWidth(value, context)
+				if valid {
+					sides[sideIndex].Width = width
+				}
+			case "style":
+				style, valid := parseBorderStyle(value)
+				if valid {
+					sides[sideIndex].Style = style
+				}
+			case "color":
+				color, valid := parseColor(value, currentColor)
+				if valid {
+					sides[sideIndex].Color = color
+				}
+			}
+		}
+		if sides[sideIndex].Style == BorderNone {
+			sides[sideIndex].Width = 0
+		}
+	}
+	return border
+}
+
+func setBorderComponent(target *BorderSide, component string, source BorderSide) {
+	switch component {
+	case "width":
+		target.Width = source.Width
+	case "style":
+		target.Style = source.Style
+	case "color":
+		target.Color = source.Color
+	}
+}
+
+func borderComponentValue(source, component string, side int, value string) (string, bool) {
+	if source == "border" || source == "border-top" || source == "border-right" || source == "border-bottom" || source == "border-left" {
+		parts, ok := splitCSSSpaceSeparated(value)
+		if !ok {
+			return "", false
+		}
+		for _, part := range parts {
+			switch component {
+			case "width":
+				if _, valid := parseBorderWidth(part, LengthContext{FontSize: 16, RootFontSize: 16}); valid {
+					return part, true
+				}
+			case "style":
+				if _, valid := parseBorderStyle(part); valid {
+					return part, true
+				}
+			case "color":
+				if _, valid := parseColor(part, 0); valid {
+					return part, true
+				}
+			}
+		}
+		switch component {
+		case "width":
+			return "medium", true
+		case "style":
+			return "none", true
+		case "color":
+			return "currentcolor", true
+		}
+	}
+	if source == "border-width" || source == "border-style" || source == "border-color" {
+		parts, ok := splitCSSSpaceSeparated(value)
+		if !ok || len(parts) < 1 || len(parts) > 4 {
+			return "", false
+		}
+		return edgePart(parts, side), true
+	}
+	return value, true
+}
+
+func edgePart(parts []string, side int) string {
+	switch len(parts) {
+	case 1:
+		return parts[0]
+	case 2:
+		return parts[side%2]
+	case 3:
+		return []string{parts[0], parts[1], parts[2], parts[1]}[side]
+	default:
+		return parts[side]
+	}
+}
+
+func parseBorderWidth(value string, context LengthContext) (float32, bool) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "thin":
+		return 1, true
+	case "medium":
+		return 3, true
+	case "thick":
+		return 5, true
+	}
+	length, ok := ResolveLength(value, context)
+	return length.Pixels, ok && length.Percentage == 0 && length.Pixels >= 0
+}
+
+func parseBorderStyle(value string) (BorderStyle, bool) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "none", "hidden":
+		return BorderNone, true
+	case "solid":
+		return BorderSolid, true
+	case "dotted":
+		return BorderDotted, true
+	case "dashed":
+		return BorderDashed, true
+	case "double":
+		return BorderDouble, true
+	default:
+		return 0, false
+	}
 }
 
 func parseEdgeValue(value string, side int, context LengthContext) (float32, bool) {
