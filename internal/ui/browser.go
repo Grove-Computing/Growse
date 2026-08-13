@@ -91,6 +91,7 @@ type Navigator interface {
 	UpdateHover(nodeID dom.NodeID, x, y float32) bool
 	ClearHover() bool
 	UpdateFocus(nodeID dom.NodeID) bool
+	UpdateViewport(width, height float32) bool
 }
 
 type navigationResult struct {
@@ -457,6 +458,10 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 	paint.Fill(gtx.Ops, color.NRGBA{R: 255, G: 255, B: 255, A: 255})
 
 	viewportWidth := float32(gtx.Constraints.Max.X) / gtx.Metric.PxPerDp
+	viewportHeight := float32(gtx.Constraints.Max.Y) / gtx.Metric.PxPerDp
+	if ui.navigator != nil {
+		ui.navigator.UpdateViewport(viewportWidth, viewportHeight)
+	}
 	tree := layoutengine.Build(page.Document, page.ComputedStyles, viewportWidth)
 	displayList := paintmodel.Build(tree)
 	paint.Fill(gtx.Ops, rgba(displayList.Background))

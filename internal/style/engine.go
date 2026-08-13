@@ -26,31 +26,60 @@ func Compute(document *dom.Document, stylesheet *css.Stylesheet) Map {
 	return ComputeWithState(document, stylesheet, InteractionState{})
 }
 
+// Environment contains rendering metrics needed during value computation.
+type Environment struct {
+	ViewportWidth  float32
+	ViewportHeight float32
+	RootFontSize   float32
+}
+
+func defaultEnvironment() Environment {
+	return Environment{ViewportWidth: 1280, ViewportHeight: 720, RootFontSize: 16}
+}
+
 // ComputeWithState applies styles using transient browser interaction state.
 func ComputeWithState(document *dom.Document, stylesheet *css.Stylesheet, state InteractionState) Map {
+	return ComputeWithEnvironment(document, stylesheet, state, defaultEnvironment())
+}
+
+// ComputeWithEnvironment applies styles using interaction and viewport state.
+func ComputeWithEnvironment(document *dom.Document, stylesheet *css.Stylesheet, state InteractionState, environment Environment) Map {
 	result := make(Map)
 	if document == nil || document.Root == nil {
 		return result
 	}
-	computeNode(document.Root, initialStyle(), stylesheet, state, result)
+	if environment.ViewportWidth <= 0 {
+		environment.ViewportWidth = defaultEnvironment().ViewportWidth
+	}
+	if environment.ViewportHeight <= 0 {
+		environment.ViewportHeight = defaultEnvironment().ViewportHeight
+	}
+	if environment.RootFontSize <= 0 {
+		environment.RootFontSize = 16
+	}
+	computeNode(document.Root, initialStyle(), stylesheet, state, environment, result)
 	return result
 }
 
-func computeNode(node *dom.Node, parent ComputedStyle, stylesheet *css.Stylesheet, state InteractionState, result Map) {
+func computeNode(node *dom.Node, parent ComputedStyle, stylesheet *css.Stylesheet, state InteractionState, environment Environment, result Map) {
 	computed := inheritedStyle(parent)
 	if node.Type == dom.NodeDocument {
 		computed = initialStyle()
 	} else if node.Type == dom.NodeElement {
 		computed = applyUADefaults(node.TagName, computed)
-		computed = applyAuthorRules(node, computed, parent, stylesheet, state)
+		computed = applyAuthorRules(node, computed, parent, stylesheet, state, environment)
 		computed = applyGeneratedContent(node, computed, stylesheet, state)
 		result[node.ID] = computed
 	} else if node.Type == dom.NodeText {
 		result[node.ID] = computed
 	}
 
+	childEnvironment := environment
+	if node.Type == dom.NodeElement && node.TagName == "html" {
+		childEnvironment.RootFontSize = computed.FontSize
+	}
 	for _, child := range node.Children {
-		computeNode(child, computed, stylesheet, state, result)
+		computeNode(child, computed, stylesheet, state, childEnvironment, result)
 	}
 }
 
@@ -107,7 +136,7 @@ func applyUADefaults(tag string, computed ComputedStyle) ComputedStyle {
 	return computed
 }
 
-func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet *css.Stylesheet, state InteractionState) ComputedStyle {
+func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet *css.Stylesheet, state InteractionState, environment Environment) ComputedStyle {
 	if stylesheet == nil {
 		stylesheet = &css.Stylesheet{}
 	}
@@ -150,6 +179,11 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 		}
 	}
 	computed.CustomProperties = applyCustomProperties(computed.CustomProperties, winners)
+	fontContext := LengthContext{
+		FontSize: parent.FontSize, RootFontSize: environment.RootFontSize,
+		ViewportWidth: environment.ViewportWidth, ViewportHeight: environment.ViewportHeight,
+		PercentageBase: parent.FontSize,
+	}
 
 	if value, ok := winners["color"]; ok {
 		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
@@ -167,7 +201,12 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 	}
 	if value, ok := winners["font-size"]; ok {
 		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
-			if parsed, valid := resolveFloat(resolved, parent.FontSize, 16, true, parsePositivePixels); valid {
+			parseFontSize := func(value string) (float32, bool) {
+				length, valid := ResolveLength(value, fontContext)
+				resolved := length.Resolve(fontContext.PercentageBase)
+				return resolved, valid && resolved > 0
+			}
+			if parsed, valid := resolveFloat(resolved, parent.FontSize, 16, true, parseFontSize); valid {
 				computed.FontSize = parsed
 			}
 		}
@@ -186,8 +225,13 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 			}
 		}
 	}
-	computed.Margin = applyEdges(computed.Margin, parent.Margin, "margin", winners, computed.CustomProperties)
-	computed.Padding = applyEdges(computed.Padding, parent.Padding, "padding", winners, computed.CustomProperties)
+	lengthContext := LengthContext{
+		FontSize: computed.FontSize, RootFontSize: environment.RootFontSize,
+		ViewportWidth: environment.ViewportWidth, ViewportHeight: environment.ViewportHeight,
+		PercentageBase: environment.ViewportWidth,
+	}
+	computed.Margin = applyEdges(computed.Margin, parent.Margin, "margin", winners, computed.CustomProperties, lengthContext)
+	computed.Padding = applyEdges(computed.Padding, parent.Padding, "padding", winners, computed.CustomProperties, lengthContext)
 	return computed
 }
 
@@ -526,7 +570,7 @@ func expandedProperties(property string) []string {
 	}
 }
 
-func applyEdges(edges, parent Edges, prefix string, winners map[string]winner, customProperties map[string]string) Edges {
+func applyEdges(edges, parent Edges, prefix string, winners map[string]winner, customProperties map[string]string, context LengthContext) Edges {
 	properties := []string{prefix + "-top", prefix + "-right", prefix + "-bottom", prefix + "-left"}
 	values := []*float32{&edges.Top, &edges.Right, &edges.Bottom, &edges.Left}
 	parentValues := []float32{parent.Top, parent.Right, parent.Bottom, parent.Left}
@@ -547,7 +591,10 @@ func applyEdges(edges, parent Edges, prefix string, winners map[string]winner, c
 		case globalInitial, globalUnset:
 			parsed, valid = 0, true
 		default:
-			parsed, valid = parseEdgeValue(resolved, index)
+			parsed, valid = parseEdgeValue(resolved, index, context)
+			if prefix == "padding" && parsed < 0 {
+				valid = false
+			}
 		}
 		if valid {
 			*values[index] = parsed
@@ -556,7 +603,7 @@ func applyEdges(edges, parent Edges, prefix string, winners map[string]winner, c
 	return edges
 }
 
-func parseEdgeValue(value string, side int) (float32, bool) {
+func parseEdgeValue(value string, side int, context LengthContext) (float32, bool) {
 	parts := strings.Fields(value)
 	if len(parts) < 1 || len(parts) > 4 {
 		return 0, false
@@ -572,7 +619,8 @@ func parseEdgeValue(value string, side int) (float32, bool) {
 	case 4:
 		resolved = [4]string{parts[0], parts[1], parts[2], parts[3]}
 	}
-	return parseLength(resolved[side])
+	length, valid := ResolveLength(resolved[side], context)
+	return length.Resolve(context.PercentageBase), valid
 }
 
 func parseDisplay(value string) (Display, bool) {

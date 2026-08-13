@@ -99,7 +99,7 @@ func (b *Browser) SetInputValue(nodeID dom.NodeID, value string) bool {
 	}
 	changed := page.Document.SetAttribute(nodeID, "value", value)
 	if changed {
-		page.ComputedStyles = style.ComputeWithState(page.Document, page.Stylesheet, interactionState(page))
+		page.ComputedStyles = computePageStyles(page)
 	}
 	dispatcher := page.Events
 	b.mu.Unlock()
@@ -172,7 +172,7 @@ func (b *Browser) UpdateHover(nodeID dom.NodeID, x, y float32) bool {
 		page.HoverTarget = 0
 	}
 	page.HoverPath = path
-	page.ComputedStyles = style.ComputeWithState(page.Document, page.Stylesheet, interactionState(page))
+	page.ComputedStyles = computePageStyles(page)
 	dispatcher := page.Events
 	b.mu.Unlock()
 	if onMutation != nil {
@@ -202,11 +202,29 @@ func (b *Browser) UpdateFocus(nodeID dom.NodeID) bool {
 		return false
 	}
 	page.FocusTarget = target
-	page.ComputedStyles = style.ComputeWithState(page.Document, page.Stylesheet, interactionState(page))
+	page.ComputedStyles = computePageStyles(page)
 	b.mu.Unlock()
 	if onMutation != nil {
 		onMutation()
 	}
+	return true
+}
+
+// UpdateViewport recomputes viewport-relative values when the content area changes.
+func (b *Browser) UpdateViewport(width, height float32) bool {
+	b.mu.Lock()
+	page := b.page
+	if page == nil || page.Document == nil || width <= 0 || height <= 0 {
+		b.mu.Unlock()
+		return false
+	}
+	if page.ViewportWidth == width && page.ViewportHeight == height {
+		b.mu.Unlock()
+		return false
+	}
+	page.ViewportWidth, page.ViewportHeight = width, height
+	page.ComputedStyles = computePageStyles(page)
+	b.mu.Unlock()
 	return true
 }
 
@@ -423,7 +441,7 @@ func startRuntime(ctx context.Context, factory runtimemodel.Factory, page *Page,
 				page.HoverTarget = 0
 			}
 			page.FocusTarget = validFocusTarget(page.Document, page.FocusTarget)
-			page.ComputedStyles = style.ComputeWithState(page.Document, page.Stylesheet, interactionState(page))
+			page.ComputedStyles = computePageStyles(page)
 			if onMutation != nil {
 				onMutation()
 			}
@@ -475,6 +493,15 @@ func interactionState(page *Page) style.InteractionState {
 		state.Hovered[nodeID] = true
 	}
 	return state
+}
+
+func computePageStyles(page *Page) style.Map {
+	if page == nil {
+		return nil
+	}
+	return style.ComputeWithEnvironment(page.Document, page.Stylesheet, interactionState(page), style.Environment{
+		ViewportWidth: page.ViewportWidth, ViewportHeight: page.ViewportHeight, RootFontSize: 16,
+	})
 }
 
 func validFocusTarget(document *dom.Document, nodeID dom.NodeID) dom.NodeID {

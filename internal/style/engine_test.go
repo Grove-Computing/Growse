@@ -496,6 +496,44 @@ func TestComputeResolvesInheritedCustomPropertiesFallbackAndCycles(t *testing.T)
 	}
 }
 
+func TestComputeResolvesFontAndViewportRelativeUnits(t *testing.T) {
+	document := dom.NewDocument()
+	html := document.CreateElement("html", nil)
+	body := document.CreateElement("body", nil)
+	rem := document.CreateElement("p", map[string]string{"class": "rem"})
+	viewport := document.CreateElement("p", map[string]string{"class": "viewport"})
+	percentage := document.CreateElement("p", map[string]string{"class": "percentage"})
+	appendNode(t, document, document.Root, html)
+	appendNode(t, document, html, body)
+	appendNode(t, document, body, rem)
+	appendNode(t, document, body, viewport)
+	appendNode(t, document, body, percentage)
+	stylesheet, err := css.Parse(strings.NewReader(`
+html { font-size: 20px; }
+.rem { font-size: 2rem; margin: 1em; }
+.viewport { font-size: 10vw; padding: 5vh; }
+.percentage { font-size: 150%; margin-left: 25%; }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	computed := ComputeWithEnvironment(document, stylesheet, InteractionState{}, Environment{
+		ViewportWidth: 800, ViewportHeight: 600, RootFontSize: 16,
+	})
+	remStyle, _ := computed.For(rem)
+	viewportStyle, _ := computed.For(viewport)
+	percentageStyle, _ := computed.For(percentage)
+	if remStyle.FontSize != 40 || remStyle.Margin.Top != 40 {
+		t.Fatalf("rem/em style = %#v", remStyle)
+	}
+	if viewportStyle.FontSize != 80 || viewportStyle.Padding.Top != 30 {
+		t.Fatalf("viewport style = %#v", viewportStyle)
+	}
+	if percentageStyle.FontSize != 30 || percentageStyle.Margin.Left != 200 {
+		t.Fatalf("percentage style = %#v", percentageStyle)
+	}
+}
+
 func parseTestSelector(t *testing.T, value string) css.Selector {
 	t.Helper()
 	stylesheet, err := css.Parse(strings.NewReader(value + " { color: red }"))

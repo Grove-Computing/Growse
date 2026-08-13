@@ -286,6 +286,34 @@ func TestUpdateFocusRecomputesStyles(t *testing.T) {
 	}
 }
 
+func TestUpdateViewportRecomputesRelativeUnits(t *testing.T) {
+	document := dom.NewDocument()
+	paragraph := document.CreateElement("p", nil)
+	if err := document.AppendChild(document.Root, paragraph); err != nil {
+		t.Fatal(err)
+	}
+	stylesheet, err := css.Parse(strings.NewReader(`p { font-size: 10vw; padding: 5vh }`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := NewPage(mustParseURL(t, "http://localhost"))
+	page.Document, page.Stylesheet = document, stylesheet
+	page.ComputedStyles = style.Compute(document, stylesheet)
+	browser := New(nil)
+	browser.SetPage(page)
+
+	if !browser.UpdateViewport(800, 600) {
+		t.Fatal("UpdateViewport() = false, want changed")
+	}
+	computed, _ := page.ComputedStyles.For(paragraph)
+	if computed.FontSize != 80 || computed.Padding.Top != 30 {
+		t.Fatalf("viewport-relative style = %#v", computed)
+	}
+	if browser.UpdateViewport(800, 600) {
+		t.Fatal("same viewport requested a recalculation")
+	}
+}
+
 func TestUpdateHoverRejectsRemovedElement(t *testing.T) {
 	document := dom.NewDocument()
 	button := document.CreateElement("button", nil)

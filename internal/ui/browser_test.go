@@ -133,14 +133,28 @@ func (navigator *stubNavigator) UpdateFocus(nodeID dom.NodeID) bool {
 	navigator.recomputeHoverStyles()
 	return true
 }
+func (navigator *stubNavigator) UpdateViewport(width, height float32) bool {
+	if navigator.page == nil || navigator.page.Document == nil || width <= 0 || height <= 0 {
+		return false
+	}
+	if navigator.page.ViewportWidth == width && navigator.page.ViewportHeight == height {
+		return false
+	}
+	navigator.page.ViewportWidth, navigator.page.ViewportHeight = width, height
+	navigator.recomputeHoverStyles()
+	return true
+}
 func (navigator *stubNavigator) recomputeHoverStyles() {
 	hovered := make(map[dom.NodeID]bool, len(navigator.page.HoverPath))
 	for _, nodeID := range navigator.page.HoverPath {
 		hovered[nodeID] = true
 	}
-	navigator.page.ComputedStyles = style.ComputeWithState(
+	navigator.page.ComputedStyles = style.ComputeWithEnvironment(
 		navigator.page.Document, navigator.page.Stylesheet,
 		style.InteractionState{Hovered: hovered, Focused: navigator.page.FocusTarget},
+		style.Environment{
+			ViewportWidth: navigator.page.ViewportWidth, ViewportHeight: navigator.page.ViewportHeight, RootFontSize: 16,
+		},
 	)
 }
 func equalNodeIDPath(left, right []dom.NodeID) bool {

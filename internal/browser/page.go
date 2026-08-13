@@ -30,6 +30,8 @@ type Page struct {
 	HoverTarget    dom.NodeID
 	HoverPath      []dom.NodeID
 	FocusTarget    dom.NodeID
+	ViewportWidth  float32
+	ViewportHeight float32
 }
 
 // NewPage creates a page for pageURL. A nil URL is allowed for documents such
