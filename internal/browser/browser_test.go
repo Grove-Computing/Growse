@@ -545,6 +545,34 @@ func TestNavigationAndReloadDiscardPreviousPageAnimations(t *testing.T) {
 	}
 }
 
+func TestBrowserReducedMotionSettingRecomputesAuthorMediaQuery(t *testing.T) {
+	pageURL := mustParseURL(t, "https://example.com/motion")
+	browser := New(stubLoader{response: &network.Response{
+		URL: pageURL, StatusCode: 200, ContentType: "text/html",
+		Body: []byte(`<style>
+#target { animation: 1s linear infinite moving; }
+@media (prefers-reduced-motion: reduce) { #target { animation-name: none; } }
+</style><div id="target"></div>`),
+	}})
+	page, err := browser.Navigate(context.Background(), pageURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, _ := page.Document.GetElementByID("target")
+	if page.Animations.Count(target.ID) != 1 {
+		t.Fatal("default no-preference animation is missing")
+	}
+	if !browser.SetReducedMotion(true) || !page.ReducedMotion {
+		t.Fatal("reduced-motion setting did not change")
+	}
+	if page.Animations.Count(target.ID) != 0 {
+		t.Fatalf("author reduce rule was not applied: %d animations", page.Animations.Count(target.ID))
+	}
+	if browser.SetReducedMotion(true) {
+		t.Fatal("unchanged reduced-motion setting reported a change")
+	}
+}
+
 func TestNavigateRejectsUnsupportedContentType(t *testing.T) {
 	browser := New(stubLoader{response: &network.Response{
 		URL:         mustParseURL(t, "https://example.com/image.png"),

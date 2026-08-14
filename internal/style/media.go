@@ -60,6 +60,11 @@ func matchesMediaFeature(feature css.MediaFeature, environment Environment) bool
 		return ok && compareMediaNumber(name, environment.ResolutionDPI, expected)
 	case "prefers-color-scheme":
 		return (value == "light" || value == "dark") && value == strings.ToLower(environment.ColorScheme)
+	case "prefers-reduced-motion":
+		if value == "reduce" {
+			return environment.ReducedMotion
+		}
+		return value == "no-preference" && !environment.ReducedMotion
 	case "hover":
 		if value == "" || value == "hover" {
 			return environment.Hover

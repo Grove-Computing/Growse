@@ -36,6 +36,7 @@ type Page struct {
 	FocusTarget      dom.NodeID
 	ViewportWidth    float32
 	ViewportHeight   float32
+	ReducedMotion    bool
 }
 
 // NewPage creates a page for pageURL. A nil URL is allowed for documents such

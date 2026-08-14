@@ -618,6 +618,28 @@ p { color: black; }
 	}
 }
 
+func TestComputeEvaluatesPrefersReducedMotion(t *testing.T) {
+	document := dom.NewDocument()
+	target := document.CreateElement("div", nil)
+	appendNode(t, document, document.Root, target)
+	stylesheet, err := css.Parse(strings.NewReader(`
+div { animation-name: moving; }
+@media (prefers-reduced-motion: reduce) { div { animation-name: reduced; } }
+@media (prefers-reduced-motion: no-preference) { div { color: blue; } }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defaultStyle, _ := Compute(document, stylesheet).For(target)
+	if defaultStyle.Animations[0].Name != "moving" || defaultStyle.Color != 0x0000ffff {
+		t.Fatalf("default motion preference = %#v", defaultStyle)
+	}
+	reducedStyle, _ := ComputeWithEnvironment(document, stylesheet, InteractionState{}, Environment{ReducedMotion: true}).For(target)
+	if reducedStyle.Animations[0].Name != "reduced" || reducedStyle.Color == 0x0000ffff {
+		t.Fatalf("reduced motion preference = %#v", reducedStyle)
+	}
+}
+
 func TestComputeResolvesSizingAndBoxSizing(t *testing.T) {
 	document := dom.NewDocument()
 	box := document.CreateElement("div", nil)

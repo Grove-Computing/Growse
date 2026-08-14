@@ -40,6 +40,7 @@ type Browser struct {
 	navigationID   uint64
 	history        history
 	now            func() time.Time
+	reducedMotion  bool
 }
 
 // New creates a browser with no page loaded.
@@ -230,6 +231,28 @@ func (b *Browser) UpdateViewport(width, height float32) bool {
 	return true
 }
 
+// SetReducedMotion updates the browser preference exposed through the
+// prefers-reduced-motion media feature.
+func (b *Browser) SetReducedMotion(reduce bool) bool {
+	b.mu.Lock()
+	if b.reducedMotion == reduce {
+		b.mu.Unlock()
+		return false
+	}
+	b.reducedMotion = reduce
+	page := b.page
+	onMutation := b.onMutation
+	if page != nil {
+		page.ReducedMotion = reduce
+		recomputePageStyles(page, b.currentTime())
+	}
+	b.mu.Unlock()
+	if page != nil && onMutation != nil {
+		onMutation()
+	}
+	return true
+}
+
 // SetPage replaces the active page. Passing nil clears the active page.
 func (b *Browser) SetPage(page *Page) {
 	b.mu.Lock()
@@ -350,6 +373,7 @@ func (b *Browser) load(ctx context.Context, pageURL *url.URL, commit historyComm
 	client := b.client
 	runtimeFactory := b.runtimeFactory
 	onMutation := b.onMutation
+	reducedMotion := b.reducedMotion
 	b.mu.Unlock()
 
 	if client == nil {
@@ -376,7 +400,10 @@ func (b *Browser) load(ctx context.Context, pageURL *url.URL, commit historyComm
 	if err != nil {
 		return nil, fmt.Errorf("load styles for %s: %w", pageURL.Redacted(), err)
 	}
-	computedStyles := style.Compute(document, stylesheet)
+	computedStyles := style.ComputeWithEnvironment(document, stylesheet, style.InteractionState{}, style.Environment{
+		ViewportWidth: 1280, ViewportHeight: 720, RootFontSize: 16, ResolutionDPI: 96,
+		ColorScheme: "light", Hover: true, Pointer: "fine", ReducedMotion: reducedMotion,
+	})
 	backgroundImages, backgroundErrors := loadBackgroundImages(ctx, client, computedStyles)
 	scripts, scriptErrors := loadScripts(ctx, client, response.URL, document)
 
@@ -390,6 +417,7 @@ func (b *Browser) load(ctx context.Context, pageURL *url.URL, commit historyComm
 		Stylesheet:       stylesheet,
 		ComputedStyles:   computedStyles,
 		Animations:       style.NewAnimationRegistry(),
+		ReducedMotion:    reducedMotion,
 		BackgroundImages: backgroundImages,
 		BackgroundErrors: backgroundErrors,
 		Scripts:          scripts,
@@ -532,6 +560,7 @@ func computePageStyles(page *Page) style.Map {
 	return style.ComputeWithEnvironment(page.Document, page.Stylesheet, interactionState(page), style.Environment{
 		ViewportWidth: page.ViewportWidth, ViewportHeight: page.ViewportHeight, RootFontSize: 16,
 		ResolutionDPI: 96, ColorScheme: "light", Hover: true, Pointer: "fine",
+		ReducedMotion: page.ReducedMotion,
 	})
 }
 

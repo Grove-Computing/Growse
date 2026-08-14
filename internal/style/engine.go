@@ -36,6 +36,7 @@ type Environment struct {
 	ColorScheme    string
 	Hover          bool
 	Pointer        string
+	ReducedMotion  bool
 }
 
 func defaultEnvironment() Environment {
