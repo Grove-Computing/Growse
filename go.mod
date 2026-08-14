@@ -1,6 +1,6 @@
 module github.com/saku0512/growse
 
-go 1.26.5
+go 1.26.6
 
 require (
 	gioui.org v0.10.2

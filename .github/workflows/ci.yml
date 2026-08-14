@@ -14,7 +14,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  GO_VERSION: 1.26.x
+  GO_VERSION: 1.26.6
   STATICCHECK_VERSION: "2026.1"
   GOVULNCHECK_VERSION: v1.6.0
   ACTIONLINT_VERSION: v1.7.12
@@ -60,7 +60,7 @@ jobs:
       - name: Check module files
         run: go mod tidy -diff
 
-      - name: Test v0.4.0 installer
+      - name: Test v0.5.0 installer
         run: bash tests/install.sh
 
       - name: Run race tests with coverage

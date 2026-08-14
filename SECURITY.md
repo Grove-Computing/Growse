@@ -6,7 +6,8 @@
 
 | Version | Supported |
 | --- | --- |
-| 0.4.x | Yes |
+| 0.5.x | Yes |
+| 0.4.x | No |
 | 0.3.x | No |
 | 0.2.x | No |
 
@@ -27,7 +28,7 @@
 
 ## WebGo Security Boundary
 
-Growse v0.4.0のYaegi Runtimeは、信頼できないGoコードを安全に実行するSandboxではありません。
+Growse v0.5.0のYaegi Runtimeは、信頼できないGoコードを安全に実行するSandboxではありません。
 プロセス分離、CPU時間制限、メモリ制限、およびGo標準ライブラリ全体に対する完全な制限は提供していません。
 
 WebGoの自動実行は`localhost`、`127.0.0.1`、`::1`のページと、同じく信頼済みOriginから取得したGoスクリプトに限定されます。ただし、ローカルで配信されるページやスクリプトを信頼できることは利用者自身が確認してください。
