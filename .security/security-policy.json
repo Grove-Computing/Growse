@@ -1,0 +1,47 @@
+{
+  "binary_allowlist": [
+    {
+      "path": "images/icon.png",
+      "sha256": "d8a3dd902a160db017f929d891a22ceb73662b2e409bae3d6f42f3fa27a4ef17",
+      "reason": "READMEとProject brandingで使用するGrowse icon"
+    },
+    {
+      "path": "images/logo.png",
+      "sha256": "83aafa502f5f395531047638c6ba2d885c232ea7d85367a8b53911603fcdc8e5",
+      "reason": "READMEとProject brandingで使用するGrowse logo"
+    },
+    {
+      "path": "internal/ui/assets/gopher-blue.png",
+      "sha256": "a59454a213cbcd02e9a75691ce6254a58a27c0a0edf5510ec00cb432724f7cf0",
+      "reason": "go:embedでGopher cursorへ組み込むPNG"
+    },
+    {
+      "path": "packaging/linux/io.github.grovecomputing.Growse.png",
+      "sha256": "80fb6758c8582c846f09ba43654c913a947b090f48117f4477a6440ec49885a7",
+      "reason": "Linux Desktop Entryへ登録するApplication icon"
+    },
+    {
+      "path": "packaging/windows/Growse.ico",
+      "sha256": "9ba07391511c5fb3b19efb88345b21dc13aaff4c1ddc4ef2fbbf5d34da616cbb",
+      "reason": "Windows executableとStart Menuで使用するApplication icon"
+    }
+  ],
+  "unicode_allowlist": [],
+  "editor_extensions": [
+    {
+      "id": "golang.go",
+      "publisher": "Go Team at Google",
+      "version": "0.56.0"
+    },
+    {
+      "id": "github.vscode-github-actions",
+      "publisher": "GitHub",
+      "version": "0.32.3"
+    },
+    {
+      "id": "redhat.vscode-yaml",
+      "publisher": "Red Hat",
+      "version": "1.24.0"
+    }
+  ]
+}
