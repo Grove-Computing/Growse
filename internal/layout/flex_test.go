@@ -156,6 +156,128 @@ func TestBuildFlexColumnShrinksItems(t *testing.T) {
 	}
 }
 
+func TestBuildFlexAppliesJustifyGapAndMainAutoMargin(t *testing.T) {
+	document := dom.NewDocument()
+	container := document.CreateElement("div", map[string]string{"class": "container"})
+	first := document.CreateElement("div", map[string]string{"class": "item"})
+	second := document.CreateElement("div", map[string]string{"class": "item push"})
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, container},
+		[2]*dom.Node{container, first},
+		[2]*dom.Node{container, second},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.container { display:flex; width:300px; justify-content:center; column-gap:20px; }
+.item { flex:0 0 50px; height:20px; background-color:#ddd; }
+.push { margin-left:auto; }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, stylemodel.Compute(document, stylesheet), 500)
+	firstBox, secondBox := decorationForNode(t, tree, first.ID), decorationForNode(t, tree, second.ID)
+	if firstBox.X != 32 || secondBox.X != 282 {
+		t.Fatalf("auto margin positions = %v, %v", firstBox.X, secondBox.X)
+	}
+}
+
+func TestBuildFlexWrapAlignAndGap(t *testing.T) {
+	document := dom.NewDocument()
+	container := document.CreateElement("div", map[string]string{"class": "container"})
+	items := []*dom.Node{
+		document.CreateElement("div", map[string]string{"class": "item"}),
+		document.CreateElement("div", map[string]string{"class": "item"}),
+		document.CreateElement("div", map[string]string{"class": "item"}),
+	}
+	appendNodes(t, document, [2]*dom.Node{document.Root, container})
+	for _, item := range items {
+		appendNodes(t, document, [2]*dom.Node{container, item})
+	}
+	stylesheet, err := css.Parse(strings.NewReader(`
+.container { display:flex; width:120px; height:100px; flex-wrap:wrap; align-content:space-between; align-items:center; gap:10px; }
+.item { flex:0 0 50px; height:20px; background-color:#ddd; }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, stylemodel.Compute(document, stylesheet), 500)
+	first := decorationForNode(t, tree, items[0].ID)
+	second := decorationForNode(t, tree, items[1].ID)
+	third := decorationForNode(t, tree, items[2].ID)
+	if second.X != first.X+60 || third.X != first.X {
+		t.Fatalf("wrapped x positions = %v, %v, %v", first.X, second.X, third.X)
+	}
+	if first.Y != 32 || third.Y != 112 {
+		t.Fatalf("align-content positions = first %v, third %v", first.Y, third.Y)
+	}
+}
+
+func TestBuildFlexAlignsCrossAutoMarginAndBaseline(t *testing.T) {
+	document := dom.NewDocument()
+	container := document.CreateElement("div", map[string]string{"class": "container"})
+	large := document.CreateElement("div", map[string]string{"class": "large"})
+	small := document.CreateElement("div", map[string]string{"class": "small"})
+	automatic := document.CreateElement("div", map[string]string{"class": "automatic"})
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, container},
+		[2]*dom.Node{container, large}, [2]*dom.Node{large, document.CreateText("Large")},
+		[2]*dom.Node{container, small}, [2]*dom.Node{small, document.CreateText("small")},
+		[2]*dom.Node{container, automatic},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.container { display:flex; width:300px; height:80px; align-items:baseline; }
+.large { flex:0 0 80px; font-size:30px; }
+.small { flex:0 0 80px; font-size:14px; }
+.automatic { flex:0 0 40px; height:20px; margin-top:auto; background-color:#ddd; }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, stylemodel.Compute(document, stylesheet), 500)
+	largeText, smallText := boxForNode(t, tree, large.ID), boxForNode(t, tree, small.ID)
+	if largeText.Baseline != smallText.Baseline {
+		t.Fatalf("baselines = %v, %v", largeText.Baseline, smallText.Baseline)
+	}
+	autoBox := decorationForNode(t, tree, automatic.ID)
+	if autoBox.Y != 92 {
+		t.Fatalf("cross auto margin y = %v, want 92", autoBox.Y)
+	}
+}
+
+func TestBuildFlexReverseAndWrapReverseKeepHitGeometry(t *testing.T) {
+	document := dom.NewDocument()
+	container := document.CreateElement("div", map[string]string{"class": "container"})
+	items := []*dom.Node{
+		document.CreateElement("div", map[string]string{"class": "item"}),
+		document.CreateElement("div", map[string]string{"class": "item"}),
+		document.CreateElement("div", map[string]string{"class": "item"}),
+	}
+	appendNodes(t, document, [2]*dom.Node{document.Root, container})
+	for _, item := range items {
+		appendNodes(t, document, [2]*dom.Node{container, item})
+	}
+	stylesheet, err := css.Parse(strings.NewReader(`
+.container { display:flex; width:110px; height:60px; flex-flow:row-reverse wrap-reverse; gap:10px; }
+.item { flex:0 0 50px; height:20px; background-color:#ddd; }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, stylemodel.Compute(document, stylesheet), 500)
+	first := decorationForNode(t, tree, items[0].ID)
+	second := decorationForNode(t, tree, items[1].ID)
+	third := decorationForNode(t, tree, items[2].ID)
+	if first.X != 92 || second.X != 32 || third.X != 92 {
+		t.Fatalf("row-reverse positions = %v, %v, %v", first.X, second.X, third.X)
+	}
+	if first.Y <= third.Y {
+		t.Fatalf("wrap-reverse y = first %v, third %v", first.Y, third.Y)
+	}
+	if hit, ok := HitTest(tree, first.X+1, first.Y+1); !ok || hit != items[0].ID {
+		t.Fatalf("reverse hit = (%d, %v), want %d", hit, ok, items[0].ID)
+	}
+}
+
 func decorationForNode(t *testing.T, tree *Tree, nodeID dom.NodeID) Decoration {
 	t.Helper()
 	for _, decoration := range tree.Decorations {
@@ -165,4 +287,15 @@ func decorationForNode(t *testing.T, tree *Tree, nodeID dom.NodeID) Decoration {
 	}
 	t.Fatalf("decoration for node %d was not created: %#v", nodeID, tree.Decorations)
 	return Decoration{}
+}
+
+func boxForNode(t *testing.T, tree *Tree, nodeID dom.NodeID) Box {
+	t.Helper()
+	for _, box := range tree.Boxes {
+		if box.NodeID == nodeID {
+			return box
+		}
+	}
+	t.Fatalf("box for node %d was not created: %#v", nodeID, tree.Boxes)
+	return Box{}
 }

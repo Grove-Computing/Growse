@@ -157,12 +157,18 @@ func resolveFlexibleLengths(line *flexLine, available, gap float32) {
 }
 
 type flexLayoutItem struct {
-	algorithm  *flexItem
-	node       *dom.Node
-	style      blockStyle
-	crossSize  float32
-	crossStart float32
-	crossEnd   float32
+	algorithm      *flexItem
+	node           *dom.Node
+	style          blockStyle
+	crossSize      float32
+	crossStart     float32
+	crossEnd       float32
+	mainAutoStart  bool
+	mainAutoEnd    bool
+	crossAutoStart bool
+	crossAutoEnd   bool
+	crossAutoSize  bool
+	baseline       float32
 }
 
 func (e *engine) addFlexChildren(container *dom.Node, containerStyle blockStyle, x, width, containingHeight float32, heightDefinite bool) {
@@ -208,11 +214,28 @@ func (e *engine) addFlexChildren(container *dom.Node, containerStyle blockStyle,
 	for _, size := range lineCrossSizes {
 		totalCross += size
 	}
-	if axis.horizontal && heightDefinite {
-		totalCross = max(totalCross, containingHeight)
+	availableCross := width
+	if axis.horizontal {
+		availableCross = totalCross
+		if heightDefinite {
+			availableCross = containingHeight
+		}
+	}
+	if len(lines) == 1 && containerStyle.flexWrap == stylemodel.FlexNoWrap {
+		lineCrossSizes[0] = max(lineCrossSizes[0], availableCross)
+		totalCross = lineCrossSizes[0]
+	}
+	crossOffset, crossSpacing := alignContentSpacing(containerStyle.alignContent, availableCross-totalCross, len(lines))
+	if containerStyle.alignContent == stylemodel.AlignStretch && availableCross > totalCross && len(lines) > 0 {
+		extra := (availableCross - totalCross) / float32(len(lines))
+		for index := range lineCrossSizes {
+			lineCrossSizes[index] += extra
+		}
+		totalCross = availableCross
+		crossOffset = 0
 	}
 
-	crossCursor := float32(0)
+	crossCursor := crossOffset
 	lineIndices := make([]int, len(lines))
 	for index := range lineIndices {
 		lineIndices[index] = index
@@ -224,39 +247,102 @@ func (e *engine) addFlexChildren(container *dom.Node, containerStyle blockStyle,
 	}
 	for _, lineIndex := range lineIndices {
 		line := &lines[lineIndex]
-		mainCursor := float32(0)
+		lineUsed, autoMargins := mainLineUsage(line, mainGap, byAlgorithm)
+		freeMain := max(availableMain-lineUsed, float32(0))
+		autoShare := float32(0)
+		if autoMargins > 0 {
+			autoShare = freeMain / float32(autoMargins)
+		}
+		mainOffset, distributedGap := justifySpacing(containerStyle.justifyContent, freeMain, len(line.items), autoMargins > 0)
+		mainCursor := mainOffset
 		if axis.reverse {
-			mainCursor = availableMain
+			mainCursor = availableMain - mainOffset
+		}
+		lineBaseline := float32(0)
+		if axis.horizontal {
+			for _, algorithm := range line.items {
+				item := byAlgorithm[algorithm]
+				lineBaseline = max(lineBaseline, item.crossStart+item.baseline)
+			}
 		}
 		for _, algorithm := range line.items {
 			item := byAlgorithm[algorithm]
+			mainStart, mainEnd := algorithm.marginStart, algorithm.marginEnd
+			if item.mainAutoStart {
+				mainStart = autoShare
+			}
+			if item.mainAutoEnd {
+				mainEnd = autoShare
+			}
+			usedCrossStart, usedCrossEnd := item.crossStart, item.crossEnd
+			freeCross := max(lineCrossSizes[lineIndex]-item.crossSize-usedCrossStart-usedCrossEnd, float32(0))
+			crossAutoCount := 0
+			if item.crossAutoStart {
+				crossAutoCount++
+			}
+			if item.crossAutoEnd {
+				crossAutoCount++
+			}
+			if crossAutoCount > 0 {
+				share := freeCross / float32(crossAutoCount)
+				if item.crossAutoStart {
+					usedCrossStart = share
+				}
+				if item.crossAutoEnd {
+					usedCrossEnd = share
+				}
+			}
+			alignment := item.style.alignSelf
+			if alignment == stylemodel.AlignAuto {
+				alignment = containerStyle.alignItems
+			}
+			if axis.crossFlip {
+				alignment = flipCrossAlignment(alignment)
+			}
+			if alignment == stylemodel.AlignStretch && item.crossAutoSize && crossAutoCount == 0 {
+				item.crossSize = max(lineCrossSizes[lineIndex]-usedCrossStart-usedCrossEnd, float32(0))
+				freeCross = 0
+			}
+			crossPosition := usedCrossStart
+			if crossAutoCount == 0 {
+				switch alignment {
+				case stylemodel.AlignFlexEnd:
+					crossPosition += freeCross
+				case stylemodel.AlignCenter:
+					crossPosition += freeCross / 2
+				case stylemodel.AlignBaseline:
+					if axis.horizontal {
+						crossPosition = max(lineBaseline-item.baseline, usedCrossStart)
+					}
+				}
+			}
 			var itemX, itemY float32
 			if axis.horizontal {
 				if axis.reverse {
-					mainCursor -= algorithm.marginEnd + algorithm.target
+					mainCursor -= mainEnd + algorithm.target
 					itemX = x + mainCursor
-					mainCursor -= algorithm.marginStart + mainGap
+					mainCursor -= mainStart + mainGap + distributedGap
 				} else {
-					mainCursor += algorithm.marginStart
+					mainCursor += mainStart
 					itemX = x + mainCursor
-					mainCursor += algorithm.target + algorithm.marginEnd + mainGap
+					mainCursor += algorithm.target + mainEnd + mainGap + distributedGap
 				}
-				itemY = e.y + crossCursor + item.crossStart
+				itemY = e.y + crossCursor + crossPosition
 			} else {
 				if axis.reverse {
-					mainCursor -= algorithm.marginEnd + algorithm.target
+					mainCursor -= mainEnd + algorithm.target
 					itemY = e.y + mainCursor
-					mainCursor -= algorithm.marginStart + mainGap
+					mainCursor -= mainStart + mainGap + distributedGap
 				} else {
-					mainCursor += algorithm.marginStart
+					mainCursor += mainStart
 					itemY = e.y + mainCursor
-					mainCursor += algorithm.target + algorithm.marginEnd + mainGap
+					mainCursor += algorithm.target + mainEnd + mainGap + distributedGap
 				}
-				itemX = x + crossCursor + item.crossStart
+				itemX = x + crossCursor + crossPosition
 			}
 			e.renderFlexItem(item, axis, itemX, itemY, algorithm.target, item.crossSize)
 		}
-		crossCursor += lineCrossSizes[lineIndex] + crossGap
+		crossCursor += lineCrossSizes[lineIndex] + crossGap + crossSpacing
 	}
 	if axis.horizontal {
 		e.y += totalCross
@@ -294,16 +380,29 @@ func (e *engine) collectFlexItems(container *dom.Node, axis flexAxis, availableM
 		}
 		mainStart, mainEnd := style.margin.Left, style.margin.Right
 		crossStart, crossEnd := style.margin.Top, style.margin.Bottom
+		mainAutoStart, mainAutoEnd := style.marginAuto.Left, style.marginAuto.Right
+		crossAutoStart, crossAutoEnd := style.marginAuto.Top, style.marginAuto.Bottom
+		crossAutoSize := style.height.Kind == stylemodel.SizeAuto
 		if !axis.horizontal {
 			mainStart, mainEnd = style.margin.Top, style.margin.Bottom
 			crossStart, crossEnd = style.margin.Left, style.margin.Right
+			mainAutoStart, mainAutoEnd = style.marginAuto.Top, style.marginAuto.Bottom
+			crossAutoStart, crossAutoEnd = style.marginAuto.Left, style.marginAuto.Right
+			crossAutoSize = style.width.Kind == stylemodel.SizeAuto
 		}
 		algorithm := &flexItem{
 			index: index, order: style.order, base: base, hypothetical: hypothetical,
 			minimum: minimum, maximum: maximum, grow: style.flexGrow, shrink: style.flexShrink,
 			marginStart: mainStart, marginEnd: mainEnd,
 		}
-		item := &flexLayoutItem{algorithm: algorithm, node: node, style: style, crossSize: cross, crossStart: crossStart, crossEnd: crossEnd}
+		_, _, ascent := measureText("Mg", style.fontSize, style.bold)
+		item := &flexLayoutItem{
+			algorithm: algorithm, node: node, style: style, crossSize: cross,
+			crossStart: crossStart, crossEnd: crossEnd,
+			mainAutoStart: mainAutoStart, mainAutoEnd: mainAutoEnd,
+			crossAutoStart: crossAutoStart, crossAutoEnd: crossAutoEnd,
+			crossAutoSize: crossAutoSize, baseline: ascent + style.border.Top.Width + style.padding.Top,
+		}
 		items = append(items, item)
 		byAlgorithm[algorithm] = item
 	}
@@ -425,4 +524,83 @@ func translateFlexGeometry(tree *Tree, boxStart, decorationStart int, x, y float
 		tree.Decorations[index].Y += y
 		tree.Decorations[index].Clip = translateClip(tree.Decorations[index].Clip)
 	}
+}
+
+func mainLineUsage(line *flexLine, gap float32, items map[*flexItem]*flexLayoutItem) (float32, int) {
+	if line == nil {
+		return 0, 0
+	}
+	used := gap * float32(max(len(line.items)-1, 0))
+	autoMargins := 0
+	for _, algorithm := range line.items {
+		item := items[algorithm]
+		used += algorithm.target
+		if item.mainAutoStart {
+			autoMargins++
+		} else {
+			used += algorithm.marginStart
+		}
+		if item.mainAutoEnd {
+			autoMargins++
+		} else {
+			used += algorithm.marginEnd
+		}
+	}
+	return used, autoMargins
+}
+
+func justifySpacing(alignment stylemodel.JustifyContent, free float32, itemCount int, hasAutoMargins bool) (float32, float32) {
+	if free <= 0 || itemCount == 0 || hasAutoMargins {
+		return 0, 0
+	}
+	switch alignment {
+	case stylemodel.JustifyFlexEnd:
+		return free, 0
+	case stylemodel.JustifyCenter:
+		return free / 2, 0
+	case stylemodel.JustifySpaceBetween:
+		if itemCount > 1 {
+			return 0, free / float32(itemCount-1)
+		}
+	case stylemodel.JustifySpaceAround:
+		spacing := free / float32(itemCount)
+		return spacing / 2, spacing
+	case stylemodel.JustifySpaceEvenly:
+		spacing := free / float32(itemCount+1)
+		return spacing, spacing
+	}
+	return 0, 0
+}
+
+func alignContentSpacing(alignment stylemodel.Align, free float32, lineCount int) (float32, float32) {
+	if free <= 0 || lineCount == 0 {
+		return 0, 0
+	}
+	switch alignment {
+	case stylemodel.AlignFlexEnd:
+		return free, 0
+	case stylemodel.AlignCenter:
+		return free / 2, 0
+	case stylemodel.AlignSpaceBetween:
+		if lineCount > 1 {
+			return 0, free / float32(lineCount-1)
+		}
+	case stylemodel.AlignSpaceAround:
+		spacing := free / float32(lineCount)
+		return spacing / 2, spacing
+	case stylemodel.AlignSpaceEvenly:
+		spacing := free / float32(lineCount+1)
+		return spacing, spacing
+	}
+	return 0, 0
+}
+
+func flipCrossAlignment(alignment stylemodel.Align) stylemodel.Align {
+	if alignment == stylemodel.AlignFlexStart {
+		return stylemodel.AlignFlexEnd
+	}
+	if alignment == stylemodel.AlignFlexEnd {
+		return stylemodel.AlignFlexStart
+	}
+	return alignment
 }
