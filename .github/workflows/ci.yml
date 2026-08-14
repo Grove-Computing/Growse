@@ -60,7 +60,7 @@ jobs:
       - name: Check module files
         run: go mod tidy -diff
 
-      - name: Test v0.5.0 installer
+      - name: Test v0.6.0 installer
         run: bash tests/install.sh
 
       - name: Validate release artifact matrix
