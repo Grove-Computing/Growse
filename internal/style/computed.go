@@ -1,7 +1,10 @@
 // Package style matches CSS rules and computes values for DOM elements.
 package style
 
-import "github.com/Grove-Computing/Growse/internal/dom"
+import (
+	"github.com/Grove-Computing/Growse/internal/animation"
+	"github.com/Grove-Computing/Growse/internal/dom"
+)
 
 // Display controls whether an element participates in block or inline layout.
 type Display uint8
@@ -430,14 +433,67 @@ type ComputedStyle struct {
 	TextDecoration      TextDecorationLine
 	DecorationColor     uint32
 	Opacity             float32
+	Transitions         []Transition
+	Animations          []CSSAnimation
+	ImportantProperties map[string]bool
 	BeforeContent       string
 	AfterContent        string
 	CustomProperties    map[string]string
 }
 
+// AnimationDirection controls iteration playback direction.
+type AnimationDirection uint8
+
+const (
+	AnimationNormal AnimationDirection = iota
+	AnimationReverse
+	AnimationAlternate
+	AnimationAlternateReverse
+)
+
+// AnimationFillMode controls the effect before and after active time.
+type AnimationFillMode uint8
+
+const (
+	AnimationFillNone AnimationFillMode = iota
+	AnimationFillForwards
+	AnimationFillBackwards
+	AnimationFillBoth
+)
+
+// AnimationPlayState controls whether an animation advances.
+type AnimationPlayState uint8
+
+const (
+	AnimationRunning AnimationPlayState = iota
+	AnimationPaused
+)
+
+// CSSAnimation is one computed entry from the animation property lists.
+type CSSAnimation struct {
+	Name       string
+	Timing     animation.Timing
+	Iterations float64
+	Direction  AnimationDirection
+	FillMode   AnimationFillMode
+	PlayState  AnimationPlayState
+}
+
+// Transition is one computed CSS transition matched to a property.
+type Transition struct {
+	Property string
+	Timing   animation.Timing
+}
+
 // Bold reports whether the computed weight should use a bold face.
 func (s ComputedStyle) Bold() bool {
 	return s.FontWeight >= 600
+}
+
+// Important reports whether the winning author declaration for property was
+// marked !important.
+func (s ComputedStyle) Important(property string) bool {
+	return s.ImportantProperties[property]
 }
 
 // Map stores computed styles by DOM NodeID.

@@ -1,10 +1,34 @@
 // Package css parses CSS syntax into Growse-owned rules.
 package css
 
+const (
+	// MaxKeyframesRules bounds named keyframe storage per stylesheet.
+	MaxKeyframesRules = 256
+	// MaxFramesPerKeyframesRule bounds selector blocks in one @keyframes rule.
+	MaxFramesPerKeyframesRule = 256
+	// MaxDeclarationsPerKeyframe bounds work performed for one sampled frame.
+	MaxDeclarationsPerKeyframe = 64
+	// MaxOffsetsPerKeyframe bounds comma-separated selectors in one block.
+	MaxOffsetsPerKeyframe = 64
+)
+
 // Stylesheet is an ordered collection of CSS rules.
 type Stylesheet struct {
-	Rules   []Rule
-	Imports []ImportRule
+	Rules     []Rule
+	Imports   []ImportRule
+	Keyframes []KeyframesRule
+}
+
+// KeyframesRule is one named CSS animation keyframe list.
+type KeyframesRule struct {
+	Name   string
+	Frames []Keyframe
+}
+
+// Keyframe contains normalized offsets and declarations for one keyframe block.
+type Keyframe struct {
+	Offsets      []float64
+	Declarations []Declaration
 }
 
 // ImportRule references a stylesheet and an optional media query list.

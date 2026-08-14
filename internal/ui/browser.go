@@ -78,6 +78,17 @@ type BrowserUI struct {
 	inputEditors      map[dom.NodeID]*widget.Editor
 	inputFocused      map[dom.NodeID]bool
 	inputCommitted    map[dom.NodeID]string
+	layoutBuild       func(*dom.Document, stylemodel.Map, float32, float32, float32, float32) *layoutengine.Tree
+	layoutCache       documentLayoutCache
+}
+
+type documentLayoutCache struct {
+	page                  *browser.Page
+	revision              uint64
+	viewportWidth         float32
+	viewportHeight        float32
+	listFirst, listOffset int
+	tree                  *layoutengine.Tree
 }
 
 // Navigator is the browser capability used by the UI.
@@ -128,6 +139,7 @@ func NewBrowserUI(navigator Navigator, invalidate func()) *BrowserUI {
 		inputEditors:   make(map[dom.NodeID]*widget.Editor),
 		inputFocused:   make(map[dom.NodeID]bool),
 		inputCommitted: make(map[dom.NodeID]string),
+		layoutBuild:    layoutengine.BuildWithScroll,
 	}
 	if cursorErr != nil {
 		slog.Error("Gopherカーソルを初期化できませんでした", "component", "ui", "error", cursorErr)
@@ -467,17 +479,10 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 	if ui.navigator != nil {
 		ui.navigator.UpdateViewport(viewportWidth, viewportHeight)
 	}
-	tree := layoutengine.BuildWithViewport(page.Document, page.ComputedStyles, viewportWidth, viewportHeight)
+	frameStyles := page.AnimatedStyles(gtx.Now)
+	tree := ui.cachedDocumentTree(page, viewportWidth, viewportHeight, gtx.Metric.PxPerDp)
+	layoutengine.ApplyAnimatedStyles(tree, frameStyles)
 	displayList := paintmodel.Build(tree)
-	if first := ui.pageList.Position.First; first >= 0 && first < len(displayList.Commands) {
-		if firstY, ok := commandDocumentY(displayList.Commands[first]); ok {
-			scrollY := max(firstY+float32(ui.pageList.Position.Offset)/gtx.Metric.PxPerDp, float32(0))
-			if scrollY > 0 {
-				tree = layoutengine.BuildWithScroll(page.Document, page.ComputedStyles, viewportWidth, viewportHeight, 0, scrollY)
-				displayList = paintmodel.Build(tree)
-			}
-		}
-	}
 	paint.Fill(gtx.Ops, rgba(displayList.Background))
 	ui.updateViewportHover(gtx, page, tree, displayList)
 	ui.handleViewportClicks(gtx, page, tree, displayList)
@@ -499,7 +504,40 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 	ui.viewportClick.Add(gtx.Ops)
 	pass.Pop()
 	area.Pop()
+	if page.ActiveAnimations(gtx.Now) && ui.invalidate != nil {
+		ui.invalidate()
+	}
 	return dimensions
+}
+
+func (ui *BrowserUI) cachedDocumentTree(page *browser.Page, viewportWidth, viewportHeight, pxPerDp float32) *layoutengine.Tree {
+	position := ui.pageList.Position
+	cache := &ui.layoutCache
+	if cache.tree != nil && cache.page == page && cache.revision == page.StyleRevision &&
+		cache.viewportWidth == viewportWidth && cache.viewportHeight == viewportHeight &&
+		cache.listFirst == position.First && cache.listOffset == position.Offset {
+		return layoutengine.Clone(cache.tree)
+	}
+
+	build := ui.layoutBuild
+	if build == nil {
+		build = layoutengine.BuildWithScroll
+	}
+	tree := build(page.Document, page.ComputedStyles, viewportWidth, viewportHeight, 0, 0)
+	displayList := paintmodel.Build(tree)
+	if position.First >= 0 && position.First < len(displayList.Commands) {
+		if firstY, ok := commandDocumentY(displayList.Commands[position.First]); ok {
+			scrollY := max(firstY+float32(position.Offset)/pxPerDp, float32(0))
+			if scrollY > 0 {
+				tree = build(page.Document, page.ComputedStyles, viewportWidth, viewportHeight, 0, scrollY)
+			}
+		}
+	}
+	*cache = documentLayoutCache{
+		page: page, revision: page.StyleRevision, viewportWidth: viewportWidth, viewportHeight: viewportHeight,
+		listFirst: position.First, listOffset: position.Offset, tree: tree,
+	}
+	return layoutengine.Clone(tree)
 }
 
 func (ui *BrowserUI) updateViewportHover(gtx layout.Context, page *browser.Page, tree *layoutengine.Tree, displayList *paintmodel.DisplayList) {

@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Grove-Computing/Growse/internal/css"
 	"github.com/Grove-Computing/Growse/internal/dom"
@@ -242,6 +243,50 @@ func TestUpdateHoverTracksAncestorPathAndRecomputesStyles(t *testing.T) {
 	}
 	if got, want := invalidations, 2; got != want {
 		t.Fatalf("invalidation count = %d, want %d", got, want)
+	}
+}
+
+func TestHoverTransitionFlowsThroughPageFrameStylesAndReverses(t *testing.T) {
+	document := dom.NewDocument()
+	button := document.CreateElement("button", nil)
+	if err := document.AppendChild(document.Root, button); err != nil {
+		t.Fatal(err)
+	}
+	stylesheet, err := css.Parse(strings.NewReader(`
+button { opacity: 0; transition: opacity 1s linear; }
+button:hover { opacity: 1; }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Date(2026, time.August, 14, 12, 0, 0, 0, time.UTC)
+	clock := &browserFakeClock{current: start}
+	page := NewPage(mustParseURL(t, "http://localhost"))
+	page.Document, page.Stylesheet = document, stylesheet
+	page.ComputedStyles = style.Compute(document, stylesheet)
+	browserState := New(nil)
+	browserState.SetAnimationClock(clock)
+	browserState.SetPage(page)
+
+	if !browserState.UpdateHover(button.ID, 0, 0) {
+		t.Fatal("hover did not start transition")
+	}
+	midpoint, _ := page.AnimatedStyles(start.Add(500 * time.Millisecond)).For(button)
+	if midpoint.Opacity != 0.5 || !page.ActiveAnimations(start.Add(500*time.Millisecond)) {
+		t.Fatalf("hover midpoint = %v, active=%v; want 0.5, true", midpoint.Opacity, page.ActiveAnimations(start.Add(500*time.Millisecond)))
+	}
+
+	clock.current = start.Add(500 * time.Millisecond)
+	if !browserState.ClearHover() {
+		t.Fatal("clear hover did not reverse transition")
+	}
+	reversing, _ := page.AnimatedStyles(start.Add(750 * time.Millisecond)).For(button)
+	if reversing.Opacity != 0.25 {
+		t.Fatalf("reversing opacity = %v, want 0.25", reversing.Opacity)
+	}
+	finished, _ := page.AnimatedStyles(start.Add(time.Second)).For(button)
+	if finished.Opacity != 0 || page.ActiveAnimations(start.Add(time.Second)) || page.Transitions.Count(button.ID) != 0 {
+		t.Fatalf("finished transition = opacity:%v active:%v count:%d", finished.Opacity, page.ActiveAnimations(start.Add(time.Second)), page.Transitions.Count(button.ID))
 	}
 }
 
@@ -499,6 +544,77 @@ func TestReloadDoesNotAddHistoryEntry(t *testing.T) {
 	}
 	if got, want := len(browser.history.entries), 1; got != want {
 		t.Fatalf("history entries after Reload = %d, want %d", got, want)
+	}
+}
+
+func TestNavigationAndReloadDiscardPreviousPageAnimations(t *testing.T) {
+	firstURL := mustParseURL(t, "https://example.com/first")
+	secondURL := mustParseURL(t, "https://example.com/second")
+	body := []byte(`<style>.running { animation: 1s linear infinite pulse; }</style><div class="running"></div>`)
+	loader := &routeLoader{responses: map[string]*network.Response{
+		firstURL.String():  {URL: firstURL, StatusCode: 200, ContentType: "text/html", Body: body},
+		secondURL.String(): {URL: secondURL, StatusCode: 200, ContentType: "text/html", Body: body},
+	}}
+	browser := New(loader)
+	first, err := browser.Navigate(context.Background(), firstURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstNode, _ := first.Document.QuerySelector(".running")
+	if first.Animations.Count(firstNode.ID) != 1 {
+		t.Fatal("first page animation was not registered")
+	}
+
+	second, err := browser.Navigate(context.Background(), secondURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Animations.Count(firstNode.ID) != 0 {
+		t.Fatalf("first page animation survived navigation: %d", first.Animations.Count(firstNode.ID))
+	}
+	secondNode, _ := second.Document.QuerySelector(".running")
+	if second.Animations.Count(secondNode.ID) != 1 {
+		t.Fatal("second page animation was not registered")
+	}
+
+	reloaded, err := browser.Reload(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Animations.Count(secondNode.ID) != 0 {
+		t.Fatalf("second page animation survived reload: %d", second.Animations.Count(secondNode.ID))
+	}
+	reloadedNode, _ := reloaded.Document.QuerySelector(".running")
+	if reloaded.Animations.Count(reloadedNode.ID) != 1 {
+		t.Fatal("reloaded page animation was not registered")
+	}
+}
+
+func TestBrowserReducedMotionSettingRecomputesAuthorMediaQuery(t *testing.T) {
+	pageURL := mustParseURL(t, "https://example.com/motion")
+	browser := New(stubLoader{response: &network.Response{
+		URL: pageURL, StatusCode: 200, ContentType: "text/html",
+		Body: []byte(`<style>
+#target { animation: 1s linear infinite moving; }
+@media (prefers-reduced-motion: reduce) { #target { animation-name: none; } }
+</style><div id="target"></div>`),
+	}})
+	page, err := browser.Navigate(context.Background(), pageURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, _ := page.Document.GetElementByID("target")
+	if page.Animations.Count(target.ID) != 1 {
+		t.Fatal("default no-preference animation is missing")
+	}
+	if !browser.SetReducedMotion(true) || !page.ReducedMotion {
+		t.Fatal("reduced-motion setting did not change")
+	}
+	if page.Animations.Count(target.ID) != 0 {
+		t.Fatalf("author reduce rule was not applied: %d animations", page.Animations.Count(target.ID))
+	}
+	if browser.SetReducedMotion(true) {
+		t.Fatal("unchanged reduced-motion setting reported a change")
 	}
 }
 

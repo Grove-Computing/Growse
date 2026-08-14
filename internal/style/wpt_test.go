@@ -3,7 +3,9 @@ package style
 import (
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/Grove-Computing/Growse/internal/animation"
 	"github.com/Grove-Computing/Growse/internal/css"
 	"github.com/Grove-Computing/Growse/internal/dom"
 )
@@ -54,5 +56,59 @@ func TestWPTBorderRadius001ZeroProducesSquareCorners(t *testing.T) {
 	computed, _ := Compute(document, stylesheet).For(target)
 	if computed.BorderRadius != (BorderRadii{}) {
 		t.Fatalf("border radius = %#v, want square corners", computed.BorderRadius)
+	}
+}
+
+// Adapted from WPT css/css-animations/animation-important-with-transition.html
+// at the revision recorded in docs/wpt.md. Web Animations objects are outside
+// v0.7, so this checks their observable computed-value cascade instead.
+func TestWPTAnimationImportantWithTransitionCascade(t *testing.T) {
+	underlying := ComputedStyle{
+		Color: 0xff0000ff, Opacity: 1,
+		ImportantProperties: map[string]bool{"color": true, "opacity": true},
+	}
+	animated := AnimatedValues{
+		"color":   {Kind: TransitionColor, Color: 0x0000ffff},
+		"opacity": {Kind: TransitionNumber, Number: 0},
+	}
+	transitioned := AnimatedValues{"opacity": {Kind: TransitionNumber, Number: 0.5}}
+	computed := ApplyAnimatedCascade(underlying, animated, transitioned)
+	if computed.Color != 0xff0000ff || computed.Opacity != 0.5 {
+		t.Fatalf("cascade result = color:%#08x opacity:%v", computed.Color, computed.Opacity)
+	}
+}
+
+// Adapted from WPT css/css-animations/animation-fill-mode-001-manual.html.
+// Its post-animation visual blue square is reduced to the underlying computed
+// background-color after a no-fill animation finishes.
+func TestWPTAnimationFillModeNoneRestoresUnderlyingColor(t *testing.T) {
+	start := time.Unix(100, 0)
+	timing, _ := animation.NewTiming(time.Second, 0, animation.Linear{})
+	sample := (CSSAnimation{
+		Name: "sample", Timing: timing, Iterations: 1, FillMode: AnimationFillNone,
+	}).Sample(start, start.Add(time.Second))
+	underlying := ComputedStyle{BackgroundColor: 0x0000ffff}
+	computed := ApplyAnimationSample(underlying, AnimatedValues{
+		"background-color": {Kind: TransitionColor, Color: 0x008000ff},
+	}, sample)
+	if computed.BackgroundColor != 0x0000ffff {
+		t.Fatalf("post-animation color = %#08x, want underlying blue", computed.BackgroundColor)
+	}
+}
+
+// Adapted from WPT css/css-transitions/transition-duration-shorthand.html.
+// Growse substitutes supported paint-only properties for width and height and
+// preserves the source assertion that the last matching zero duration wins.
+func TestWPTTransitionDurationShorthandUsesLastMatchingProperty(t *testing.T) {
+	long, _ := animation.NewTiming(100*time.Second, 0, animation.Linear{})
+	zero, _ := animation.NewTiming(0, 0, animation.Linear{})
+	previous := Map{1: {Opacity: 0, Color: 0xff0000ff}}
+	next := Map{1: {
+		Opacity: 1, Color: 0x0000ffff,
+		Transitions: []Transition{{Property: "all", Timing: long}, {Property: "opacity", Timing: zero}},
+	}}
+	started := StartTransitions(previous, next)
+	if len(started) != 1 || started[0].Property != "color" {
+		t.Fatalf("started transitions = %#v, want only color", started)
 	}
 }

@@ -121,7 +121,11 @@ func build(document *dom.Document, computed stylemodel.Map, viewportWidth, viewp
 		viewportWidth = pagePadding*2 + 1
 	}
 
-	tree := &Tree{Width: viewportWidth, Background: 0xffffffff, StackingContexts: []StackingContext{{Parent: -1}}}
+	tree := &Tree{
+		Width: viewportWidth, Background: 0xffffffff, StackingContexts: []StackingContext{{Parent: -1}},
+		Parents: make(map[dom.NodeID]dom.NodeID), Bounds: make(map[dom.NodeID]Rect),
+	}
+	recordNodeParents(tree, document)
 	state := engine{
 		tree:           tree,
 		computed:       computed,
@@ -268,6 +272,7 @@ func (e *engine) addInput(node *dom.Node, style blockStyle, x, width, containing
 		Transform:   stylemodel.IdentityMatrix(),
 		Hidden:      style.hidden,
 	})
+	e.tree.Bounds[node.ID] = Rect{X: x, Y: e.y, Width: usedWidth, Height: usedHeight}
 	e.y += usedHeight + style.margin.Bottom
 }
 
@@ -442,6 +447,7 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 	if outerHeight < 0 {
 		outerHeight = 0
 	}
+	e.tree.Bounds[node.ID] = Rect{X: x, Y: boxTop, Width: outerWidth, Height: outerHeight}
 	if decorationIndex >= 0 {
 		e.tree.Decorations[decorationIndex].Height = outerHeight
 		e.tree.Decorations[decorationIndex].Radius = resolveBorderRadii(style.radius, outerWidth, outerHeight)
@@ -479,6 +485,26 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 	e.positionCB = previousPositionCB
 	e.stackingID = previousStackingID
 	e.opacity = previousOpacity
+}
+
+func recordNodeParents(tree *Tree, document *dom.Document) {
+	if tree == nil || document == nil || document.Root == nil {
+		return
+	}
+	var walk func(*dom.Node, dom.NodeID)
+	walk = func(node *dom.Node, parent dom.NodeID) {
+		if node == nil {
+			return
+		}
+		if node.ID != 0 {
+			tree.Parents[node.ID] = parent
+			parent = node.ID
+		}
+		for _, child := range node.Children {
+			walk(child, parent)
+		}
+	}
+	walk(document.Root, 0)
 }
 
 func normalizeMatrix(matrix stylemodel.Matrix) stylemodel.Matrix {

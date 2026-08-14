@@ -21,10 +21,12 @@ func Parse(reader io.Reader) (*Stylesheet, error) {
 	p := parser.NewParser(parse.NewInputBytes(input), false)
 	stylesheet := &Stylesheet{}
 	var current *Rule
+	var currentKeyframe *Keyframe
 	type atRuleFrame struct {
-		active  bool
-		isMedia bool
-		media   []MediaQuery
+		active         bool
+		isMedia        bool
+		media          []MediaQuery
+		keyframesIndex int
 	}
 	var atRules []atRuleFrame
 	importsAllowed := true
@@ -46,6 +48,22 @@ func Parse(reader io.Reader) (*Stylesheet, error) {
 		case parser.BeginRulesetGrammar:
 			if len(atRules) == 0 {
 				importsAllowed = false
+			}
+			if len(atRules) != 0 && atRules[len(atRules)-1].keyframesIndex >= 0 {
+				frame := atRules[len(atRules)-1]
+				offsets, valid := parseKeyframeSelectors(string(data) + tokenText(p.Values()))
+				if !valid {
+					current, currentKeyframe = nil, nil
+					continue
+				}
+				keyframes := &stylesheet.Keyframes[frame.keyframesIndex]
+				if len(keyframes.Frames) >= MaxFramesPerKeyframesRule {
+					current, currentKeyframe = nil, nil
+					continue
+				}
+				keyframes.Frames = append(keyframes.Frames, Keyframe{Offsets: offsets})
+				current, currentKeyframe = nil, &keyframes.Frames[len(keyframes.Frames)-1]
+				continue
 			}
 			active := true
 			var mediaGroups [][]MediaQuery
@@ -73,7 +91,7 @@ func Parse(reader io.Reader) (*Stylesheet, error) {
 			})
 			current = &stylesheet.Rules[len(stylesheet.Rules)-1]
 		case parser.DeclarationGrammar, parser.CustomPropertyGrammar:
-			if current == nil {
+			if current == nil && currentKeyframe == nil {
 				continue
 			}
 			rawValue := strings.TrimSpace(tokenText(p.Values()))
@@ -83,12 +101,19 @@ func Parse(reader io.Reader) (*Stylesheet, error) {
 				property = strings.ToLower(property)
 			}
 			if property != "" && rawValue != "" {
-				current.Declarations = append(current.Declarations, Declaration{
+				declaration := Declaration{
 					Property: property, Value: parseValue(rawValue), Important: important,
-				})
+				}
+				if currentKeyframe != nil {
+					if len(currentKeyframe.Declarations) < MaxDeclarationsPerKeyframe {
+						currentKeyframe.Declarations = append(currentKeyframe.Declarations, declaration)
+					}
+				} else {
+					current.Declarations = append(current.Declarations, declaration)
+				}
 			}
 		case parser.EndRulesetGrammar:
-			current = nil
+			current, currentKeyframe = nil, nil
 		case parser.AtRuleGrammar:
 			name := strings.ToLower(strings.TrimSpace(string(data)))
 			if len(atRules) == 0 && name == "@import" && importsAllowed {
@@ -104,20 +129,64 @@ func Parse(reader io.Reader) (*Stylesheet, error) {
 			if len(atRules) == 0 {
 				importsAllowed = false
 			}
-			frame := atRuleFrame{active: false}
+			frame := atRuleFrame{active: false, keyframesIndex: -1}
 			if name == "@media" {
 				frame.active, frame.isMedia = true, true
 				frame.media = parseMediaQueryList(tokenText(p.Values()))
+			} else if len(atRules) == 0 && name == "@keyframes" {
+				if keyframesName, valid := parseKeyframesName(tokenText(p.Values())); valid && len(stylesheet.Keyframes) < MaxKeyframesRules {
+					stylesheet.Keyframes = append(stylesheet.Keyframes, KeyframesRule{Name: keyframesName})
+					frame.active = true
+					frame.keyframesIndex = len(stylesheet.Keyframes) - 1
+				}
 			}
 			atRules = append(atRules, frame)
-			current = nil
+			current, currentKeyframe = nil, nil
 		case parser.EndAtRuleGrammar:
 			if len(atRules) != 0 {
 				atRules = atRules[:len(atRules)-1]
 			}
-			current = nil
+			current, currentKeyframe = nil, nil
 		}
 	}
+}
+
+func parseKeyframesName(value string) (string, bool) {
+	value = strings.TrimSpace(value)
+	if decoded, ok := DecodeString(value); ok {
+		value = decoded
+	}
+	if value == "" || strings.EqualFold(value, "none") || strings.ContainsAny(value, "{};,()") {
+		return "", false
+	}
+	return value, true
+}
+
+func parseKeyframeSelectors(value string) ([]float64, bool) {
+	parts := strings.Split(value, ",")
+	if len(parts) > MaxOffsetsPerKeyframe {
+		return nil, false
+	}
+	offsets := make([]float64, 0, len(parts))
+	for _, part := range parts {
+		part = strings.ToLower(strings.TrimSpace(part))
+		switch part {
+		case "from":
+			offsets = append(offsets, 0)
+		case "to":
+			offsets = append(offsets, 1)
+		default:
+			if !strings.HasSuffix(part, "%") {
+				return nil, false
+			}
+			percentage, err := strconv.ParseFloat(strings.TrimSpace(strings.TrimSuffix(part, "%")), 64)
+			if err != nil || percentage < 0 || percentage > 100 {
+				return nil, false
+			}
+			offsets = append(offsets, percentage/100)
+		}
+	}
+	return offsets, len(offsets) != 0
 }
 
 // ParseDeclarations parses the contents of an element's style attribute.
@@ -190,6 +259,16 @@ func (s *Stylesheet) Append(other *Stylesheet) {
 	for _, rule := range other.Rules {
 		rule.Order = len(s.Rules)
 		s.Rules = append(s.Rules, rule)
+	}
+	for _, keyframes := range other.Keyframes {
+		copy := KeyframesRule{Name: keyframes.Name, Frames: make([]Keyframe, len(keyframes.Frames))}
+		for index, frame := range keyframes.Frames {
+			copy.Frames[index] = Keyframe{
+				Offsets:      append([]float64(nil), frame.Offsets...),
+				Declarations: append([]Declaration(nil), frame.Declarations...),
+			}
+		}
+		s.Keyframes = append(s.Keyframes, copy)
 	}
 }
 

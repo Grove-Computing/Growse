@@ -11,7 +11,9 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 
+	animationmodel "github.com/Grove-Computing/Growse/internal/animation"
 	"github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/events"
 	htmlparser "github.com/Grove-Computing/Growse/internal/html"
@@ -38,6 +40,8 @@ type Browser struct {
 	onMutation     func()
 	navigationID   uint64
 	history        history
+	clock          animationmodel.Clock
+	reducedMotion  bool
 }
 
 // New creates a browser with no page loaded.
@@ -47,7 +51,18 @@ func New(client ResourceLoader) *Browser {
 
 // NewWithRuntimeFactory は信頼済みページのスクリプトを実行するBrowserを生成する。
 func NewWithRuntimeFactory(client ResourceLoader, factory runtimemodel.Factory) *Browser {
-	return &Browser{client: client, runtimeFactory: factory, history: newHistory()}
+	return &Browser{client: client, runtimeFactory: factory, history: newHistory(), clock: animationmodel.SystemClock{}}
+}
+
+// SetAnimationClock replaces the page animation clock. Tests can inject a
+// controllable Clock before navigation; nil restores the production clock.
+func (b *Browser) SetAnimationClock(clock animationmodel.Clock) {
+	b.mu.Lock()
+	if clock == nil {
+		clock = animationmodel.SystemClock{}
+	}
+	b.clock = clock
+	b.mu.Unlock()
 }
 
 // SetOnMutation はWebGoによるDOM変更後の通知先を設定する。
@@ -99,7 +114,7 @@ func (b *Browser) SetInputValue(nodeID dom.NodeID, value string) bool {
 	}
 	changed := page.Document.SetAttribute(nodeID, "value", value)
 	if changed {
-		page.ComputedStyles = computePageStyles(page)
+		recomputePageStyles(page, b.currentTime())
 	}
 	dispatcher := page.Events
 	b.mu.Unlock()
@@ -172,7 +187,7 @@ func (b *Browser) UpdateHover(nodeID dom.NodeID, x, y float32) bool {
 		page.HoverTarget = 0
 	}
 	page.HoverPath = path
-	page.ComputedStyles = computePageStyles(page)
+	recomputePageStyles(page, b.currentTime())
 	dispatcher := page.Events
 	b.mu.Unlock()
 	if onMutation != nil {
@@ -202,7 +217,7 @@ func (b *Browser) UpdateFocus(nodeID dom.NodeID) bool {
 		return false
 	}
 	page.FocusTarget = target
-	page.ComputedStyles = computePageStyles(page)
+	recomputePageStyles(page, b.currentTime())
 	b.mu.Unlock()
 	if onMutation != nil {
 		onMutation()
@@ -223,8 +238,30 @@ func (b *Browser) UpdateViewport(width, height float32) bool {
 		return false
 	}
 	page.ViewportWidth, page.ViewportHeight = width, height
-	page.ComputedStyles = computePageStyles(page)
+	recomputePageStyles(page, b.currentTime())
 	b.mu.Unlock()
+	return true
+}
+
+// SetReducedMotion updates the browser preference exposed through the
+// prefers-reduced-motion media feature.
+func (b *Browser) SetReducedMotion(reduce bool) bool {
+	b.mu.Lock()
+	if b.reducedMotion == reduce {
+		b.mu.Unlock()
+		return false
+	}
+	b.reducedMotion = reduce
+	page := b.page
+	onMutation := b.onMutation
+	if page != nil {
+		page.ReducedMotion = reduce
+		recomputePageStyles(page, b.currentTime())
+	}
+	b.mu.Unlock()
+	if page != nil && onMutation != nil {
+		onMutation()
+	}
 	return true
 }
 
@@ -233,8 +270,30 @@ func (b *Browser) SetPage(page *Page) {
 	b.mu.Lock()
 	b.navigationID++
 	activeRuntime := b.activeRuntime
+	previousPage := b.page
 	b.activeRuntime = nil
 	b.page = page
+	if previousPage != nil && previousPage != page && previousPage.Animations != nil {
+		previousPage.Animations.Clear()
+	}
+	if previousPage != nil && previousPage != page && previousPage.Transitions != nil {
+		previousPage.Transitions.Clear()
+	}
+	if page != nil {
+		if page.ComputedStyles == nil {
+			page.ComputedStyles = computePageStyles(page)
+		}
+		if page.Animations == nil {
+			page.Animations = style.NewAnimationRegistry()
+		}
+		if page.Transitions == nil {
+			page.Transitions = style.NewTransitionRegistry()
+		}
+		if page.StyleRevision == 0 {
+			page.StyleRevision = 1
+		}
+		page.Animations.Reconcile(page.ComputedStyles, b.currentTime())
+	}
 	if page == nil {
 		b.history = newHistory()
 	} else {
@@ -251,7 +310,14 @@ func (b *Browser) Close() error {
 	b.mu.Lock()
 	b.navigationID++
 	activeRuntime := b.activeRuntime
+	page := b.page
 	b.activeRuntime = nil
+	if page != nil && page.Animations != nil {
+		page.Animations.Clear()
+	}
+	if page != nil && page.Transitions != nil {
+		page.Transitions.Clear()
+	}
 	b.mu.Unlock()
 	if activeRuntime != nil {
 		return activeRuntime.Stop()
@@ -331,6 +397,7 @@ func (b *Browser) load(ctx context.Context, pageURL *url.URL, commit historyComm
 	client := b.client
 	runtimeFactory := b.runtimeFactory
 	onMutation := b.onMutation
+	reducedMotion := b.reducedMotion
 	b.mu.Unlock()
 
 	if client == nil {
@@ -357,7 +424,10 @@ func (b *Browser) load(ctx context.Context, pageURL *url.URL, commit historyComm
 	if err != nil {
 		return nil, fmt.Errorf("load styles for %s: %w", pageURL.Redacted(), err)
 	}
-	computedStyles := style.Compute(document, stylesheet)
+	computedStyles := style.ComputeWithEnvironment(document, stylesheet, style.InteractionState{}, style.Environment{
+		ViewportWidth: 1280, ViewportHeight: 720, RootFontSize: 16, ResolutionDPI: 96,
+		ColorScheme: "light", Hover: true, Pointer: "fine", ReducedMotion: reducedMotion,
+	})
 	backgroundImages, backgroundErrors := loadBackgroundImages(ctx, client, computedStyles)
 	scripts, scriptErrors := loadScripts(ctx, client, response.URL, document)
 
@@ -370,13 +440,20 @@ func (b *Browser) load(ctx context.Context, pageURL *url.URL, commit historyComm
 		Events:           events.NewDispatcher(),
 		Stylesheet:       stylesheet,
 		ComputedStyles:   computedStyles,
+		Animations:       style.NewAnimationRegistry(),
+		Transitions:      style.NewTransitionRegistry(),
+		StyleRevision:    1,
+		ReducedMotion:    reducedMotion,
 		BackgroundImages: backgroundImages,
 		BackgroundErrors: backgroundErrors,
 		Scripts:          scripts,
 		ScriptErrors:     scriptErrors,
 	}
-	pageRuntime := startRuntime(ctx, runtimeFactory, page, onMutation)
+	page.Animations.Reconcile(computedStyles, b.currentTime())
+	pageRuntime := startRuntime(ctx, runtimeFactory, page, onMutation, b.currentTime)
 	if err := ctx.Err(); err != nil {
+		page.Animations.Clear()
+		page.Transitions.Clear()
 		if pageRuntime != nil {
 			_ = pageRuntime.Stop()
 		}
@@ -385,14 +462,23 @@ func (b *Browser) load(ctx context.Context, pageURL *url.URL, commit historyComm
 	b.mu.Lock()
 	if navigationID != b.navigationID {
 		b.mu.Unlock()
+		page.Animations.Clear()
+		page.Transitions.Clear()
 		if pageRuntime != nil {
 			_ = pageRuntime.Stop()
 		}
 		return nil, context.Canceled
 	}
 	previousRuntime := b.activeRuntime
+	previousPage := b.page
 	b.activeRuntime = pageRuntime
 	b.page = page
+	if previousPage != nil && previousPage != page && previousPage.Animations != nil {
+		previousPage.Animations.Clear()
+	}
+	if previousPage != nil && previousPage != page && previousPage.Transitions != nil {
+		previousPage.Transitions.Clear()
+	}
 	switch commit {
 	case historyPush:
 		b.history.push(page.URL)
@@ -410,7 +496,7 @@ func (b *Browser) load(ctx context.Context, pageURL *url.URL, commit historyComm
 	return page, nil
 }
 
-func startRuntime(ctx context.Context, factory runtimemodel.Factory, page *Page, onMutation func()) runtimemodel.Runtime {
+func startRuntime(ctx context.Context, factory runtimemodel.Factory, page *Page, onMutation func(), now func() time.Time) runtimemodel.Runtime {
 	if factory == nil || page == nil || len(page.Scripts) == 0 {
 		return nil
 	}
@@ -444,7 +530,7 @@ func startRuntime(ctx context.Context, factory runtimemodel.Factory, page *Page,
 				page.HoverTarget = 0
 			}
 			page.FocusTarget = validFocusTarget(page.Document, page.FocusTarget)
-			page.ComputedStyles = computePageStyles(page)
+			recomputePageStyles(page, now())
 			if onMutation != nil {
 				onMutation()
 			}
@@ -505,7 +591,32 @@ func computePageStyles(page *Page) style.Map {
 	return style.ComputeWithEnvironment(page.Document, page.Stylesheet, interactionState(page), style.Environment{
 		ViewportWidth: page.ViewportWidth, ViewportHeight: page.ViewportHeight, RootFontSize: 16,
 		ResolutionDPI: 96, ColorScheme: "light", Hover: true, Pointer: "fine",
+		ReducedMotion: page.ReducedMotion,
 	})
+}
+
+func recomputePageStyles(page *Page, current time.Time) {
+	if page == nil {
+		return
+	}
+	previous := page.ComputedStyles
+	page.ComputedStyles = computePageStyles(page)
+	page.StyleRevision++
+	if page.Transitions == nil {
+		page.Transitions = style.NewTransitionRegistry()
+	}
+	page.Transitions.Reconcile(previous, page.ComputedStyles, current)
+	if page.Animations == nil {
+		page.Animations = style.NewAnimationRegistry()
+	}
+	page.Animations.Reconcile(page.ComputedStyles, current)
+}
+
+func (b *Browser) currentTime() time.Time {
+	if b.clock == nil {
+		return time.Now()
+	}
+	return b.clock.Now()
 }
 
 func validFocusTarget(document *dom.Document, nodeID dom.NodeID) dom.NodeID {

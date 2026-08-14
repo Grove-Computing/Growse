@@ -25,7 +25,8 @@ type Command interface {
 
 // DrawText paints one pre-laid-out line of text.
 type DrawText struct {
-	Text string
+	NodeID dom.NodeID
+	Text   string
 
 	X        float32
 	Y        float32
@@ -185,6 +186,7 @@ func Build(tree *layout.Tree) *DisplayList {
 			continue
 		}
 		command := DrawText{
+			NodeID:     box.NodeID,
 			Text:       box.Text,
 			X:          box.X,
 			Y:          box.Y,
@@ -216,6 +218,66 @@ func Build(tree *layout.Tree) *DisplayList {
 		previousBottom = box.Y + box.Height
 	}
 	return list
+}
+
+// ApplyAnimatedStyles updates paint-only properties on an existing display
+// list. Geometry and text metrics are intentionally left untouched, so a
+// frame containing only v0.7 animatable properties does not require layout.
+func ApplyAnimatedStyles(list *DisplayList, styles stylemodel.Map) {
+	if list == nil {
+		return
+	}
+	for index, raw := range list.Commands {
+		switch command := raw.(type) {
+		case DrawBox:
+			computed, ok := styles[command.NodeID]
+			if !ok {
+				continue
+			}
+			command.Color = computed.BackgroundColor
+			command.Border.Top.Color = computed.Border.Top.Color
+			command.Border.Right.Color = computed.Border.Right.Color
+			command.Border.Bottom.Color = computed.Border.Bottom.Color
+			command.Border.Left.Color = computed.Border.Left.Color
+			command.Outline.Color = computed.Outline.Color
+			command.Opacity = computed.Opacity
+			command.Transform = resolvedPaintTransform(computed, command.X, command.Y, command.Width, command.Height)
+			list.Commands[index] = command
+		case DrawText:
+			computed, ok := styles[command.NodeID]
+			if ok {
+				command.Color = computed.Color
+				command.Background = computed.BackgroundColor
+				command.DecorationColor = computed.DecorationColor
+				command.Opacity = computed.Opacity
+				command.Transform = resolvedPaintTransform(computed, command.X, command.Y, command.Width, command.Height)
+			}
+			for runIndex := range command.Runs {
+				if runStyle, exists := styles[command.Runs[runIndex].NodeID]; exists {
+					command.Runs[runIndex].Color = runStyle.Color
+					command.Runs[runIndex].Background = runStyle.BackgroundColor
+					command.Runs[runIndex].DecorationColor = runStyle.DecorationColor
+					command.Runs[runIndex].Opacity = runStyle.Opacity
+				}
+			}
+			list.Commands[index] = command
+		case DrawInput:
+			computed, ok := styles[command.NodeID]
+			if !ok {
+				continue
+			}
+			command.Color = computed.Color
+			command.Opacity = computed.Opacity
+			list.Commands[index] = command
+		}
+	}
+}
+
+func resolvedPaintTransform(computed stylemodel.ComputedStyle, x, y, width, height float32) stylemodel.Matrix {
+	originX := x + computed.TransformOrigin.X.Resolve(width)
+	originY := y + computed.TransformOrigin.Y.Resolve(height)
+	result := stylemodel.Matrix{A: 1, D: 1, E: originX, F: originY}.Multiply(stylemodel.ResolveTransform(computed.Transform, width, height))
+	return result.Multiply(stylemodel.Matrix{A: 1, D: 1, E: -originX, F: -originY})
 }
 
 func cloneLayoutRect(source *layout.Rect) *layout.Rect {

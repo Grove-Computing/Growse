@@ -1,0 +1,19 @@
+{
+  "viewport": "320x240",
+  "scale": 1,
+  "font": "gofont/goregular@72dpi-hinting-none",
+  "pixel_sha256": "fee53665d8ae3b7794bdbd001b22195d8c149d1c8587b0b9f037c920754639df",
+  "geometry": [
+    "box node=2 rect=32.0,32.0,80.0,40.0 stack=0",
+    "text node=2 rect=32.0,32.0,80.0,18.5 text=\"Moving\""
+  ],
+  "display_list": [
+    "0 box node=2 rect=32.0,32.0,80.0,40.0 color=9f0060ff opacity=0.70 transform=1.000,0.000,0.000,1.000,30.000,0.000",
+    "1 text rect=32.0,32.0,80.0,18.5 color=ffffffff text=\"Moving\""
+  ],
+  "hit_testing": [
+    "70,40=node(2)",
+    "35,40=none"
+  ],
+  "timestamp": "375ms"
+}

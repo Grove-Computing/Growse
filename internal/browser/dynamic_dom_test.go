@@ -3,6 +3,7 @@ package browser
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/Grove-Computing/Growse/internal/dom"
 	layoutengine "github.com/Grove-Computing/Growse/internal/layout"
@@ -13,13 +14,135 @@ import (
 	"github.com/Grove-Computing/Growse/internal/style"
 )
 
+func TestClassStyleHoverAndWebGoMutationReconcileAnimations(t *testing.T) {
+	pageURL := mustParseURL(t, "http://localhost/animation-mutation.html")
+	loader := stubLoader{response: &network.Response{
+		URL: pageURL, StatusCode: 200, ContentType: "text/html",
+		Body: []byte(`<!doctype html><html><head><style>
+#target { animation: 1s linear infinite base; }
+#target:hover { animation-name: hovered; }
+#target.active { animation-name: classed; }
+</style></head><body><button id="target">Change</button>
+<script type="text/go">package main
+import "growse/dom"
+func main() {
+	target := dom.GetElementByID("target")
+	target.OnClick(func() {
+		target.AddClass("active")
+		target.SetAttribute("style", "animation-name: inline")
+	})
+}</script></body></html>`),
+	}}
+	current := time.Unix(100, 0)
+	browserState := NewWithRuntimeFactory(loader, func() runtimemodel.Runtime { return yaegi.New() })
+	clock := &browserFakeClock{current: current}
+	browserState.SetAnimationClock(clock)
+	var page *Page
+	var err error
+	var targetID dom.NodeID
+	var mutationNames []string
+	browserState.SetOnMutation(func() {
+		if page == nil {
+			return
+		}
+		samples := page.Animations.Sample(targetID, current)
+		if len(samples) == 1 {
+			mutationNames = append(mutationNames, samples[0].Name)
+		}
+	})
+
+	page, err = browserState.Navigate(context.Background(), pageURL.String())
+	if err != nil {
+		t.Fatalf("Navigate() error = %v", err)
+	}
+	target, ok := page.Document.GetElementByID("target")
+	if !ok {
+		t.Fatal("target element was not found")
+	}
+	targetID = target.ID
+	assertAnimationSample(t, page, target.ID, current.Add(250*time.Millisecond), "base", 0.25)
+
+	current = current.Add(250 * time.Millisecond)
+	clock.current = current
+	if !browserState.UpdateHover(target.ID, 0, 0) {
+		t.Fatal("UpdateHover() = false, want true")
+	}
+	assertAnimationSample(t, page, target.ID, current, "hovered", 0)
+	assertAnimationSample(t, page, target.ID, current.Add(250*time.Millisecond), "hovered", 0.25)
+
+	current = current.Add(500 * time.Millisecond)
+	clock.current = current
+	mutationNames = nil
+	if !browserState.DispatchClick(target.ID, 0, 0) {
+		t.Fatal("WebGo click mutation was not handled")
+	}
+	if len(mutationNames) != 2 || mutationNames[0] != "classed" || mutationNames[1] != "inline" {
+		t.Fatalf("mutation animation names = %v, want [classed inline]", mutationNames)
+	}
+	assertAnimationSample(t, page, target.ID, current, "inline", 0)
+}
+
+func TestHoverResizeAndScrollDoNotRestartUnchangedAnimation(t *testing.T) {
+	pageURL := mustParseURL(t, "http://localhost/steady-animation.html")
+	loader := stubLoader{response: &network.Response{
+		URL: pageURL, StatusCode: 200, ContentType: "text/html",
+		Body: []byte(`<style>
+#target { animation: 1s linear infinite steady; }
+#target:hover { color: blue; }
+</style><div id="target">Steady</div>`),
+	}}
+	start := time.Unix(100, 0)
+	current := start
+	browserState := New(loader)
+	clock := &browserFakeClock{current: current}
+	browserState.SetAnimationClock(clock)
+	page, err := browserState.Navigate(context.Background(), pageURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, _ := page.Document.GetElementByID("target")
+
+	current = start.Add(250 * time.Millisecond)
+	clock.current = current
+	if !browserState.UpdateHover(target.ID, 0, 0) {
+		t.Fatal("hover state did not change")
+	}
+	assertAnimationSample(t, page, target.ID, start.Add(500*time.Millisecond), "steady", 0.5)
+
+	current = start.Add(600 * time.Millisecond)
+	clock.current = current
+	if !browserState.UpdateViewport(640, 480) {
+		t.Fatal("viewport did not change")
+	}
+	assertAnimationSample(t, page, target.ID, start.Add(750*time.Millisecond), "steady", 0.75)
+
+	_ = layoutengine.BuildWithScroll(page.Document, page.ComputedStyles, 640, 480, 0, 100)
+	assertAnimationSample(t, page, target.ID, start.Add(900*time.Millisecond), "steady", 0.9)
+}
+
+type browserFakeClock struct {
+	current time.Time
+}
+
+func (clock *browserFakeClock) Now() time.Time {
+	return clock.current
+}
+
+func assertAnimationSample(t *testing.T, page *Page, nodeID dom.NodeID, current time.Time, name string, progress float64) {
+	t.Helper()
+	samples := page.Animations.Sample(nodeID, current)
+	if len(samples) != 1 || samples[0].Name != name || samples[0].Sample.Progress != progress {
+		t.Fatalf("animation sample = %#v, want %s at %v", samples, name, progress)
+	}
+}
+
 func TestWebGoMutationRecomputesStyles(t *testing.T) {
 	pageURL := mustParseURL(t, "http://localhost/dynamic.html")
 	loader := stubLoader{response: &network.Response{
 		URL: pageURL, StatusCode: 200, ContentType: "text/html",
 		Body: []byte(`<!doctype html><html><head><style>
 .completed { color: #ff0000; }
-li.todo { font-size: 24px; }
+li.todo { font-size: 24px; animation: 1s linear infinite pulse; }
 </style></head><body>
 <ul id="list"><li id="existing">Existing</li></ul>
 <script type="text/go">package main
@@ -59,6 +182,9 @@ func main() {
 	if !ok || dynamicStyle.FontSize != 24 {
 		t.Fatalf("dynamic style = (%#v, %v), want 24px", dynamicStyle, ok)
 	}
+	if page.Animations.Count(dynamic.ID) != 1 {
+		t.Fatalf("dynamic animation count = %d, want 1", page.Animations.Count(dynamic.ID))
+	}
 
 	tree := layoutengine.Build(page.Document, page.ComputedStyles, 800)
 	displayList := paintmodel.Build(tree)
@@ -70,6 +196,9 @@ func main() {
 	}
 	if _, ok := page.Document.QuerySelector("li.todo"); ok {
 		t.Fatal("dynamic element remains after WebGo removal")
+	}
+	if page.Animations.Count(dynamic.ID) != 0 {
+		t.Fatalf("removed element animation count = %d, want zero", page.Animations.Count(dynamic.ID))
 	}
 	updatedTree := layoutengine.Build(page.Document, page.ComputedStyles, 800)
 	updatedDisplayList := paintmodel.Build(updatedTree)

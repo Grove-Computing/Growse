@@ -20,6 +20,7 @@ for value in \
     "artifact: macos_arm64" \
     "artifact: windows_amd64" \
     "examples/dashboard" \
+    "examples/animation" \
     'tar -czf "dist/$archive_name"' \
     "Compress-Archive" \
     ".sha256" \
