@@ -188,6 +188,53 @@ func TestClientAppliesRedirectMethodAndBodyRules(t *testing.T) {
 	}
 }
 
+func TestClientSharesInMemoryCookieJarAcrossNavigationFormAndFetch(t *testing.T) {
+	var failures []string
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/navigation":
+			http.SetCookie(response, &http.Cookie{Name: "session", Value: "navigation", Path: "/"})
+		case "/form":
+			if cookie, err := request.Cookie("session"); err != nil || cookie.Value != "navigation" {
+				failures = append(failures, "Form did not receive Navigation Cookie")
+			}
+			http.SetCookie(response, &http.Cookie{Name: "form", Value: "submission", Path: "/"})
+		case "/fetch":
+			for name, value := range map[string]string{"session": "navigation", "form": "submission"} {
+				if cookie, err := request.Cookie(name); err != nil || cookie.Value != value {
+					failures = append(failures, "Fetch did not receive "+name+" Cookie")
+				}
+			}
+		}
+		response.Header().Set("Content-Type", "text/html")
+		_, _ = response.Write([]byte("ok"))
+	}))
+	defer server.Close()
+
+	client := NewClientWithLimits(server.Client(), 1024)
+	if _, err := client.Get(context.Background(), mustParseURL(t, server.URL+"/navigation")); err != nil {
+		t.Fatalf("Navigation Get() error = %v", err)
+	}
+	if _, err := client.Do(context.Background(), &Request{
+		Method: http.MethodPost, URL: mustParseURL(t, server.URL+"/form"), Body: []byte("name=growse"),
+	}); err != nil {
+		t.Fatalf("Form Do() error = %v", err)
+	}
+	if _, err := client.Do(context.Background(), &Request{
+		Method: http.MethodGet, URL: mustParseURL(t, server.URL+"/fetch"),
+	}); err != nil {
+		t.Fatalf("Fetch Do() error = %v", err)
+	}
+	if len(failures) != 0 {
+		t.Fatal(strings.Join(failures, "; "))
+	}
+
+	isolated := NewClientWithLimits(server.Client(), 1024)
+	if cookies := isolated.httpClient.Jar.Cookies(mustParseURL(t, server.URL)); len(cookies) != 0 {
+		t.Fatalf("new Browser client inherited Cookies: %v", cookies)
+	}
+}
+
 func mustParseURL(t *testing.T, rawURL string) *url.URL {
 	t.Helper()
 	parsed, err := url.Parse(rawURL)

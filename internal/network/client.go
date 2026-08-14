@@ -9,8 +9,11 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/cookiejar"
 	"net/url"
 	"time"
+
+	"golang.org/x/net/publicsuffix"
 )
 
 const (
@@ -76,6 +79,9 @@ func NewClientWithLimits(httpClient *http.Client, maxBodyBytes int64) *Client {
 
 func configuredHTTPClient(source *http.Client) *http.Client {
 	copy := *source
+	if copy.Jar == nil {
+		copy.Jar, _ = cookiejar.New(&cookiejar.Options{PublicSuffixList: publicsuffix.List})
+	}
 	if copy.CheckRedirect == nil {
 		copy.CheckRedirect = applyRedirectPolicy
 	}
