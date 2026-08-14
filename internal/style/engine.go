@@ -116,7 +116,7 @@ func initialStyle() ComputedStyle {
 func inheritedStyle(parent ComputedStyle) ComputedStyle {
 	computed := ComputedStyle{
 		Color: parent.Color, FontSize: parent.FontSize, FontWeight: parent.FontWeight,
-		LineHeight: parent.LineHeight, WhiteSpace: parent.WhiteSpace,
+		LineHeight: parent.LineHeight, WhiteSpace: parent.WhiteSpace, Visibility: parent.Visibility,
 		BackgroundColor: transparent, Display: DisplayInline,
 		BackgroundRepeat: BackgroundRepeat{X: true, Y: true},
 		DecorationColor:  parent.Color, Opacity: 1, FlexShrink: 1,
@@ -374,6 +374,23 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
 			if parsed, valid := resolveDisplay(resolved, parent.Display); valid {
 				computed.Display = parsed
+			}
+		}
+	}
+	if value, ok := winners["visibility"]; ok {
+		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
+			switch parseGlobalKeyword(resolved) {
+			case globalInherit, globalUnset:
+				computed.Visibility = parent.Visibility
+			case globalInitial:
+				computed.Visibility = VisibilityVisible
+			default:
+				switch strings.ToLower(strings.TrimSpace(resolved)) {
+				case "visible":
+					computed.Visibility = VisibilityVisible
+				case "hidden", "collapse":
+					computed.Visibility = VisibilityHidden
+				}
 			}
 		}
 	}

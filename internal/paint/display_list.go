@@ -132,8 +132,14 @@ func Build(tree *layout.Tree) *DisplayList {
 	items := make([]orderedItem, 0, len(entries))
 	for _, entry := range entries {
 		if entry.DecorationIndex >= 0 {
+			if tree.Decorations[entry.DecorationIndex].Hidden {
+				continue
+			}
 			items = append(items, orderedItem{order: entry.Order, decoration: &tree.Decorations[entry.DecorationIndex]})
 		} else {
+			if tree.Boxes[entry.BoxIndex].Hidden {
+				continue
+			}
 			items = append(items, orderedItem{order: entry.Order, box: &tree.Boxes[entry.BoxIndex]})
 		}
 	}

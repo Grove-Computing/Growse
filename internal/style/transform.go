@@ -154,6 +154,20 @@ func (left Matrix) Multiply(right Matrix) Matrix {
 	return Matrix{A: left.A*right.A + left.C*right.B, B: left.B*right.A + left.D*right.B, C: left.A*right.C + left.C*right.D, D: left.B*right.C + left.D*right.D, E: left.A*right.E + left.C*right.F + left.E, F: left.B*right.E + left.D*right.F + left.F}
 }
 
+// TransformPoint maps a point through the matrix.
+func (matrix Matrix) TransformPoint(x, y float32) (float32, float32) {
+	return matrix.A*x + matrix.C*y + matrix.E, matrix.B*x + matrix.D*y + matrix.F
+}
+
+// Inverse returns the inverse affine matrix when it is non-singular.
+func (matrix Matrix) Inverse() (Matrix, bool) {
+	determinant := matrix.A*matrix.D - matrix.B*matrix.C
+	if float32(math.Abs(float64(determinant))) < 1e-8 {
+		return Matrix{}, false
+	}
+	return Matrix{A: matrix.D / determinant, B: -matrix.B / determinant, C: -matrix.C / determinant, D: matrix.A / determinant, E: (matrix.C*matrix.F - matrix.D*matrix.E) / determinant, F: (matrix.B*matrix.E - matrix.A*matrix.F) / determinant}, true
+}
+
 func ResolveTransform(functions []TransformFunction, width, height float32) Matrix {
 	result := IdentityMatrix()
 	for _, function := range functions {

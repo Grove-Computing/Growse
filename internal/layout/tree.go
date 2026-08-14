@@ -105,6 +105,7 @@ type Decoration struct {
 	Outline       stylemodel.BorderSide
 	OutlineOffset float32
 	Transform     stylemodel.Matrix
+	Hidden        bool
 }
 
 // CornerRadius is one resolved elliptical radius in CSS pixels.
@@ -146,6 +147,7 @@ type Box struct {
 	DecorationColor uint32
 	TextShadows     []stylemodel.Shadow
 	Transform       stylemodel.Matrix
+	Hidden          bool
 	Runs            []TextRun
 }
 

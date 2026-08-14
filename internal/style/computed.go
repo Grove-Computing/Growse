@@ -94,6 +94,14 @@ const (
 	PositionSticky
 )
 
+// Visibility controls painting and hit testing while preserving layout.
+type Visibility uint8
+
+const (
+	VisibilityVisible Visibility = iota
+	VisibilityHidden
+)
+
 // Insets stores the four computed inset properties; SizeAuto means auto.
 type Insets struct {
 	Top, Right, Bottom, Left SizeValue
@@ -370,6 +378,7 @@ type ComputedStyle struct {
 	OverflowX           Overflow
 	OverflowY           Overflow
 	Display             Display
+	Visibility          Visibility
 	FlexDirection       FlexDirection
 	FlexWrap            FlexWrap
 	JustifyContent      JustifyContent

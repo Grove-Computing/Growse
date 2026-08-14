@@ -1038,6 +1038,26 @@ func TestComputeAllTwoDimensionalTransformsAndOrigin(t *testing.T) {
 	if matrix != (Matrix{A: 2, D: 2, E: 10, F: 20}) {
 		t.Fatalf("composed matrix = %#v", matrix)
 	}
+	inverse, invertible := matrix.Inverse()
+	x, y := matrix.TransformPoint(7, 9)
+	localX, localY := inverse.TransformPoint(x, y)
+	if !invertible || localX != 7 || localY != 9 {
+		t.Fatalf("matrix inverse = %#v -> (%v, %v)", inverse, localX, localY)
+	}
+}
+
+func TestComputeVisibilityIsInherited(t *testing.T) {
+	document := dom.NewDocument()
+	parent := document.CreateElement("div", map[string]string{"style": "visibility:hidden"})
+	child := document.CreateElement("span", nil)
+	appendNode(t, document, document.Root, parent)
+	appendNode(t, document, parent, child)
+	computed := Compute(document, nil)
+	parentStyle, _ := computed.For(parent)
+	childStyle, _ := computed.For(child)
+	if parentStyle.Visibility != VisibilityHidden || childStyle.Visibility != VisibilityHidden {
+		t.Fatalf("visibility = parent %v child %v", parentStyle.Visibility, childStyle.Visibility)
+	}
 }
 
 func parseTestSelector(t *testing.T, value string) css.Selector {

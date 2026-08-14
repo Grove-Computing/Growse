@@ -41,6 +41,7 @@ type blockStyle struct {
 	decorationColor     uint32
 	opacity             float32
 	display             stylemodel.Display
+	hidden              bool
 	margin              stylemodel.Edges
 	padding             stylemodel.Edges
 	border              stylemodel.Borders
@@ -249,6 +250,7 @@ func (e *engine) addInput(node *dom.Node, style blockStyle, x, width, containing
 		Opacity:     e.opacity * style.opacity,
 		TextShadows: append([]stylemodel.Shadow(nil), style.textShadows...),
 		Transform:   stylemodel.IdentityMatrix(),
+		Hidden:      style.hidden,
 	})
 	e.y += usedHeight + style.margin.Bottom
 }
@@ -318,6 +320,7 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 			Border: style.border, Opacity: e.opacity, BoxShadows: append([]stylemodel.Shadow(nil), style.boxShadows...),
 			Outline: style.outline, OutlineOffset: style.outlineOffset,
 			Transform: stylemodel.IdentityMatrix(),
+			Hidden:    style.hidden,
 		})
 	}
 	e.y += style.border.Top.Width + style.padding.Top
@@ -657,6 +660,7 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 			Opacity: e.opacity, Decoration: container.decoration, DecorationColor: container.decorationColor,
 			TextShadows: append([]stylemodel.Shadow(nil), container.textShadows...),
 			Transform:   stylemodel.IdentityMatrix(),
+			Hidden:      container.hidden,
 			Runs:        append([]TextRun(nil), lineRuns...),
 			Baseline:    e.y + lineAscent, Clip: cloneRect(e.clip), Clips: cloneClipRegions(e.clips),
 		})
@@ -1016,6 +1020,7 @@ func applyComputed(block blockStyle, computed stylemodel.ComputedStyle) blockSty
 	block.decorationColor = computed.DecorationColor
 	block.opacity = computed.Opacity
 	block.display = computed.Display
+	block.hidden = computed.Visibility == stylemodel.VisibilityHidden
 	block.margin = computed.Margin
 	block.padding = computed.Padding
 	block.border = computed.Border
