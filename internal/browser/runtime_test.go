@@ -357,6 +357,50 @@ func TestNavigationSwitchesStorageByOrigin(t *testing.T) {
 	}
 }
 
+func TestSessionStorageSurvivesSameDocumentNavigationAndReload(t *testing.T) {
+	pageURL := mustParseURL(t, "http://localhost/session-storage")
+	script := `<script type="text/go">package main; func main() {}</script>`
+	loader := &routeLoader{responses: map[string]*network.Response{
+		pageURL.String(): {URL: pageURL, StatusCode: 200, ContentType: "text/html", Body: []byte(script)},
+	}}
+	var runtimes []*runtimeStub
+	browser := NewWithRuntimeFactory(loader, func() runtimemodel.Runtime {
+		runtime := &runtimeStub{}
+		runtimes = append(runtimes, runtime)
+		return runtime
+	})
+	page, err := browser.Navigate(context.Background(), pageURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtimes[0].environment.SessionStorage.Set("draft", "kept"); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtimes[0].environment.HistoryPush(`{"route":2}`, pageURL); err != nil {
+		t.Fatal(err)
+	}
+	if browser.Page() != page || len(runtimes) != 1 {
+		t.Fatal("same-document Navigation replaced Page or Runtime")
+	}
+	if got, found := runtimes[0].environment.SessionStorage.Get("draft"); !found || got != "kept" {
+		t.Fatalf("same-document Session Storage = (%q, %v)", got, found)
+	}
+
+	reloaded, err := browser.Reload(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded == page || len(runtimes) != 2 {
+		t.Fatal("reload did not rebuild Page and Runtime")
+	}
+	if got, found := runtimes[1].environment.SessionStorage.Get("draft"); !found || got != "kept" {
+		t.Fatalf("reloaded Session Storage = (%q, %v)", got, found)
+	}
+	if runtimes[0].environment.SessionStorage != runtimes[1].environment.SessionStorage {
+		t.Fatal("reload switched Session Storage Area")
+	}
+}
+
 func TestNavigateStartsRuntimeForTrustedOrigin(t *testing.T) {
 	pageURL := mustParseURL(t, "http://localhost/index.html")
 	loader := stubLoader{response: &network.Response{
