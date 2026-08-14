@@ -25,3 +25,19 @@ go test ./internal/layout ./internal/paint -run '^$' \
 | `BenchmarkDashboardPaint-16` | 19,432 ns/op | 43,704 B/op | 201 allocs/op |
 
 baselineはrelease間の傾向把握用であり、異なるhost間の合否判定には使用しない。意図しない退行を調査するときは`benchstat`で複数回の結果を比較する。
+
+## v0.7.0 Animation workload
+
+100要素がそれぞれ1つのinfinite Animationを持つ状態で、同一timestampの1 Frameをsampleする。DOM走査、Style再計算、Layout、Paintは含めず、Animation RegistryとTiming計算の費用を測定する。
+
+```sh
+go test ./internal/style -run '^$' \
+  -bench '^BenchmarkSample100ElementAnimations$' \
+  -benchmem -count=5
+```
+
+基準値は上記v0.6.0 baselineと同じ環境で計測し、5回の中央値を記録する。
+
+| Benchmark | 同時Animation数 | 中央値 | Memory | Allocations |
+|---|---:|---:|---:|---:|
+| `BenchmarkSample100ElementAnimations-16` | 100 | 5,908 ns/op | 4,800 B/op | 100 allocs/op |
