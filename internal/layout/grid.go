@@ -48,18 +48,24 @@ func (e *engine) addGridChildren(container *dom.Node, containerStyle blockStyle,
 		columnCount = 1
 	}
 	rowCount := max(len(containerStyle.gridTemplateRows), (len(items)+columnCount-1)/columnCount)
-	columns := resolveGridTracks(containerStyle.gridTemplateColumns, containerStyle.gridAutoColumns, columnCount, width)
-	rows := resolveGridTracks(containerStyle.gridTemplateRows, containerStyle.gridAutoRows, rowCount, containingHeight)
+	columnMaxContent, columnMinContent := make([]float32, columnCount), make([]float32, columnCount)
 	for index, item := range items {
-		row, column := index/columnCount, index%columnCount
-		if rows[row] != 0 {
-			continue
-		}
-		_, intrinsicHeight, _ := e.flexIntrinsicSizes(item.node, item.style, flexAxis{horizontal: true}, columns[column], columns[column], containingHeight, heightDefinite)
-		rows[row] = max(rows[row], intrinsicHeight+item.style.margin.Top+item.style.margin.Bottom)
+		column := index % columnCount
+		maxContent, _, minContent := e.flexIntrinsicSizes(item.node, item.style, flexAxis{horizontal: true}, width, width, containingHeight, heightDefinite)
+		horizontalMargin := item.style.margin.Left + item.style.margin.Right
+		columnMaxContent[column] = max(columnMaxContent[column], maxContent+horizontalMargin)
+		columnMinContent[column] = max(columnMinContent[column], minContent+horizontalMargin)
 	}
 	columnGap := containerStyle.columnGap.Resolve(width)
 	rowGap := containerStyle.rowGap.Resolve(containingHeight)
+	columns := resolveGridTracks(containerStyle.gridTemplateColumns, containerStyle.gridAutoColumns, columnCount, width, true, columnGap, columnMinContent, columnMaxContent)
+	rowMaxContent := make([]float32, rowCount)
+	for index, item := range items {
+		row, column := index/columnCount, index%columnCount
+		_, intrinsicHeight, _ := e.flexIntrinsicSizes(item.node, item.style, flexAxis{horizontal: true}, columns[column], columns[column], containingHeight, heightDefinite)
+		rowMaxContent[row] = max(rowMaxContent[row], intrinsicHeight+item.style.margin.Top+item.style.margin.Bottom)
+	}
+	rows := resolveGridTracks(containerStyle.gridTemplateRows, containerStyle.gridAutoRows, rowCount, containingHeight, heightDefinite, rowGap, rowMaxContent, rowMaxContent)
 	startY := e.y
 	for index, item := range items {
 		row, column := index/columnCount, index%columnCount
@@ -69,9 +75,10 @@ func (e *engine) addGridChildren(container *dom.Node, containerStyle blockStyle,
 	e.y = startY + trackOffset(rows, len(rows), rowGap)
 }
 
-func resolveGridTracks(explicit, implicit []stylemodel.GridTrackSize, count int, basis float32) []float32 {
+func resolveGridTracks(explicit, implicit []stylemodel.GridTrackSize, count int, basis float32, basisDefinite bool, gap float32, minContent, maxContent []float32) []float32 {
 	result := make([]float32, count)
-	autoCount, used := 0, float32(0)
+	tracks := make([]stylemodel.GridTrackSize, count)
+	autoCount, flexTotal, used := 0, float32(0), gap*float32(max(count-1, 0))
 	for index := range result {
 		track := stylemodel.GridTrackSize{Kind: stylemodel.GridTrackAuto}
 		if index < len(explicit) {
@@ -79,22 +86,53 @@ func resolveGridTracks(explicit, implicit []stylemodel.GridTrackSize, count int,
 		} else if len(implicit) != 0 {
 			track = implicit[(index-len(explicit))%len(implicit)]
 		}
-		if track.Kind == stylemodel.GridTrackLength {
-			result[index] = max(track.Value.Resolve(basis), float32(0))
-			used += result[index]
-		} else {
+		tracks[index] = track
+		switch track.Kind {
+		case stylemodel.GridTrackLength:
+			if track.Value.Percentage == 0 || basisDefinite {
+				result[index] = max(track.Value.Resolve(basis), float32(0))
+			} else {
+				result[index] = contentContribution(maxContent, index)
+			}
+		case stylemodel.GridTrackMinContent:
+			result[index] = contentContribution(minContent, index)
+		case stylemodel.GridTrackMaxContent:
+			result[index] = contentContribution(maxContent, index)
+		case stylemodel.GridTrackFraction:
+			result[index] = contentContribution(minContent, index)
+			flexTotal += track.Flex
+		case stylemodel.GridTrackAuto:
+			result[index] = contentContribution(maxContent, index)
 			autoCount++
 		}
+		used += result[index]
 	}
-	if autoCount > 0 {
-		share := max(basis-used, float32(0)) / float32(autoCount)
+	if flexTotal > 0 && basisDefinite {
+		free := max(basis-used, float32(0))
 		for index := range result {
-			if result[index] == 0 {
-				result[index] = share
+			if tracks[index].Kind == stylemodel.GridTrackFraction {
+				addition := free * tracks[index].Flex / flexTotal
+				result[index] += addition
+			}
+		}
+		used += free
+	}
+	if autoCount > 0 && basisDefinite && basis > used {
+		share := (basis - used) / float32(autoCount)
+		for index := range result {
+			if tracks[index].Kind == stylemodel.GridTrackAuto {
+				result[index] += share
 			}
 		}
 	}
 	return result
+}
+
+func contentContribution(values []float32, index int) float32 {
+	if index >= 0 && index < len(values) {
+		return values[index]
+	}
+	return 0
 }
 
 func trackOffset(tracks []float32, end int, gap float32) float32 {

@@ -71,3 +71,53 @@ func TestBuildGridGeneratesExplicitAndImplicitTracks(t *testing.T) {
 		t.Fatalf("implicit row = %#v", third.Rect)
 	}
 }
+
+func TestBuildGridSizesFixedPercentageIntrinsicAndFlexibleTracks(t *testing.T) {
+	document := dom.NewDocument()
+	grid := document.CreateElement("div", map[string]string{"class": "grid"})
+	items := make([]*dom.Node, 4)
+	appendNodes(t, document, [2]*dom.Node{document.Root, grid})
+	for index := range items {
+		items[index] = document.CreateElement("div", map[string]string{"class": "item"})
+		appendNodes(t, document, [2]*dom.Node{grid, items[index]})
+	}
+	stylesheet, err := css.Parse(strings.NewReader(`
+.grid { display:grid; width:400px; grid-template-columns:100px 25% 1fr 2fr; grid-template-rows:20px }
+.item { background-color:#ddd }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, stylemodel.Compute(document, stylesheet), 600)
+	want := []float32{100, 100, 200.0 / 3.0, 400.0 / 3.0}
+	for index, item := range items {
+		actual := decorationForNode(t, tree, item.ID).Width
+		if difference := actual - want[index]; difference < -0.01 || difference > 0.01 {
+			t.Fatalf("track %d width = %v, want %v", index, actual, want[index])
+		}
+	}
+
+	intrinsicDocument := dom.NewDocument()
+	intrinsicGrid := intrinsicDocument.CreateElement("div", map[string]string{"class": "intrinsic"})
+	minItem := intrinsicDocument.CreateElement("div", map[string]string{"class": "intrinsic-item"})
+	maxItem := intrinsicDocument.CreateElement("div", map[string]string{"class": "intrinsic-item"})
+	flexItem := intrinsicDocument.CreateElement("div", map[string]string{"class": "intrinsic-item"})
+	appendNodes(t, intrinsicDocument,
+		[2]*dom.Node{intrinsicDocument.Root, intrinsicGrid},
+		[2]*dom.Node{intrinsicGrid, minItem}, [2]*dom.Node{minItem, intrinsicDocument.CreateText("aa bbbbb")},
+		[2]*dom.Node{intrinsicGrid, maxItem}, [2]*dom.Node{maxItem, intrinsicDocument.CreateText("aa bbbbb")},
+		[2]*dom.Node{intrinsicGrid, flexItem},
+	)
+	intrinsicStyles, err := css.Parse(strings.NewReader(`
+.intrinsic { display:grid; width:400px; grid-template-columns:min-content max-content 1fr; grid-template-rows:20px }
+.intrinsic-item { background-color:#ccc }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	intrinsicTree := Build(intrinsicDocument, stylemodel.Compute(intrinsicDocument, intrinsicStyles), 600)
+	minRect, maxRect, flexRect := decorationForNode(t, intrinsicTree, minItem.ID), decorationForNode(t, intrinsicTree, maxItem.ID), decorationForNode(t, intrinsicTree, flexItem.ID)
+	if !(minRect.Width > 0 && maxRect.Width > minRect.Width && flexRect.Width > maxRect.Width) {
+		t.Fatalf("intrinsic/flexible widths = %v, %v, %v", minRect.Width, maxRect.Width, flexRect.Width)
+	}
+}

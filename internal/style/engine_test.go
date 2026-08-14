@@ -867,6 +867,17 @@ func TestComputeGridExplicitAndImplicitTracks(t *testing.T) {
 	}
 }
 
+func TestComputeGridIntrinsicAndFlexibleTracks(t *testing.T) {
+	document := dom.NewDocument()
+	grid := document.CreateElement("div", map[string]string{"style": "display:grid; grid-template-columns:min-content max-content 2fr"})
+	appendNode(t, document, document.Root, grid)
+	computed, _ := Compute(document, nil).For(grid)
+	tracks := computed.GridTemplateColumns
+	if len(tracks) != 3 || tracks[0].Kind != GridTrackMinContent || tracks[1].Kind != GridTrackMaxContent || tracks[2].Kind != GridTrackFraction || tracks[2].Flex != 2 {
+		t.Fatalf("intrinsic/flexible tracks = %#v", tracks)
+	}
+}
+
 func parseTestSelector(t *testing.T, value string) css.Selector {
 	t.Helper()
 	stylesheet, err := css.Parse(strings.NewReader(value + " { color: red }"))
