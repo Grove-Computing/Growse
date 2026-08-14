@@ -353,6 +353,56 @@ func TestValueAPIIgnoresNonTextInput(t *testing.T) {
 	}
 }
 
+func TestFormResetRestoresDefaultValue(t *testing.T) {
+	document := dommodel.NewDocument()
+	form := document.CreateElement("form", map[string]string{"id": "profile"})
+	input := document.CreateElement("input", map[string]string{"id": "name", "value": "default"})
+	if err := document.AppendChild(document.Root, form); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(form, input); err != nil {
+		t.Fatal(err)
+	}
+	mutations := 0
+	api := New(document, events.NewDispatcher(), func() { mutations++ })
+	if !api.GetElementByID("name").SetValue("edited") {
+		t.Fatal("SetValue = false")
+	}
+	document.SetAttribute(input.ID, "value", "new-default")
+	if !api.GetElementByID("profile").Reset() {
+		t.Fatal("Reset = false")
+	}
+	if got := api.GetElementByID("name").Value(); got != "new-default" || mutations != 2 {
+		t.Fatalf("value=%q mutations=%d", got, mutations)
+	}
+}
+
+func TestFocusBlurAndResetHandlersReceiveWebGoEvents(t *testing.T) {
+	document := dommodel.NewDocument()
+	form := document.CreateElement("form", map[string]string{"id": "form"})
+	input := document.CreateElement("input", map[string]string{"id": "name"})
+	if err := document.AppendChild(document.Root, form); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(form, input); err != nil {
+		t.Fatal(err)
+	}
+	dispatcher := events.NewDispatcher()
+	api := New(document, dispatcher, nil)
+	var received []string
+	api.GetElementByID("name").OnFocus(func(event Event) { received = append(received, event.Type+":"+event.TargetID) })
+	api.GetElementByID("name").OnBlur(func(event Event) { received = append(received, event.Type+":"+event.TargetID) })
+	api.GetElementByID("form").OnReset(func(event Event) { received = append(received, event.Type+":"+event.TargetID) })
+
+	dispatcher.Dispatch(events.Event{Type: events.Focus, Target: input.ID})
+	dispatcher.Dispatch(events.Event{Type: events.Blur, Target: input.ID})
+	dispatcher.Dispatch(events.Event{Type: events.Reset, Target: form.ID})
+	want := []string{"focus:name", "blur:name", "reset:form"}
+	if !reflect.DeepEqual(received, want) {
+		t.Fatalf("events = %v, want %v", received, want)
+	}
+}
+
 func TestOnClickRegistersHandler(t *testing.T) {
 	document := dommodel.NewDocument()
 	button := document.CreateElement("button", map[string]string{"id": "button"})
@@ -502,5 +552,20 @@ func TestOnSubmitProvidesFormTarget(t *testing.T) {
 	}
 	if received.Type != "submit" || received.TargetID != "todo-form" {
 		t.Fatalf("event = %#v, want form submit data", received)
+	}
+}
+
+func TestOnSubmitCanPreventDefault(t *testing.T) {
+	document := dommodel.NewDocument()
+	form := document.CreateElement("form", map[string]string{"id": "form"})
+	if err := document.AppendChild(document.Root, form); err != nil {
+		t.Fatal(err)
+	}
+	dispatcher := events.NewDispatcher()
+	New(document, dispatcher, nil).GetElementByID("form").OnSubmit(func(event Event) { event.PreventDefault() })
+	submit := events.Cancelable(events.Submit, form.ID)
+	dispatcher.Dispatch(submit)
+	if !submit.DefaultPrevented() {
+		t.Fatal("WebGo event did not prevent submit default")
 	}
 }

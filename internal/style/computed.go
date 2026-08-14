@@ -501,8 +501,9 @@ type Map map[dom.NodeID]ComputedStyle
 
 // InteractionState contains transient browser state used by selector matching.
 type InteractionState struct {
-	Hovered map[dom.NodeID]bool
-	Focused dom.NodeID
+	Hovered  map[dom.NodeID]bool
+	Focused  dom.NodeID
+	Document *dom.Document
 }
 
 // For returns a node's computed style and whether one was calculated.

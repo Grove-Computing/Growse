@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"mime"
+	"net/http"
 	"net/url"
 	"strings"
 	"sync"
@@ -16,6 +17,7 @@ import (
 	animationmodel "github.com/Grove-Computing/Growse/internal/animation"
 	"github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/events"
+	"github.com/Grove-Computing/Growse/internal/forms"
 	htmlparser "github.com/Grove-Computing/Growse/internal/html"
 	"github.com/Grove-Computing/Growse/internal/network"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
@@ -25,6 +27,10 @@ import (
 // ResourceLoader retrieves a resource for navigation.
 type ResourceLoader interface {
 	Get(ctx context.Context, resourceURL *url.URL) (*network.Response, error)
+}
+
+type requestLoader interface {
+	Do(ctx context.Context, request *network.Request) (*network.Response, error)
 }
 
 // Browser owns the state for one browser window.
@@ -43,6 +49,11 @@ type Browser struct {
 	clock          animationmodel.Clock
 	reducedMotion  bool
 }
+
+var (
+	ErrFormValidation      = errors.New("form validation failed")
+	ErrSubmissionPrevented = errors.New("form submission was prevented")
+)
 
 // New creates a browser with no page loaded.
 func New(client ResourceLoader) *Browser {
@@ -88,17 +99,40 @@ func (b *Browser) DispatchClick(nodeID dom.NodeID, x, y float32) bool {
 	if page == nil || page.Events == nil {
 		return false
 	}
-	clickHandled := page.Events.Dispatch(events.Event{Type: events.Click, Target: nodeID, X: x, Y: y})
-	submitHandled := false
-	if node, ok := page.Document.NodeByID(nodeID); ok && isSubmitButton(node) {
-		if form := nearestForm(node); form != nil {
-			submitHandled = page.Events.Dispatch(events.Event{Type: events.Submit, Target: form.ID})
+	if page.Document != nil {
+		if clickedNode, exists := page.Document.NodeByID(nodeID); exists && forms.Disabled(clickedNode) {
+			return false
 		}
 	}
-	return clickHandled || submitHandled
+	clickHandled := page.Events.Dispatch(events.Event{Type: events.Click, Target: nodeID, X: x, Y: y})
+	labelHandled := false
+	if page.Document != nil {
+		if node, ok := page.Document.NodeByID(nodeID); ok {
+			if control := forms.LabeledControl(page.Document, node); control != nil && !forms.Disabled(control) {
+				b.UpdateFocus(control.ID)
+				if _, checkable := forms.CheckableState(control); checkable {
+					labelHandled = b.ActivateCheckable(control.ID)
+				}
+			}
+		}
+	}
+	submitHandled := false
+	if page.Document != nil {
+		if node, ok := page.Document.NodeByID(nodeID); ok && isSubmitButton(node) {
+			if form := forms.FormOwner(page.Document, node); form != nil {
+				b.mu.Lock()
+				if b.page == page {
+					page.Submitter = node.ID
+				}
+				b.mu.Unlock()
+				submitHandled = page.Events.Dispatch(events.Event{Type: events.Submit, Target: form.ID})
+			}
+		}
+	}
+	return clickHandled || submitHandled || labelHandled
 }
 
-// SetInputValue はユーザー入力をアクティブページのテキストinputへ反映する。
+// SetInputValue はユーザー入力をアクティブページの編集可能なText Controlへ反映する。
 func (b *Browser) SetInputValue(nodeID dom.NodeID, value string) bool {
 	b.mu.Lock()
 	page := b.page
@@ -108,11 +142,11 @@ func (b *Browser) SetInputValue(nodeID dom.NodeID, value string) bool {
 		return false
 	}
 	node, ok := page.Document.NodeByID(nodeID)
-	if !ok || !isTextInput(node) || !page.Document.IsConnected(node) {
+	if !ok || !isEditableTextControl(node) || !page.Document.IsConnected(node) || forms.Disabled(node) || forms.ReadOnly(node) {
 		b.mu.Unlock()
 		return false
 	}
-	changed := page.Document.SetAttribute(nodeID, "value", value)
+	changed := forms.SetCurrentValue(node, value)
 	if changed {
 		recomputePageStyles(page, b.currentTime())
 	}
@@ -127,6 +161,60 @@ func (b *Browser) SetInputValue(nodeID dom.NodeID, value string) bool {
 	return changed
 }
 
+// SetSelectValue changes a select to an enabled option and dispatches the
+// input/change pair produced by a committed user selection.
+func (b *Browser) SetSelectValue(nodeID dom.NodeID, value string) bool {
+	b.mu.Lock()
+	page := b.page
+	onMutation := b.onMutation
+	if page == nil || page.Document == nil || !forms.SetSelectedValue(page.Document, nodeID, value) {
+		b.mu.Unlock()
+		return false
+	}
+	recomputePageStyles(page, b.currentTime())
+	dispatcher := page.Events
+	b.mu.Unlock()
+	if onMutation != nil {
+		onMutation()
+	}
+	if dispatcher != nil {
+		dispatcher.Dispatch(events.Event{Type: events.Input, Target: nodeID, Value: value})
+		dispatcher.Dispatch(events.Event{Type: events.Change, Target: nodeID, Value: value})
+	}
+	return true
+}
+
+// ActivateCheckable toggles a checkbox or selects one radio in its group.
+func (b *Browser) ActivateCheckable(nodeID dom.NodeID) bool {
+	b.mu.Lock()
+	page := b.page
+	onMutation := b.onMutation
+	if page == nil || page.Document == nil {
+		b.mu.Unlock()
+		return false
+	}
+	checked, changed := forms.ActivateCheckable(page.Document, nodeID)
+	if !changed {
+		b.mu.Unlock()
+		return false
+	}
+	recomputePageStyles(page, b.currentTime())
+	dispatcher := page.Events
+	b.mu.Unlock()
+	if onMutation != nil {
+		onMutation()
+	}
+	value := "false"
+	if checked {
+		value = "true"
+	}
+	if dispatcher != nil {
+		dispatcher.Dispatch(events.Event{Type: events.Input, Target: nodeID, Value: value})
+		dispatcher.Dispatch(events.Event{Type: events.Change, Target: nodeID, Value: value})
+	}
+	return true
+}
+
 // CommitInputValue はテキストinputの編集確定をchangeイベントとして配信する。
 func (b *Browser) CommitInputValue(nodeID dom.NodeID, value string) bool {
 	b.mu.RLock()
@@ -136,7 +224,7 @@ func (b *Browser) CommitInputValue(nodeID dom.NodeID, value string) bool {
 		return false
 	}
 	node, ok := page.Document.NodeByID(nodeID)
-	if !ok || !isTextInput(node) || !page.Document.IsConnected(node) {
+	if !ok || !isEditableTextControl(node) || !page.Document.IsConnected(node) {
 		b.mu.RUnlock()
 		return false
 	}
@@ -158,13 +246,82 @@ func (b *Browser) SubmitForm(nodeID dom.NodeID) bool {
 		b.mu.RUnlock()
 		return false
 	}
-	form := nearestForm(node)
+	form := forms.FormOwner(page.Document, node)
 	dispatcher := page.Events
 	b.mu.RUnlock()
 	if form == nil {
 		return false
 	}
+	b.mu.Lock()
+	if b.page == page {
+		page.Submitter = 0
+	}
+	b.mu.Unlock()
 	return dispatcher.Dispatch(events.Event{Type: events.Submit, Target: form.ID})
+}
+
+// ResetForm restores a form's controls to their HTML attribute defaults.
+func (b *Browser) ResetForm(nodeID dom.NodeID) bool {
+	b.mu.Lock()
+	page := b.page
+	onMutation := b.onMutation
+	if page == nil || page.Document == nil {
+		b.mu.Unlock()
+		return false
+	}
+	node, ok := page.Document.NodeByID(nodeID)
+	if !ok || !page.Document.IsConnected(node) {
+		b.mu.Unlock()
+		return false
+	}
+	form := node
+	if form.TagName != "form" {
+		form = forms.FormOwner(page.Document, node)
+	}
+	if form == nil {
+		b.mu.Unlock()
+		return false
+	}
+	changed := forms.Reset(form)
+	if changed {
+		recomputePageStyles(page, b.currentTime())
+	}
+	dispatcher := page.Events
+	b.mu.Unlock()
+	if changed && onMutation != nil {
+		onMutation()
+	}
+	handled := false
+	if dispatcher != nil {
+		handled = dispatcher.Dispatch(events.Event{Type: events.Reset, Target: form.ID})
+	}
+	return changed || handled
+}
+
+// ValidateForm focuses the first invalid control and reports whether the form is valid.
+func (b *Browser) ValidateForm(nodeID dom.NodeID) bool {
+	b.mu.RLock()
+	page := b.page
+	if page == nil || page.Document == nil {
+		b.mu.RUnlock()
+		return false
+	}
+	node, ok := page.Document.NodeByID(nodeID)
+	if !ok || !page.Document.IsConnected(node) {
+		b.mu.RUnlock()
+		return false
+	}
+	form := node
+	if form.TagName != "form" {
+		form = forms.FormOwner(page.Document, node)
+	}
+	first, invalid := forms.FirstInvalidControl(page.Document, form)
+	b.mu.RUnlock()
+	if !invalid {
+		return form != nil
+	}
+	b.UpdateFocus(first.ID)
+	return false
 }
 
 // UpdateHover updates the active page's hovered element path.
@@ -216,13 +373,36 @@ func (b *Browser) UpdateFocus(nodeID dom.NodeID) bool {
 		b.mu.Unlock()
 		return false
 	}
+	previous := page.FocusTarget
 	page.FocusTarget = target
 	recomputePageStyles(page, b.currentTime())
+	dispatcher := page.Events
 	b.mu.Unlock()
 	if onMutation != nil {
 		onMutation()
 	}
+	if dispatcher != nil {
+		if previous != 0 {
+			dispatcher.Dispatch(events.Event{Type: events.Blur, Target: previous})
+		}
+		if target != 0 {
+			dispatcher.Dispatch(events.Event{Type: events.Focus, Target: target})
+		}
+	}
 	return true
+}
+
+// MoveFormFocus advances focus through enabled controls in DOM order.
+func (b *Browser) MoveFormFocus(reverse bool) bool {
+	b.mu.RLock()
+	page := b.page
+	if page == nil || page.Document == nil {
+		b.mu.RUnlock()
+		return false
+	}
+	target := forms.NextFocusable(page.Document, page.FocusTarget, reverse)
+	b.mu.RUnlock()
+	return b.UpdateFocus(target)
 }
 
 // UpdateViewport recomputes viewport-relative values when the content area changes.
@@ -335,6 +515,185 @@ func (b *Browser) Navigate(ctx context.Context, rawURL string) (*Page, error) {
 	return b.load(ctx, pageURL, historyPush, -1)
 }
 
+// SubmitGET serializes a form into the action query and navigates with history.
+func (b *Browser) SubmitGET(ctx context.Context, formID, submitterID dom.NodeID) (*Page, error) {
+	b.mu.RLock()
+	page := b.page
+	if page == nil || page.Document == nil || page.URL == nil {
+		b.mu.RUnlock()
+		return nil, errors.New("no active page for form submission")
+	}
+	form, ok := page.Document.NodeByID(formID)
+	if !ok {
+		b.mu.RUnlock()
+		return nil, errors.New("form was not found")
+	}
+	var submitter *dom.Node
+	if submitterID != 0 {
+		submitter, ok = page.Document.NodeByID(submitterID)
+		if !ok {
+			b.mu.RUnlock()
+			return nil, errors.New("submitter was not found")
+		}
+	}
+	config, ok := forms.ResolveFormSubmission(page.Document, form, submitter)
+	if !ok || config.Method != "get" {
+		b.mu.RUnlock()
+		return nil, errors.New("form is not a GET submission")
+	}
+	entries := forms.CollectEntries(page.Document, form, submitter)
+	baseURL := cloneURL(page.URL)
+	b.mu.RUnlock()
+
+	target, err := resolveFormAction(baseURL, config.Action)
+	if err != nil {
+		return nil, err
+	}
+	encoded, err := forms.EncodeURLEncodedLimited(entries)
+	if err != nil {
+		return nil, err
+	}
+	target.RawQuery = encoded
+	target.Fragment = ""
+	return b.load(ctx, target, historyPush, -1)
+}
+
+// SubmitPOST sends URL-encoded entries and navigates to the response document.
+func (b *Browser) SubmitPOST(ctx context.Context, formID, submitterID dom.NodeID) (*Page, error) {
+	b.mu.Lock()
+	page := b.page
+	if page == nil || page.Document == nil || page.URL == nil {
+		b.mu.Unlock()
+		return nil, errors.New("no active page for form submission")
+	}
+	form, ok := page.Document.NodeByID(formID)
+	if !ok {
+		b.mu.Unlock()
+		return nil, errors.New("form was not found")
+	}
+	var submitter *dom.Node
+	if submitterID != 0 {
+		submitter, ok = page.Document.NodeByID(submitterID)
+		if !ok {
+			b.mu.Unlock()
+			return nil, errors.New("submitter was not found")
+		}
+	}
+	config, ok := forms.ResolveFormSubmission(page.Document, form, submitter)
+	if !ok || config.Method != "post" || config.Enctype != forms.URLEncoded || config.Target != "_self" {
+		b.mu.Unlock()
+		return nil, errors.New("unsupported POST form configuration")
+	}
+	entries := forms.CollectEntries(page.Document, form, submitter)
+	target, err := resolveFormAction(page.URL, config.Action)
+	if err != nil {
+		b.mu.Unlock()
+		return nil, err
+	}
+	target.Fragment = ""
+	client := b.client
+	loader, ok := client.(requestLoader)
+	if !ok {
+		b.mu.Unlock()
+		return nil, errors.New("network client does not support POST")
+	}
+	b.navigationID++
+	navigationID := b.navigationID
+	runtimeFactory := b.runtimeFactory
+	onMutation := b.onMutation
+	reducedMotion := b.reducedMotion
+	b.mu.Unlock()
+
+	encoded, err := forms.EncodeURLEncodedLimited(entries)
+	if err != nil {
+		return nil, err
+	}
+	body := []byte(encoded)
+	response, err := loader.Do(ctx, &network.Request{
+		Method: http.MethodPost, URL: target, Body: body,
+		Header:  http.Header{"Content-Type": []string{forms.URLEncoded}},
+		SiteURL: cloneURL(page.URL), Kind: network.RequestForm,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("submit form to %s: %w", network.RedactedURL(target), err)
+	}
+	return b.finishLoad(ctx, target, response, historyPush, -1, navigationID, client, runtimeFactory, onMutation, reducedMotion)
+}
+
+// Submit validates and dispatches a cancelable submit event before navigation.
+func (b *Browser) Submit(ctx context.Context, formID, submitterID dom.NodeID) (*Page, error) {
+	b.mu.RLock()
+	page := b.page
+	if page == nil || page.Document == nil {
+		b.mu.RUnlock()
+		return nil, errors.New("no active page for form submission")
+	}
+	form, ok := page.Document.NodeByID(formID)
+	if !ok || form.TagName != "form" {
+		b.mu.RUnlock()
+		return nil, errors.New("form was not found")
+	}
+	var submitter *dom.Node
+	if submitterID != 0 {
+		submitter, ok = page.Document.NodeByID(submitterID)
+		if !ok {
+			b.mu.RUnlock()
+			return nil, errors.New("submitter was not found")
+		}
+	}
+	config, ok := forms.ResolveFormSubmission(page.Document, form, submitter)
+	if !ok {
+		b.mu.RUnlock()
+		return nil, errors.New("invalid form submission configuration")
+	}
+	firstInvalid, invalid := forms.FirstInvalidControl(page.Document, form)
+	dispatcher := page.Events
+	b.mu.RUnlock()
+	b.mu.Lock()
+	if b.page == page {
+		page.Submitter = submitterID
+	}
+	b.mu.Unlock()
+
+	if invalid && !config.NoValidate {
+		b.UpdateFocus(firstInvalid.ID)
+		return nil, ErrFormValidation
+	}
+	submitEvent := events.Cancelable(events.Submit, form.ID)
+	if dispatcher != nil {
+		dispatcher.Dispatch(submitEvent)
+	}
+	if submitEvent.DefaultPrevented() {
+		return nil, ErrSubmissionPrevented
+	}
+	if config.Target != "_self" {
+		return nil, fmt.Errorf("unsupported form target %q", config.Target)
+	}
+	switch config.Method {
+	case "get":
+		return b.SubmitGET(ctx, formID, submitterID)
+	case "post":
+		return b.SubmitPOST(ctx, formID, submitterID)
+	default:
+		return nil, fmt.Errorf("unsupported form method %q", config.Method)
+	}
+}
+
+func resolveFormAction(baseURL *url.URL, action string) (*url.URL, error) {
+	if baseURL == nil {
+		return nil, errors.New("form action has no base URL")
+	}
+	reference, err := url.Parse(strings.TrimSpace(action))
+	if err != nil {
+		return nil, fmt.Errorf("parse form action: %w", err)
+	}
+	target := baseURL.ResolveReference(reference)
+	if target.Scheme != "http" && target.Scheme != "https" {
+		return nil, fmt.Errorf("unsupported form action scheme %q", target.Scheme)
+	}
+	return target, nil
+}
+
 // Back loads the previous successful navigation entry.
 func (b *Browser) Back(ctx context.Context) (*Page, error) {
 	return b.traverse(ctx, -1)
@@ -406,9 +765,12 @@ func (b *Browser) load(ctx context.Context, pageURL *url.URL, commit historyComm
 
 	response, err := client.Get(ctx, pageURL)
 	if err != nil {
-		return nil, fmt.Errorf("navigate to %s: %w", pageURL.Redacted(), err)
+		return nil, fmt.Errorf("navigate to %s: %w", network.RedactedURL(pageURL), err)
 	}
+	return b.finishLoad(ctx, pageURL, response, commit, historyIndex, navigationID, client, runtimeFactory, onMutation, reducedMotion)
+}
 
+func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *network.Response, commit historyCommit, historyIndex int, navigationID uint64, client ResourceLoader, runtimeFactory runtimemodel.Factory, onMutation func(), reducedMotion bool) (*Page, error) {
 	mediaType, _, err := mime.ParseMediaType(response.ContentType)
 	if err != nil {
 		return nil, fmt.Errorf("invalid Content-Type %q: %w", response.ContentType, err)
@@ -418,11 +780,11 @@ func (b *Browser) load(ctx context.Context, pageURL *url.URL, commit historyComm
 	}
 	document, err := htmlparser.Parse(bytes.NewReader(response.Body))
 	if err != nil {
-		return nil, fmt.Errorf("build DOM for %s: %w", pageURL.Redacted(), err)
+		return nil, fmt.Errorf("build DOM for %s: %w", network.RedactedURL(pageURL), err)
 	}
 	stylesheet, err := b.loadStyles(ctx, client, response.URL, document)
 	if err != nil {
-		return nil, fmt.Errorf("load styles for %s: %w", pageURL.Redacted(), err)
+		return nil, fmt.Errorf("load styles for %s: %w", network.RedactedURL(pageURL), err)
 	}
 	computedStyles := style.ComputeWithEnvironment(document, stylesheet, style.InteractionState{}, style.Environment{
 		ViewportWidth: 1280, ViewportHeight: 720, RootFontSize: 16, ResolutionDPI: 96,
@@ -450,7 +812,7 @@ func (b *Browser) load(ctx context.Context, pageURL *url.URL, commit historyComm
 		ScriptErrors:     scriptErrors,
 	}
 	page.Animations.Reconcile(computedStyles, b.currentTime())
-	pageRuntime := startRuntime(ctx, runtimeFactory, page, onMutation, b.currentTime)
+	pageRuntime := startRuntime(ctx, runtimeFactory, page, client, onMutation, b.currentTime)
 	if err := ctx.Err(); err != nil {
 		page.Animations.Clear()
 		page.Transitions.Clear()
@@ -496,12 +858,12 @@ func (b *Browser) load(ctx context.Context, pageURL *url.URL, commit historyComm
 	return page, nil
 }
 
-func startRuntime(ctx context.Context, factory runtimemodel.Factory, page *Page, onMutation func(), now func() time.Time) runtimemodel.Runtime {
+func startRuntime(ctx context.Context, factory runtimemodel.Factory, page *Page, client ResourceLoader, onMutation func(), now func() time.Time) runtimemodel.Runtime {
 	if factory == nil || page == nil || len(page.Scripts) == 0 {
 		return nil
 	}
 	if !IsTrustedOrigin(page.URL) {
-		page.RuntimeError = fmt.Sprintf("blocked Go script execution from untrusted origin: %s", page.URL.Redacted())
+		page.RuntimeError = fmt.Sprintf("blocked Go script execution from untrusted origin: %s", network.RedactedURL(page.URL))
 		return nil
 	}
 	for _, script := range page.Scripts {
@@ -535,6 +897,9 @@ func startRuntime(ctx context.Context, factory runtimemodel.Factory, page *Page,
 				onMutation()
 			}
 		},
+	}
+	if loader, ok := client.(requestLoader); ok {
+		environment.Fetch = loader.Do
 	}
 	if err := pageRuntime.Load(ctx, page.Scripts, environment); err != nil {
 		page.RuntimeError = fmt.Sprintf("load Go runtime: %v", err)
@@ -662,32 +1027,19 @@ func runtimeOrigin(sourceURL *url.URL) string {
 	if sourceURL == nil {
 		return "unknown"
 	}
-	return sourceURL.Redacted()
+	return network.RedactedURL(sourceURL)
+}
+
+func isEditableTextControl(node *dom.Node) bool {
+	return forms.IsEditableTextControl(node)
 }
 
 func isTextInput(node *dom.Node) bool {
-	if node == nil || node.Type != dom.NodeElement || node.TagName != "input" {
-		return false
-	}
-	typeValue, ok := node.Attribute("type")
-	return !ok || strings.EqualFold(strings.TrimSpace(typeValue), "text")
+	return node != nil && node.TagName == "input" && isEditableTextControl(node)
 }
 
 func isSubmitButton(node *dom.Node) bool {
-	if node == nil || node.Type != dom.NodeElement || node.TagName != "button" {
-		return false
-	}
-	typeValue, ok := node.Attribute("type")
-	return !ok || strings.EqualFold(strings.TrimSpace(typeValue), "submit")
-}
-
-func nearestForm(node *dom.Node) *dom.Node {
-	for current := node; current != nil; current = current.Parent {
-		if current.Type == dom.NodeElement && current.TagName == "form" {
-			return current
-		}
-	}
-	return nil
+	return forms.IsSubmitButton(node)
 }
 
 func normalizeURL(rawURL string) (*url.URL, error) {

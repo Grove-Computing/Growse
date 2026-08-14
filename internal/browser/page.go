@@ -36,6 +36,7 @@ type Page struct {
 	HoverTarget      dom.NodeID
 	HoverPath        []dom.NodeID
 	FocusTarget      dom.NodeID
+	Submitter        dom.NodeID
 	ViewportWidth    float32
 	ViewportHeight   float32
 	ReducedMotion    bool

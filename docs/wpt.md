@@ -5,8 +5,8 @@ GrowseはWeb Platform Tests（WPT）をブラウザで直接実行せず、対�
 - Upstream: `web-platform-tests/wpt`
 - Revision: `816bbf3ebae17dc6866deb65b2286b1a1c162819`
 - License: WPTリポジトリの`LICENSE.md`（3-Clause BSD）
-- 配置: `internal/style/wpt_test.go`、`internal/layout/wpt_test.go`
-- v0.7.0対象: CSS Transitions Level 2、CSS Animations Level 1、CSS Easing Functions Level 1
+- 配置: `internal/style/wpt_test.go`、`internal/layout/wpt_test.go`、`internal/forms/wpt_test.go`、`internal/network/wpt_test.go`
+- v0.8.0対象: HTML Forms、URL、Cookies、Fetch/CORS
 
 ## 対応表
 
@@ -24,6 +24,10 @@ GrowseはWeb Platform Tests（WPT）をブラウザで直接実行せず、対�
 | `TestWPTAnimationImportantWithTransitionCascade` | `css/css-animations/animation-important-with-transition.html` | Transition、Animation、`!important`が同時に存在するcomputed valueの優先順を比較 | Web Animations APIの型・列挙順はv0.7.0対象外 |
 | `TestWPTAnimationFillModeNoneRestoresUnderlyingColor` | `css/css-animations/animation-fill-mode-001-manual.html` | Animation終了後にFillなしでunderlying background colorへ戻ることを比較 | 5秒の目視試験をfake timestampのcomputed value判定へ変換 |
 | `TestWPTTransitionDurationShorthandUsesLastMatchingProperty` | `css/css-transitions/transition-duration-shorthand.html` | shorthand内で最後に一致する0秒のPropertyは即時反映され、別PropertyだけTransitionを開始することを比較 | Layout対象のwidth/heightをv0.7.0対応のopacity/colorへ置換 |
+| `TestWPTURLEncodedPreservesDuplicateNamesAndEmptyValues` | `html/semantics/forms/form-submission-0/urlencoded2.window.js` | duplicate nameと空値をEntry順のurlencoded文字列へ縮約 | FormDataとJavaScript harnessは使用しない |
+| `TestWPTURLOriginNormalizesDefaultPorts` | `url/url-origin.any.js` | HTTPSの省略portと443を同じOriginとして比較 | opaque originと非HTTP schemeはv0.8.0対象外 |
+| `TestWPTCookiePathDoesNotMatchPrefixLookalike` | `cookies/attributes/resources/path-redirect-shared.js` | Cookie Path直後がslashでないprefix lookalikeを非一致として比較 | redirect harnessをJar lookupへ縮約 |
+| `TestWPTCORSSafelistedContentTypes` | `cors/cors-safelisted-request-header.any.js` | safelisted Content-Type 3種のsimple request判定を比較 | byte-level unsafe value全組合せは未移植 |
 
 Upstreamのファイル全体はコピーせず、assertionの意味と最小入力だけを移植する。ケースを追加または更新するときは、Revision、Source、適応内容、および意図的な差分をこの表へ記録する。
 
@@ -39,3 +43,10 @@ Upstreamのファイル全体はコピーせず、assertionの意味と最小入
 - CSS Transitions Level 2、CSS Animations Level 1、CSS Easing Functions Level 1から、v0.7.0が対応する構文、Timing、補間、Cascade、Lifecycleを選定対象とする。
 - Web Animations API、Animation Event、3D Transform、およびLayoutを変更するPropertyのAnimationは対象外とし、同じ仕様上のassertionをpaint-only Propertyとfake timestampへ縮約できる場合だけ移植する。
 - 追加時は固定Revisionに対象Sourceが存在することを確認し、Goテストの直前コメントと対応表の両方へSource pathを記録する。
+
+## v0.8.0の選定範囲
+
+- HTML Formsはsuccessful controls、改行正規化、urlencoded、validation、submit cancellationを選定し、File uploadとmultipart body生成は対象外とする。
+- URLはHTTP(S) Originとpercent-encodingを選定し、opaque origin、IDNA全fixture、URL API全体は対象外とする。
+- CookiesはDomain、Path、Secure、HttpOnly、SameSite、expirationを選定し、partitioned Cookieは対象外とする。
+- Fetch/CORSはsimple request、preflight、credentials、公開Response Headerを選定し、JavaScript Promise/Stream APIは対象外とする。

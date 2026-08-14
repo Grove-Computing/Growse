@@ -5,6 +5,7 @@ import (
 	"sort"
 
 	"github.com/Grove-Computing/Growse/internal/dom"
+	"github.com/Grove-Computing/Growse/internal/forms"
 	stylemodel "github.com/Grove-Computing/Growse/internal/style"
 )
 
@@ -131,6 +132,16 @@ type Box struct {
 	Tag        string
 	Text       string
 	Input      bool
+	Multiline  bool
+	Select     bool
+	Options    []forms.Option
+	Selected   int
+	Checkable  bool
+	Checked    bool
+	InputType  string
+	Disabled   bool
+	ReadOnly   bool
+	Button     bool
 
 	X        float32
 	Y        float32

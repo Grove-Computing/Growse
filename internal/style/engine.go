@@ -6,6 +6,7 @@ import (
 
 	"github.com/Grove-Computing/Growse/internal/css"
 	"github.com/Grove-Computing/Growse/internal/dom"
+	"github.com/Grove-Computing/Growse/internal/forms"
 )
 
 const (
@@ -57,6 +58,7 @@ func ComputeWithEnvironment(document *dom.Document, stylesheet *css.Stylesheet, 
 	if document == nil || document.Root == nil {
 		return result
 	}
+	state.Document = document
 	if environment.ViewportWidth <= 0 {
 		environment.ViewportWidth = defaultEnvironment().ViewportWidth
 	}
@@ -1388,8 +1390,12 @@ func matchesPseudoClass(node *dom.Node, pseudo css.PseudoClass, state Interactio
 			return selected
 		}
 		inputType, _ := node.Attribute("type")
-		_, checked := node.Attribute("checked")
+		checked := forms.CurrentChecked(node)
 		return node.TagName == "input" && checked && (strings.EqualFold(inputType, "checkbox") || strings.EqualFold(inputType, "radio"))
+	case css.PseudoValid:
+		return forms.WillValidate(node) && forms.ValidateControl(state.Document, node).Valid()
+	case css.PseudoInvalid:
+		return forms.WillValidate(node) && !forms.ValidateControl(state.Document, node).Valid()
 	default:
 		return false
 	}

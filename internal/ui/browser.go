@@ -16,6 +16,7 @@ import (
 	"gioui.org/f32"
 	"gioui.org/font"
 	"gioui.org/gesture"
+	"gioui.org/io/key"
 	"gioui.org/io/pointer"
 	"gioui.org/layout"
 	"gioui.org/op"
@@ -29,7 +30,9 @@ import (
 
 	"github.com/Grove-Computing/Growse/internal/browser"
 	"github.com/Grove-Computing/Growse/internal/dom"
+	"github.com/Grove-Computing/Growse/internal/forms"
 	layoutengine "github.com/Grove-Computing/Growse/internal/layout"
+	"github.com/Grove-Computing/Growse/internal/network"
 	paintmodel "github.com/Grove-Computing/Growse/internal/paint"
 	stylemodel "github.com/Grove-Computing/Growse/internal/style"
 )
@@ -78,6 +81,9 @@ type BrowserUI struct {
 	inputEditors      map[dom.NodeID]*widget.Editor
 	inputFocused      map[dom.NodeID]bool
 	inputCommitted    map[dom.NodeID]string
+	selectButtons     map[dom.NodeID]*widget.Clickable
+	checkableButtons  map[dom.NodeID]*widget.Clickable
+	formButtons       map[dom.NodeID]*widget.Clickable
 	layoutBuild       func(*dom.Document, stylemodel.Map, float32, float32, float32, float32) *layoutengine.Tree
 	layoutCache       documentLayoutCache
 }
@@ -102,11 +108,14 @@ type Navigator interface {
 	Page() *browser.Page
 	DispatchClick(nodeID dom.NodeID, x, y float32) bool
 	SetInputValue(nodeID dom.NodeID, value string) bool
+	SetSelectValue(nodeID dom.NodeID, value string) bool
+	ActivateCheckable(nodeID dom.NodeID) bool
 	CommitInputValue(nodeID dom.NodeID, value string) bool
 	SubmitForm(nodeID dom.NodeID) bool
 	UpdateHover(nodeID dom.NodeID, x, y float32) bool
 	ClearHover() bool
 	UpdateFocus(nodeID dom.NodeID) bool
+	MoveFormFocus(reverse bool) bool
 	UpdateViewport(width, height float32) bool
 }
 
@@ -125,21 +134,24 @@ func NewBrowserUI(navigator Navigator, invalidate func()) *BrowserUI {
 
 	cursorImage, cursorErr := loadGopherCursor()
 	ui := &BrowserUI{
-		theme:          material.NewTheme(),
-		navigator:      navigator,
-		invalidate:     invalidate,
-		results:        make(chan navigationResult, 1),
-		gopher:         paint.NewImageOp(gopherImage),
-		backIcon:       mustIcon(widget.NewIcon(icons.NavigationArrowBack)),
-		forwardIcon:    mustIcon(widget.NewIcon(icons.NavigationArrowForward)),
-		reloadIcon:     mustIcon(widget.NewIcon(icons.NavigationRefresh)),
-		pageTitle:      "新しい Web を Go で開く",
-		status:         "URLを入力して Gopher ボタンを押してください",
-		pageStatus:     "URLを入力して Gopher ボタンを押してください",
-		inputEditors:   make(map[dom.NodeID]*widget.Editor),
-		inputFocused:   make(map[dom.NodeID]bool),
-		inputCommitted: make(map[dom.NodeID]string),
-		layoutBuild:    layoutengine.BuildWithScroll,
+		theme:            material.NewTheme(),
+		navigator:        navigator,
+		invalidate:       invalidate,
+		results:          make(chan navigationResult, 1),
+		gopher:           paint.NewImageOp(gopherImage),
+		backIcon:         mustIcon(widget.NewIcon(icons.NavigationArrowBack)),
+		forwardIcon:      mustIcon(widget.NewIcon(icons.NavigationArrowForward)),
+		reloadIcon:       mustIcon(widget.NewIcon(icons.NavigationRefresh)),
+		pageTitle:        "新しい Web を Go で開く",
+		status:           "URLを入力して Gopher ボタンを押してください",
+		pageStatus:       "URLを入力して Gopher ボタンを押してください",
+		inputEditors:     make(map[dom.NodeID]*widget.Editor),
+		inputFocused:     make(map[dom.NodeID]bool),
+		inputCommitted:   make(map[dom.NodeID]string),
+		selectButtons:    make(map[dom.NodeID]*widget.Clickable),
+		checkableButtons: make(map[dom.NodeID]*widget.Clickable),
+		formButtons:      make(map[dom.NodeID]*widget.Clickable),
+		layoutBuild:      layoutengine.BuildWithScroll,
 	}
 	if cursorErr != nil {
 		slog.Error("Gopherカーソルを初期化できませんでした", "component", "ui", "error", cursorErr)
@@ -247,6 +259,9 @@ func (ui *BrowserUI) consumeNavigationResult() {
 			ui.inputEditors = make(map[dom.NodeID]*widget.Editor)
 			ui.inputFocused = make(map[dom.NodeID]bool)
 			ui.inputCommitted = make(map[dom.NodeID]string)
+			ui.selectButtons = make(map[dom.NodeID]*widget.Clickable)
+			ui.checkableButtons = make(map[dom.NodeID]*widget.Clickable)
+			ui.formButtons = make(map[dom.NodeID]*widget.Clickable)
 			if result.err != nil {
 				ui.status = "読み込みエラー: " + result.err.Error()
 				ui.pageStatus = ui.status
@@ -473,6 +488,8 @@ func (ui *BrowserUI) layoutViewport(gtx layout.Context) layout.Dimensions {
 
 func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layout.Dimensions {
 	paint.Fill(gtx.Ops, color.NRGBA{R: 255, G: 255, B: 255, A: 255})
+	ui.handleFormTraversal(gtx, page)
+	ui.syncFormFocus(gtx, page.FocusTarget)
 
 	viewportWidth := float32(gtx.Constraints.Max.X) / gtx.Metric.PxPerDp
 	viewportHeight := float32(gtx.Constraints.Max.Y) / gtx.Metric.PxPerDp
@@ -494,6 +511,12 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 			return ui.layoutDrawText(gtx, command)
 		case paintmodel.DrawInput:
 			return ui.layoutDrawInput(gtx, command)
+		case paintmodel.DrawSelect:
+			return ui.layoutDrawSelect(gtx, command)
+		case paintmodel.DrawCheckable:
+			return ui.layoutDrawCheckable(gtx, command)
+		case paintmodel.DrawButton:
+			return ui.layoutDrawButton(gtx, command)
 		case paintmodel.DrawBox:
 			return layoutDrawBox(gtx, command, page.BackgroundImages)
 		default:
@@ -572,7 +595,7 @@ func (ui *BrowserUI) updateLinkPreview(page *browser.Page, nodeID dom.NodeID) {
 		return
 	}
 	if linkURL, ok := page.LinkURL(nodeID); ok {
-		ui.status = linkURL.Redacted()
+		ui.status = network.RedactedURL(linkURL)
 		return
 	}
 	ui.status = ui.pageStatus
@@ -595,6 +618,9 @@ func (ui *BrowserUI) handleViewportClicks(gtx layout.Context, page *browser.Page
 		if !ok {
 			continue
 		}
+		if _, handledByButton := ui.formButtons[nodeID]; handledByButton {
+			continue
+		}
 		ui.navigator.UpdateFocus(focusableNodeID(page.Document, nodeID))
 		if ui.navigator.DispatchClick(nodeID, x, y) {
 			continue
@@ -615,8 +641,14 @@ func focusableNodeID(document *dom.Document, nodeID dom.NodeID) dom.NodeID {
 	if !ok {
 		return 0
 	}
+	if control := forms.LabeledControl(document, node); control != nil && !forms.Disabled(control) {
+		return control.ID
+	}
 	for current := node; current != nil; current = current.Parent {
 		if current.Type != dom.NodeElement {
+			continue
+		}
+		if forms.Disabled(current) {
 			continue
 		}
 		if _, hasTabIndex := current.Attribute("tabindex"); hasTabIndex {
@@ -656,6 +688,12 @@ func commandDocumentY(command paintmodel.Command) (float32, bool) {
 	case paintmodel.DrawText:
 		return command.Y - command.Top, true
 	case paintmodel.DrawInput:
+		return command.Y - command.Top, true
+	case paintmodel.DrawSelect:
+		return command.Y - command.Top, true
+	case paintmodel.DrawCheckable:
+		return command.Y - command.Top, true
+	case paintmodel.DrawButton:
 		return command.Y - command.Top, true
 	case paintmodel.DrawBox:
 		return command.Y - command.Top, true
@@ -991,6 +1029,9 @@ func (ui *BrowserUI) layoutDrawInput(gtx layout.Context, command paintmodel.Draw
 		if command.Opacity < 1 {
 			defer paint.PushOpacity(gtx.Ops, max(command.Opacity, 0)).Pop()
 		}
+		if command.Disabled {
+			gtx = gtx.Disabled()
+		}
 		height := gtx.Dp(unit.Dp(command.Height))
 		gtx.Constraints.Min.Y = height
 		gtx.Constraints.Max.Y = height
@@ -998,8 +1039,11 @@ func (ui *BrowserUI) layoutDrawInput(gtx layout.Context, command paintmodel.Draw
 		wasFocused := ui.inputFocused[command.NodeID]
 		if editor == nil {
 			editor = new(widget.Editor)
-			editor.SingleLine = true
-			editor.Submit = true
+			editor.SingleLine = !command.Multiline
+			editor.Submit = !command.Multiline
+			if command.InputType == "password" {
+				editor.Mask = '•'
+			}
 			editor.SetText(command.Value)
 			ui.inputEditors[command.NodeID] = editor
 			ui.inputCommitted[command.NodeID] = command.Value
@@ -1007,6 +1051,12 @@ func (ui *BrowserUI) layoutDrawInput(gtx layout.Context, command paintmodel.Draw
 			editor.SetText(command.Value)
 			ui.inputCommitted[command.NodeID] = command.Value
 		}
+		if command.InputType == "password" {
+			editor.Mask = '•'
+		} else {
+			editor.Mask = 0
+		}
+		editor.ReadOnly = command.ReadOnly || command.Disabled
 		for {
 			event, ok := editor.Update(gtx)
 			if !ok {
@@ -1027,7 +1077,10 @@ func (ui *BrowserUI) layoutDrawInput(gtx layout.Context, command paintmodel.Draw
 			if focused {
 				ui.navigator.UpdateFocus(command.NodeID)
 			} else {
-				ui.navigator.UpdateFocus(0)
+				page := ui.navigator.Page()
+				if page == nil || page.FocusTarget == command.NodeID {
+					ui.navigator.UpdateFocus(0)
+				}
 			}
 		}
 		if wasFocused && !focused {
@@ -1045,6 +1098,149 @@ func (ui *BrowserUI) layoutDrawInput(gtx layout.Context, command paintmodel.Draw
 			return layout.UniformInset(unit.Dp(8)).Layout(gtx, style.Layout)
 		})
 	})
+}
+
+func (ui *BrowserUI) layoutDrawSelect(gtx layout.Context, command paintmodel.DrawSelect) layout.Dimensions {
+	left := unit.Dp(command.X)
+	viewportWidth := float32(gtx.Constraints.Max.X) / gtx.Metric.PxPerDp
+	right := unit.Dp(max(viewportWidth-command.X-command.Width, float32(0)))
+	return layout.Inset{Top: unit.Dp(command.Top), Left: left, Right: right}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		if command.Clip != nil {
+			defer commandClip(gtx, command.Clip, command.X, command.Y).Push(gtx.Ops).Pop()
+		}
+		if command.Opacity < 1 {
+			defer paint.PushOpacity(gtx.Ops, max(command.Opacity, 0)).Pop()
+		}
+		if command.Disabled {
+			gtx = gtx.Disabled()
+		}
+		button := ui.selectButtons[command.NodeID]
+		if button == nil {
+			button = new(widget.Clickable)
+			ui.selectButtons[command.NodeID] = button
+		}
+		for button.Clicked(gtx) {
+			if next, ok := forms.NextEnabledValue(command.Options, command.Selected); ok && ui.navigator != nil {
+				ui.navigator.UpdateFocus(command.NodeID)
+				ui.navigator.SetSelectValue(command.NodeID, next)
+			}
+		}
+		gtx.Constraints.Min.Y = gtx.Dp(unit.Dp(command.Height))
+		gtx.Constraints.Max.Y = gtx.Constraints.Min.Y
+		label := command.Label
+		if label == "" {
+			label = "選択してください"
+		}
+		style := material.Button(ui.theme, button, label+" ▾")
+		style.Color = rgba(command.Color)
+		return style.Layout(gtx)
+	})
+}
+
+func (ui *BrowserUI) layoutDrawCheckable(gtx layout.Context, command paintmodel.DrawCheckable) layout.Dimensions {
+	left := unit.Dp(command.X)
+	viewportWidth := float32(gtx.Constraints.Max.X) / gtx.Metric.PxPerDp
+	right := unit.Dp(max(viewportWidth-command.X-command.Width, float32(0)))
+	return layout.Inset{Top: unit.Dp(command.Top), Left: left, Right: right}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		if command.Clip != nil {
+			defer commandClip(gtx, command.Clip, command.X, command.Y).Push(gtx.Ops).Pop()
+		}
+		if command.Opacity < 1 {
+			defer paint.PushOpacity(gtx.Ops, max(command.Opacity, 0)).Pop()
+		}
+		if command.Disabled {
+			gtx = gtx.Disabled()
+		}
+		button := ui.checkableButtons[command.NodeID]
+		if button == nil {
+			button = new(widget.Clickable)
+			ui.checkableButtons[command.NodeID] = button
+		}
+		for button.Clicked(gtx) {
+			if ui.navigator != nil {
+				ui.navigator.UpdateFocus(command.NodeID)
+				ui.navigator.ActivateCheckable(command.NodeID)
+			}
+		}
+		gtx.Constraints.Min.Y = gtx.Dp(unit.Dp(command.Height))
+		gtx.Constraints.Max.Y = gtx.Constraints.Min.Y
+		label := "☐"
+		if command.InputType == "radio" {
+			label = "○"
+		}
+		if command.Checked {
+			label = "☑"
+			if command.InputType == "radio" {
+				label = "●"
+			}
+		}
+		style := material.Button(ui.theme, button, label)
+		style.Color = rgba(command.Color)
+		return style.Layout(gtx)
+	})
+}
+
+func (ui *BrowserUI) layoutDrawButton(gtx layout.Context, command paintmodel.DrawButton) layout.Dimensions {
+	left := unit.Dp(command.X)
+	viewportWidth := float32(gtx.Constraints.Max.X) / gtx.Metric.PxPerDp
+	right := unit.Dp(max(viewportWidth-command.X-command.Width, float32(0)))
+	return layout.Inset{Top: unit.Dp(command.Top), Left: left, Right: right}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		if command.Clip != nil {
+			defer commandClip(gtx, command.Clip, command.X, command.Y).Push(gtx.Ops).Pop()
+		}
+		if command.Opacity < 1 {
+			defer paint.PushOpacity(gtx.Ops, max(command.Opacity, 0)).Pop()
+		}
+		if command.Disabled {
+			gtx = gtx.Disabled()
+		}
+		button := ui.formButtons[command.NodeID]
+		if button == nil {
+			button = new(widget.Clickable)
+			ui.formButtons[command.NodeID] = button
+		}
+		for button.Clicked(gtx) {
+			if ui.navigator != nil {
+				ui.navigator.UpdateFocus(command.NodeID)
+				ui.navigator.DispatchClick(command.NodeID, command.X, command.Y)
+			}
+		}
+		gtx.Constraints.Min.Y = gtx.Dp(unit.Dp(command.Height))
+		gtx.Constraints.Max.Y = gtx.Constraints.Min.Y
+		style := material.Button(ui.theme, button, command.Label)
+		style.Color = rgba(command.Color)
+		return style.Layout(gtx)
+	})
+}
+
+func (ui *BrowserUI) handleFormTraversal(gtx layout.Context, page *browser.Page) {
+	for {
+		event, ok := gtx.Event(key.Filter{Name: key.NameTab, Optional: key.ModShift})
+		if !ok {
+			return
+		}
+		keyEvent, ok := event.(key.Event)
+		if !ok || keyEvent.State != key.Press || ui.navigator == nil {
+			continue
+		}
+		ui.navigator.MoveFormFocus(keyEvent.Modifiers.Contain(key.ModShift))
+	}
+}
+
+func (ui *BrowserUI) syncFormFocus(gtx layout.Context, nodeID dom.NodeID) {
+	var tag any
+	if editor := ui.inputEditors[nodeID]; editor != nil {
+		tag = editor
+	} else if button := ui.selectButtons[nodeID]; button != nil {
+		tag = button
+	} else if button := ui.checkableButtons[nodeID]; button != nil {
+		tag = button
+	} else if button := ui.formButtons[nodeID]; button != nil {
+		tag = button
+	}
+	if tag != nil && !gtx.Focused(tag) {
+		gtx.Execute(key.FocusCmd{Tag: tag})
+	}
 }
 
 func (ui *BrowserUI) commitInput(nodeID dom.NodeID, value string) {

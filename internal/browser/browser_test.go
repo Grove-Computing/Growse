@@ -3,6 +3,7 @@ package browser
 import (
 	"context"
 	"errors"
+	"net/http"
 	"net/url"
 	"reflect"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/Grove-Computing/Growse/internal/css"
 	"github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/events"
+	"github.com/Grove-Computing/Growse/internal/forms"
 	"github.com/Grove-Computing/Growse/internal/network"
 	"github.com/Grove-Computing/Growse/internal/style"
 )
@@ -24,6 +26,23 @@ type stubLoader struct {
 type routeLoader struct {
 	responses map[string]*network.Response
 	requested []string
+}
+
+type requestRouteLoader struct {
+	routeLoader
+	request *network.Request
+}
+
+func (loader *requestRouteLoader) Do(_ context.Context, request *network.Request) (*network.Response, error) {
+	copy := *request
+	copy.Body = append([]byte(nil), request.Body...)
+	copy.Header = request.Header.Clone()
+	loader.request = &copy
+	response, ok := loader.responses[request.URL.String()]
+	if !ok {
+		return nil, errors.New("missing response")
+	}
+	return response, nil
 }
 
 func (loader *routeLoader) Get(_ context.Context, resourceURL *url.URL) (*network.Response, error) {
@@ -90,8 +109,8 @@ func TestSetInputValueUpdatesActiveTextInput(t *testing.T) {
 	if !browser.SetInputValue(input.ID, "hello") {
 		t.Fatal("SetInputValue() = false, want true")
 	}
-	if got, ok := input.Attribute("value"); !ok || got != "hello" {
-		t.Fatalf("input value = (%q, %v), want (hello, true)", got, ok)
+	if got := forms.CurrentValue(input); got != "hello" {
+		t.Fatalf("input value = %q, want hello", got)
 	}
 	if browser.SetInputValue(input.ID, "hello") {
 		t.Fatal("SetInputValue() = true for unchanged value")
@@ -101,6 +120,47 @@ func TestSetInputValueUpdatesActiveTextInput(t *testing.T) {
 	}
 	if inputEvent.Type != events.Input || inputEvent.Target != input.ID || inputEvent.Value != "hello" {
 		t.Fatalf("input event = %#v, want updated value", inputEvent)
+	}
+}
+
+func TestSetInputValueUpdatesTextareaWithNewlines(t *testing.T) {
+	document := dom.NewDocument()
+	textarea := document.CreateElement("textarea", nil)
+	if err := document.AppendChild(document.Root, textarea); err != nil {
+		t.Fatal(err)
+	}
+	page := NewPage(mustParseURL(t, "http://localhost"))
+	page.Document = document
+	page.Events = events.NewDispatcher()
+	browserState := New(nil)
+	browserState.SetPage(page)
+
+	if !browserState.SetInputValue(textarea.ID, "first\nsecond") {
+		t.Fatal("SetInputValue(textarea) = false, want true")
+	}
+	if got := forms.CurrentValue(textarea); got != "first\nsecond" {
+		t.Fatalf("textarea value = %q", got)
+	}
+}
+
+func TestSetInputValueUpdatesSupportedTextInputTypes(t *testing.T) {
+	for _, inputType := range []string{"password", "email", "url", "number", "unknown-control"} {
+		t.Run(inputType, func(t *testing.T) {
+			document := dom.NewDocument()
+			input := document.CreateElement("input", map[string]string{"type": inputType})
+			if err := document.AppendChild(document.Root, input); err != nil {
+				t.Fatal(err)
+			}
+			page := &Page{Document: document, ComputedStyles: style.Compute(document, nil), Events: events.NewDispatcher()}
+			browser := New(nil)
+			browser.SetPage(page)
+			if !browser.SetInputValue(input.ID, "edited") {
+				t.Fatalf("SetInputValue(%s) = false", inputType)
+			}
+			if value := forms.CurrentValue(input); value != "edited" {
+				t.Fatalf("value = %q", value)
+			}
+		})
 	}
 }
 
@@ -194,6 +254,32 @@ func TestDispatchClickSubmitsSubmitButton(t *testing.T) {
 
 	if !browser.DispatchClick(button.ID, 0, 0) || !submitted {
 		t.Fatal("submit button click did not submit its form")
+	}
+}
+
+func TestDispatchClickUsesExplicitFormOwnerAndStoresSubmitter(t *testing.T) {
+	document := dom.NewDocument()
+	form := document.CreateElement("form", map[string]string{"id": "search"})
+	button := document.CreateElement("button", map[string]string{"form": "search", "formaction": "/alternate"})
+	if err := document.AppendChild(document.Root, form); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(document.Root, button); err != nil {
+		t.Fatal(err)
+	}
+	dispatcher := events.NewDispatcher()
+	submitted := false
+	dispatcher.AddEventListener(form.ID, events.Submit, func(events.Event) { submitted = true })
+	page := &Page{Document: document, ComputedStyles: style.Compute(document, nil), Events: dispatcher}
+	browser := New(nil)
+	browser.SetPage(page)
+
+	if !browser.DispatchClick(button.ID, 1, 2) || !submitted || page.Submitter != button.ID {
+		t.Fatalf("submitted=%v submitter=%d", submitted, page.Submitter)
+	}
+	config, ok := forms.ResolveSubmission(document, button)
+	if !ok || config.Form != form || config.Action != "/alternate" {
+		t.Fatalf("submission config = %#v, ok=%v", config, ok)
 	}
 }
 
@@ -759,6 +845,301 @@ func TestNormalizeURL(t *testing.T) {
 			}
 			if got.String() != test.want {
 				t.Fatalf("normalizeURL(%q) = %q, want %q", test.rawURL, got, test.want)
+			}
+		})
+	}
+}
+
+func TestSetSelectValueChangesEnabledOptionAndDispatchesEvents(t *testing.T) {
+	document := dom.NewDocument()
+	selectNode := document.CreateElement("select", nil)
+	first := document.CreateElement("option", map[string]string{"value": "one"})
+	second := document.CreateElement("option", map[string]string{"value": "two"})
+	for _, edge := range [][2]*dom.Node{{document.Root, selectNode}, {selectNode, first}, {first, document.CreateText("One")}, {selectNode, second}, {second, document.CreateText("Two")}} {
+		if err := document.AppendChild(edge[0], edge[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	page := &Page{Document: document, ComputedStyles: style.Compute(document, nil), Events: events.NewDispatcher()}
+	var received []events.Type
+	page.Events.AddEventListener(selectNode.ID, events.Input, func(event events.Event) { received = append(received, event.Type) })
+	page.Events.AddEventListener(selectNode.ID, events.Change, func(event events.Event) { received = append(received, event.Type) })
+	browser := New(nil)
+	browser.SetPage(page)
+
+	if !browser.SetSelectValue(selectNode.ID, "two") {
+		t.Fatal("SetSelectValue returned false")
+	}
+	if got := forms.CurrentValue(selectNode); got != "two" {
+		t.Fatalf("select value = %q", got)
+	}
+	if !reflect.DeepEqual(received, []events.Type{events.Input, events.Change}) {
+		t.Fatalf("events = %#v", received)
+	}
+}
+
+func TestActivateCheckableUpdatesRadioGroupAndDispatchesEvents(t *testing.T) {
+	document := dom.NewDocument()
+	form := document.CreateElement("form", nil)
+	first := document.CreateElement("input", map[string]string{"type": "radio", "name": "plan", "checked": ""})
+	second := document.CreateElement("input", map[string]string{"type": "radio", "name": "plan"})
+	for _, edge := range [][2]*dom.Node{{document.Root, form}, {form, first}, {form, second}} {
+		if err := document.AppendChild(edge[0], edge[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	page := &Page{Document: document, ComputedStyles: style.Compute(document, nil), Events: events.NewDispatcher()}
+	var received []events.Type
+	page.Events.AddEventListener(second.ID, events.Input, func(event events.Event) { received = append(received, event.Type) })
+	page.Events.AddEventListener(second.ID, events.Change, func(event events.Event) { received = append(received, event.Type) })
+	browser := New(nil)
+	browser.SetPage(page)
+
+	if !browser.ActivateCheckable(second.ID) {
+		t.Fatal("ActivateCheckable returned false")
+	}
+	if forms.CurrentChecked(first) {
+		t.Fatal("first radio remained checked")
+	}
+	if !forms.CurrentChecked(second) {
+		t.Fatal("second radio was not checked")
+	}
+	if !reflect.DeepEqual(received, []events.Type{events.Input, events.Change}) {
+		t.Fatalf("events = %#v", received)
+	}
+}
+
+func TestDisabledReadonlyLabelAndResetBehavior(t *testing.T) {
+	document := dom.NewDocument()
+	form := document.CreateElement("form", nil)
+	readonly := document.CreateElement("input", map[string]string{"id": "readonly", "value": "default", "readonly": ""})
+	disabled := document.CreateElement("input", map[string]string{"id": "disabled", "disabled": ""})
+	checkbox := document.CreateElement("input", map[string]string{"id": "accept", "type": "checkbox"})
+	label := document.CreateElement("label", map[string]string{"for": "accept"})
+	labelText := document.CreateText("Accept")
+	for _, edge := range [][2]*dom.Node{{document.Root, form}, {form, readonly}, {form, disabled}, {form, checkbox}, {form, label}, {label, labelText}} {
+		if err := document.AppendChild(edge[0], edge[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	page := &Page{Document: document, ComputedStyles: style.Compute(document, nil), Events: events.NewDispatcher()}
+	resetEvents := 0
+	page.Events.AddEventListener(form.ID, events.Reset, func(events.Event) { resetEvents++ })
+	browser := New(nil)
+	browser.SetPage(page)
+
+	if browser.SetInputValue(readonly.ID, "changed") || browser.SetInputValue(disabled.ID, "changed") {
+		t.Fatal("readonly or disabled input accepted editing")
+	}
+	if !browser.DispatchClick(labelText.ID, 10, 10) || !forms.CurrentChecked(checkbox) || page.FocusTarget != checkbox.ID {
+		t.Fatalf("label activation: checked=%v focus=%d", forms.CurrentChecked(checkbox), page.FocusTarget)
+	}
+	if !browser.ResetForm(form.ID) || forms.CurrentChecked(checkbox) || forms.CurrentValue(readonly) != "default" || resetEvents != 1 {
+		t.Fatalf("reset: checked=%v value=%q events=%d", forms.CurrentChecked(checkbox), forms.CurrentValue(readonly), resetEvents)
+	}
+}
+
+func TestMoveFormFocusTraversesAndWrapsBothDirections(t *testing.T) {
+	document := dom.NewDocument()
+	first := document.CreateElement("input", nil)
+	disabled := document.CreateElement("input", map[string]string{"disabled": ""})
+	last := document.CreateElement("button", nil)
+	for _, node := range []*dom.Node{first, disabled, last} {
+		if err := document.AppendChild(document.Root, node); err != nil {
+			t.Fatal(err)
+		}
+	}
+	page := &Page{Document: document, ComputedStyles: style.Compute(document, nil)}
+	browser := New(nil)
+	browser.SetPage(page)
+
+	if !browser.MoveFormFocus(false) || page.FocusTarget != first.ID {
+		t.Fatalf("first forward focus = %d", page.FocusTarget)
+	}
+	if !browser.MoveFormFocus(false) || page.FocusTarget != last.ID {
+		t.Fatalf("second forward focus = %d", page.FocusTarget)
+	}
+	if !browser.MoveFormFocus(true) || page.FocusTarget != first.ID {
+		t.Fatalf("reverse focus = %d", page.FocusTarget)
+	}
+}
+
+func TestUpdateFocusDispatchesBlurBeforeFocus(t *testing.T) {
+	document := dom.NewDocument()
+	first := document.CreateElement("input", nil)
+	second := document.CreateElement("input", nil)
+	if err := document.AppendChild(document.Root, first); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(document.Root, second); err != nil {
+		t.Fatal(err)
+	}
+	dispatcher := events.NewDispatcher()
+	var order []string
+	dispatcher.AddEventListener(first.ID, events.Focus, func(events.Event) { order = append(order, "focus:first") })
+	dispatcher.AddEventListener(first.ID, events.Blur, func(events.Event) { order = append(order, "blur:first") })
+	dispatcher.AddEventListener(second.ID, events.Focus, func(events.Event) { order = append(order, "focus:second") })
+	page := &Page{Document: document, ComputedStyles: style.Compute(document, nil), Events: dispatcher}
+	browser := New(nil)
+	browser.SetPage(page)
+
+	if !browser.UpdateFocus(first.ID) || !browser.UpdateFocus(second.ID) {
+		t.Fatal("focus transition was not applied")
+	}
+	want := []string{"focus:first", "blur:first", "focus:second"}
+	if !reflect.DeepEqual(order, want) {
+		t.Fatalf("event order = %v, want %v", order, want)
+	}
+}
+
+func TestValidateFormFocusesFirstInvalidControlAndUpdatesPseudoClass(t *testing.T) {
+	document := dom.NewDocument()
+	form := document.CreateElement("form", nil)
+	first := document.CreateElement("input", map[string]string{"required": "", "class": "field"})
+	second := document.CreateElement("input", map[string]string{"type": "email", "class": "field"})
+	for _, edge := range [][2]*dom.Node{{document.Root, form}, {form, first}, {form, second}} {
+		if err := document.AppendChild(edge[0], edge[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stylesheet, err := css.Parse(strings.NewReader(`.field:valid { color: green } .field:invalid { color: red }`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := &Page{Document: document, Stylesheet: stylesheet, ComputedStyles: style.Compute(document, stylesheet), Events: events.NewDispatcher()}
+	browser := New(nil)
+	browser.SetPage(page)
+
+	if browser.ValidateForm(form.ID) || page.FocusTarget != first.ID {
+		t.Fatalf("validation result=true or focus=%d, want %d", page.FocusTarget, first.ID)
+	}
+	firstStyle, _ := page.ComputedStyles.For(first)
+	if firstStyle.Color != 0xff0000ff {
+		t.Fatalf("invalid color = %#x, want red", firstStyle.Color)
+	}
+	forms.SetCurrentValue(first, "ok")
+	forms.SetCurrentValue(second, "user@example.com")
+	recomputePageStyles(page, time.Now())
+	if !browser.ValidateForm(form.ID) {
+		t.Fatal("valid form was rejected")
+	}
+	firstStyle, _ = page.ComputedStyles.For(first)
+	if firstStyle.Color != 0x008000ff {
+		t.Fatalf("valid color = %#x, want green", firstStyle.Color)
+	}
+}
+
+func TestSubmitGETNavigatesWithEncodedEntriesAndPushesHistory(t *testing.T) {
+	document := dom.NewDocument()
+	form := document.CreateElement("form", map[string]string{"action": "/search?old=1#fragment", "method": "get"})
+	query := document.CreateElement("input", map[string]string{"name": "q", "value": "hello world"})
+	tag := document.CreateElement("input", map[string]string{"name": "tag", "value": "go"})
+	submit := document.CreateElement("button", nil)
+	for _, edge := range [][2]*dom.Node{{document.Root, form}, {form, query}, {form, tag}, {form, submit}} {
+		if err := document.AppendChild(edge[0], edge[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	baseURL := mustParseURL(t, "https://example.com/form")
+	targetURL := mustParseURL(t, "https://example.com/search?q=hello+world&tag=go")
+	loader := &routeLoader{responses: map[string]*network.Response{
+		targetURL.String(): {URL: targetURL, StatusCode: 200, ContentType: "text/html", Body: []byte(`<!doctype html><title>Results</title>`)},
+	}}
+	browser := New(loader)
+	browser.SetPage(&Page{URL: baseURL, Document: document, ComputedStyles: style.Compute(document, nil), Events: events.NewDispatcher()})
+
+	page, err := browser.SubmitGET(context.Background(), form.ID, submit.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.URL.String() != targetURL.String() || !browser.CanBack() {
+		t.Fatalf("page=%s canBack=%v", page.URL, browser.CanBack())
+	}
+	if got := loader.requested; !reflect.DeepEqual(got, []string{targetURL.String()}) {
+		t.Fatalf("requested = %v", got)
+	}
+	if len(browser.history.entries) != 2 || browser.history.entries[0].String() != baseURL.String() {
+		t.Fatalf("history = %#v", browser.history.entries)
+	}
+}
+
+func TestSubmitPOSTSendsEncodedBodyAndNavigatesToResponse(t *testing.T) {
+	document := dom.NewDocument()
+	form := document.CreateElement("form", map[string]string{"action": "/save?mode=fast#fragment", "method": "post"})
+	input := document.CreateElement("input", map[string]string{"name": "message", "value": "hello world"})
+	for _, edge := range [][2]*dom.Node{{document.Root, form}, {form, input}} {
+		if err := document.AppendChild(edge[0], edge[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	baseURL := mustParseURL(t, "https://example.com/form")
+	targetURL := mustParseURL(t, "https://example.com/save?mode=fast")
+	finalURL := mustParseURL(t, "https://example.com/saved")
+	loader := &requestRouteLoader{routeLoader: routeLoader{responses: map[string]*network.Response{
+		targetURL.String(): {URL: finalURL, StatusCode: 200, ContentType: "text/html", Body: []byte(`<!doctype html><title>Saved</title>`)},
+	}}}
+	browser := New(loader)
+	browser.SetPage(&Page{URL: baseURL, Document: document, ComputedStyles: style.Compute(document, nil), Events: events.NewDispatcher()})
+
+	page, err := browser.SubmitPOST(context.Background(), form.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loader.request == nil || loader.request.Method != http.MethodPost || string(loader.request.Body) != "message=hello+world" ||
+		loader.request.Header.Get("Content-Type") != forms.URLEncoded {
+		t.Fatalf("request = %#v", loader.request)
+	}
+	if page.URL.String() != finalURL.String() || !browser.CanBack() {
+		t.Fatalf("page=%s canBack=%v", page.URL, browser.CanBack())
+	}
+}
+
+func TestSubmitHonorsValidationPreventDefaultAndNoValidate(t *testing.T) {
+	newBrowser := func(t *testing.T, formAttributes, buttonAttributes map[string]string) (*Browser, *routeLoader, *Page, *dom.Node, *dom.Node) {
+		t.Helper()
+		document := dom.NewDocument()
+		formAttributes["action"] = "/result"
+		form := document.CreateElement("form", formAttributes)
+		input := document.CreateElement("input", map[string]string{"name": "name", "required": ""})
+		button := document.CreateElement("button", buttonAttributes)
+		for _, edge := range [][2]*dom.Node{{document.Root, form}, {form, input}, {form, button}} {
+			if err := document.AppendChild(edge[0], edge[1]); err != nil {
+				t.Fatal(err)
+			}
+		}
+		baseURL := mustParseURL(t, "https://example.com/form")
+		targetURL := mustParseURL(t, "https://example.com/result?name=")
+		loader := &routeLoader{responses: map[string]*network.Response{
+			targetURL.String(): {URL: targetURL, StatusCode: 200, ContentType: "text/html", Body: []byte(`<!doctype html><title>Result</title>`)},
+		}}
+		page := &Page{URL: baseURL, Document: document, ComputedStyles: style.Compute(document, nil), Events: events.NewDispatcher()}
+		browser := New(loader)
+		browser.SetPage(page)
+		return browser, loader, page, form, button
+	}
+
+	browser, loader, page, form, button := newBrowser(t, map[string]string{}, map[string]string{})
+	if _, err := browser.Submit(context.Background(), form.ID, button.ID); !errors.Is(err, ErrFormValidation) || page.FocusTarget == 0 || len(loader.requested) != 0 {
+		t.Fatalf("validation err=%v focus=%d requests=%v", err, page.FocusTarget, loader.requested)
+	}
+
+	browser, loader, page, form, button = newBrowser(t, map[string]string{"novalidate": ""}, map[string]string{})
+	page.Events.AddEventListener(form.ID, events.Submit, func(event events.Event) { event.PreventDefault() })
+	if _, err := browser.Submit(context.Background(), form.ID, button.ID); !errors.Is(err, ErrSubmissionPrevented) || len(loader.requested) != 0 {
+		t.Fatalf("prevent err=%v requests=%v", err, loader.requested)
+	}
+
+	for name, attributes := range map[string]struct {
+		form   map[string]string
+		button map[string]string
+	}{
+		"novalidate":     {form: map[string]string{"novalidate": ""}, button: map[string]string{}},
+		"formnovalidate": {form: map[string]string{}, button: map[string]string{"formnovalidate": ""}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			browser, loader, _, form, button := newBrowser(t, attributes.form, attributes.button)
+			if _, err := browser.Submit(context.Background(), form.ID, button.ID); err != nil || len(loader.requested) != 1 {
+				t.Fatalf("submit err=%v requests=%v", err, loader.requested)
 			}
 		})
 	}

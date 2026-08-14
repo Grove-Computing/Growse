@@ -6,6 +6,7 @@ import (
 
 	dommodel "github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/events"
+	"github.com/Grove-Computing/Growse/internal/forms"
 )
 
 // API は1ページのDocumentへアクセスする。
@@ -25,11 +26,19 @@ type Element struct {
 
 // Event はWebGoへ公開するDOMイベント情報である。
 type Event struct {
-	Type     string
-	TargetID string
-	Value    string
-	X        float32
-	Y        float32
+	Type           string
+	TargetID       string
+	Value          string
+	X              float32
+	Y              float32
+	preventDefault func()
+}
+
+// PreventDefault cancels a cancelable browser default action such as form submission.
+func (event Event) PreventDefault() {
+	if event.preventDefault != nil {
+		event.preventDefault()
+	}
 }
 
 // New はDocumentに結び付いたDOM APIを生成する。
@@ -119,6 +128,36 @@ func (element *Element) OnSubmit(handler func(Event)) {
 		return
 	}
 	element.addEventListener(events.Submit, func(event events.Event) {
+		handler(element.publicEvent(event))
+	})
+}
+
+// OnReset はformのresetハンドラーを登録する。
+func (element *Element) OnReset(handler func(Event)) {
+	if handler == nil {
+		return
+	}
+	element.addEventListener(events.Reset, func(event events.Event) {
+		handler(element.publicEvent(event))
+	})
+}
+
+// OnFocus は要素がfocusを得たハンドラーを登録する。
+func (element *Element) OnFocus(handler func(Event)) {
+	if handler == nil {
+		return
+	}
+	element.addEventListener(events.Focus, func(event events.Event) {
+		handler(element.publicEvent(event))
+	})
+}
+
+// OnBlur は要素がfocusを失ったハンドラーを登録する。
+func (element *Element) OnBlur(handler func(Event)) {
+	if handler == nil {
+		return
+	}
+	element.addEventListener(events.Blur, func(event events.Event) {
 		handler(element.publicEvent(event))
 	})
 }
@@ -262,16 +301,37 @@ func (element *Element) Value() string {
 	if !ok {
 		return ""
 	}
-	value, _ := node.Attribute("value")
-	return value
+	return forms.CurrentValue(node)
 }
 
 // SetValue はテキストinputの現在値を変更する。
 func (element *Element) SetValue(value string) bool {
-	if _, ok := element.textInputNode(); !ok {
+	node, ok := element.textInputNode()
+	if !ok || forms.Disabled(node) || forms.ReadOnly(node) || !forms.SetCurrentValue(node, value) {
 		return false
 	}
-	return element.SetAttribute("value", value)
+	if element.onMutation != nil {
+		element.onMutation()
+	}
+	return true
+}
+
+// Reset restores this form's controls to their default state.
+func (element *Element) Reset() bool {
+	if element == nil || element.document == nil {
+		return false
+	}
+	node, ok := element.document.NodeByID(element.id)
+	if !ok || !forms.Reset(node) {
+		return false
+	}
+	if element.events != nil {
+		element.events.Dispatch(events.Event{Type: events.Reset, Target: node.ID})
+	}
+	if element.onMutation != nil {
+		element.onMutation()
+	}
+	return true
 }
 
 // Text は要素と子孫のテキストを返す。
@@ -308,11 +368,7 @@ func (element *Element) textInputNode() (*dommodel.Node, bool) {
 		return nil, false
 	}
 	node, ok := element.document.NodeByID(element.id)
-	if !ok || node.Type != dommodel.NodeElement || node.TagName != "input" {
-		return nil, false
-	}
-	typeValue, hasType := node.Attribute("type")
-	if hasType && !strings.EqualFold(strings.TrimSpace(typeValue), "text") {
+	if !ok || !forms.IsEditableTextControl(node) {
 		return nil, false
 	}
 	return node, true
@@ -332,6 +388,9 @@ func (element *Element) addEventListener(eventType events.Type, listener events.
 
 func (element *Element) publicEvent(event events.Event) Event {
 	result := Event{Type: string(event.Type), Value: event.Value, X: event.X, Y: event.Y}
+	if event.IsCancelable() {
+		result.preventDefault = event.PreventDefault
+	}
 	if element == nil || element.document == nil {
 		return result
 	}
@@ -340,8 +399,8 @@ func (element *Element) publicEvent(event events.Event) Event {
 		return result
 	}
 	result.TargetID, _ = node.Attribute("id")
-	if node.TagName == "input" {
-		result.Value, _ = node.Attribute("value")
+	if forms.IsEditableTextControl(node) {
+		result.Value = forms.CurrentValue(node)
 	}
 	return result
 }

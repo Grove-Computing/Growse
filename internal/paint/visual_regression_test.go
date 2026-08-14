@@ -143,6 +143,94 @@ func TestAnimationVisualRegressionAtSpecifiedTimestamp(t *testing.T) {
 	}
 }
 
+func TestV08FormControlsAndDataAppStatesVisualRegression(t *testing.T) {
+	document := dom.NewDocument()
+	app := document.CreateElement("main", map[string]string{"class": "data-app"})
+	if err := document.AppendChild(document.Root, app); err != nil {
+		t.Fatal(err)
+	}
+	form := document.CreateElement("form", map[string]string{"class": "controls"})
+	if err := document.AppendChild(app, form); err != nil {
+		t.Fatal(err)
+	}
+	controls := []map[string]string{
+		{"type": "text", "class": "normal", "value": "Growse"},
+		{"type": "text", "class": "focused", "value": "editing"},
+		{"type": "checkbox", "class": "checked", "checked": ""},
+		{"type": "text", "class": "disabled", "value": "disabled", "disabled": ""},
+		{"type": "email", "class": "invalid", "value": "invalid", "required": ""},
+	}
+	for _, attributes := range controls {
+		control := document.CreateElement("input", attributes)
+		if err := document.AppendChild(form, control); err != nil {
+			t.Fatal(err)
+		}
+	}
+	selectNode := document.CreateElement("select", map[string]string{"class": "selected"})
+	option := document.CreateElement("option", map[string]string{"selected": "", "value": "one"})
+	if err := document.AppendChild(form, selectNode); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(selectNode, option); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(option, document.CreateText("Selected")); err != nil {
+		t.Fatal(err)
+	}
+	for _, state := range []string{"loading", "success", "empty", "validation-error", "network-error"} {
+		card := document.CreateElement("section", map[string]string{"class": "state " + state})
+		if err := document.AppendChild(app, card); err != nil {
+			t.Fatal(err)
+		}
+		if err := document.AppendChild(card, document.CreateText(state)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stylesheet, err := css.Parse(strings.NewReader(`
+.data-app { display:block; width:288px; background-color:#f1f5f9; }
+.controls { display:flex; width:272px; height:72px; gap:4px; background-color:#ffffff; }
+.controls input, .controls select { width:40px; height:32px; background-color:#e2e8f0; color:#0f172a; }
+.controls .focused { background-color:#bfdbfe; }
+.controls .checked, .controls .selected { background-color:#86efac; }
+.controls .disabled { background-color:#cbd5e1; opacity:0.5; }
+.controls .invalid { background-color:#fecaca; }
+.state { display:block; width:272px; height:22px; color:#ffffff; }
+.loading { background-color:#3b82f6; }
+.success { background-color:#16a34a; }
+.empty { background-color:#64748b; }
+.validation-error { background-color:#f59e0b; }
+.network-error { background-color:#dc2626; }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := layout.BuildWithViewport(document, style.Compute(document, stylesheet), visualViewportWidth, visualViewportHeight)
+	list := Build(tree)
+	imageValue := rasterVisualFixture(t, list, visualViewportWidth, visualViewportHeight, visualScale)
+	hash := sha256.Sum256(imageValue.Pix)
+	snapshot := visualSnapshot{
+		Viewport: fmt.Sprintf("%dx%d", visualViewportWidth, visualViewportHeight), Scale: visualScale,
+		Font: "gofont/goregular@72dpi-hinting-none", PixelSHA: hex.EncodeToString(hash[:]),
+		Geometry: geometrySnapshot(tree), Display: displaySnapshot(list),
+	}
+	actual, err := json.MarshalIndent(snapshot, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	actual = append(actual, '\n')
+	want, err := os.ReadFile("testdata/v08-data-app.golden.json")
+	if err != nil {
+		t.Fatalf("read v0.8.0 visual golden: %v\n--- actual ---\n%s", err, actual)
+	}
+	wantSnapshot, err := decodeVisualSnapshot(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(snapshot, wantSnapshot) {
+		t.Fatalf("v0.8.0 Form/Data App visual snapshot changed\n--- actual ---\n%s", actual)
+	}
+}
+
 func animationHitSnapshot(tree *layout.Tree, x, y float32) string {
 	nodeID, ok := layout.HitTest(tree, x, y)
 	if !ok {

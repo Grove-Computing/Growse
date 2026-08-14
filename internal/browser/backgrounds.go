@@ -10,6 +10,7 @@ import (
 	"mime"
 	"net/url"
 
+	"github.com/Grove-Computing/Growse/internal/network"
 	"github.com/Grove-Computing/Growse/internal/style"
 )
 
@@ -42,21 +43,21 @@ func loadBackgroundImages(ctx context.Context, client ResourceLoader, computed s
 			}
 			response, err := client.Get(ctx, resourceURL)
 			if err != nil || response == nil {
-				errors = append(errors, "background image request failed: "+resourceURL.Redacted())
+				errors = append(errors, "background image request failed: "+network.RedactedURL(resourceURL))
 				continue
 			}
 			if len(response.Body) > maxBackgroundImageBytes || !isImageContentType(response.ContentType) {
-				errors = append(errors, "background image response was rejected: "+resourceURL.Redacted())
+				errors = append(errors, "background image response was rejected: "+network.RedactedURL(resourceURL))
 				continue
 			}
 			config, _, err := image.DecodeConfig(bytes.NewReader(response.Body))
 			if err != nil || config.Width <= 0 || config.Height <= 0 || config.Width > maxBackgroundImagePixels/config.Height {
-				errors = append(errors, "background image dimensions were rejected: "+resourceURL.Redacted())
+				errors = append(errors, "background image dimensions were rejected: "+network.RedactedURL(resourceURL))
 				continue
 			}
 			decoded, _, err := image.Decode(bytes.NewReader(response.Body))
 			if err != nil {
-				errors = append(errors, "background image decode failed: "+resourceURL.Redacted())
+				errors = append(errors, "background image decode failed: "+network.RedactedURL(resourceURL))
 				continue
 			}
 			images[background.URL] = decoded

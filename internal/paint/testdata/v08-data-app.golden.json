@@ -1,0 +1,41 @@
+{
+  "viewport": "320x240",
+  "scale": 1,
+  "font": "gofont/goregular@72dpi-hinting-none",
+  "pixel_sha256": "03967ba090308d3ae2ad5a5bc75ec54759c83b75fcc03cb7b3342793a5f81077",
+  "geometry": [
+    "box node=2 rect=32.0,32.0,288.0,182.0 stack=0",
+    "box node=3 rect=32.0,32.0,272.0,72.0 stack=0",
+    "box node=12 rect=32.0,104.0,272.0,22.0 stack=0",
+    "box node=14 rect=32.0,126.0,272.0,22.0 stack=0",
+    "box node=16 rect=32.0,148.0,272.0,22.0 stack=0",
+    "box node=18 rect=32.0,170.0,272.0,22.0 stack=0",
+    "box node=20 rect=32.0,192.0,272.0,22.0 stack=0",
+    "text node=4 rect=32.0,32.0,40.0,32.0 text=\"Growse\"",
+    "text node=5 rect=76.0,32.0,40.0,32.0 text=\"editing\"",
+    "text node=6 rect=120.0,32.0,40.0,32.0 text=\"\"",
+    "text node=7 rect=164.0,32.0,40.0,32.0 text=\"disabled\"",
+    "text node=8 rect=208.0,32.0,40.0,32.0 text=\"invalid\"",
+    "text node=9 rect=252.0,32.0,40.0,32.0 text=\"Selected\"",
+    "text node=12 rect=32.0,104.0,272.0,18.5 text=\"loading\"",
+    "text node=14 rect=32.0,126.0,272.0,18.5 text=\"success\"",
+    "text node=16 rect=32.0,148.0,272.0,18.5 text=\"empty\"",
+    "text node=18 rect=32.0,170.0,272.0,18.5 text=\"validation-error\"",
+    "text node=20 rect=32.0,192.0,272.0,18.5 text=\"network-error\""
+  ],
+  "display_list": [
+    "0 box node=2 rect=32.0,32.0,288.0,182.0 color=f1f5f9ff opacity=1.00 transform=1.000,0.000,0.000,1.000,0.000,0.000",
+    "1 box node=3 rect=32.0,32.0,272.0,72.0 color=ffffffff opacity=1.00 transform=1.000,0.000,0.000,1.000,0.000,0.000",
+    "8 box node=12 rect=32.0,104.0,272.0,22.0 color=3b82f6ff opacity=1.00 transform=1.000,0.000,0.000,1.000,0.000,0.000",
+    "9 text rect=32.0,104.0,272.0,18.5 color=ffffffff text=\"loading\"",
+    "10 box node=14 rect=32.0,126.0,272.0,22.0 color=16a34aff opacity=1.00 transform=1.000,0.000,0.000,1.000,0.000,0.000",
+    "11 text rect=32.0,126.0,272.0,18.5 color=ffffffff text=\"success\"",
+    "12 box node=16 rect=32.0,148.0,272.0,22.0 color=64748bff opacity=1.00 transform=1.000,0.000,0.000,1.000,0.000,0.000",
+    "13 text rect=32.0,148.0,272.0,18.5 color=ffffffff text=\"empty\"",
+    "14 box node=18 rect=32.0,170.0,272.0,22.0 color=f59e0bff opacity=1.00 transform=1.000,0.000,0.000,1.000,0.000,0.000",
+    "15 text rect=32.0,170.0,272.0,18.5 color=ffffffff text=\"validation-error\"",
+    "16 box node=20 rect=32.0,192.0,272.0,22.0 color=dc2626ff opacity=1.00 transform=1.000,0.000,0.000,1.000,0.000,0.000",
+    "17 text rect=32.0,192.0,272.0,18.5 color=ffffffff text=\"network-error\""
+  ],
+  "hit_testing": null
+}

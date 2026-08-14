@@ -251,6 +251,27 @@ func TestSetAttributeInitializesAttributeMap(t *testing.T) {
 	}
 }
 
+func TestRemoveAttributeUpdatesElementAndIDIndex(t *testing.T) {
+	document := NewDocument()
+	element := document.CreateElement("input", map[string]string{"id": "choice", "checked": ""})
+	if err := document.AppendChild(document.Root, element); err != nil {
+		t.Fatal(err)
+	}
+
+	if !document.RemoveAttribute(element.ID, "checked") {
+		t.Fatal("RemoveAttribute(checked) = false")
+	}
+	if _, exists := element.Attribute("checked"); exists || document.RemoveAttribute(element.ID, "checked") {
+		t.Fatal("checked attribute was not removed exactly once")
+	}
+	if !document.RemoveAttribute(element.ID, "id") {
+		t.Fatal("RemoveAttribute(id) = false")
+	}
+	if _, exists := document.GetElementByID("choice"); exists {
+		t.Fatal("removed id remained indexed")
+	}
+}
+
 func TestSetTextContentReplacesDescendantsAndIndexes(t *testing.T) {
 	document := NewDocument()
 	parent := document.CreateElement("p", map[string]string{"id": "message"})
