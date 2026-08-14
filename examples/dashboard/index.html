@@ -1,0 +1,62 @@
+<!doctype html>
+<html>
+<head>
+    <title>Growse Dashboard</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <main class="dashboard">
+        <aside class="sidebar">
+            <p class="version">Growse v0.6.0</p>
+            <h1>Overview</h1>
+            <nav class="navigation">
+                <a class="active">Dashboard</a>
+                <a>Layout</a>
+                <a>Paint</a>
+            </nav>
+        </aside>
+
+        <header class="topbar">
+            <div>
+                <p class="eyebrow">Workspace health</p>
+                <h2>Rendering dashboard</h2>
+            </div>
+            <span class="release">Release ready</span>
+        </header>
+
+        <section class="metrics">
+            <article class="metric accent">
+                <span class="metric-label">Grid tracks</span>
+                <strong>12</strong>
+            </article>
+            <article class="metric">
+                <span class="metric-label">Paint layers</span>
+                <strong>8</strong>
+            </article>
+            <article class="metric">
+                <span class="metric-label">Hit targets</span>
+                <strong>24</strong>
+            </article>
+        </section>
+
+        <section class="panel activity">
+            <h3>Frame activity</h3>
+            <div class="chart">
+                <span class="bar short"></span>
+                <span class="bar medium"></span>
+                <span class="bar tall"></span>
+                <span class="bar medium"></span>
+                <span class="bar peak"></span>
+            </div>
+        </section>
+
+        <section class="panel status-panel">
+            <span class="pulse"></span>
+            <h3>Pipeline</h3>
+            <div class="status-row"><span>Style</span><strong>Ready</strong></div>
+            <div class="status-row"><span>Layout</span><strong>Ready</strong></div>
+            <div class="status-row"><span>Paint</span><strong>Ready</strong></div>
+        </section>
+    </main>
+</body>
+</html>

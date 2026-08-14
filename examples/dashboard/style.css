@@ -1,0 +1,195 @@
+:root {
+    --ink: #172033;
+    --muted: #64748b;
+    --blue: #4263eb;
+    --panel: #ffffff;
+}
+
+body {
+    background-color: #e9eef7;
+    color: var(--ink);
+}
+
+.dashboard {
+    display: grid;
+    grid-template-columns: 190px minmax(0, 1fr);
+    grid-template-rows: auto auto minmax(220px, 1fr);
+    grid-template-areas:
+        "sidebar topbar"
+        "sidebar metrics"
+        "sidebar content";
+    gap: 18px;
+    width: calc(100% - 64px);
+    max-width: 980px;
+    min-height: 560px;
+    margin: 24px auto;
+    background-color: #e9eef7;
+}
+
+.sidebar {
+    grid-area: sidebar;
+    padding: 22px;
+    border-radius: 18px;
+    background-color: #172554;
+    background-image: linear-gradient(150deg, #172554 0%, #1e3a8a 55%, #2563eb 100%), radial-gradient(circle at left top, #38bdf8 0%, transparent 62%);
+    box-shadow: 0 16px 36px rgba(30, 58, 138, .28);
+    color: white;
+}
+
+.version, .eyebrow, .metric-label {
+    color: #bfdbfe;
+    font-size: 13px;
+}
+
+.navigation {
+    display: grid;
+    row-gap: 10px;
+    margin-top: 28px;
+}
+
+.navigation a {
+    padding: 10px 12px;
+    border-radius: 10px;
+    color: white;
+}
+
+.navigation .active {
+    background-color: rgba(255, 255, 255, .18);
+    outline: 1px solid rgba(255, 255, 255, .42);
+}
+
+.topbar {
+    grid-area: topbar;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 4px 2px;
+}
+
+.topbar h2, .topbar p {
+    margin: 0;
+}
+
+.release {
+    padding: 8px 12px;
+    border-radius: 14px;
+    background-color: #dcfce7;
+    color: #166534;
+    box-shadow: 0 5px 14px rgba(22, 101, 52, .16);
+    transform: rotate(-2deg);
+}
+
+.metrics {
+    grid-area: metrics;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(120px, 1fr));
+    gap: 14px;
+}
+
+.metric, .panel {
+    padding: 18px;
+    border: 1px solid #dbe4f0;
+    border-radius: 16px;
+    background-color: var(--panel);
+    box-shadow: 0 10px 24px rgba(15, 23, 42, .08);
+}
+
+.metric {
+    display: grid;
+    row-gap: 8px;
+}
+
+.metric-label {
+    color: var(--muted);
+}
+
+.metric strong {
+    font-size: 28px;
+}
+
+.metric.accent {
+    border-color: #93c5fd;
+    background-image: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
+}
+
+.activity {
+    grid-column: 2;
+    grid-row: 3;
+    margin-right: 240px;
+}
+
+.chart {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    align-items: end;
+    column-gap: 10px;
+    height: 150px;
+    margin-top: 18px;
+    padding: 12px;
+    border-radius: 12px;
+    background-color: #f1f5f9;
+    overflow: hidden;
+}
+
+.bar {
+    height: 45%;
+    border-radius: 8px 8px 2px 2px;
+    background-color: #60a5fa;
+}
+
+.bar.medium { height: 62%; }
+.bar.tall { height: 78%; }
+.bar.peak { height: 92%; background-color: #4263eb; }
+
+.status-panel {
+    position: relative;
+    grid-column: 2;
+    grid-row: 3;
+    justify-self: end;
+    width: 200px;
+    opacity: .96;
+}
+
+.pulse {
+    position: absolute;
+    top: 20px;
+    right: 20px;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background-color: #22c55e;
+    box-shadow: 0 0 0 5px rgba(34, 197, 94, .18);
+    transform: scale(1.08);
+    z-index: 2;
+}
+
+.status-row {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid #e2e8f0;
+}
+
+.status-row strong {
+    color: #15803d;
+}
+
+@media screen and (max-width: 720px) {
+    .dashboard {
+        grid-template-columns: 1fr;
+        grid-template-areas: "sidebar" "topbar" "metrics" "content";
+    }
+
+    .metrics {
+        grid-template-columns: 1fr;
+    }
+
+    .activity, .status-panel {
+        grid-column: 1;
+        grid-row: auto;
+        margin-right: 0;
+        width: auto;
+        justify-self: stretch;
+    }
+}
