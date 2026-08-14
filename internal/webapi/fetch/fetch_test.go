@@ -237,6 +237,9 @@ func TestCloseWaitsForCanceledFetchOperation(t *testing.T) {
 	default:
 		t.Fatal("Close returned before Fetch goroutine released its references")
 	}
+	if api.ctx != nil || api.baseURL != nil || api.do != nil || api.enqueue != nil {
+		t.Fatal("Close retained Fetch executor or Page references")
+	}
 	api.Fetch(Request{URL: "/ignored"}, nil, nil)
 }
 

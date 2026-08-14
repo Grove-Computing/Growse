@@ -750,11 +750,9 @@ func main() {
 	if runtime.HasAnimationFrameCallbacks() || runtime.RunAnimationFrame(time.Now()) {
 		t.Fatal("stopped runtime retained a frame callback")
 	}
-	if runtime.schedulerAPI == nil {
-		t.Fatal("scheduler API was not initialized")
-	}
-	if _, err := runtime.schedulerAPI.SetTimeout(0, func() {}); err == nil {
-		t.Fatal("stopped runtime scheduler accepted a new timer")
+	if runtime.interpreter != nil || runtime.runtimeCtx != nil || runtime.callbackQueue != nil || runtime.callbackDone != nil ||
+		runtime.fetchAPI != nil || runtime.navigationAPI != nil || runtime.schedulerAPI != nil {
+		t.Fatal("stopped Runtime retained Page-owned references")
 	}
 }
 

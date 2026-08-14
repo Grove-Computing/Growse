@@ -323,6 +323,18 @@ func (r *Runtime) Stop() error {
 	if done != nil {
 		<-done
 	}
+	r.executionMu.Lock()
+	r.mu.Lock()
+	r.interpreter = nil
+	r.runtimeCtx = nil
+	r.callbackQueue = nil
+	r.callbackDone = nil
+	r.fetchAPI = nil
+	r.navigationAPI = nil
+	r.schedulerAPI = nil
+	r.loaded = false
+	r.mu.Unlock()
+	r.executionMu.Unlock()
 	return nil
 }
 

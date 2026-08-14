@@ -582,6 +582,12 @@ func (b *Browser) Close() error {
 	if page != nil && page.Transitions != nil {
 		page.Transitions.Clear()
 	}
+	b.page = nil
+	b.client = nil
+	b.runtimeFactory = nil
+	b.onMutation = nil
+	b.history = newHistory()
+	b.storage = nil
 	b.mu.Unlock()
 	if activeRuntime != nil {
 		return activeRuntime.Stop()

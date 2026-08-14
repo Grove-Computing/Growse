@@ -81,6 +81,32 @@ func main() {
 	}
 }
 
+func TestBrowserCloseReleasesPageClientStorageAndRuntimeReferences(t *testing.T) {
+	pageURL := mustParseURL(t, "http://localhost/page")
+	runtime := &runtimeStub{}
+	browserState := NewWithRuntimeFactoryAndStorage(stubLoader{response: &network.Response{
+		URL: pageURL, StatusCode: 200, ContentType: "text/html",
+		Body: []byte(`<script type="text/go">package main; func main() {}</script><p>Page</p>`),
+	}}, func() runtimemodel.Runtime { return runtime }, storagecore.NewManager())
+	browserState.SetOnMutation(func() {})
+	if _, err := browserState.Navigate(context.Background(), pageURL.String()); err != nil {
+		t.Fatal(err)
+	}
+	if err := browserState.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if browserState.page != nil || browserState.client != nil || browserState.storage != nil || browserState.activeRuntime != nil ||
+		browserState.runtimeFactory != nil || browserState.onMutation != nil || len(browserState.history.entries) != 0 {
+		t.Fatal("Browser Close retained Page-owned references")
+	}
+	if runtime.stopCalls.Load() != 1 {
+		t.Fatalf("Runtime Stop calls = %d, want 1", runtime.stopCalls.Load())
+	}
+	if err := browserState.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func (runtime *runtimeStub) Load(_ context.Context, _ []runtimemodel.Script, environment runtimemodel.Environment) error {
 	runtime.loadCalls.Add(1)
 	runtime.environment = environment

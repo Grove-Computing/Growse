@@ -170,6 +170,12 @@ func (api *API) Close() {
 	api.closed = true
 	api.mu.Unlock()
 	api.active.Wait()
+	api.mu.Lock()
+	api.ctx = nil
+	api.baseURL = nil
+	api.do = nil
+	api.enqueue = nil
+	api.mu.Unlock()
 }
 
 func (api *API) deliver(callback func()) {
