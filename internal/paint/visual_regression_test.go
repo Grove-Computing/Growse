@@ -1,6 +1,7 @@
 package paint
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -9,6 +10,7 @@ import (
 	"image/color"
 	"image/draw"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -73,9 +75,37 @@ func TestDashboardVisualRegression(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(actual) != string(want) {
+	wantSnapshot, err := decodeVisualSnapshot(want)
+	if err != nil {
+		t.Fatalf("decode visual snapshot: %v", err)
+	}
+	if !reflect.DeepEqual(snapshot, wantSnapshot) {
 		t.Fatalf("visual snapshot changed; inspect the rendering difference before updating testdata/dashboard.golden.json\n--- actual ---\n%s", actual)
 	}
+}
+
+func TestVisualSnapshotGoldenAcceptsCRLF(t *testing.T) {
+	source, err := os.ReadFile("testdata/dashboard.golden.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	unixSnapshot, err := decodeVisualSnapshot(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	windowsSnapshot, err := decodeVisualSnapshot(bytes.ReplaceAll(source, []byte("\n"), []byte("\r\n")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(unixSnapshot, windowsSnapshot) {
+		t.Fatalf("CRLF changed visual snapshot: unix=%#v windows=%#v", unixSnapshot, windowsSnapshot)
+	}
+}
+
+func decodeVisualSnapshot(source []byte) (visualSnapshot, error) {
+	var snapshot visualSnapshot
+	err := json.Unmarshal(source, &snapshot)
+	return snapshot, err
 }
 
 func visualFixtureDocument(t *testing.T) (*dom.Document, map[string]dom.NodeID) {
