@@ -97,13 +97,7 @@ jobs:
           GOOS: ${{ matrix.goos }}
         run: |
           mkdir -p dist/package/examples
-          output="dist/package/growse"
-          ldflags="-s -w"
-          if [[ "$GOOS" == "windows" ]]; then
-            output="${output}.exe"
-            ldflags="$ldflags -H windowsgui"
-          fi
-          go build -trimpath -ldflags="$ldflags" -o "$output" ./cmd/growse
+          scripts/package-gui.sh dist/package "$RELEASE_TAG" "$GITHUB_RUN_NUMBER"
           cp README.md SECURITY.md LICENSE.md dist/package/
           cp -R examples/counter examples/todo examples/css3-core examples/flexbox examples/dashboard examples/animation examples/data-app dist/package/examples/
 

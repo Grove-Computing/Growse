@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+printf '%s\n' "$@" > "${GROWSE_TEST_POWERSHELL_RECORD:?}"
+printf 'C:\\Users\\test\\Start Menu\\Programs\\Growse.lnk\r\n'

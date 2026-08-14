@@ -25,6 +25,7 @@ actionlint:
 
 installer-test:
 	bash tests/install.sh
+	bash tests/install-platforms.sh
 
 release-test:
 	bash tests/release.sh

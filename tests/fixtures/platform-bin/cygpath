@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "${1:-}" != "-w" || $# -ne 2 ]]; then
+  echo "unexpected cygpath arguments: $*" >&2
+  exit 1
+fi
+printf 'WIN:%s\n' "$2"

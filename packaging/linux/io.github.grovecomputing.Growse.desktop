@@ -1,0 +1,15 @@
+[Desktop Entry]
+Version=1.5
+Type=Application
+Name=Growse
+GenericName=Web Browser
+GenericName[ja]=Webブラウザ
+Comment=Run Web applications with Go
+Comment[ja]=GoでWebアプリケーションを実行するブラウザ
+Exec=growse
+Icon=io.github.grovecomputing.Growse
+Terminal=false
+Categories=Network;WebBrowser;
+Keywords=Go;Web;Browser;
+StartupNotify=false
+StartupWMClass=io.github.grovecomputing.Growse
