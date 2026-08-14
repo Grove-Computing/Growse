@@ -1,0 +1,14 @@
+@keyframes loading-pulse {
+  0% { opacity: 0.45; }
+  100% { opacity: 1; }
+}
+
+.app { display: block; width: 320px; background-color: #f8fafc; }
+#status { color: #ffffff; background-color: #3b82f6; }
+#status.loading { animation: 700ms ease-in-out infinite alternate loading-pulse; }
+#status.success { background-color: #16a34a; }
+#status.network-error { background-color: #dc2626; }
+#items.empty { color: #64748b; }
+#items.success { color: #166534; }
+form { display: flex; gap: 8px; }
+input:invalid { background-color: #fecaca; }
