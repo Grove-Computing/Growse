@@ -20,6 +20,7 @@ import (
 	consoleapi "github.com/Grove-Computing/Growse/internal/webapi/console"
 	domapi "github.com/Grove-Computing/Growse/internal/webapi/dom"
 	fetchapi "github.com/Grove-Computing/Growse/internal/webapi/fetch"
+	navigationapi "github.com/Grove-Computing/Growse/internal/webapi/navigation"
 	schedulerapi "github.com/Grove-Computing/Growse/internal/webapi/scheduler"
 	strconvapi "github.com/Grove-Computing/Growse/internal/webapi/strconv"
 	"github.com/traefik/yaegi/interp"
@@ -94,6 +95,7 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 	console := consoleapi.New(environment.ConsoleLog)
 	dom := domapi.New(environment.Document, environment.Events, environment.OnMutation)
 	fetch := fetchapi.NewPage(r.runtimeCtx, environment.BaseURL, environment.Fetch, r.enqueueCallback)
+	navigation := navigationapi.New(environment.BaseURL)
 	r.fetchAPI = fetch
 	scheduler := schedulerapi.NewPage(r.runtimeCtx, r.enqueueCallback, environment.RequestFrame)
 	scheduler.SetFrameScope(environment.FrameScope)
@@ -118,6 +120,10 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 			"Header":                reflect.ValueOf((*fetchapi.Header)(nil)),
 			"Request":               reflect.ValueOf((*fetchapi.Request)(nil)),
 			"Response":              reflect.ValueOf((*fetchapi.Response)(nil)),
+		},
+		"growse/navigation/navigation": {
+			"Current":  reflect.ValueOf(navigation.Current),
+			"Location": reflect.ValueOf((*navigationapi.Location)(nil)),
 		},
 		"growse/scheduler/scheduler": {
 			"CancelAnimationFrame":  reflect.ValueOf(scheduler.CancelAnimationFrame),

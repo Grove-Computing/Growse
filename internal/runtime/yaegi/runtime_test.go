@@ -228,6 +228,45 @@ func main() {
 	}
 }
 
+func TestRuntimeExposesCurrentNavigationLocation(t *testing.T) {
+	runtime := New()
+	scripts := []runtimemodel.Script{{Source: `package main
+import "growse/navigation"
+var Href string
+var Origin string
+var Path string
+var Query string
+var Fragment string
+func main() {
+	current := navigation.Current()
+	Href = current.Href
+	Origin = current.Origin
+	Path = current.Path
+	Query = current.Query
+	Fragment = current.Fragment
+}`}}
+	documentURL, err := url.Parse("https://example.test:8443/notes/today?filter=open#second")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Load(context.Background(), scripts, runtimemodel.Environment{BaseURL: documentURL}); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	symbols := runtime.interpreter.Symbols("page")["page"]
+	for name, want := range map[string]string{
+		"Href":   "https://example.test:8443/notes/today?filter=open#second",
+		"Origin": "https://example.test:8443", "Path": "/notes/today",
+		"Query": "filter=open", "Fragment": "second",
+	} {
+		if got := symbols[name].String(); got != want {
+			t.Fatalf("%s = %q, want %q", name, got, want)
+		}
+	}
+}
+
 func TestRuntimeFetchSendsMethodRelativeURLHeadersAndTextBody(t *testing.T) {
 	runtime := New()
 	var captured *network.Request
