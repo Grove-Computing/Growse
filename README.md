@@ -167,7 +167,7 @@ make ci
 - govulncheck
 - Installer、Release成果物、Docker、文書の検証
 
-Go ModulesとGitHub Actionsの依存関係は、Dependabotで週次確認します。
+Go Modules、GitHub Actions、Docker base imageの依存関係は、Dependabotで週次確認します。Pull Requestでは追加されたHigh/Criticalの既知脆弱性をDependency Reviewで遮断します。
 
 ## セキュリティ
 
@@ -177,7 +177,7 @@ GrowseとWebGo Runtimeは、信頼できないGoコードを安全に実行す�
 
 ## リリース成果物
 
-`v0.8.0`のようなVersion tagをpushすると、GitHub Actionsが次の成果物とSHA-256 checksumをGitHub Releaseへ公開します。
+`v0.8.0`のようなVersion tagをpushすると、GitHub Actionsが次の成果物、SHA-256 checksum、SPDX JSON SBOMをGitHub Releaseへ公開します。ArchiveとSBOMにはGitHub Artifact Attestation、Docker imageにはBuildKitのSBOMとSLSA Provenanceを付与します。
 
 - Linux amd64
 - macOS Intel
@@ -186,6 +186,8 @@ GrowseとWebGo Runtimeは、信頼できないGoコードを安全に実行す�
 - Linux amd64 Docker imageのVersion tagと`latest` tag
 
 Archiveには、Growse本体とすべてのDemoを同梱します。Gopher cursor imageは実行ファイルへ埋め込まれるため、別途assetを配置する必要はありません。
+
+checksum、SBOM、Provenanceを使った成果物の検証手順は、[SECURITY.mdのSupply Chain Security](SECURITY.md#supply-chain-security)を参照してください。
 
 ## Go Gopherのクレジット
 

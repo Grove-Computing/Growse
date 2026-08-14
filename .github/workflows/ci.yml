@@ -71,6 +71,9 @@ jobs:
       - name: Validate Docker release
         run: bash tests/docker.sh
 
+      - name: Validate supply chain security
+        run: bash tests/supply-chain.sh
+
       - name: Validate v0.8.0 documentation
         run: bash tests/docs.sh
 

@@ -10,8 +10,8 @@ require_file_value() {
     fi
 }
 
-require_file_value Dockerfile "FROM golang:1.26-bookworm AS build"
-require_file_value Dockerfile "FROM ubuntu:24.04"
+require_file_value Dockerfile "FROM golang:1.26-bookworm@sha256:"
+require_file_value Dockerfile "FROM ubuntu:24.04@sha256:"
 require_file_value Dockerfile "go build -trimpath"
 require_file_value Dockerfile "https://deb.debian.org"
 require_file_value Dockerfile "https://archive.ubuntu.com"
@@ -24,8 +24,18 @@ require_file_value .dockerignore "dist"
 
 workflow=.github/workflows/release.yml
 require_file_value "$workflow" "needs: build"
-require_file_value "$workflow" 'org.opencontainers.image.version=$RELEASE_TAG'
-require_file_value "$workflow" 'docker push "$IMAGE_NAME:$RELEASE_TAG"'
-require_file_value "$workflow" 'docker push "$IMAGE_NAME:latest"'
+require_file_value "$workflow" "docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c"
+require_file_value "$workflow" "docker/login-action@dbcb813823bdd20940b903addbd779551569679fd"
+require_file_value "$workflow" "docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a"
+require_file_value "$workflow" "push: true"
+require_file_value "$workflow" "sbom: true"
+require_file_value "$workflow" "provenance: mode=max"
+require_file_value "$workflow" 'org.opencontainers.image.version=${{ env.RELEASE_TAG }}'
+require_file_value "$workflow" 'image: ${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}'
+require_file_value "$workflow" "severity-cutoff: high"
+require_file_value "$workflow" "fail-build: true"
+require_file_value "$workflow" "Promote verified image tags by digest"
+require_file_value "$workflow" '"$IMAGE_NAME@${{ steps.build.outputs.digest }}"'
+require_file_value "$workflow" "push-to-registry: true"
 
-echo "Docker release検証成功: multi-stage image, release tag, latest tag"
+echo "Docker release検証成功: pinned base, digest scan, SBOM, provenance"
