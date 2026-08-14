@@ -2,6 +2,7 @@
 package navigation
 
 import (
+	"encoding/json"
 	"errors"
 	"net/url"
 	"strings"
@@ -10,7 +11,10 @@ import (
 	"github.com/Grove-Computing/Growse/internal/network"
 )
 
-const maxURLBytes = 8192
+const (
+	maxURLBytes         = 8192
+	MaxHistoryStateSize = 64 * 1024
+)
 
 var (
 	// ErrInvalidURL はNavigation対象として扱えないURLを表す。
@@ -35,10 +39,21 @@ type Location struct {
 
 // API は1つのPageに属するNavigation APIである。
 type API struct {
-	mu       sync.RWMutex
-	base     *url.URL
-	current  Location
-	navigate func(*url.URL) error
+	mu        sync.RWMutex
+	base      *url.URL
+	current   Location
+	navigate  func(*url.URL) error
+	pushState func(string, *url.URL) error
+}
+
+// SetPushStateHandler はsame-document History entryの追加先を設定する。
+func (api *API) SetPushStateHandler(handler func(string, *url.URL) error) {
+	if api == nil {
+		return
+	}
+	api.mu.Lock()
+	api.pushState = handler
+	api.mu.Unlock()
 }
 
 // New はDocument URLを読み取り専用のWebGo APIへ変換する。
@@ -71,6 +86,45 @@ func (api *API) Navigate(rawURL string) error {
 		return ErrUnavailable
 	}
 	return api.navigate(target)
+}
+
+// PushState はJSON stateとsame-origin URLを新しいHistory entryへ追加する。
+func (api *API) PushState(stateJSON, rawURL string) error {
+	if len(stateJSON) == 0 || len(stateJSON) > MaxHistoryStateSize || !json.Valid([]byte(stateJSON)) {
+		return errors.New("invalid history state")
+	}
+	target, err := api.resolveHistoryURL(rawURL)
+	if err != nil {
+		return err
+	}
+	api.mu.RLock()
+	handler := api.pushState
+	api.mu.RUnlock()
+	if handler == nil {
+		return ErrUnavailable
+	}
+	if err := handler(stateJSON, target); err != nil {
+		return err
+	}
+	api.UpdateCurrent(target)
+	return nil
+}
+
+func (api *API) resolveHistoryURL(rawURL string) (*url.URL, error) {
+	api.mu.RLock()
+	base := cloneURL(api.base)
+	api.mu.RUnlock()
+	if base == nil {
+		return nil, ErrInvalidURL
+	}
+	if rawURL == "" {
+		return base, nil
+	}
+	target, err := api.resolve(rawURL)
+	if err != nil || !network.SameOrigin(base, target) {
+		return nil, ErrInvalidURL
+	}
+	return target, nil
 }
 
 func (api *API) resolve(rawURL string) (*url.URL, error) {

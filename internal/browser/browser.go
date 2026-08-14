@@ -54,6 +54,7 @@ type Browser struct {
 	activeRuntime  runtimemodel.Runtime
 	onMutation     func()
 	navigationID   uint64
+	nextPageID     uint64
 	history        history
 	clock          animationmodel.Clock
 	reducedMotion  bool
@@ -513,7 +514,10 @@ func (b *Browser) SetPage(page *Page) {
 	if page == nil {
 		b.history = newHistory()
 	} else {
-		b.history.reset(page.URL)
+		b.nextPageID++
+		page.HistoryID = b.nextPageID
+		b.history = newHistory()
+		b.history.pushEntry(&historyEntry{URL: page.URL, PageID: page.HistoryID})
 	}
 	b.mu.Unlock()
 	if activeRuntime != nil {
@@ -907,6 +911,8 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 			b.navigateFromRuntime(page, resolved)
 		}()
 		return nil
+	}, func(state string, target *url.URL) error {
+		return b.pushHistoryState(page, target, state)
 	})
 	if err := ctx.Err(); err != nil {
 		close(navigationReady)
@@ -930,6 +936,8 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	}
 	previousRuntime := b.activeRuntime
 	previousPage := b.page
+	b.nextPageID++
+	page.HistoryID = b.nextPageID
 	b.activeRuntime = pageRuntime
 	b.page = page
 	if previousPage != nil && previousPage != page && previousPage.Animations != nil {
@@ -940,13 +948,18 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	}
 	switch commit {
 	case historyPush:
-		b.history.push(page.URL)
+		b.history.pushEntry(&historyEntry{URL: page.URL, PageID: page.HistoryID})
 	case historyTraverse:
 		b.history.index = historyIndex
-		b.history.replace(page.URL)
+		b.history.replaceEntry(&historyEntry{URL: page.URL, PageID: page.HistoryID})
 	case historyReplace:
 		b.history.index = historyIndex
-		b.history.replace(page.URL)
+		current, _ := b.history.current()
+		state := ""
+		if current != nil {
+			state = current.State
+		}
+		b.history.replaceEntry(&historyEntry{URL: page.URL, State: state, PageID: page.HistoryID})
 	}
 	b.mu.Unlock()
 	close(navigationReady)
@@ -990,7 +1003,7 @@ func (b *Browser) commitFragmentNavigation(target *url.URL) (*Page, bool) {
 		return nil, false
 	}
 	page.URL = cloneURL(target)
-	b.history.push(target)
+	b.history.pushEntry(&historyEntry{URL: target, SameDocument: true, PageID: page.HistoryID})
 	activeRuntime := b.activeRuntime
 	onMutation := b.onMutation
 	b.mu.Unlock()
@@ -1014,7 +1027,33 @@ func fragmentOnlyChange(current, target *url.URL) bool {
 	return left.String() == right.String()
 }
 
-func startRuntime(ctx context.Context, factory runtimemodel.Factory, page *Page, client ResourceLoader, onMutation func(), now func() time.Time, navigate func(*url.URL) error) runtimemodel.Runtime {
+func (b *Browser) pushHistoryState(source *Page, target *url.URL, state string) error {
+	b.mu.Lock()
+	if source == nil || b.page != source || source.URL == nil || target == nil {
+		b.mu.Unlock()
+		return errors.New("history is unavailable")
+	}
+	if target.User != nil || !network.SameOrigin(source.URL, target) {
+		b.mu.Unlock()
+		return errors.New("history URL is not same-origin")
+	}
+	source.URL = cloneURL(target)
+	b.history.pushEntry(&historyEntry{
+		URL: target, State: state, SameDocument: true, PageID: source.HistoryID,
+	})
+	activeRuntime := b.activeRuntime
+	onMutation := b.onMutation
+	b.mu.Unlock()
+	if updater, ok := activeRuntime.(runtimemodel.LocationUpdater); ok {
+		updater.UpdateLocation(target)
+	}
+	if onMutation != nil {
+		onMutation()
+	}
+	return nil
+}
+
+func startRuntime(ctx context.Context, factory runtimemodel.Factory, page *Page, client ResourceLoader, onMutation func(), now func() time.Time, navigate func(*url.URL) error, historyPush func(string, *url.URL) error) runtimemodel.Runtime {
 	if factory == nil || page == nil || len(page.Scripts) == 0 {
 		return nil
 	}
@@ -1051,10 +1090,11 @@ func startRuntime(ctx context.Context, factory runtimemodel.Factory, page *Page,
 		return now()
 	}
 	environment := runtimemodel.Environment{
-		Document: page.Document,
-		Events:   page.Events,
-		BaseURL:  cloneURL(page.URL),
-		Navigate: navigate,
+		Document:    page.Document,
+		Events:      page.Events,
+		BaseURL:     cloneURL(page.URL),
+		Navigate:    navigate,
+		HistoryPush: historyPush,
 		OnMutation: func() {
 			page.HoverPath = hoverPath(page.Document, page.HoverTarget)
 			if len(page.HoverPath) == 0 {

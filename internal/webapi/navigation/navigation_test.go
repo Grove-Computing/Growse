@@ -100,3 +100,34 @@ func TestUpdateCurrentChangesLocationAndResolutionBase(t *testing.T) {
 		t.Fatalf("Resolve().Href = %q, want %q", got, want)
 	}
 }
+
+func TestPushStateValidatesJSONAndSameOriginBeforeAddingEntry(t *testing.T) {
+	base, _ := url.Parse("https://example.test/app/index.html")
+	api := New(base)
+	var gotState string
+	var gotURL *url.URL
+	api.SetPushStateHandler(func(state string, target *url.URL) error {
+		gotState, gotURL = state, target
+		return nil
+	})
+
+	if err := api.PushState(`{"note":7}`, "../notes/7?mode=edit"); err != nil {
+		t.Fatalf("PushState() error = %v", err)
+	}
+	if gotState != `{"note":7}` || gotURL == nil || gotURL.String() != "https://example.test/notes/7?mode=edit" {
+		t.Fatalf("history entry = (%q, %v)", gotState, gotURL)
+	}
+	if got := api.Current().Href; got != gotURL.String() {
+		t.Fatalf("Current().Href = %q, want %q", got, gotURL)
+	}
+
+	for _, test := range []struct{ state, rawURL string }{
+		{state: `{`, rawURL: "/bad-json"},
+		{state: `null`, rawURL: "https://other.test/cross-origin"},
+		{state: `null`, rawURL: "https://user:secret@example.test/private"},
+	} {
+		if err := api.PushState(test.state, test.rawURL); err == nil {
+			t.Errorf("PushState(%q, %q) error = nil", test.state, test.rawURL)
+		}
+	}
+}

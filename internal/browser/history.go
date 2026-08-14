@@ -2,8 +2,33 @@ package browser
 
 import "net/url"
 
+type historyEntry struct {
+	URL          *url.URL
+	State        string
+	SameDocument bool
+	PageID       uint64
+	ScrollX      float32
+	ScrollY      float32
+}
+
+func (entry *historyEntry) String() string {
+	if entry == nil || entry.URL == nil {
+		return ""
+	}
+	return entry.URL.String()
+}
+
+func cloneHistoryEntry(source *historyEntry) *historyEntry {
+	if source == nil {
+		return nil
+	}
+	copy := *source
+	copy.URL = cloneURL(source.URL)
+	return &copy
+}
+
 type history struct {
-	entries []*url.URL
+	entries []*historyEntry
 	index   int
 }
 
@@ -12,13 +37,17 @@ func newHistory() history {
 }
 
 func (h *history) push(entry *url.URL) {
-	if entry == nil {
+	h.pushEntry(&historyEntry{URL: entry})
+}
+
+func (h *history) pushEntry(entry *historyEntry) {
+	if entry == nil || entry.URL == nil {
 		return
 	}
 	if h.index+1 < len(h.entries) {
 		h.entries = h.entries[:h.index+1]
 	}
-	h.entries = append(h.entries, cloneURL(entry))
+	h.entries = append(h.entries, cloneHistoryEntry(entry))
 	h.index = len(h.entries) - 1
 }
 
@@ -30,15 +59,41 @@ func (h *history) replace(entry *url.URL) {
 		h.push(entry)
 		return
 	}
-	h.entries[h.index] = cloneURL(entry)
+	h.entries[h.index].URL = cloneURL(entry)
+}
+
+func (h *history) replaceEntry(entry *historyEntry) {
+	if entry == nil || entry.URL == nil {
+		return
+	}
+	if h.index < 0 || h.index >= len(h.entries) {
+		h.pushEntry(entry)
+		return
+	}
+	h.entries[h.index] = cloneHistoryEntry(entry)
 }
 
 func (h *history) target(delta int) (*url.URL, int, bool) {
+	entry, index, ok := h.targetEntry(delta)
+	if !ok {
+		return nil, h.index, false
+	}
+	return cloneURL(entry.URL), index, true
+}
+
+func (h *history) targetEntry(delta int) (*historyEntry, int, bool) {
 	index := h.index + delta
 	if index < 0 || index >= len(h.entries) {
 		return nil, h.index, false
 	}
-	return cloneURL(h.entries[index]), index, true
+	return cloneHistoryEntry(h.entries[index]), index, true
+}
+
+func (h *history) current() (*historyEntry, bool) {
+	if h.index < 0 || h.index >= len(h.entries) {
+		return nil, false
+	}
+	return cloneHistoryEntry(h.entries[h.index]), true
 }
 
 func (h *history) canBack() bool {

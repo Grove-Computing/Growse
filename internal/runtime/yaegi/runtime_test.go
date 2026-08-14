@@ -304,6 +304,38 @@ func main() {
 	}
 }
 
+func TestRuntimePushesJSONHistoryState(t *testing.T) {
+	runtime := New()
+	scripts := []runtimemodel.Script{{Source: `package main
+import "growse/navigation"
+var Failure string
+func main() {
+	if err := navigation.PushState("{\"view\":\"detail\"}", "/notes/9"); err != nil { Failure = err.Error() }
+}`}}
+	baseURL, _ := url.Parse("http://localhost/notes")
+	var state string
+	var target *url.URL
+	environment := runtimemodel.Environment{
+		BaseURL: baseURL,
+		HistoryPush: func(gotState string, gotTarget *url.URL) error {
+			state, target = gotState, gotTarget
+			return nil
+		},
+	}
+	if err := runtime.Load(context.Background(), scripts, environment); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := runtime.interpreter.Symbols("page")["page"]["Failure"].String(); got != "" {
+		t.Fatalf("Failure = %q", got)
+	}
+	if state != `{"view":"detail"}` || target == nil || target.String() != "http://localhost/notes/9" {
+		t.Fatalf("HistoryPush = (%q, %v)", state, target)
+	}
+}
+
 func TestRuntimeFetchSendsMethodRelativeURLHeadersAndTextBody(t *testing.T) {
 	runtime := New()
 	var captured *network.Request
