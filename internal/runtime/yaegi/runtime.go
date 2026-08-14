@@ -24,12 +24,16 @@ import (
 
 // Runtime は1ページ専用のYaegiインタープリターである。
 type Runtime struct {
-	mu          sync.Mutex
-	interpreter *interp.Interpreter
-	cancel      context.CancelFunc
-	loaded      bool
-	started     bool
-	stopped     bool
+	mu            sync.Mutex
+	executionMu   sync.Mutex
+	interpreter   *interp.Interpreter
+	cancel        context.CancelFunc
+	runtimeCtx    context.Context
+	callbackQueue chan func()
+	callbackDone  chan struct{}
+	loaded        bool
+	started       bool
+	stopped       bool
 }
 
 // New は未ロードのYaegi Runtimeを生成する。
@@ -78,9 +82,13 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 		return errors.New("runtime already stopped")
 	}
 	r.interpreter = interp.New(interp.Options{GoPath: ".", SourcecodeFilesystem: portableFS{FS: files}})
+	r.runtimeCtx, r.cancel = context.WithCancel(ctx)
+	r.callbackQueue = make(chan func(), 32)
+	r.callbackDone = make(chan struct{})
+	go r.runCallbacks(r.runtimeCtx, r.callbackQueue, r.callbackDone)
 	console := consoleapi.New(environment.ConsoleLog)
 	dom := domapi.New(environment.Document, environment.Events, environment.OnMutation)
-	fetch := fetchapi.New(environment.BaseURL, environment.Fetch)
+	fetch := fetchapi.NewPage(r.runtimeCtx, environment.BaseURL, environment.Fetch, r.enqueueCallback)
 	if err := r.interpreter.Use(interp.Exports{
 		"growse/console/console": {
 			"Log": reflect.ValueOf(console.Log),
@@ -119,6 +127,9 @@ func (filesystem portableFS) Open(name string) (fs.File, error) {
 
 // Start はロード済みの全ファイルを評価し、main.mainを一度呼び出す。
 func (r *Runtime) Start(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	r.mu.Lock()
 	if !r.loaded || r.interpreter == nil {
 		r.mu.Unlock()
@@ -132,20 +143,14 @@ func (r *Runtime) Start(ctx context.Context) error {
 		r.mu.Unlock()
 		return errors.New("runtime already stopped")
 	}
-	runtimeContext, cancel := context.WithCancel(ctx)
-	r.cancel = cancel
 	r.started = true
 	interpreter := r.interpreter
+	runtimeContext := r.runtimeCtx
 	r.mu.Unlock()
 
+	r.executionMu.Lock()
 	_, err := interpreter.EvalPathWithContext(runtimeContext, "page")
-
-	r.mu.Lock()
-	if r.cancel != nil {
-		r.cancel()
-		r.cancel = nil
-	}
-	r.mu.Unlock()
+	r.executionMu.Unlock()
 	if err != nil {
 		return fmt.Errorf("execute Go scripts: %w", err)
 	}
@@ -158,11 +163,49 @@ func (r *Runtime) Stop() error {
 	cancel := r.cancel
 	r.cancel = nil
 	r.stopped = true
+	done := r.callbackDone
 	r.mu.Unlock()
 	if cancel != nil {
 		cancel()
 	}
+	if done != nil {
+		<-done
+	}
 	return nil
+}
+
+func (r *Runtime) enqueueCallback(callback func()) bool {
+	r.mu.Lock()
+	ctx := r.runtimeCtx
+	queue := r.callbackQueue
+	stopped := r.stopped
+	r.mu.Unlock()
+	if callback == nil || ctx == nil || queue == nil || stopped {
+		return false
+	}
+	select {
+	case queue <- callback:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+func (r *Runtime) runCallbacks(ctx context.Context, queue <-chan func(), done chan<- struct{}) {
+	defer close(done)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case callback := <-queue:
+			if callback == nil {
+				continue
+			}
+			r.executionMu.Lock()
+			callback()
+			r.executionMu.Unlock()
+		}
+	}
 }
 
 func scriptName(script runtimemodel.Script, fallback string) string {

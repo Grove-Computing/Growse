@@ -84,27 +84,60 @@ func (response Response) consumeBody() ([]byte, error) {
 
 // API binds WebGo Fetch calls to one page URL and network executor.
 type API struct {
+	ctx     context.Context
 	baseURL *url.URL
 	do      func(context.Context, *network.Request) (*network.Response, error)
+	enqueue func(func()) bool
 }
 
 // New creates a page-scoped Fetch API.
 func New(baseURL *url.URL, do func(context.Context, *network.Request) (*network.Response, error)) *API {
-	return &API{baseURL: cloneURL(baseURL), do: do}
+	return NewPage(context.Background(), baseURL, do, func(callback func()) bool {
+		callback()
+		return true
+	})
 }
 
-// Fetch sends request and invokes exactly one callback before returning.
+// NewPage creates an asynchronous Fetch API bound to a page callback queue.
+func NewPage(ctx context.Context, baseURL *url.URL, do func(context.Context, *network.Request) (*network.Response, error), enqueue func(func()) bool) *API {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return &API{ctx: ctx, baseURL: cloneURL(baseURL), do: do, enqueue: enqueue}
+}
+
+// Fetch starts request asynchronously and delivers exactly one callback.
 func (api *API) Fetch(request Request, success func(Response), failure func(string)) {
-	response, err := api.fetch(context.Background(), request)
+	networkRequest, err := api.prepare(request)
 	if err != nil {
-		if failure != nil {
-			failure(err.Error())
-		}
+		api.deliver(func() {
+			if failure != nil {
+				failure(err.Error())
+			}
+		})
 		return
 	}
-	if success != nil {
-		success(newResponse(response))
+	go func() {
+		response, fetchError := api.do(api.ctx, networkRequest)
+		api.deliver(func() {
+			if fetchError != nil {
+				if failure != nil {
+					failure(fetchError.Error())
+				}
+				return
+			}
+			if success != nil {
+				success(newResponse(response))
+			}
+		})
+	}()
+}
+
+func (api *API) deliver(callback func()) {
+	if api == nil || callback == nil || api.enqueue == nil {
+		return
 	}
+	api.enqueue(callback)
 }
 
 func newResponse(response *network.Response) Response {
@@ -130,6 +163,14 @@ func newResponse(response *network.Response) Response {
 }
 
 func (api *API) fetch(ctx context.Context, request Request) (*network.Response, error) {
+	networkRequest, err := api.prepare(request)
+	if err != nil {
+		return nil, err
+	}
+	return api.do(ctx, networkRequest)
+}
+
+func (api *API) prepare(request Request) (*network.Request, error) {
 	if api == nil || api.do == nil {
 		return nil, errors.New("Fetch is not configured")
 	}
@@ -178,12 +219,12 @@ func (api *API) fetch(ctx context.Context, request Request) (*network.Response, 
 		}
 		header[name] = append([]string(nil), values...)
 	}
-	return api.do(ctx, &network.Request{
+	return &network.Request{
 		Method: method,
 		URL:    resolved,
 		Header: header,
 		Body:   body,
-	})
+	}, nil
 }
 
 func allowedMethod(method string) bool {

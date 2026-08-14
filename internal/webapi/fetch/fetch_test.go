@@ -22,10 +22,11 @@ func TestFetchResponseMetadataAndBodyHelpers(t *testing.T) {
 		}, nil
 	})
 
-	var response Response
-	api.Fetch(Request{URL: "/data"}, func(result Response) { response = result }, func(message string) {
+	responses := make(chan Response, 1)
+	api.Fetch(Request{URL: "/data"}, func(result Response) { responses <- result }, func(message string) {
 		t.Fatalf("Fetch failure = %q", message)
 	})
+	response := <-responses
 	if response.Status != http.StatusCreated || response.StatusText != "Created" {
 		t.Fatalf("status = %d %q", response.Status, response.StatusText)
 	}
