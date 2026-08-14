@@ -1,6 +1,6 @@
 # CSS対応表
 
-この表はGrowse v0.6.0の実装を基準とする。「部分対応」は一般的な値を扱えるが、仕様全体を実装していない機能を表す。
+この表はGrowse v0.7.0の実装を基準とする。「部分対応」は一般的な値を扱えるが、仕様全体を実装していない機能を表す。
 
 ## SelectorとCascade
 
@@ -25,8 +25,9 @@
 | Relative Length | 対応 | `em`、`rem`、`ex`、`ch`、`vw`、`vh`、`vmin`、`vmax`、percentage |
 | `calc()` | 対応 | Length/Percentageの四則演算。非互換Dimension、ゼロ除算、非有限値は無効 |
 | CSS Color Level 3 | 対応 | Named Color、hex、rgb(a)、hsl(a)、`transparent`、`currentColor` |
-| Media Query | 部分対応 | `all`、`screen`、width/height、orientation、resolution、color scheme、hover、pointer |
+| Media Query | 部分対応 | `all`、`screen`、width/height、orientation、resolution、color scheme、hover、pointer、`prefers-reduced-motion` |
 | `@import` | 部分対応 | Stylesheet先頭の同一Origin HTTP(S)だけ。循環・深度・件数・サイズ制限あり |
+| `@keyframes` | 対応 | from/to、percentage、複数selector、同一offsetのCascade。1 Stylesheetあたり256 rule |
 
 ## Property
 
@@ -61,6 +62,8 @@
 | `box-shadow`、`text-shadow` | 対応 | 複数shadow、blur/spread、inset、alpha color |
 | `outline`、`outline-offset` | 対応 | width/style/colorとoffset |
 | `transform`、`transform-origin` | 対応 | 2D translate/scale/rotate/skew/matrixと複数function。3D、perspectiveは未対応 |
+| `transition-*`、`transition` | 部分対応 | opacity、transform、主要Color。複数Transition、list matching、delay、Easing、中断・反転 |
+| `animation-*`、`animation` | 部分対応 | 複数Keyframes Animation、delay、iteration、direction、fill、play-state。加算・累積合成は未対応 |
 | `visibility` | 対応 | `visible`、`hidden`。`display:none`とは別にLayout geometryを保持 |
 | `font-family/style`、`text-align` | 未対応 | Declarationを描画へ反映しない |
 | `word-break`、`overflow-wrap`、letter/word spacing、`vertical-align` | 未対応 | Declarationを描画へ反映しない |
@@ -75,6 +78,8 @@ Gridはexplicit/implicit track、intrinsic/flexible sizing、line/span/area plac
 
 PaintとHit Testingは同じStacking Context順、nested rounded clip、group opacity、2D transformを参照する。Hit Testingは逆Paint順とTransform逆行列を使い、`visibility:hidden`とclip外を除外する。通常alphaのsource-overを扱い、Blend Mode、Filter、Backdrop Filter、3D Transformは未対応である。
 
-Float、Multi-column、Animation、Transitionは未対応である。
+TransitionとKeyframes AnimationはOpacity、Color、Background Color、Border Color、Outline Color、2D Transformを補間する。Duration、正負のDelay、cubic-bezier/stepsを含むEasing、Iteration、Direction、Fill Mode、Pauseを扱い、active Animationがある間だけFrameを更新する。Layoutを変更するProperty、Discrete Animation、Animation Event、Web Animations API、Scroll-driven Animationは未対応である。
+
+Float、Multi-columnは未対応である。
 
 WPTから適応した回帰テストと出典は[Web Platform Tests由来テスト](wpt.md)に記録する。

@@ -6,6 +6,7 @@ GrowseはWeb Platform Tests（WPT）をブラウザで直接実行せず、対�
 - Revision: `816bbf3ebae17dc6866deb65b2286b1a1c162819`
 - License: WPTリポジトリの`LICENSE.md`（3-Clause BSD）
 - 配置: `internal/style/wpt_test.go`、`internal/layout/wpt_test.go`
+- v0.7.0対象: CSS Transitions Level 2、CSS Animations Level 1、CSS Easing Functions Level 1
 
 ## 対応表
 
