@@ -26,6 +26,25 @@ go test ./internal/layout ./internal/paint -run '^$' \
 
 baselineはrelease間の傾向把握用であり、異なるhost間の合否判定には使用しない。意図しない退行を調査するときは`benchstat`で複数回の結果を比較する。
 
+## v0.8.0 Form、Cookie、Fetch workload
+
+2026-08-14にLinux amd64、AMD Ryzen 7 8745HS、Go 1.26.6で次を実行した。
+
+```sh
+go test ./internal/forms ./internal/network ./internal/webapi/fetch \
+  -run '^$' \
+  -bench 'Benchmark(Serialize100FormControls|Match1000Cookies|Complete16ConcurrentFetches)$' \
+  -benchmem -count=1
+```
+
+| Benchmark | Workload | Baseline | Memory | Allocations |
+|---|---:|---:|---:|---:|
+| `BenchmarkSerialize100FormControls-16` | 100 controls | 22,663 ns/op | 25,872 B/op | 617 allocs/op |
+| `BenchmarkMatch1000Cookies-16` | 1,000 cookies | 396,559 ns/op | 815,688 B/op | 1,027 allocs/op |
+| `BenchmarkComplete16ConcurrentFetches-16` | 16 concurrent completions | 14,205 ns/op | 14,950 B/op | 225 allocs/op |
+
+Cookie benchmarkは安全上限をtest用に1,200へ設定し、同一Domain/Pathの1,000 Cookie matchingを測定する。Fetch benchmarkはHTTP transportを注入fakeへ置換し、goroutine開始からPage callback queueでの完了までを測定する。
+
 ## v0.7.0 Animation workload
 
 100要素がそれぞれ1つのinfinite Animationを持つ状態で、同一timestampの1 Frameをsampleする。DOM走査、Style再計算、Layout、Paintは含めず、Animation RegistryとTiming計算の費用を測定する。
