@@ -269,6 +269,58 @@ func TestParseInlineDeclarations(t *testing.T) {
 	}
 }
 
+func TestParseKeyframesSelectorsAndDeclarations(t *testing.T) {
+	stylesheet, err := Parse(strings.NewReader(`
+@keyframes pulse {
+  from, 20% { opacity: 0; transform: scale(0.8) }
+  75.5% { opacity: 0.5 }
+  to { opacity: 1 }
+}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stylesheet.Keyframes) != 1 || stylesheet.Keyframes[0].Name != "pulse" {
+		t.Fatalf("keyframes = %#v", stylesheet.Keyframes)
+	}
+	frames := stylesheet.Keyframes[0].Frames
+	if len(frames) != 3 {
+		t.Fatalf("frames = %d, want 3", len(frames))
+	}
+	if got, want := frames[0].Offsets, []float64{0, 0.2}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("first offsets = %v, want %v", got, want)
+	}
+	if got, want := frames[1].Offsets, []float64{0.755}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("second offsets = %v, want %v", got, want)
+	}
+	if got, want := frames[2].Offsets, []float64{1}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("last offsets = %v, want %v", got, want)
+	}
+	if len(frames[0].Declarations) != 2 || frames[0].Declarations[0].Property != "opacity" {
+		t.Fatalf("first declarations = %#v", frames[0].Declarations)
+	}
+}
+
+func TestParseKeyframesIgnoresInvalidFrameLocally(t *testing.T) {
+	stylesheet, err := Parse(strings.NewReader(`
+@keyframes safe {
+  120% { opacity: 0 }
+  from { opacity: broken }
+  to { opacity: 1 }
+}
+.after { color: green }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stylesheet.Keyframes) != 1 || len(stylesheet.Keyframes[0].Frames) != 2 {
+		t.Fatalf("keyframes after invalid selector = %#v", stylesheet.Keyframes)
+	}
+	if len(stylesheet.Rules) != 1 {
+		t.Fatalf("style rules after keyframes = %d, want 1", len(stylesheet.Rules))
+	}
+}
+
 func TestParsePreservesCustomPropertyNameCase(t *testing.T) {
 	stylesheet, err := Parse(strings.NewReader(`p { --Brand: red; --brand: blue; color: var(--Brand) }`))
 	if err != nil {

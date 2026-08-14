@@ -3,8 +3,21 @@ package css
 
 // Stylesheet is an ordered collection of CSS rules.
 type Stylesheet struct {
-	Rules   []Rule
-	Imports []ImportRule
+	Rules     []Rule
+	Imports   []ImportRule
+	Keyframes []KeyframesRule
+}
+
+// KeyframesRule is one named CSS animation keyframe list.
+type KeyframesRule struct {
+	Name   string
+	Frames []Keyframe
+}
+
+// Keyframe contains normalized offsets and declarations for one keyframe block.
+type Keyframe struct {
+	Offsets      []float64
+	Declarations []Declaration
 }
 
 // ImportRule references a stylesheet and an optional media query list.
