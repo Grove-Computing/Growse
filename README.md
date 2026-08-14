@@ -25,6 +25,8 @@ HTMLとCSSで画面を構築し、`<script type="text/go">`に書いたWebGoか�
 
 Linux、macOS、Git Bashを利用できるWindowsでは、最新版を`~/.local/bin`へインストールできます。InstallerはダウンロードしたArchiveのSHA-256 checksumを検証します。
 
+Linuxでは同時にDesktop EntryとApplication Iconを`$XDG_DATA_HOME`へ配置します。未設定時は`~/.local/share`を使用します。Ubuntuではインストール後にApplication一覧から「Growse」を検索して起動し、Dockへ登録できます。
+
 ```sh
 wget -qO- https://github.com/Grove-Computing/Growse/releases/latest/download/install.sh | bash
 ```
@@ -34,6 +36,8 @@ Versionとインストール先を指定する場合は、環境変数を利用�
 ```sh
 wget -qO- https://github.com/Grove-Computing/Growse/releases/latest/download/install.sh | GROWSE_VERSION=v0.8.0 GROWSE_INSTALL_DIR=/usr/local/bin bash
 ```
+
+LinuxのDesktop EntryとIconの配置先は、`XDG_DATA_HOME`または`GROWSE_DATA_HOME`で変更できます。
 
 ### Docker imageを使う
 

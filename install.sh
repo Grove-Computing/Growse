@@ -5,8 +5,10 @@ set -euo pipefail
 repository="${GROWSE_REPOSITORY:-Grove-Computing/Growse}"
 version="${GROWSE_VERSION:-latest}"
 install_dir="${GROWSE_INSTALL_DIR:-${HOME}/.local/bin}"
+data_home="${GROWSE_DATA_HOME:-${XDG_DATA_HOME:-${HOME}/.local/share}}"
 api_base_url="${GROWSE_API_BASE_URL:-https://api.github.com/repos/${repository}}"
 release_base_url="${GROWSE_RELEASE_BASE_URL:-https://github.com/${repository}/releases/download}"
+app_id="io.github.grovecomputing.Growse"
 
 download() {
   local url=$1
@@ -115,10 +117,54 @@ else
   tar -xzf "${work_dir}/${archive}" -C "$package_dir"
 fi
 
+if [[ "$platform" == "linux" ]]; then
+  desktop_source="${package_dir}/share/applications/${app_id}.desktop"
+  icon_source="${package_dir}/share/icons/hicolor/512x512/apps/${app_id}.png"
+  if [[ ! -f "$desktop_source" || ! -f "$icon_source" ]]; then
+    echo "Linux Desktop統合AssetがRelease Archiveにありません。" >&2
+    exit 1
+  fi
+  if [[ "$data_home" != /* ]]; then
+    echo "GROWSE_DATA_HOMEまたはXDG_DATA_HOMEには絶対Pathを指定してください: $data_home" >&2
+    exit 1
+  fi
+fi
+
 mkdir -p "$install_dir"
+install_dir=$(cd "$install_dir" && pwd -P)
 install -m 0755 "${package_dir}/${executable}" "${install_dir}/${executable}"
 
 echo "Growseを ${install_dir}/${executable} にインストールしました。"
 if [[ ":${PATH}:" != *":${install_dir}:"* ]]; then
   echo "${install_dir} をPATHへ追加してください。"
+fi
+
+if [[ "$platform" == "linux" ]]; then
+  desktop_dir="${data_home}/applications"
+  icon_dir="${data_home}/icons/hicolor/512x512/apps"
+  mkdir -p "$desktop_dir" "$icon_dir"
+
+  desktop_path="${desktop_dir}/${app_id}.desktop"
+  desktop_temp="${work_dir}/${app_id}.desktop"
+  executable_path="${install_dir}/${executable}"
+  executable_path=${executable_path//\\/\\\\}
+  executable_path=${executable_path//\`/\\\`}
+  executable_path=${executable_path//\$/\\\$}
+  executable_path=${executable_path//\"/\\\"}
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    if [[ "$line" == "Exec=growse" ]]; then
+      printf 'Exec="%s"\n' "$executable_path"
+    else
+      printf '%s\n' "$line"
+    fi
+  done < "$desktop_source" > "$desktop_temp"
+
+  install -m 0644 "$desktop_temp" "$desktop_path"
+  install -m 0644 "$icon_source" "${icon_dir}/${app_id}.png"
+  if command -v update-desktop-database >/dev/null 2>&1; then
+    if ! update-desktop-database "$desktop_dir" >/dev/null; then
+      echo "Desktop Databaseを更新できませんでした。再ログイン後に反映されます。" >&2
+    fi
+  fi
+  echo "GrowseをDesktop Applicationとして ${desktop_path} に登録しました。"
 fi

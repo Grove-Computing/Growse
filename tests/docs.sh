@@ -15,6 +15,8 @@ require README.md "examples/animation"
 require README.md "examples/data-app"
 require README.md "GROWSE_VERSION=v0.8.0"
 require README.md "growse:v0.8.0"
+require README.md "Desktop Entry"
+require README.md "GROWSE_DATA_HOME"
 require README.md "CSS Transition"
 require README.md 'growse/fetch'
 require README.md "CORS"

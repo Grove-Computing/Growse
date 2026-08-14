@@ -9,12 +9,21 @@ trap 'rm -rf "$test_root"' EXIT
 version=${GROWSE_TEST_VERSION:-v0.8.0}
 release_dir="${test_root}/releases/${version}"
 package_dir="${test_root}/package"
-install_dir="${test_root}/bin"
+install_dir="${test_root}/install dir/bin"
+data_home="${test_root}/data home"
 archive="growse_${version}_linux_amd64.tar.gz"
-mkdir -p "$release_dir" "$package_dir"
+app_id="io.github.grovecomputing.Growse"
+mkdir -p \
+  "$release_dir" \
+  "${package_dir}/share/applications" \
+  "${package_dir}/share/icons/hicolor/512x512/apps"
 
 printf '%s\n' '#!/usr/bin/env sh' "printf '%s\\n' '${version}'" > "${package_dir}/growse"
 chmod 0755 "${package_dir}/growse"
+cp "${repository_root}/packaging/linux/${app_id}.desktop" \
+  "${package_dir}/share/applications/"
+cp "${repository_root}/packaging/linux/${app_id}.png" \
+  "${package_dir}/share/icons/hicolor/512x512/apps/"
 tar -czf "${release_dir}/${archive}" -C "$package_dir" .
 (
   cd "$release_dir"
@@ -23,6 +32,7 @@ tar -czf "${release_dir}/${archive}" -C "$package_dir" .
 
 GROWSE_VERSION="$version" \
 GROWSE_INSTALL_DIR="$install_dir" \
+GROWSE_DATA_HOME="$data_home" \
 GROWSE_RELEASE_BASE_URL="file://${test_root}/releases" \
 bash "${repository_root}/install.sh"
 
@@ -37,4 +47,26 @@ if [[ "$installed_version" != "$version" ]]; then
   exit 1
 fi
 
-echo "インストーラー検証成功: ${installed_version}"
+desktop_file="${data_home}/applications/${app_id}.desktop"
+icon_file="${data_home}/icons/hicolor/512x512/apps/${app_id}.png"
+if [[ ! -f "$desktop_file" || ! -f "$icon_file" ]]; then
+  echo "Linux Desktop統合Assetがインストールされていません。" >&2
+  exit 1
+fi
+if ! grep -Fq "Exec=\"${install_dir}/growse\"" "$desktop_file"; then
+  echo "Desktop EntryのExecがインストール先と一致しません。" >&2
+  exit 1
+fi
+if grep -Fxq "Exec=growse" "$desktop_file"; then
+  echo "Desktop EntryのExecがインストール先へ展開されていません。" >&2
+  exit 1
+fi
+if ! grep -Fq "Icon=${app_id}" "$desktop_file"; then
+  echo "Desktop EntryのIcon IDが不正です。" >&2
+  exit 1
+fi
+if command -v desktop-file-validate >/dev/null 2>&1; then
+  desktop-file-validate "$desktop_file"
+fi
+
+echo "インストーラー検証成功: ${installed_version}, Linux Desktop統合"

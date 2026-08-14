@@ -2,6 +2,8 @@
 set -euo pipefail
 
 workflow=".github/workflows/release.yml"
+desktop_entry="packaging/linux/io.github.grovecomputing.Growse.desktop"
+desktop_icon="packaging/linux/io.github.grovecomputing.Growse.png"
 
 require() {
     if ! grep -Fq -- "$1" "$workflow"; then
@@ -22,6 +24,9 @@ for value in \
     "examples/dashboard" \
     "examples/animation" \
     "examples/data-app" \
+    "-X gioui.org/app.ID=io.github.grovecomputing.Growse" \
+    "packaging/linux/io.github.grovecomputing.Growse.desktop" \
+    "packaging/linux/io.github.grovecomputing.Growse.png" \
     'tar -czf "dist/$archive_name"' \
     "Compress-Archive" \
     ".sha256" \
@@ -30,4 +35,24 @@ do
     require "$value"
 done
 
-echo "release成果物matrix検証成功: Linux, macOS Intel/Apple Silicon, Windows"
+for asset in "$desktop_entry" "$desktop_icon"; do
+    if [[ ! -s "$asset" ]]; then
+        echo "Linux Desktop統合Assetがありません: $asset" >&2
+        exit 1
+    fi
+done
+
+for value in \
+    "Type=Application" \
+    "Exec=growse" \
+    "Icon=io.github.grovecomputing.Growse" \
+    "Categories=Network;WebBrowser;" \
+    "StartupWMClass=io.github.grovecomputing.Growse"
+do
+    if ! grep -Fq -- "$value" "$desktop_entry"; then
+        echo "Desktop Entryに必須設定がありません: $value" >&2
+        exit 1
+    fi
+done
+
+echo "release成果物matrix検証成功: Linux Desktop統合, macOS Intel/Apple Silicon, Windows"
