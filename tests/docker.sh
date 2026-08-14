@@ -10,8 +10,16 @@ require_file_value() {
     fi
 }
 
-require_file_value Dockerfile "FROM golang:1.26-bookworm@sha256:"
-require_file_value Dockerfile "FROM ubuntu:24.04@sha256:"
+require_pinned_base() {
+    local image=$1
+    if ! grep -Eq "^FROM ${image}:[^@[:space:]]+@sha256:[0-9a-f]{64}([[:space:]]+AS[[:space:]]+[[:alnum:]_.-]+)?$" Dockerfile; then
+        echo "Dockerfileの${image}ベースイメージがタグ付きSHA-256 digestで固定されていません" >&2
+        exit 1
+    fi
+}
+
+require_pinned_base golang
+require_pinned_base ubuntu
 require_file_value Dockerfile "go build -trimpath"
 require_file_value Dockerfile "https://deb.debian.org"
 require_file_value Dockerfile "https://archive.ubuntu.com"
