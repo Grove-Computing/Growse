@@ -434,9 +434,48 @@ type ComputedStyle struct {
 	DecorationColor     uint32
 	Opacity             float32
 	Transitions         []Transition
+	Animations          []CSSAnimation
 	BeforeContent       string
 	AfterContent        string
 	CustomProperties    map[string]string
+}
+
+// AnimationDirection controls iteration playback direction.
+type AnimationDirection uint8
+
+const (
+	AnimationNormal AnimationDirection = iota
+	AnimationReverse
+	AnimationAlternate
+	AnimationAlternateReverse
+)
+
+// AnimationFillMode controls the effect before and after active time.
+type AnimationFillMode uint8
+
+const (
+	AnimationFillNone AnimationFillMode = iota
+	AnimationFillForwards
+	AnimationFillBackwards
+	AnimationFillBoth
+)
+
+// AnimationPlayState controls whether an animation advances.
+type AnimationPlayState uint8
+
+const (
+	AnimationRunning AnimationPlayState = iota
+	AnimationPaused
+)
+
+// CSSAnimation is one computed entry from the animation property lists.
+type CSSAnimation struct {
+	Name       string
+	Timing     animation.Timing
+	Iterations float64
+	Direction  AnimationDirection
+	FillMode   AnimationFillMode
+	PlayState  AnimationPlayState
 }
 
 // Transition is one computed CSS transition matched to a property.

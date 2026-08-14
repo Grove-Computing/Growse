@@ -111,6 +111,7 @@ func initialStyle() ComputedStyle {
 		MinWidth: SizeValue{Kind: SizeAuto}, MinHeight: SizeValue{Kind: SizeAuto},
 		MaxWidth: SizeValue{Kind: SizeNone}, MaxHeight: SizeValue{Kind: SizeNone},
 		Transitions: defaultTransitions(),
+		Animations:  defaultAnimations(),
 	}
 }
 
@@ -127,6 +128,7 @@ func inheritedStyle(parent ComputedStyle) ComputedStyle {
 		MinWidth: SizeValue{Kind: SizeAuto}, MinHeight: SizeValue{Kind: SizeAuto},
 		MaxWidth: SizeValue{Kind: SizeNone}, MaxHeight: SizeValue{Kind: SizeNone},
 		Transitions: defaultTransitions(),
+		Animations:  defaultAnimations(),
 	}
 	if len(parent.CustomProperties) != 0 {
 		computed.CustomProperties = make(map[string]string, len(parent.CustomProperties))
@@ -424,6 +426,7 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 	computed = applyShadowAndOutlineProperties(computed, parent, winners, computed.CustomProperties, lengthContext)
 	computed = applyTransformProperties(computed, parent, winners, computed.CustomProperties, lengthContext)
 	computed = applyTransitionProperties(computed, parent, winners, computed.CustomProperties)
+	computed = applyAnimationProperties(computed, parent, winners, computed.CustomProperties)
 	return computed
 }
 
@@ -916,6 +919,8 @@ func expandedProperties(property string) []string {
 		return []string{"outline-width", "outline-style", "outline-color"}
 	case "transition":
 		return []string{"transition-property", "transition-duration", "transition-timing-function", "transition-delay"}
+	case "animation":
+		return []string{"animation-name", "animation-duration", "animation-timing-function", "animation-delay", "animation-iteration-count", "animation-direction", "animation-fill-mode", "animation-play-state"}
 	default:
 		return []string{property}
 	}

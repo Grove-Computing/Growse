@@ -383,7 +383,10 @@ func parseTransitionTime(value string, allowNegative bool) (time.Duration, bool,
 		return 0, false, false
 	}
 	parsed, err := strconv.ParseFloat(number, 64)
-	if err != nil || math.IsNaN(parsed) || math.IsInf(parsed, 0) || (!allowNegative && parsed < 0) {
+	if err != nil || math.IsNaN(parsed) || math.IsInf(parsed, 0) {
+		return 0, false, false
+	}
+	if !allowNegative && parsed < 0 {
 		return 0, true, false
 	}
 	return time.Duration(parsed * float64(multiplier)), true, true
