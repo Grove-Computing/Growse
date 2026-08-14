@@ -1,0 +1,7 @@
+{
+  "frame_paint_sha256": "8b1c813ff929566bc2e560e9dd069832e8e4ce16c25564c565455caf2b5011a3",
+  "back_paint_sha256": "8b1c813ff929566bc2e560e9dd069832e8e4ce16c25564c565455caf2b5011a3",
+  "forward_paint_sha256": "b6558b28666652072b3cd9223b00b9a606be5e52c64a5838ed10cf0f63a1d807",
+  "back_scroll": "first=2 offset=-10",
+  "forward_scroll": "first=5 offset=-24"
+}

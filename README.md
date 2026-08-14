@@ -8,16 +8,18 @@ HTMLとCSSで画面を構築し、`<script type="text/go">`に書いたWebGoか�
 
 | 項目 | 主な機能 |
 | --- | --- |
-| ブラウジング | URL入力、リンク遷移、戻る、進む、再読込、同一オリジンのResource Loading |
+| ブラウジング | URL入力、リンク遷移、same-document Routing、戻る、進む、再読込、Scroll復元 |
 | HTML / DOM | 要素の検索・生成・追加・削除、属性・class・Form値の操作 |
 | CSS Layout | Box Model、Flexbox、Grid、Position、Overflow |
 | CSS Paint | Color、Gradient、複数Background、Shadow、Opacity、2D Transform |
 | Animation | CSS Transition、`@keyframes`、Easing、Iteration、Direction、Fill Mode、Pause、`prefers-reduced-motion` |
 | Form | Form Controls、Focus、Constraint Validation、GET / POST Submission |
-| HTTP | WebGo Fetch、Redirect、Timeout、Cancel、Cookie、Same-Origin Policy、CORS |
-| WebGo | click、input、change、submit、mouseenter、mouseleave Eventと非同期Fetch callback |
+| Scheduler | timeout、interval、Animation Frame、Page終了時の自動解除 |
+| Storage | Origin分離された永続Local StorageとPage Session単位のSession Storage |
+| HTTP | WebGo Fetch、Cookie、Same-Origin Policy、CORS、Freshness・再検証・Disk対応のHTTP Cache |
+| WebGo | DOM Event、非同期Fetch、Scheduler、History、Navigation、Storage API |
 
-詳しい対応範囲と制限は、[CSS対応表](docs/css-support.md)と[Form / Fetch / Cookie対応表](docs/form-fetch-cookie-support.md)を参照してください。
+詳しい対応範囲と制限は、[CSS対応表](docs/css-support.md)、[Form / Fetch / Cookie対応表](docs/form-fetch-cookie-support.md)、[Storage / Cache対応表](docs/storage-cache-support.md)を参照してください。
 
 ## インストール
 
@@ -40,7 +42,7 @@ wget -qO- https://github.com/Grove-Computing/Growse/releases/latest/download/ins
 Versionとインストール先を指定する場合は、環境変数を利用します。
 
 ```sh
-wget -qO- https://github.com/Grove-Computing/Growse/releases/latest/download/install.sh | GROWSE_VERSION=v0.8.0 GROWSE_INSTALL_DIR=/usr/local/bin bash
+wget -qO- https://github.com/Grove-Computing/Growse/releases/latest/download/install.sh | GROWSE_VERSION=v0.9.0 GROWSE_INSTALL_DIR=/usr/local/bin bash
 ```
 
 GUI Applicationの配置先は、`GROWSE_DATA_HOME`、`GROWSE_APPLICATIONS_DIR`、`GROWSE_WINDOWS_PROGRAMS_DIR`で変更できます。
@@ -50,7 +52,7 @@ GUI Applicationの配置先は、`GROWSE_DATA_HOME`、`GROWSE_APPLICATIONS_DIR`�
 Linux amd64のDocker imageを、GitHub Container Registryから取得できます。
 
 ```sh
-docker pull ghcr.io/grove-computing/growse:v0.8.0
+docker pull ghcr.io/grove-computing/growse:v0.9.0
 ```
 
 GrowseはGUI applicationのため、Containerから起動する場合はホストのDisplay ServerとGPU deviceを接続する必要があります。
@@ -99,6 +101,7 @@ python3 -m http.server 8080 --directory examples/data-app
 | Dashboard | `examples/dashboard` | Grid、Position、複数Background、Shadow、Transform、Opacity |
 | Animation Showcase | `examples/animation` | hover Transition、複数Keyframes Animation |
 | Data App Showcase | `examples/data-app` | Form、WebGo Fetch、Session Cookie、DOM更新、Animation |
+| Persistent App Showcase | `examples/persistent-app` | Scheduler、same-document Routing、Local / Session Storage、Fetch、HTTP Cache、offline状態 |
 
 WebGoソースは通常のGo build対象から除外するため、各Demoでは`_app.go`として配置しています。
 
@@ -133,8 +136,11 @@ Animation中のPaintとHit Testingは、同じFrameの値を参照します。DO
 
 - `growse/dom`: DOM、Form、Eventを操作
 - `growse/fetch`: 非同期HTTP Requestを実行
+- `growse/navigation`: 現在URL、pushState / replaceState、History traversalとEventを操作
+- `growse/scheduler`: timeout、interval、Animation Frameを登録・解除
+- `growse/storage`: Origin単位のLocal / Session Storageを操作
 - Fetch callback: PageのEvent Queueで実行
-- Page終了時: 実行中のFetchをcancel
+- Page終了時: Timer、Frame callback、実行中Fetchをcancelし、Runtime参照を解放
 
 WebGo RuntimeはSandboxではありません。信頼できるローカルページだけを開いてください。
 
@@ -144,11 +150,12 @@ WebGo RuntimeはSandboxではありません。信頼できるローカルペー
 | --- | --- |
 | [CSS対応表](docs/css-support.md) | CSS Property、Layout、Animationの対応状況と制限 |
 | [Form / Fetch / Cookie対応表](docs/form-fetch-cookie-support.md) | Form、HTTP、Cookie、CORSの対応状況と制限 |
-| [Visual Regression Test](docs/visual-regression.md) | 固定Viewport、Font、Scaleによる画像回帰テスト |
-| [Performance Baseline](docs/performance.md) | Layout、Paint、Form、Cookie、FetchのBenchmark基準値 |
+| [Storage / Cache対応表](docs/storage-cache-support.md) | Web Storage、HTTP Cache、永続化、quotaの対応状況と制限 |
+| [Visual Regression Test](docs/visual-regression.md) | 固定Viewport、Font、ScaleによるDashboardとPersistent Appの画像回帰テスト |
+| [Performance Baseline](docs/performance.md) | Layout、Paint、Form、Scheduler、History、Storage、CacheのBenchmark基準値 |
 | [WPT由来テスト](docs/wpt.md) | Web Platform Testsから移植したTestと出典 |
 | [Developer Supply Chain Security](docs/developer-security.md) | 不可視Code検査、Extension管理、署名、Credential、Incident Response |
-| [v0.8.0リリース定義](docs/v0.8.0.md) | v0.8.0のTheme、Scope、完了条件 |
+| [v0.9.0リリース定義](docs/v0.9.0.md) | v0.9.0のTheme、Scope、完了条件 |
 
 ## 品質チェック
 
@@ -179,7 +186,7 @@ GrowseとWebGo Runtimeは、信頼できないGoコードを安全に実行す�
 
 ## リリース成果物
 
-`v0.8.0`のようなVersion tagをpushすると、GitHub Actionsが次の成果物、SHA-256 checksum、SPDX JSON SBOMをGitHub Releaseへ公開します。ArchiveとSBOMにはGitHub Artifact Attestation、Docker imageにはBuildKitのSBOMとSLSA Provenanceを付与します。
+`v0.9.0`のようなVersion tagをpushすると、GitHub Actionsが次の成果物、SHA-256 checksum、SPDX JSON SBOMをGitHub Releaseへ公開します。ArchiveとSBOMにはGitHub Artifact Attestation、Docker imageにはBuildKitのSBOMとSLSA Provenanceを付与します。
 
 - Linux amd64
 - macOS Intel

@@ -1,7 +1,10 @@
 package scheduler
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 )
@@ -171,6 +174,101 @@ func TestSchedulerNormalizesNegativeDelayAndRejectsExtremeDuration(t *testing.T)
 	}
 	if id, err := api.SetTimeout(MaxTimerDuration+time.Nanosecond, func() {}); err == nil || id != 0 {
 		t.Fatalf("SetTimeout(extreme) = (%d, %v), want zero ID and error", id, err)
+	}
+}
+
+func TestSchedulerBoundsPendingTimerAndFrameCallbacks(t *testing.T) {
+	api := newAPI(context.Background(), &fakeClock{}, func(func()) bool { return true }, nil, false)
+	t.Cleanup(api.Close)
+	timerIDs := make([]TimerID, MaxTimersPerPage)
+	for index := range timerIDs {
+		id, err := api.SetTimeout(time.Hour, func() {})
+		if err != nil {
+			t.Fatalf("SetTimeout(%d) error = %v", index, err)
+		}
+		timerIDs[index] = id
+	}
+	if id, err := api.SetTimeout(time.Hour, func() {}); err == nil || id != 0 {
+		t.Fatalf("SetTimeout beyond limit = (%d, %v)", id, err)
+	}
+	if !api.ClearTimer(timerIDs[0]) {
+		t.Fatal("ClearTimer() did not release one limit slot")
+	}
+	if id, err := api.SetTimeout(time.Hour, func() {}); err != nil || id == 0 {
+		t.Fatalf("SetTimeout after clear = (%d, %v)", id, err)
+	}
+
+	frameIDs := make([]FrameID, MaxFrameCallbacksPerPage)
+	for index := range frameIDs {
+		id, err := api.RequestAnimationFrame(func(Timestamp) {})
+		if err != nil {
+			t.Fatalf("RequestAnimationFrame(%d) error = %v", index, err)
+		}
+		frameIDs[index] = id
+	}
+	if id, err := api.RequestAnimationFrame(func(Timestamp) {}); err == nil || id != 0 {
+		t.Fatalf("RequestAnimationFrame beyond limit = (%d, %v)", id, err)
+	}
+	if !api.CancelAnimationFrame(frameIDs[0]) {
+		t.Fatal("CancelAnimationFrame() did not release one limit slot")
+	}
+	if id, err := api.RequestAnimationFrame(func(Timestamp) {}); err != nil || id == 0 {
+		t.Fatalf("RequestAnimationFrame after cancel = (%d, %v)", id, err)
+	}
+}
+
+func TestSchedulerBoundsCallbacksDeliveredPerTurn(t *testing.T) {
+	clock := &fakeClock{current: time.Unix(100, 0)}
+	delivered := 0
+	api := newAPI(context.Background(), clock, func(callback func()) bool {
+		callback()
+		return true
+	}, nil, false)
+	t.Cleanup(api.Close)
+	for index := 0; index < MaxCallbacksPerTurn+1; index++ {
+		if _, err := api.SetTimeout(0, func() { delivered++ }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	api.runDue(clock.Now())
+	if delivered != MaxCallbacksPerTurn {
+		t.Fatalf("first turn callbacks = %d, want %d", delivered, MaxCallbacksPerTurn)
+	}
+	api.runDue(clock.Now())
+	if delivered != MaxCallbacksPerTurn+1 {
+		t.Fatalf("second turn callbacks = %d, want %d", delivered, MaxCallbacksPerTurn+1)
+	}
+}
+
+func TestSchedulerRecoversCallbackPanicsWithoutLoggingPayload(t *testing.T) {
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	clock := &fakeClock{current: time.Unix(100, 0)}
+	api := newAPI(context.Background(), clock, func(callback func()) bool {
+		callback()
+		return true
+	}, nil, false)
+	t.Cleanup(api.Close)
+	delivered := 0
+	_, _ = api.SetTimeout(0, func() { panic("storage-value-secret") })
+	_, _ = api.SetTimeout(0, func() { delivered++ })
+	api.runDue(clock.Now())
+	_, _ = api.RequestAnimationFrame(func(Timestamp) { panic("credential-secret") })
+	_, _ = api.RequestAnimationFrame(func(Timestamp) { delivered++ })
+	api.RunAnimationFrame(clock.Now())
+	if delivered != 2 {
+		t.Fatalf("callbacks after panic = %d, want 2", delivered)
+	}
+	message := logs.String()
+	if !strings.Contains(message, "component=scheduler") || !strings.Contains(message, "type=timer") || !strings.Contains(message, "type=frame") {
+		t.Fatalf("generic Scheduler panic logs = %q", message)
+	}
+	for _, secret := range []string{"storage-value-secret", "credential-secret"} {
+		if strings.Contains(message, secret) {
+			t.Fatalf("Scheduler panic log exposed %q: %s", secret, message)
+		}
 	}
 }
 

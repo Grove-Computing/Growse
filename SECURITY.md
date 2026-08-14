@@ -6,7 +6,8 @@
 
 | Version | Supported |
 | --- | --- |
-| 0.8.x | Yes |
+| 0.9.x | Yes |
+| 0.8.x | No |
 | 0.7.x | No |
 | 0.6.x | No |
 | 0.5.x | No |
@@ -36,7 +37,7 @@ GitHub Releaseの各Archiveには、同名の`.sha256`と、`growse_<version>_<p
 たとえばLinux amd64のArchiveを検証する場合は、次を実行します。
 
 ```sh
-VERSION=v0.8.0
+VERSION=v0.9.0
 ASSET="growse_${VERSION}_linux_amd64.tar.gz"
 gh release download "$VERSION" --repo Grove-Computing/Growse \
   --pattern "$ASSET" --pattern "$ASSET.sha256" \
@@ -65,12 +66,18 @@ Developer workstationからのCredential窃取、不可視Unicode、未承認Bin
 
 ## WebGo Security Boundary
 
-Growse v0.8.0のYaegi Runtimeは、信頼できないGoコードを安全に実行するSandboxではありません。
+Growse v0.9.0のYaegi Runtimeは、信頼できないGoコードを安全に実行するSandboxではありません。
 プロセス分離、CPU時間制限、メモリ制限、およびGo標準ライブラリ全体に対する完全な制限は提供していません。
 
 WebGoの自動実行は`localhost`、`127.0.0.1`、`::1`のページと、同じく信頼済みOriginから取得したGoスクリプトに限定されます。ただし、ローカルで配信されるページやスクリプトを信頼できることは利用者自身が確認してください。WebGo FetchはSame-Origin PolicyとCORSを適用し、`omit`、`same-origin`、`include`のCredentials Modeに従います。禁止Header、CORS Response Headerの非公開化、preflightとそのcacheを実装していますが、Runtime自体をSandboxにはしません。
 
 Navigation、Form Submission、FetchはPage単位のメモリ内Cookie Jarを共有します。Domain、Path、Secure、HttpOnly、SameSite、expirationを検証し、WebGoからHttpOnly Cookieを参照できないようにします。Request Bodyは1 MiB、Headerは100件かつ64 KiB、Response Bodyは既定4 MiB、Redirectは10回を上限とし、Page終了時は進行中のFetchをcancelします。URLを含むErrorと表示にはuserinfoを残さず、CookieとAuthorizationの値をLogへ出力しません。
+
+SchedulerはPageあたりTimer 10,000件、Animation Frame callback 10,000件、1 turnあたりのTimer callback 1,000件、delay 365日を上限とし、Page終了時にcallbackと待機goroutineを解放します。Historyは1,024 entry、URL 8 KiB、state 1件64 KiB、Session全体4 MiBを上限とし、stateやURL credentialをLogへ出力しません。
+
+Local StorageはOSのUser Config Directory配下へOriginごとのJSONとして保存し、directoryを0700、fileを0600に制限します。暗号化機能ではないため、OS user accountとprofile directoryを信頼境界とします。Session StorageはBrowser Window内だけに保持します。key 4 KiB、value 1 MiB、Originごと5 MiB、Profile全体50 MiB、Origin数128を上限とし、transaction失敗時は更新前の状態へ戻します。
+
+HTTP CacheはOSのUser Cache Directory配下にprivate cacheとして保存します。Authorization、Cookie、Set-Cookieを含むentryは保存せず、Cache hit時もMIME、Origin、CORS、Credentials Policyを再適用します。memoryは1,024 entryかつCache keyごと32 variant、diskは1 entry 4 MiB、Originごと32 MiB、全体128 MiBを上限とし、schema versionとBody SHA-256が一致しないentryを破棄します。
 
 信頼できないWebGoソースを開いたり、Growseを権限の高いユーザーで実行したりしないでください。
 

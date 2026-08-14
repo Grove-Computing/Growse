@@ -5,6 +5,7 @@ import (
 	"container/heap"
 	"context"
 	"errors"
+	"log/slog"
 	"sync"
 	"time"
 )
@@ -25,6 +26,12 @@ const (
 	Second      = time.Second
 	// MaxTimerDuration bounds retained callbacks and deadline arithmetic.
 	MaxTimerDuration = 365 * 24 * time.Hour
+	// MaxTimersPerPage bounds callbacks retained by timeouts and intervals.
+	MaxTimersPerPage = 10000
+	// MaxFrameCallbacksPerPage bounds callbacks retained until the next frame.
+	MaxFrameCallbacksPerPage = 10000
+	// MaxCallbacksPerTurn prevents one deadline from starving the Page queue.
+	MaxCallbacksPerTurn = 1000
 )
 
 // Clock supplies monotonic time to the scheduler.
@@ -117,6 +124,12 @@ func NewPage(parent context.Context, enqueue func(func()) bool, requestFrame fun
 	return newAPI(parent, systemClock{}, enqueue, requestFrame, true)
 }
 
+// NewPageWithClock creates a manually driven page Scheduler. Embedders and
+// tests advance timers through RunDue, so no wall-clock goroutine is started.
+func NewPageWithClock(parent context.Context, clock Clock, enqueue func(func()) bool, requestFrame func()) *API {
+	return newAPI(parent, clock, enqueue, requestFrame, false)
+}
+
 func newAPI(parent context.Context, clock Clock, enqueue func(func()) bool, requestFrame func(), auto bool) *API {
 	if parent == nil {
 		parent = context.Background()
@@ -166,6 +179,10 @@ func (api *API) RequestAnimationFrame(callback func(Timestamp)) (FrameID, error)
 	if api.closed {
 		api.mu.Unlock()
 		return 0, errors.New("scheduler is closed")
+	}
+	if len(api.frameCallbacks) >= MaxFrameCallbacksPerPage {
+		api.mu.Unlock()
+		return 0, errors.New("animation frame callback limit exceeded")
 	}
 	api.nextFrameID++
 	if api.nextFrameID == 0 {
@@ -222,7 +239,7 @@ func (api *API) RunAnimationFrame(current time.Time) bool {
 	deliver := func() {
 		for _, id := range order {
 			if callback := callbacks[id]; callback != nil {
-				callback(Timestamp(elapsed))
+				invokeSchedulerCallback("frame", func() { callback(Timestamp(elapsed)) })
 			}
 		}
 	}
@@ -291,6 +308,10 @@ func (api *API) schedule(delay, interval time.Duration, repeat bool, callback fu
 	if api.closed {
 		api.mu.Unlock()
 		return 0, errors.New("scheduler is closed")
+	}
+	if len(api.timers) >= MaxTimersPerPage {
+		api.mu.Unlock()
+		return 0, errors.New("scheduler timer limit exceeded")
 	}
 	nesting := api.nesting + 1
 	delay, err := normalizeDelay(delay, nesting)
@@ -384,7 +405,7 @@ func (api *API) runDue(current time.Time) {
 	api.mu.Lock()
 	current = api.observeLocked(current)
 	api.mu.Unlock()
-	for {
+	for delivered := 0; delivered < MaxCallbacksPerTurn; delivered++ {
 		api.mu.Lock()
 		if api.closed || len(api.queue) == 0 || api.queue[0].deadline.After(current) {
 			api.mu.Unlock()
@@ -410,6 +431,15 @@ func (api *API) runDue(current time.Time) {
 	}
 }
 
+// RunDue synchronously queues all timers whose deadline is at or before
+// current. It is intended for a manually driven Scheduler.
+func (api *API) RunDue(current time.Time) {
+	if api == nil {
+		return
+	}
+	api.runDue(current)
+}
+
 func (api *API) execute(entry *timerEntry) {
 	api.mu.Lock()
 	if api.closed || entry.canceled {
@@ -427,7 +457,7 @@ func (api *API) execute(entry *timerEntry) {
 	api.mu.Unlock()
 
 	if callback != nil {
-		callback()
+		invokeSchedulerCallback("timer", callback)
 	}
 
 	api.mu.Lock()
@@ -451,6 +481,15 @@ func (api *API) execute(entry *timerEntry) {
 	heap.Push(&api.queue, entry)
 	api.mu.Unlock()
 	api.signal()
+}
+
+func invokeSchedulerCallback(callbackType string, callback func()) {
+	defer func() {
+		if recover() != nil {
+			slog.Error("WebGo Scheduler callbackでpanicが発生しました", "component", "scheduler", "type", callbackType)
+		}
+	}()
+	callback()
 }
 
 func normalizeDelay(delay time.Duration, nesting int) (time.Duration, error) {

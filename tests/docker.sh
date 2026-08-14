@@ -23,12 +23,18 @@ require_pinned_base ubuntu
 require_file_value Dockerfile "go build -trimpath"
 require_file_value Dockerfile "https://deb.debian.org"
 require_file_value Dockerfile "https://archive.ubuntu.com"
-require_file_value Dockerfile "COPY --from=build /etc/ssl/certs/ca-certificates.crt"
 require_file_value Dockerfile "COPY --from=build /out/growse /usr/local/bin/growse"
 require_file_value Dockerfile "USER growse"
 require_file_value Dockerfile 'ENTRYPOINT ["growse"]'
 require_file_value .dockerignore ".git"
 require_file_value .dockerignore "dist"
+
+ubuntu_ca_line=$(grep -nF "apt-get install --no-install-recommends -y ca-certificates" Dockerfile | cut -d: -f1)
+ubuntu_https_line=$(grep -nF "s|http://archive.ubuntu.com|https://archive.ubuntu.com|g" Dockerfile | cut -d: -f1)
+if [[ -z "$ubuntu_ca_line" || -z "$ubuntu_https_line" || "$ubuntu_ca_line" -ge "$ubuntu_https_line" ]]; then
+    echo "Ubuntu自身のCA bundleをHTTPS切替前に導入していません" >&2
+    exit 1
+fi
 
 workflow=.github/workflows/release.yml
 require_file_value "$workflow" "needs: build"
@@ -46,4 +52,11 @@ require_file_value "$workflow" "Promote verified image tags by digest"
 require_file_value "$workflow" '"$IMAGE_NAME@${{ steps.build.outputs.digest }}"'
 require_file_value "$workflow" "push-to-registry: true"
 
-echo "Docker release検証成功: pinned base, digest scan, SBOM, provenance"
+ci_workflow=.github/workflows/ci.yml
+require_file_value "$ci_workflow" "Docker package (v0.9.0)"
+require_file_value "$ci_workflow" "docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c"
+require_file_value "$ci_workflow" "docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a"
+require_file_value "$ci_workflow" "push: false"
+require_file_value "$ci_workflow" "growse:v0.9.0"
+
+echo "Docker検証成功: PR build, pinned base, digest scan, SBOM, provenance"

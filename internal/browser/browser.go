@@ -120,6 +120,31 @@ func (b *Browser) Page() *Page {
 	return b.page
 }
 
+// InspectPage runs a read-only inspection of the active Page on its serialized
+// Page event queue. Callers should use it when WebGo callbacks may still mutate
+// the DOM asynchronously.
+func (b *Browser) InspectPage(inspect func(*Page) bool) bool {
+	if inspect == nil {
+		return false
+	}
+	b.mu.RLock()
+	page := b.page
+	activeRuntime := b.activeRuntime
+	b.mu.RUnlock()
+	if page == nil {
+		return false
+	}
+	if runtime, ok := activeRuntime.(pageEventRuntime); ok {
+		return runtime.DispatchPageEvent(func() bool {
+			b.mu.RLock()
+			active := b.page == page
+			b.mu.RUnlock()
+			return active && inspect(page)
+		})
+	}
+	return inspect(page)
+}
+
 // RunAnimationFrame delivers one Gio frame timestamp to the active WebGo runtime.
 func (b *Browser) RunAnimationFrame(current time.Time) bool {
 	b.mu.RLock()
@@ -557,6 +582,12 @@ func (b *Browser) Close() error {
 	if page != nil && page.Transitions != nil {
 		page.Transitions.Clear()
 	}
+	b.page = nil
+	b.client = nil
+	b.runtimeFactory = nil
+	b.onMutation = nil
+	b.history = newHistory()
+	b.storage = nil
 	b.mu.Unlock()
 	if activeRuntime != nil {
 		return activeRuntime.Stop()

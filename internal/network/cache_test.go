@@ -1,7 +1,10 @@
 package network
 
 import (
+	"fmt"
 	"net/http"
+	"net/url"
+	"strings"
 	"testing"
 	"time"
 )
@@ -237,5 +240,61 @@ func TestHTTPCacheRejectsUnsafeOrUnusableKeys(t *testing.T) {
 func TestCachePartitionHandlesNilRequest(t *testing.T) {
 	if got := cachePartition(nil); got != "" {
 		t.Fatalf("cachePartition(nil) = %q, want empty", got)
+	}
+}
+
+func TestHTTPCacheBoundsMemoryEntriesAndVariants(t *testing.T) {
+	cache := NewHTTPCache()
+	response := func(target *url.URL) *Response {
+		return &Response{URL: target, StatusCode: http.StatusOK, Header: http.Header{"Cache-Control": []string{"max-age=60"}}}
+	}
+	for index := 0; index < maxMemoryCacheEntries; index++ {
+		target := mustParseURL(t, fmt.Sprintf("https://example.test/cache/%d", index))
+		if !cache.Store(&Request{Method: http.MethodGet, URL: target}, response(target)) {
+			t.Fatalf("Store(%d) failed before memory limit", index)
+		}
+	}
+	overflow := mustParseURL(t, "https://example.test/cache/overflow")
+	if cache.Store(&Request{Method: http.MethodGet, URL: overflow}, response(overflow)) {
+		t.Fatal("memory Cache accepted entry beyond limit")
+	}
+	cache.InvalidateURL(&Request{Method: http.MethodGet, URL: overflow}, mustParseURL(t, "https://example.test/cache/0"))
+	if !cache.Store(&Request{Method: http.MethodGet, URL: overflow}, response(overflow)) {
+		t.Fatal("memory Cache did not reuse invalidated capacity")
+	}
+
+	variants := NewHTTPCache()
+	target := mustParseURL(t, "https://example.test/vary")
+	for index := 0; index < maxCacheVariantsPerKey; index++ {
+		request := &Request{Method: http.MethodGet, URL: target, Header: http.Header{"X-Variant": []string{fmt.Sprint(index)}}}
+		variantResponse := response(target)
+		variantResponse.Header.Set("Vary", "X-Variant")
+		if !variants.Store(request, variantResponse) {
+			t.Fatalf("variant Store(%d) failed before limit", index)
+		}
+	}
+	request := &Request{Method: http.MethodGet, URL: target, Header: http.Header{"X-Variant": []string{"overflow"}}}
+	variantResponse := response(target)
+	variantResponse.Header.Set("Vary", "X-Variant")
+	if variants.Store(request, variantResponse) {
+		t.Fatal("Cache accepted URL variant beyond limit")
+	}
+}
+
+func TestHTTPCacheRejectsPathologicalKeyAndVaryInput(t *testing.T) {
+	cache := NewHTTPCache()
+	target := mustParseURL(t, "https://example.test/"+strings.Repeat("x", maxCacheKeyBytes))
+	if cache.Store(&Request{Method: http.MethodGet, URL: target}, &Response{URL: target, StatusCode: http.StatusOK}) {
+		t.Fatal("Cache accepted oversized key")
+	}
+	vary := make([]string, maxVaryHeaders+1)
+	for index := range vary {
+		vary[index] = fmt.Sprintf("X-%d", index)
+	}
+	target = mustParseURL(t, "https://example.test/vary-limit")
+	if cache.Store(&Request{Method: http.MethodGet, URL: target}, &Response{
+		URL: target, StatusCode: http.StatusOK, Header: http.Header{"Vary": []string{strings.Join(vary, ",")}},
+	}) {
+		t.Fatal("Cache accepted too many Vary fields")
 	}
 }

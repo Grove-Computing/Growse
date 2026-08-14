@@ -1,0 +1,50 @@
+{
+  "viewport": "480x600",
+  "scale": 1,
+  "font": "gofont/goregular@72dpi-hinting-none",
+  "timestamp": "2026-08-15T12:00:00Z",
+  "states": [
+    {
+      "name": "initial",
+      "pixel_sha256": "e47e257c475548a8501690714d7a66f9012be90b7e779039826a72639fde7451",
+      "geometry_sha256": "26cda10af3c48ee29927b42107025907010337981ae60f3b8a4b24efec8880ff",
+      "display_sha256": "e8469e2858ab7d43bdfeecb62739c2a7cbfd41e54f1260ce1bad5cd093acf80f"
+    },
+    {
+      "name": "restored",
+      "pixel_sha256": "dfec50ed27f1769b2c404eda086270cb67a11dc3694177685f7f86605399f004",
+      "geometry_sha256": "6ee92fda9055708c399458aab1af60e6343a2e821f91704c2fc5c559f7b42178",
+      "display_sha256": "c8a3817ddad1aa45a387126ca0e12d001fc5e980f85271c5d8f3b722e737e1c4"
+    },
+    {
+      "name": "routing",
+      "pixel_sha256": "fa5ad33ffeea90b6597be53a49718ff3b151131fe1e2d8121976eaf9e875954c",
+      "geometry_sha256": "3891fe1e4dd1447cd0f08491cda8edc3e7b3af1175e51c6363a241faaa02a45c",
+      "display_sha256": "239826773518e8f2dc1eb65da2a6ebc050a4fddfae4522877c11fe512fbfa132"
+    },
+    {
+      "name": "saving",
+      "pixel_sha256": "0ea40d2042d0d1f174feda53fb04fd1b58b8413d01cfe4346a3b922cae4c6340",
+      "geometry_sha256": "5d0c3ab35ec2ddc2c236a9a4d94decbcb67eb23943575f94c63e107bbee11ee1",
+      "display_sha256": "9272467d69a3530d9dbbd0a8e21ac18cff81af1c3e9fdfd2d4fa910ab9cc842e"
+    },
+    {
+      "name": "saved",
+      "pixel_sha256": "62fada308bc3dfd814a32931169dc5c04fb50a6252df8afe4e52614721a10b19",
+      "geometry_sha256": "6a15670a0d45df78331d99074c522b0cdfcdde343a2f839cd74ee2101e578710",
+      "display_sha256": "c88ddc602662aaa4f9062fb5e6e3f8eb2d09e9fc469f9d3f7f822096dda52b37"
+    },
+    {
+      "name": "cache-revalidating",
+      "pixel_sha256": "7266dd05b3ffa6e7130bfde10581bdbe56dc85899096133120ed109bb0d9278a",
+      "geometry_sha256": "83155d9f0672de6f34bb6a4d3a56449dc3795f9b156b71cd964e6151131230aa",
+      "display_sha256": "019e02048d7506c69b30445372e41409daf36ed932ed4a654185e17095ab2e15"
+    },
+    {
+      "name": "error",
+      "pixel_sha256": "1e304596ba7a3a17af93fc4a61b001c898ca118185464fbea05fbf4916dde9ce",
+      "geometry_sha256": "fdd5d568015525cd18ad0a6a723fbe91f85771a1f06ceb25995a18a4243f37b1",
+      "display_sha256": "5d8e8ee764712dd7e283ccd06f3c4ab4756a8429bf5161c10056347ef762682c"
+    }
+  ]
+}
