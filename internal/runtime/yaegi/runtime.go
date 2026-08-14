@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing/fstest"
+	"time"
 
 	"github.com/Grove-Computing/Growse/internal/network"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
@@ -94,7 +95,7 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 	dom := domapi.New(environment.Document, environment.Events, environment.OnMutation)
 	fetch := fetchapi.NewPage(r.runtimeCtx, environment.BaseURL, environment.Fetch, r.enqueueCallback)
 	r.fetchAPI = fetch
-	scheduler := schedulerapi.NewPage(r.runtimeCtx, r.enqueueCallback)
+	scheduler := schedulerapi.NewPage(r.runtimeCtx, r.enqueueCallback, environment.RequestFrame)
 	r.schedulerAPI = scheduler
 	if err := r.interpreter.Use(interp.Exports{
 		"growse/console/console": {
@@ -118,12 +119,16 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 			"Response":              reflect.ValueOf((*fetchapi.Response)(nil)),
 		},
 		"growse/scheduler/scheduler": {
-			"ClearTimer":  reflect.ValueOf(scheduler.ClearTimer),
-			"Millisecond": reflect.ValueOf(schedulerapi.Millisecond),
-			"Second":      reflect.ValueOf(schedulerapi.Second),
-			"SetInterval": reflect.ValueOf(scheduler.SetInterval),
-			"SetTimeout":  reflect.ValueOf(scheduler.SetTimeout),
-			"TimerID":     reflect.ValueOf((*schedulerapi.TimerID)(nil)),
+			"CancelAnimationFrame":  reflect.ValueOf(scheduler.CancelAnimationFrame),
+			"ClearTimer":            reflect.ValueOf(scheduler.ClearTimer),
+			"FrameID":               reflect.ValueOf((*schedulerapi.FrameID)(nil)),
+			"Millisecond":           reflect.ValueOf(schedulerapi.Millisecond),
+			"RequestAnimationFrame": reflect.ValueOf(scheduler.RequestAnimationFrame),
+			"Second":                reflect.ValueOf(schedulerapi.Second),
+			"SetInterval":           reflect.ValueOf(scheduler.SetInterval),
+			"SetTimeout":            reflect.ValueOf(scheduler.SetTimeout),
+			"TimerID":               reflect.ValueOf((*schedulerapi.TimerID)(nil)),
+			"Timestamp":             reflect.ValueOf((*schedulerapi.Timestamp)(nil)),
 		},
 		"growse/strconv/strconv": {
 			"Itoa": reflect.ValueOf(strconvapi.Itoa),
@@ -133,6 +138,37 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 	}
 	r.loaded = true
 	return nil
+}
+
+// RunAnimationFrame synchronously delivers one frame through the page queue.
+func (r *Runtime) RunAnimationFrame(current time.Time) bool {
+	r.mu.Lock()
+	scheduler := r.schedulerAPI
+	ctx := r.runtimeCtx
+	r.mu.Unlock()
+	if scheduler == nil || ctx == nil || !scheduler.HasAnimationFrameCallbacks() {
+		return false
+	}
+	result := make(chan bool, 1)
+	if !r.enqueueCallback(func() {
+		result <- scheduler.RunAnimationFrame(current)
+	}) {
+		return false
+	}
+	select {
+	case ran := <-result:
+		return ran
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// HasAnimationFrameCallbacks reports whether the page requested another frame.
+func (r *Runtime) HasAnimationFrameCallbacks() bool {
+	r.mu.Lock()
+	scheduler := r.schedulerAPI
+	r.mu.Unlock()
+	return scheduler != nil && scheduler.HasAnimationFrameCallbacks()
 }
 
 // portableFS はOS固有の区切り文字をio/fs形式へ正規化する。

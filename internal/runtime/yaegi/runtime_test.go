@@ -159,6 +159,75 @@ func main() {
 	}
 }
 
+func TestRuntimeExposesAnimationFrameRegistrationAndCancellation(t *testing.T) {
+	runtime := New()
+	document := dommodel.NewDocument()
+	result := document.CreateElement("p", map[string]string{"id": "result"})
+	if err := document.AppendChild(document.Root, result); err != nil {
+		t.Fatal(err)
+	}
+	frameRequests := 0
+	mutated := make(chan struct{}, 1)
+	scripts := []runtimemodel.Script{{Source: `package main
+import (
+	"growse/dom"
+	"growse/scheduler"
+)
+var FrameID scheduler.FrameID
+var Canceled bool
+var LastTimestamp scheduler.Timestamp
+func main() {
+	canceledID, _ := scheduler.RequestAnimationFrame(func(scheduler.Timestamp) {
+		dom.GetElementByID("result").SetText("canceled")
+	})
+	Canceled = scheduler.CancelAnimationFrame(canceledID)
+	FrameID, _ = scheduler.RequestAnimationFrame(func(timestamp scheduler.Timestamp) {
+		LastTimestamp = timestamp
+		dom.GetElementByID("result").SetText("frame")
+	})
+}`}}
+	environment := runtimemodel.Environment{
+		Document: document,
+		Events:   events.NewDispatcher(),
+		RequestFrame: func() {
+			frameRequests++
+		},
+		OnMutation: func() {
+			mutated <- struct{}{}
+		},
+	}
+	if err := runtime.Load(context.Background(), scripts, environment); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if frameRequests != 2 {
+		t.Fatalf("frame requests = %d, want 2", frameRequests)
+	}
+	if !runtime.RunAnimationFrame(time.Now()) {
+		t.Fatal("RunAnimationFrame() did not deliver the active callback")
+	}
+	select {
+	case <-mutated:
+	default:
+		t.Fatal("frame callback did not mutate the DOM")
+	}
+	symbols := runtime.interpreter.Symbols("page")["page"]
+	if symbols["FrameID"].Uint() == 0 || !symbols["Canceled"].Bool() {
+		t.Fatalf("frame state = id:%d canceled:%v", symbols["FrameID"].Uint(), symbols["Canceled"].Bool())
+	}
+	if got := result.TextContent(); got != "frame" {
+		t.Fatalf("result text = %q, want frame", got)
+	}
+	if runtime.HasAnimationFrameCallbacks() {
+		t.Fatal("one-shot frame callback remained active")
+	}
+	if err := runtime.Stop(); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+}
+
 func TestRuntimeFetchSendsMethodRelativeURLHeadersAndTextBody(t *testing.T) {
 	runtime := New()
 	var captured *network.Request

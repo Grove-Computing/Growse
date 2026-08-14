@@ -12,6 +12,12 @@ import (
 // TimerID identifies one timeout or interval within a page.
 type TimerID uint64
 
+// FrameID identifies one animation frame callback within a page.
+type FrameID uint64
+
+// Timestamp is elapsed monotonic time on the page animation timeline.
+type Timestamp time.Duration
+
 // WebGo programs can build time.Duration values without importing the Go
 // standard library, which is intentionally not part of the page API surface.
 const (
@@ -93,6 +99,12 @@ type API struct {
 	nesting  int
 	closed   bool
 
+	frameOrigin    time.Time
+	frameCallbacks map[FrameID]func(Timestamp)
+	frameOrder     []FrameID
+	nextFrameID    FrameID
+	requestFrame   func()
+
 	wake chan struct{}
 	done chan struct{}
 	auto bool
@@ -100,11 +112,11 @@ type API struct {
 
 // NewPage creates a scheduler that waits for deadlines and delivers callbacks
 // through enqueue.
-func NewPage(parent context.Context, enqueue func(func()) bool) *API {
-	return newAPI(parent, systemClock{}, enqueue, true)
+func NewPage(parent context.Context, enqueue func(func()) bool, requestFrame func()) *API {
+	return newAPI(parent, systemClock{}, enqueue, requestFrame, true)
 }
 
-func newAPI(parent context.Context, clock Clock, enqueue func(func()) bool, auto bool) *API {
+func newAPI(parent context.Context, clock Clock, enqueue func(func()) bool, requestFrame func(), auto bool) *API {
 	if parent == nil {
 		parent = context.Background()
 	}
@@ -113,14 +125,17 @@ func newAPI(parent context.Context, clock Clock, enqueue func(func()) bool, auto
 	}
 	ctx, cancel := context.WithCancel(parent)
 	api := &API{
-		ctx:     ctx,
-		cancel:  cancel,
-		clock:   clock,
-		enqueue: enqueue,
-		timers:  make(map[TimerID]*timerEntry),
-		wake:    make(chan struct{}, 1),
-		done:    make(chan struct{}),
-		auto:    auto,
+		ctx:            ctx,
+		cancel:         cancel,
+		clock:          clock,
+		enqueue:        enqueue,
+		timers:         make(map[TimerID]*timerEntry),
+		frameOrigin:    clock.Now(),
+		frameCallbacks: make(map[FrameID]func(Timestamp)),
+		requestFrame:   requestFrame,
+		wake:           make(chan struct{}, 1),
+		done:           make(chan struct{}),
+		auto:           auto,
 	}
 	heap.Init(&api.queue)
 	if auto {
@@ -129,6 +144,85 @@ func newAPI(parent context.Context, clock Clock, enqueue func(func()) bool, auto
 		close(api.done)
 	}
 	return api
+}
+
+// RequestAnimationFrame registers callback for the next rendered frame.
+func (api *API) RequestAnimationFrame(callback func(Timestamp)) (FrameID, error) {
+	if api == nil || callback == nil {
+		return 0, errors.New("animation frame callback is required")
+	}
+	api.mu.Lock()
+	if api.closed {
+		api.mu.Unlock()
+		return 0, errors.New("scheduler is closed")
+	}
+	api.nextFrameID++
+	if api.nextFrameID == 0 {
+		api.nextFrameID++
+	}
+	id := api.nextFrameID
+	api.frameCallbacks[id] = callback
+	api.frameOrder = append(api.frameOrder, id)
+	requestFrame := api.requestFrame
+	api.mu.Unlock()
+	if requestFrame != nil {
+		requestFrame()
+	}
+	return id, nil
+}
+
+// CancelAnimationFrame removes a callback that has not started.
+func (api *API) CancelAnimationFrame(id FrameID) bool {
+	if api == nil || id == 0 {
+		return false
+	}
+	api.mu.Lock()
+	_, exists := api.frameCallbacks[id]
+	if exists {
+		delete(api.frameCallbacks, id)
+	}
+	api.mu.Unlock()
+	return exists
+}
+
+// RunAnimationFrame delivers the callbacks captured for one frame. Callers
+// must invoke it from the page event queue.
+func (api *API) RunAnimationFrame(current time.Time) bool {
+	if api == nil {
+		return false
+	}
+	api.mu.Lock()
+	if api.closed || len(api.frameCallbacks) == 0 {
+		api.mu.Unlock()
+		return false
+	}
+	current = api.observeLocked(current)
+	elapsed := current.Sub(api.frameOrigin)
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	order := api.frameOrder
+	callbacks := api.frameCallbacks
+	api.frameOrder = nil
+	api.frameCallbacks = make(map[FrameID]func(Timestamp))
+	api.mu.Unlock()
+
+	for _, id := range order {
+		if callback := callbacks[id]; callback != nil {
+			callback(Timestamp(elapsed))
+		}
+	}
+	return true
+}
+
+// HasAnimationFrameCallbacks reports whether another rendered frame is needed.
+func (api *API) HasAnimationFrameCallbacks() bool {
+	if api == nil {
+		return false
+	}
+	api.mu.Lock()
+	defer api.mu.Unlock()
+	return !api.closed && len(api.frameCallbacks) != 0
 }
 
 // SetTimeout registers callback to run once after delay.
@@ -392,6 +486,10 @@ func (api *API) Close() {
 	}
 	clear(api.timers)
 	api.queue = nil
+	clear(api.frameCallbacks)
+	api.frameCallbacks = nil
+	api.frameOrder = nil
+	api.requestFrame = nil
 	api.mu.Unlock()
 	api.cancel()
 	api.signal()

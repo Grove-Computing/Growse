@@ -12,6 +12,7 @@ import (
 	"image/png"
 	"log/slog"
 	"math"
+	"time"
 
 	"gioui.org/f32"
 	"gioui.org/font"
@@ -118,6 +119,11 @@ type Navigator interface {
 	UpdateFocus(nodeID dom.NodeID) bool
 	MoveFormFocus(reverse bool) bool
 	UpdateViewport(width, height float32) bool
+}
+
+type animationFrameNavigator interface {
+	RunAnimationFrame(time.Time) bool
+	HasAnimationFrameCallbacks() bool
 }
 
 type navigationResult struct {
@@ -508,6 +514,9 @@ func (ui *BrowserUI) layoutViewport(gtx layout.Context) layout.Dimensions {
 
 func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layout.Dimensions {
 	paint.Fill(gtx.Ops, color.NRGBA{R: 255, G: 255, B: 255, A: 255})
+	if navigator, ok := ui.navigator.(animationFrameNavigator); ok {
+		navigator.RunAnimationFrame(gtx.Now)
+	}
 	ui.handleFormTraversal(gtx, page)
 	ui.syncFormFocus(gtx, page.FocusTarget)
 
@@ -548,6 +557,9 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 	pass.Pop()
 	area.Pop()
 	if page.ActiveAnimations(gtx.Now) && ui.invalidate != nil {
+		ui.invalidate()
+	}
+	if navigator, ok := ui.navigator.(animationFrameNavigator); ok && navigator.HasAnimationFrameCallbacks() && ui.invalidate != nil {
 		ui.invalidate()
 	}
 	return dimensions

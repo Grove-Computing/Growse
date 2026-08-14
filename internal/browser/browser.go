@@ -33,6 +33,11 @@ type requestLoader interface {
 	Do(ctx context.Context, request *network.Request) (*network.Response, error)
 }
 
+type animationFrameRuntime interface {
+	RunAnimationFrame(time.Time) bool
+	HasAnimationFrameCallbacks() bool
+}
+
 // Browser owns the state for one browser window.
 //
 // MVPでは1つのアクティブページ、線形の閲覧履歴、信頼済みページごとに
@@ -89,6 +94,24 @@ func (b *Browser) Page() *Page {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	return b.page
+}
+
+// RunAnimationFrame delivers one Gio frame timestamp to the active WebGo runtime.
+func (b *Browser) RunAnimationFrame(current time.Time) bool {
+	b.mu.RLock()
+	activeRuntime := b.activeRuntime
+	b.mu.RUnlock()
+	runtime, ok := activeRuntime.(animationFrameRuntime)
+	return ok && runtime.RunAnimationFrame(current)
+}
+
+// HasAnimationFrameCallbacks reports whether WebGo requested another frame.
+func (b *Browser) HasAnimationFrameCallbacks() bool {
+	b.mu.RLock()
+	activeRuntime := b.activeRuntime
+	b.mu.RUnlock()
+	runtime, ok := activeRuntime.(animationFrameRuntime)
+	return ok && runtime.HasAnimationFrameCallbacks()
 }
 
 // DispatchClick はアクティブページの対象ノードへクリックを配信する。
@@ -940,6 +963,7 @@ func startRuntime(ctx context.Context, factory runtimemodel.Factory, page *Page,
 				onMutation()
 			}
 		},
+		RequestFrame: onMutation,
 	}
 	if loader, ok := client.(requestLoader); ok {
 		environment.Fetch = loader.Do

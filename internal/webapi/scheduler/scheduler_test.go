@@ -21,7 +21,7 @@ func TestTimeoutAndIntervalRegisterCallbacks(t *testing.T) {
 	api := newAPI(context.Background(), clock, func(callback func()) bool {
 		callback()
 		return true
-	}, false)
+	}, nil, false)
 	t.Cleanup(api.Close)
 
 	timeoutID, err := api.SetTimeout(10*time.Millisecond, func() {
@@ -54,7 +54,7 @@ func TestTimeoutAndIntervalRegisterCallbacks(t *testing.T) {
 }
 
 func TestSchedulerRejectsMissingCallback(t *testing.T) {
-	api := newAPI(context.Background(), &fakeClock{}, func(func()) bool { return true }, false)
+	api := newAPI(context.Background(), &fakeClock{}, func(func()) bool { return true }, nil, false)
 	t.Cleanup(api.Close)
 
 	if id, err := api.SetTimeout(time.Second, nil); err == nil || id != 0 {
@@ -69,7 +69,7 @@ func TestClearTimerCancelsPendingTimeoutAndInterval(t *testing.T) {
 	api := newAPI(context.Background(), clock, func(callback func()) bool {
 		callback()
 		return true
-	}, false)
+	}, nil, false)
 	t.Cleanup(api.Close)
 
 	timeoutID, err := api.SetTimeout(time.Second, func() { callbackCount++ })
@@ -101,7 +101,7 @@ func TestIntervalCanClearItself(t *testing.T) {
 	api := newAPI(context.Background(), clock, func(callback func()) bool {
 		callback()
 		return true
-	}, false)
+	}, nil, false)
 	t.Cleanup(api.Close)
 
 	var intervalID TimerID
@@ -125,7 +125,7 @@ func TestSchedulerClampsRegressedClockAndKeepsRegistrationOrder(t *testing.T) {
 	api := newAPI(context.Background(), clock, func(callback func()) bool {
 		callback()
 		return true
-	}, false)
+	}, nil, false)
 	t.Cleanup(api.Close)
 
 	if _, err := api.SetTimeout(10*time.Millisecond, func() { callbacks = append(callbacks, 1) }); err != nil {
@@ -159,7 +159,7 @@ func TestSchedulerNormalizesNegativeDelayAndRejectsExtremeDuration(t *testing.T)
 	api := newAPI(context.Background(), clock, func(callback func()) bool {
 		callback()
 		return true
-	}, false)
+	}, nil, false)
 	t.Cleanup(api.Close)
 
 	if _, err := api.SetTimeout(-time.Second, func() { called = true }); err != nil {
@@ -180,7 +180,7 @@ func TestSchedulerClampsDeeplyNestedTimers(t *testing.T) {
 	api := newAPI(context.Background(), clock, func(callback func()) bool {
 		callback()
 		return true
-	}, false)
+	}, nil, false)
 	t.Cleanup(api.Close)
 
 	callbackCount := 0
@@ -224,7 +224,7 @@ func TestDelayedIntervalSkipsMissedExecutions(t *testing.T) {
 	api := newAPI(context.Background(), clock, func(callback func()) bool {
 		callback()
 		return true
-	}, false)
+	}, nil, false)
 	t.Cleanup(api.Close)
 
 	intervalID, err := api.SetInterval(10*time.Millisecond, func() { callbackCount++ })
@@ -245,5 +245,63 @@ func TestDelayedIntervalSkipsMissedExecutions(t *testing.T) {
 	api.runDue(clock.Now())
 	if callbackCount != 1 {
 		t.Fatalf("missed intervals were delivered in a burst: %d", callbackCount)
+	}
+}
+
+func TestAnimationFrameRegistersCancelsAndDefersNestedCallback(t *testing.T) {
+	start := time.Unix(100, 0)
+	clock := &fakeClock{current: start}
+	requests := 0
+	api := newAPI(context.Background(), clock, func(callback func()) bool {
+		callback()
+		return true
+	}, func() {
+		requests++
+	}, false)
+	t.Cleanup(api.Close)
+
+	var timestamps []Timestamp
+	firstID, err := api.RequestAnimationFrame(func(timestamp Timestamp) {
+		timestamps = append(timestamps, timestamp)
+		if _, nestedErr := api.RequestAnimationFrame(func(next Timestamp) {
+			timestamps = append(timestamps, next)
+		}); nestedErr != nil {
+			t.Errorf("nested RequestAnimationFrame() error = %v", nestedErr)
+		}
+	})
+	if err != nil || firstID == 0 {
+		t.Fatalf("RequestAnimationFrame() = (%d, %v), want non-zero ID", firstID, err)
+	}
+	canceledID, err := api.RequestAnimationFrame(func(Timestamp) {
+		t.Fatal("canceled frame callback was executed")
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !api.CancelAnimationFrame(canceledID) || api.CancelAnimationFrame(canceledID) {
+		t.Fatal("CancelAnimationFrame() did not report active state")
+	}
+	if requests != 2 {
+		t.Fatalf("frame requests = %d, want 2", requests)
+	}
+
+	firstFrame := start.Add(16 * time.Millisecond)
+	if !api.RunAnimationFrame(firstFrame) {
+		t.Fatal("first frame did not run")
+	}
+	if len(timestamps) != 1 || timestamps[0] != Timestamp(16*time.Millisecond) {
+		t.Fatalf("first frame timestamps = %v", timestamps)
+	}
+	if !api.HasAnimationFrameCallbacks() {
+		t.Fatal("callback registered during a frame was not deferred")
+	}
+
+	secondFrame := start.Add(32 * time.Millisecond)
+	api.RunAnimationFrame(secondFrame)
+	if len(timestamps) != 2 || timestamps[1] != Timestamp(32*time.Millisecond) {
+		t.Fatalf("second frame timestamps = %v", timestamps)
+	}
+	if api.HasAnimationFrameCallbacks() {
+		t.Fatal("one-shot frame callback remained active")
 	}
 }
