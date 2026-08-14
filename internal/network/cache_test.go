@@ -233,3 +233,9 @@ func TestHTTPCacheRejectsUnsafeOrUnusableKeys(t *testing.T) {
 		t.Fatal("Store() accepted Vary: *")
 	}
 }
+
+func TestCachePartitionHandlesNilRequest(t *testing.T) {
+	if got := cachePartition(nil); got != "" {
+		t.Fatalf("cachePartition(nil) = %q, want empty", got)
+	}
+}

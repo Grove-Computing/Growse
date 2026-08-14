@@ -409,8 +409,11 @@ func cacheURL(source *url.URL) string {
 }
 
 func cachePartition(request *Request) string {
+	if request == nil {
+		return ""
+	}
 	partitionURL := request.URL
-	if request != nil && request.Kind != RequestNavigation && request.SiteURL != nil {
+	if request.Kind != RequestNavigation && request.SiteURL != nil {
 		partitionURL = request.SiteURL
 	}
 	origin, err := OriginFromURL(partitionURL)
