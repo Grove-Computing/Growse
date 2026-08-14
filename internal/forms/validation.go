@@ -2,6 +2,8 @@ package forms
 
 import (
 	"math"
+	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -51,7 +53,36 @@ func ValidateControl(document *dom.Document, node *dom.Node) Validity {
 	if inputType == "number" && strings.TrimSpace(value) != "" {
 		validateNumber(node, value, &validity)
 	}
+	if value != "" {
+		switch inputType {
+		case "email":
+			validity.TypeMismatch = !validEmail(value)
+		case "url":
+			validity.TypeMismatch = !validAbsoluteURL(value)
+		}
+		if pattern, exists := node.Attribute("pattern"); exists {
+			if expression, err := regexp.Compile("^(?:" + pattern + ")$"); err == nil {
+				validity.PatternMismatch = !expression.MatchString(value)
+			}
+		}
+	}
 	return validity
+}
+
+func validEmail(value string) bool {
+	if strings.TrimSpace(value) != value || strings.ContainsAny(value, "\r\n\t ") || strings.Count(value, "@") != 1 {
+		return false
+	}
+	local, domain, _ := strings.Cut(value, "@")
+	return local != "" && domain != "" && !strings.HasPrefix(domain, ".") && !strings.HasSuffix(domain, ".") && !strings.Contains(domain, "..")
+}
+
+func validAbsoluteURL(value string) bool {
+	if strings.TrimSpace(value) != value || strings.ContainsAny(value, "\r\n\t ") {
+		return false
+	}
+	parsed, err := url.ParseRequestURI(value)
+	return err == nil && parsed.IsAbs()
 }
 
 func requiredValueMissing(document *dom.Document, node *dom.Node, value string) bool {

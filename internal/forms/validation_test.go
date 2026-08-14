@@ -58,3 +58,45 @@ func TestValidateControlAcceptsValidUnicodeLengthAndNumber(t *testing.T) {
 		t.Fatalf("number validity = %#v", validity)
 	}
 }
+
+func TestValidateControlEmailURLAndPatternMismatch(t *testing.T) {
+	document := dom.NewDocument()
+	email := document.CreateElement("input", map[string]string{"type": "email"})
+	urlInput := document.CreateElement("input", map[string]string{"type": "url"})
+	pattern := document.CreateElement("input", map[string]string{"pattern": `[A-Z]{2}-[0-9]{3}`})
+	for _, node := range []*dom.Node{email, urlInput, pattern} {
+		appendNode(t, document, document.Root, node)
+	}
+
+	SetCurrentValue(email, "not-an-email")
+	SetCurrentValue(urlInput, "/relative")
+	SetCurrentValue(pattern, "ab-123")
+	if validity := ValidateControl(document, email); !validity.TypeMismatch || validity.Valid() {
+		t.Fatalf("email validity = %#v", validity)
+	}
+	if validity := ValidateControl(document, urlInput); !validity.TypeMismatch || validity.Valid() {
+		t.Fatalf("URL validity = %#v", validity)
+	}
+	if validity := ValidateControl(document, pattern); !validity.PatternMismatch || validity.Valid() {
+		t.Fatalf("pattern validity = %#v", validity)
+	}
+
+	SetCurrentValue(email, "user@example.com")
+	SetCurrentValue(urlInput, "https://example.com/path?q=1")
+	SetCurrentValue(pattern, "AB-123")
+	for _, node := range []*dom.Node{email, urlInput, pattern} {
+		if validity := ValidateControl(document, node); !validity.Valid() {
+			t.Fatalf("valid control %#v = %#v", node.Attributes, validity)
+		}
+	}
+}
+
+func TestValidateControlIgnoresInvalidPattern(t *testing.T) {
+	document := dom.NewDocument()
+	input := document.CreateElement("input", map[string]string{"pattern": "["})
+	appendNode(t, document, document.Root, input)
+	SetCurrentValue(input, "anything")
+	if validity := ValidateControl(document, input); !validity.Valid() {
+		t.Fatalf("invalid pattern constrained input = %#v", validity)
+	}
+}
