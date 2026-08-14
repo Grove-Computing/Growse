@@ -483,6 +483,18 @@ func TestBuildCarriesDisabledAndReadonlyControlState(t *testing.T) {
 	}
 }
 
+func TestBuildCreatesSubmitButtonControls(t *testing.T) {
+	document := dom.NewDocument()
+	button := document.CreateElement("button", nil)
+	input := document.CreateElement("input", map[string]string{"type": "submit", "value": "Save"})
+	appendNodes(t, document, [2]*dom.Node{document.Root, button}, [2]*dom.Node{button, document.CreateText("Send")}, [2]*dom.Node{document.Root, input})
+
+	boxes := Build(document, style.Compute(document, nil), 800).Boxes
+	if len(boxes) != 2 || !boxes[0].Button || boxes[0].Text != "Send" || !boxes[1].Button || boxes[1].Text != "Save" {
+		t.Fatalf("submit buttons = %#v", boxes)
+	}
+}
+
 func TestBuildIgnoresHiddenInputType(t *testing.T) {
 	document := dom.NewDocument()
 	input := document.CreateElement("input", map[string]string{"type": "hidden"})

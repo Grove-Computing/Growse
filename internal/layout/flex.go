@@ -435,6 +435,9 @@ func (e *engine) flexIntrinsicSizes(node *dom.Node, style blockStyle, axis flexA
 	} else if isCheckableControl(node) {
 		textWidth, textHeight = checkableSize, checkableSize
 		minTextWidth = checkableSize
+	} else if isSubmitButtonControl(node) {
+		textWidth, textHeight = buttonWidth, inputHeight
+		minTextWidth = buttonWidth
 	}
 	horizontalExtras := style.padding.Left + style.padding.Right + style.border.Left.Width + style.border.Right.Width
 	verticalExtras := style.padding.Top + style.padding.Bottom + style.border.Top.Width + style.border.Bottom.Width
@@ -511,6 +514,8 @@ func (e *engine) renderFlexItem(item *flexLayoutItem, axis flexAxis, x, y, mainS
 		e.addSelect(item.node, style, 0, outerWidth, outerHeight, true)
 	} else if isCheckableControl(item.node) {
 		e.addCheckable(item.node, style, 0, outerWidth, outerHeight, true)
+	} else if isSubmitButtonControl(item.node) {
+		e.addSubmitButton(item.node, style, 0, outerWidth, outerHeight, true)
 	} else {
 		if style.display == stylemodel.DisplayInlineFlex {
 			style.display = stylemodel.DisplayFlex

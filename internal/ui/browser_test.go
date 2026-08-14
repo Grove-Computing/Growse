@@ -120,8 +120,23 @@ func (navigator *stubNavigator) Reload(context.Context) (*browser.Page, error) {
 
 func (navigator *stubNavigator) CanBack() bool    { return true }
 func (navigator *stubNavigator) CanForward() bool { return true }
-func (navigator *stubNavigator) DispatchClick(dom.NodeID, float32, float32) bool {
-	return false
+func (navigator *stubNavigator) DispatchClick(nodeID dom.NodeID, x, y float32) bool {
+	if navigator.page == nil || navigator.page.Document == nil || navigator.page.Events == nil {
+		return false
+	}
+	node, ok := navigator.page.Document.NodeByID(nodeID)
+	if !ok || forms.Disabled(node) {
+		return false
+	}
+	handled := navigator.page.Events.Dispatch(events.Event{Type: events.Click, Target: nodeID, X: x, Y: y})
+	if forms.IsSubmitButton(node) {
+		for current := node.Parent; current != nil; current = current.Parent {
+			if current.Type == dom.NodeElement && current.TagName == "form" {
+				return navigator.page.Events.Dispatch(events.Event{Type: events.Submit, Target: current.ID}) || handled
+			}
+		}
+	}
+	return handled
 }
 func (navigator *stubNavigator) SetInputValue(nodeID dom.NodeID, value string) bool {
 	if navigator.page == nil || navigator.page.Document == nil {
@@ -229,6 +244,13 @@ func (navigator *stubNavigator) UpdateFocus(nodeID dom.NodeID) bool {
 	navigator.page.FocusTarget = nodeID
 	navigator.recomputeHoverStyles()
 	return true
+}
+func (navigator *stubNavigator) MoveFormFocus(reverse bool) bool {
+	if navigator.page == nil || navigator.page.Document == nil {
+		return false
+	}
+	target := forms.NextFocusable(navigator.page.Document, navigator.page.FocusTarget, reverse)
+	return navigator.UpdateFocus(target)
 }
 func (navigator *stubNavigator) UpdateViewport(width, height float32) bool {
 	if navigator.page == nil || navigator.page.Document == nil || width <= 0 || height <= 0 {
@@ -954,6 +976,73 @@ func TestCheckableButtonActivatesWithSpaceKey(t *testing.T) {
 
 	if !forms.CurrentChecked(checkbox) {
 		t.Fatal("Space did not activate checkbox")
+	}
+}
+
+func TestTabAndShiftTabMoveFormFocusInDOMOrder(t *testing.T) {
+	document := dom.NewDocument()
+	first := document.CreateElement("input", nil)
+	last := document.CreateElement("input", map[string]string{"type": "checkbox"})
+	if err := document.AppendChild(document.Root, first); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(document.Root, last); err != nil {
+		t.Fatal(err)
+	}
+	page := &browser.Page{Document: document, ComputedStyles: style.Compute(document, nil), Events: events.NewDispatcher()}
+	ui := NewBrowserUI(&stubNavigator{page: page}, nil)
+	router := new(input.Router)
+	gtx := layout.Context{Ops: new(op.Ops), Source: router.Source(), Constraints: layout.Exact(image.Pt(800, 600)), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}}
+
+	ui.layoutDocument(gtx, page)
+	router.Frame(gtx.Ops)
+	router.Queue(key.Event{Name: key.NameTab, State: key.Press})
+	gtx.Reset()
+	ui.layoutDocument(gtx, page)
+	if page.FocusTarget != first.ID {
+		t.Fatalf("Tab focus = %d, want %d", page.FocusTarget, first.ID)
+	}
+	router.Frame(gtx.Ops)
+	router.Queue(key.Event{Name: key.NameTab, Modifiers: key.ModShift, State: key.Press})
+	gtx.Reset()
+	ui.layoutDocument(gtx, page)
+	if page.FocusTarget != last.ID {
+		t.Fatalf("Shift+Tab focus = %d, want %d", page.FocusTarget, last.ID)
+	}
+}
+
+func TestSubmitButtonActivatesWithSpaceKey(t *testing.T) {
+	document := dom.NewDocument()
+	form := document.CreateElement("form", nil)
+	buttonNode := document.CreateElement("button", nil)
+	if err := document.AppendChild(document.Root, form); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(form, buttonNode); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(buttonNode, document.CreateText("Send")); err != nil {
+		t.Fatal(err)
+	}
+	page := &browser.Page{Document: document, ComputedStyles: style.Compute(document, nil), Events: events.NewDispatcher()}
+	submissions := 0
+	page.Events.AddEventListener(form.ID, events.Submit, func(events.Event) { submissions++ })
+	ui := NewBrowserUI(&stubNavigator{page: page}, nil)
+	router := new(input.Router)
+	gtx := layout.Context{Ops: new(op.Ops), Source: router.Source(), Constraints: layout.Exact(image.Pt(800, 600)), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}}
+
+	ui.layoutDocument(gtx, page)
+	router.Frame(gtx.Ops)
+	button := ui.formButtons[buttonNode.ID]
+	gtx.Execute(key.FocusCmd{Tag: button})
+	gtx.Reset()
+	ui.layoutDocument(gtx, page)
+	router.Frame(gtx.Ops)
+	router.Queue(key.Event{Name: key.NameSpace, State: key.Press}, key.Event{Name: key.NameSpace, State: key.Release})
+	gtx.Reset()
+	ui.layoutDocument(gtx, page)
+	if submissions != 1 {
+		t.Fatalf("submissions = %d, want 1", submissions)
 	}
 }
 

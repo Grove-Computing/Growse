@@ -895,6 +895,31 @@ func TestDisabledReadonlyLabelAndResetBehavior(t *testing.T) {
 	}
 }
 
+func TestMoveFormFocusTraversesAndWrapsBothDirections(t *testing.T) {
+	document := dom.NewDocument()
+	first := document.CreateElement("input", nil)
+	disabled := document.CreateElement("input", map[string]string{"disabled": ""})
+	last := document.CreateElement("button", nil)
+	for _, node := range []*dom.Node{first, disabled, last} {
+		if err := document.AppendChild(document.Root, node); err != nil {
+			t.Fatal(err)
+		}
+	}
+	page := &Page{Document: document, ComputedStyles: style.Compute(document, nil)}
+	browser := New(nil)
+	browser.SetPage(page)
+
+	if !browser.MoveFormFocus(false) || page.FocusTarget != first.ID {
+		t.Fatalf("first forward focus = %d", page.FocusTarget)
+	}
+	if !browser.MoveFormFocus(false) || page.FocusTarget != last.ID {
+		t.Fatalf("second forward focus = %d", page.FocusTarget)
+	}
+	if !browser.MoveFormFocus(true) || page.FocusTarget != first.ID {
+		t.Fatalf("reverse focus = %d", page.FocusTarget)
+	}
+}
+
 func TestNewPageCopiesURL(t *testing.T) {
 	pageURL := mustParseURL(t, "https://example.com/original")
 	page := NewPage(pageURL)

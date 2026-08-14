@@ -141,6 +141,7 @@ type Box struct {
 	InputType  string
 	Disabled   bool
 	ReadOnly   bool
+	Button     bool
 
 	X        float32
 	Y        float32

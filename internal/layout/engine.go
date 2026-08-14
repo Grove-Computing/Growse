@@ -16,6 +16,7 @@ const (
 	inputWidth     = float32(280)
 	inputHeight    = float32(40)
 	checkableSize  = float32(32)
+	buttonWidth    = float32(120)
 	textareaHeight = float32(96)
 )
 
@@ -227,6 +228,10 @@ func (e *engine) walk(node *dom.Node, x, width, containingHeight float32, height
 			e.addCheckable(node, style, x, width, containingHeight, heightDefinite)
 			return
 		}
+		if isSubmitButtonControl(node) {
+			e.addSubmitButton(node, style, x, width, containingHeight, heightDefinite)
+			return
+		}
 		if isBlockLevelDisplay(style.display) {
 			e.addBlock(node, style, x, width, containingHeight, heightDefinite, nil)
 			return
@@ -307,6 +312,41 @@ func isSelectControl(node *dom.Node) bool {
 func isCheckableControl(node *dom.Node) bool {
 	_, ok := forms.CheckableState(node)
 	return ok
+}
+
+func isSubmitButtonControl(node *dom.Node) bool {
+	return forms.IsSubmitButton(node)
+}
+
+func (e *engine) addSubmitButton(node *dom.Node, style blockStyle, x, width, containingHeight float32, heightDefinite bool) {
+	e.y += style.margin.Top
+	x += style.margin.Left
+	label := strings.TrimSpace(node.TextContent())
+	if node.TagName == "input" {
+		label, _ = node.Attribute("value")
+	}
+	if label == "" {
+		label = "Submit"
+	}
+	textWidth, textHeight, _ := measureText(label, style.fontSize, style.bold)
+	naturalWidth := textWidth + style.padding.Left + style.padding.Right + style.border.Left.Width + style.border.Right.Width
+	naturalHeight := textHeight + style.padding.Top + style.padding.Bottom + style.border.Top.Width + style.border.Bottom.Width
+	usedWidth, usedHeight := max(buttonWidth, naturalWidth), max(inputHeight, naturalHeight)
+	if resolved, ok := resolveSize(style.width, width, true); ok {
+		usedWidth = resolved
+	}
+	if resolved, ok := resolveSize(style.height, containingHeight, heightDefinite); ok {
+		usedHeight = resolved
+	}
+	e.tree.Boxes = append(e.tree.Boxes, Box{
+		Order: e.nextOrder(), StackingID: e.stackingID, NodeID: node.ID, Tag: node.TagName,
+		Text: label, Button: true, Disabled: forms.Disabled(node),
+		X: x, Y: e.y, Width: max(usedWidth, float32(1)), Height: max(usedHeight, float32(1)), Color: style.color,
+		Clip: cloneRect(e.clip), Clips: cloneClipRegions(e.clips), Opacity: e.opacity * style.opacity,
+		Transform: stylemodel.IdentityMatrix(), Hidden: style.hidden,
+	})
+	e.tree.Bounds[node.ID] = Rect{X: x, Y: e.y, Width: usedWidth, Height: usedHeight}
+	e.y += usedHeight + style.margin.Bottom
 }
 
 func (e *engine) addCheckable(node *dom.Node, style blockStyle, x, width, containingHeight float32, heightDefinite bool) {
@@ -501,6 +541,13 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 				if isCheckableControl(child) {
 					flushInline()
 					e.addCheckable(child, childStyle, contentX, contentWidth, childContainingHeight, declaredHeightDefinite)
+					previousBlock = true
+					previousBottomMargin = childStyle.margin.Bottom
+					continue
+				}
+				if isSubmitButtonControl(child) {
+					flushInline()
+					e.addSubmitButton(child, childStyle, contentX, contentWidth, childContainingHeight, declaredHeightDefinite)
 					previousBlock = true
 					previousBottomMargin = childStyle.margin.Bottom
 					continue

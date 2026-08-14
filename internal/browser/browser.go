@@ -89,20 +89,29 @@ func (b *Browser) DispatchClick(nodeID dom.NodeID, x, y float32) bool {
 	if page == nil || page.Events == nil {
 		return false
 	}
+	if page.Document != nil {
+		if clickedNode, exists := page.Document.NodeByID(nodeID); exists && forms.Disabled(clickedNode) {
+			return false
+		}
+	}
 	clickHandled := page.Events.Dispatch(events.Event{Type: events.Click, Target: nodeID, X: x, Y: y})
 	labelHandled := false
-	if node, ok := page.Document.NodeByID(nodeID); ok {
-		if control := forms.LabeledControl(page.Document, node); control != nil && !forms.Disabled(control) {
-			b.UpdateFocus(control.ID)
-			if _, checkable := forms.CheckableState(control); checkable {
-				labelHandled = b.ActivateCheckable(control.ID)
+	if page.Document != nil {
+		if node, ok := page.Document.NodeByID(nodeID); ok {
+			if control := forms.LabeledControl(page.Document, node); control != nil && !forms.Disabled(control) {
+				b.UpdateFocus(control.ID)
+				if _, checkable := forms.CheckableState(control); checkable {
+					labelHandled = b.ActivateCheckable(control.ID)
+				}
 			}
 		}
 	}
 	submitHandled := false
-	if node, ok := page.Document.NodeByID(nodeID); ok && isSubmitButton(node) {
-		if form := nearestForm(node); form != nil {
-			submitHandled = page.Events.Dispatch(events.Event{Type: events.Submit, Target: form.ID})
+	if page.Document != nil {
+		if node, ok := page.Document.NodeByID(nodeID); ok && isSubmitButton(node) {
+			if form := nearestForm(node); form != nil {
+				submitHandled = page.Events.Dispatch(events.Event{Type: events.Submit, Target: form.ID})
+			}
 		}
 	}
 	return clickHandled || submitHandled || labelHandled
@@ -325,6 +334,19 @@ func (b *Browser) UpdateFocus(nodeID dom.NodeID) bool {
 		onMutation()
 	}
 	return true
+}
+
+// MoveFormFocus advances focus through enabled controls in DOM order.
+func (b *Browser) MoveFormFocus(reverse bool) bool {
+	b.mu.RLock()
+	page := b.page
+	if page == nil || page.Document == nil {
+		b.mu.RUnlock()
+		return false
+	}
+	target := forms.NextFocusable(page.Document, page.FocusTarget, reverse)
+	b.mu.RUnlock()
+	return b.UpdateFocus(target)
 }
 
 // UpdateViewport recomputes viewport-relative values when the content area changes.
@@ -776,11 +798,7 @@ func isTextInput(node *dom.Node) bool {
 }
 
 func isSubmitButton(node *dom.Node) bool {
-	if node == nil || node.Type != dom.NodeElement || node.TagName != "button" {
-		return false
-	}
-	typeValue, ok := node.Attribute("type")
-	return !ok || strings.EqualFold(strings.TrimSpace(typeValue), "submit")
+	return forms.IsSubmitButton(node)
 }
 
 func nearestForm(node *dom.Node) *dom.Node {
