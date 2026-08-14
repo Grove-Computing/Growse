@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"mime"
+	"net/http"
 	"net/url"
 	"strings"
 	"sync"
@@ -28,6 +29,10 @@ type ResourceLoader interface {
 	Get(ctx context.Context, resourceURL *url.URL) (*network.Response, error)
 }
 
+type requestLoader interface {
+	Do(ctx context.Context, request *network.Request) (*network.Response, error)
+}
+
 // Browser owns the state for one browser window.
 //
 // MVPでは1つのアクティブページ、線形の閲覧履歴、信頼済みページごとに
@@ -44,6 +49,11 @@ type Browser struct {
 	clock          animationmodel.Clock
 	reducedMotion  bool
 }
+
+var (
+	ErrFormValidation      = errors.New("form validation failed")
+	ErrSubmissionPrevented = errors.New("form submission was prevented")
+)
 
 // New creates a browser with no page loaded.
 func New(client ResourceLoader) *Browser {
@@ -109,7 +119,12 @@ func (b *Browser) DispatchClick(nodeID dom.NodeID, x, y float32) bool {
 	submitHandled := false
 	if page.Document != nil {
 		if node, ok := page.Document.NodeByID(nodeID); ok && isSubmitButton(node) {
-			if form := nearestForm(node); form != nil {
+			if form := forms.FormOwner(page.Document, node); form != nil {
+				b.mu.Lock()
+				if b.page == page {
+					page.Submitter = node.ID
+				}
+				b.mu.Unlock()
 				submitHandled = page.Events.Dispatch(events.Event{Type: events.Submit, Target: form.ID})
 			}
 		}
@@ -231,12 +246,17 @@ func (b *Browser) SubmitForm(nodeID dom.NodeID) bool {
 		b.mu.RUnlock()
 		return false
 	}
-	form := nearestForm(node)
+	form := forms.FormOwner(page.Document, node)
 	dispatcher := page.Events
 	b.mu.RUnlock()
 	if form == nil {
 		return false
 	}
+	b.mu.Lock()
+	if b.page == page {
+		page.Submitter = 0
+	}
+	b.mu.Unlock()
 	return dispatcher.Dispatch(events.Event{Type: events.Submit, Target: form.ID})
 }
 
@@ -256,7 +276,7 @@ func (b *Browser) ResetForm(nodeID dom.NodeID) bool {
 	}
 	form := node
 	if form.TagName != "form" {
-		form = nearestForm(node)
+		form = forms.FormOwner(page.Document, node)
 	}
 	if form == nil {
 		b.mu.Unlock()
@@ -276,6 +296,32 @@ func (b *Browser) ResetForm(nodeID dom.NodeID) bool {
 		handled = dispatcher.Dispatch(events.Event{Type: events.Reset, Target: form.ID})
 	}
 	return changed || handled
+}
+
+// ValidateForm focuses the first invalid control and reports whether the form is valid.
+func (b *Browser) ValidateForm(nodeID dom.NodeID) bool {
+	b.mu.RLock()
+	page := b.page
+	if page == nil || page.Document == nil {
+		b.mu.RUnlock()
+		return false
+	}
+	node, ok := page.Document.NodeByID(nodeID)
+	if !ok || !page.Document.IsConnected(node) {
+		b.mu.RUnlock()
+		return false
+	}
+	form := node
+	if form.TagName != "form" {
+		form = forms.FormOwner(page.Document, node)
+	}
+	first, invalid := forms.FirstInvalidControl(page.Document, form)
+	b.mu.RUnlock()
+	if !invalid {
+		return form != nil
+	}
+	b.UpdateFocus(first.ID)
+	return false
 }
 
 // UpdateHover updates the active page's hovered element path.
@@ -469,6 +515,176 @@ func (b *Browser) Navigate(ctx context.Context, rawURL string) (*Page, error) {
 	return b.load(ctx, pageURL, historyPush, -1)
 }
 
+// SubmitGET serializes a form into the action query and navigates with history.
+func (b *Browser) SubmitGET(ctx context.Context, formID, submitterID dom.NodeID) (*Page, error) {
+	b.mu.RLock()
+	page := b.page
+	if page == nil || page.Document == nil || page.URL == nil {
+		b.mu.RUnlock()
+		return nil, errors.New("no active page for form submission")
+	}
+	form, ok := page.Document.NodeByID(formID)
+	if !ok {
+		b.mu.RUnlock()
+		return nil, errors.New("form was not found")
+	}
+	var submitter *dom.Node
+	if submitterID != 0 {
+		submitter, ok = page.Document.NodeByID(submitterID)
+		if !ok {
+			b.mu.RUnlock()
+			return nil, errors.New("submitter was not found")
+		}
+	}
+	config, ok := forms.ResolveFormSubmission(page.Document, form, submitter)
+	if !ok || config.Method != "get" {
+		b.mu.RUnlock()
+		return nil, errors.New("form is not a GET submission")
+	}
+	entries := forms.CollectEntries(page.Document, form, submitter)
+	baseURL := cloneURL(page.URL)
+	b.mu.RUnlock()
+
+	target, err := resolveFormAction(baseURL, config.Action)
+	if err != nil {
+		return nil, err
+	}
+	target.RawQuery = forms.EncodeURLEncoded(entries)
+	target.Fragment = ""
+	return b.load(ctx, target, historyPush, -1)
+}
+
+// SubmitPOST sends URL-encoded entries and navigates to the response document.
+func (b *Browser) SubmitPOST(ctx context.Context, formID, submitterID dom.NodeID) (*Page, error) {
+	b.mu.Lock()
+	page := b.page
+	if page == nil || page.Document == nil || page.URL == nil {
+		b.mu.Unlock()
+		return nil, errors.New("no active page for form submission")
+	}
+	form, ok := page.Document.NodeByID(formID)
+	if !ok {
+		b.mu.Unlock()
+		return nil, errors.New("form was not found")
+	}
+	var submitter *dom.Node
+	if submitterID != 0 {
+		submitter, ok = page.Document.NodeByID(submitterID)
+		if !ok {
+			b.mu.Unlock()
+			return nil, errors.New("submitter was not found")
+		}
+	}
+	config, ok := forms.ResolveFormSubmission(page.Document, form, submitter)
+	if !ok || config.Method != "post" || config.Enctype != forms.URLEncoded || config.Target != "_self" {
+		b.mu.Unlock()
+		return nil, errors.New("unsupported POST form configuration")
+	}
+	entries := forms.CollectEntries(page.Document, form, submitter)
+	target, err := resolveFormAction(page.URL, config.Action)
+	if err != nil {
+		b.mu.Unlock()
+		return nil, err
+	}
+	target.Fragment = ""
+	client := b.client
+	loader, ok := client.(requestLoader)
+	if !ok {
+		b.mu.Unlock()
+		return nil, errors.New("network client does not support POST")
+	}
+	b.navigationID++
+	navigationID := b.navigationID
+	runtimeFactory := b.runtimeFactory
+	onMutation := b.onMutation
+	reducedMotion := b.reducedMotion
+	b.mu.Unlock()
+
+	body := []byte(forms.EncodeURLEncoded(entries))
+	response, err := loader.Do(ctx, &network.Request{
+		Method: http.MethodPost, URL: target, Body: body,
+		Header: http.Header{"Content-Type": []string{forms.URLEncoded}},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("submit form to %s: %w", target.Redacted(), err)
+	}
+	return b.finishLoad(ctx, target, response, historyPush, -1, navigationID, client, runtimeFactory, onMutation, reducedMotion)
+}
+
+// Submit validates and dispatches a cancelable submit event before navigation.
+func (b *Browser) Submit(ctx context.Context, formID, submitterID dom.NodeID) (*Page, error) {
+	b.mu.RLock()
+	page := b.page
+	if page == nil || page.Document == nil {
+		b.mu.RUnlock()
+		return nil, errors.New("no active page for form submission")
+	}
+	form, ok := page.Document.NodeByID(formID)
+	if !ok || form.TagName != "form" {
+		b.mu.RUnlock()
+		return nil, errors.New("form was not found")
+	}
+	var submitter *dom.Node
+	if submitterID != 0 {
+		submitter, ok = page.Document.NodeByID(submitterID)
+		if !ok {
+			b.mu.RUnlock()
+			return nil, errors.New("submitter was not found")
+		}
+	}
+	config, ok := forms.ResolveFormSubmission(page.Document, form, submitter)
+	if !ok {
+		b.mu.RUnlock()
+		return nil, errors.New("invalid form submission configuration")
+	}
+	firstInvalid, invalid := forms.FirstInvalidControl(page.Document, form)
+	dispatcher := page.Events
+	b.mu.RUnlock()
+	b.mu.Lock()
+	if b.page == page {
+		page.Submitter = submitterID
+	}
+	b.mu.Unlock()
+
+	if invalid && !config.NoValidate {
+		b.UpdateFocus(firstInvalid.ID)
+		return nil, ErrFormValidation
+	}
+	submitEvent := events.Cancelable(events.Submit, form.ID)
+	if dispatcher != nil {
+		dispatcher.Dispatch(submitEvent)
+	}
+	if submitEvent.DefaultPrevented() {
+		return nil, ErrSubmissionPrevented
+	}
+	if config.Target != "_self" {
+		return nil, fmt.Errorf("unsupported form target %q", config.Target)
+	}
+	switch config.Method {
+	case "get":
+		return b.SubmitGET(ctx, formID, submitterID)
+	case "post":
+		return b.SubmitPOST(ctx, formID, submitterID)
+	default:
+		return nil, fmt.Errorf("unsupported form method %q", config.Method)
+	}
+}
+
+func resolveFormAction(baseURL *url.URL, action string) (*url.URL, error) {
+	if baseURL == nil {
+		return nil, errors.New("form action has no base URL")
+	}
+	reference, err := url.Parse(strings.TrimSpace(action))
+	if err != nil {
+		return nil, fmt.Errorf("parse form action: %w", err)
+	}
+	target := baseURL.ResolveReference(reference)
+	if target.Scheme != "http" && target.Scheme != "https" {
+		return nil, fmt.Errorf("unsupported form action scheme %q", target.Scheme)
+	}
+	return target, nil
+}
+
 // Back loads the previous successful navigation entry.
 func (b *Browser) Back(ctx context.Context) (*Page, error) {
 	return b.traverse(ctx, -1)
@@ -542,7 +758,10 @@ func (b *Browser) load(ctx context.Context, pageURL *url.URL, commit historyComm
 	if err != nil {
 		return nil, fmt.Errorf("navigate to %s: %w", pageURL.Redacted(), err)
 	}
+	return b.finishLoad(ctx, pageURL, response, commit, historyIndex, navigationID, client, runtimeFactory, onMutation, reducedMotion)
+}
 
+func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *network.Response, commit historyCommit, historyIndex int, navigationID uint64, client ResourceLoader, runtimeFactory runtimemodel.Factory, onMutation func(), reducedMotion bool) (*Page, error) {
 	mediaType, _, err := mime.ParseMediaType(response.ContentType)
 	if err != nil {
 		return nil, fmt.Errorf("invalid Content-Type %q: %w", response.ContentType, err)
@@ -809,15 +1028,6 @@ func isTextInput(node *dom.Node) bool {
 
 func isSubmitButton(node *dom.Node) bool {
 	return forms.IsSubmitButton(node)
-}
-
-func nearestForm(node *dom.Node) *dom.Node {
-	for current := node; current != nil; current = current.Parent {
-		if current.Type == dom.NodeElement && current.TagName == "form" {
-			return current
-		}
-	}
-	return nil
 }
 
 func normalizeURL(rawURL string) (*url.URL, error) {

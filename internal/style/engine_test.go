@@ -286,7 +286,8 @@ func TestMatchesInteractionAndFormStatePseudoClasses(t *testing.T) {
 	disabled := document.CreateElement("input", map[string]string{"disabled": ""})
 	checked := document.CreateElement("input", map[string]string{"type": "checkbox", "checked": ""})
 	selected := document.CreateElement("option", map[string]string{"selected": ""})
-	for _, node := range []*dom.Node{link, anchor, enabled, disabled, checked, selected} {
+	invalid := document.CreateElement("input", map[string]string{"required": ""})
+	for _, node := range []*dom.Node{link, anchor, enabled, disabled, checked, selected, invalid} {
 		appendNode(t, document, document.Root, node)
 	}
 	state := InteractionState{Hovered: map[dom.NodeID]bool{link.ID: true}, Focused: enabled.ID}
@@ -301,6 +302,8 @@ func TestMatchesInteractionAndFormStatePseudoClasses(t *testing.T) {
 		{"input:disabled", enabled, false}, {"input:disabled", disabled, true},
 		{"input:enabled", disabled, false}, {"input:checked", checked, true},
 		{"option:checked", selected, true}, {"input:checked", enabled, false},
+		{"input:valid", enabled, true}, {"input:invalid", enabled, false},
+		{"input:invalid", invalid, true}, {"input:valid", invalid, false},
 	}
 	for _, test := range tests {
 		t.Run(test.selector+test.node.TagName, func(t *testing.T) {

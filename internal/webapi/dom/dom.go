@@ -26,11 +26,19 @@ type Element struct {
 
 // Event はWebGoへ公開するDOMイベント情報である。
 type Event struct {
-	Type     string
-	TargetID string
-	Value    string
-	X        float32
-	Y        float32
+	Type           string
+	TargetID       string
+	Value          string
+	X              float32
+	Y              float32
+	preventDefault func()
+}
+
+// PreventDefault cancels a cancelable browser default action such as form submission.
+func (event Event) PreventDefault() {
+	if event.preventDefault != nil {
+		event.preventDefault()
+	}
 }
 
 // New はDocumentに結び付いたDOM APIを生成する。
@@ -380,6 +388,9 @@ func (element *Element) addEventListener(eventType events.Type, listener events.
 
 func (element *Element) publicEvent(event events.Event) Event {
 	result := Event{Type: string(event.Type), Value: event.Value, X: event.X, Y: event.Y}
+	if event.IsCancelable() {
+		result.preventDefault = event.PreventDefault
+	}
 	if element == nil || element.document == nil {
 		return result
 	}

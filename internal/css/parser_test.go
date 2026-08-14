@@ -483,13 +483,13 @@ button:hover, #save:hover, .todo:hover, li.todo:hover { color: red }
 
 func TestParseInteractionAndFormStatePseudoClasses(t *testing.T) {
 	stylesheet, err := Parse(strings.NewReader(`
-a:link, input:focus, input:enabled, input:disabled, input:checked { color: red }
+a:link, input:focus, input:enabled, input:disabled, input:checked, input:valid, input:invalid { color: red }
 `))
 	if err != nil {
 		t.Fatal(err)
 	}
 	selectors := stylesheet.Rules[0].Selectors
-	wantKinds := []PseudoClassKind{PseudoLink, PseudoFocus, PseudoEnabled, PseudoDisabled, PseudoChecked}
+	wantKinds := []PseudoClassKind{PseudoLink, PseudoFocus, PseudoEnabled, PseudoDisabled, PseudoChecked, PseudoValid, PseudoInvalid}
 	if got, want := len(selectors), len(wantKinds); got != want {
 		t.Fatalf("selector count = %d, want %d", got, want)
 	}

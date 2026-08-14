@@ -2,6 +2,7 @@
 package network
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -26,6 +27,14 @@ type Response struct {
 	StatusCode  int
 	ContentType string
 	Body        []byte
+}
+
+// Request contains the HTTP request data accepted by the network client.
+type Request struct {
+	Method string
+	URL    *url.URL
+	Header http.Header
+	Body   []byte
 }
 
 // StatusError reports a non-successful HTTP response.
@@ -66,16 +75,32 @@ func NewClientWithLimits(httpClient *http.Client, maxBodyBytes int64) *Client {
 
 // Get retrieves one HTTP(S) resource.
 func (c *Client) Get(ctx context.Context, resourceURL *url.URL) (*Response, error) {
-	if resourceURL == nil {
+	return c.Do(ctx, &Request{Method: http.MethodGet, URL: resourceURL})
+}
+
+// Do sends a size-limited HTTP request.
+func (c *Client) Do(ctx context.Context, requestData *Request) (*Response, error) {
+	if requestData == nil || requestData.URL == nil {
 		return nil, errors.New("resource URL is nil")
 	}
-
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, resourceURL.String(), nil)
+	method := requestData.Method
+	if method == "" {
+		method = http.MethodGet
+	}
+	request, err := http.NewRequestWithContext(ctx, method, requestData.URL.String(), bytes.NewReader(requestData.Body))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
-	request.Header.Set("Accept", "text/html,application/xhtml+xml")
-	request.Header.Set("User-Agent", "Growse/0.1")
+	request.Header = requestData.Header.Clone()
+	if request.Header == nil {
+		request.Header = make(http.Header)
+	}
+	if request.Header.Get("Accept") == "" {
+		request.Header.Set("Accept", "text/html,application/xhtml+xml")
+	}
+	if request.Header.Get("User-Agent") == "" {
+		request.Header.Set("User-Agent", "Growse/0.1")
+	}
 
 	response, err := c.httpClient.Do(request)
 	if err != nil {
@@ -98,7 +123,7 @@ func (c *Client) Get(ctx context.Context, resourceURL *url.URL) (*Response, erro
 		return nil, fmt.Errorf("%w: limit is %d bytes", ErrResponseTooLarge, c.maxBodyBytes)
 	}
 
-	finalURL := resourceURL
+	finalURL := requestData.URL
 	if response.Request != nil && response.Request.URL != nil {
 		finalURL = response.Request.URL
 	}

@@ -554,3 +554,18 @@ func TestOnSubmitProvidesFormTarget(t *testing.T) {
 		t.Fatalf("event = %#v, want form submit data", received)
 	}
 }
+
+func TestOnSubmitCanPreventDefault(t *testing.T) {
+	document := dommodel.NewDocument()
+	form := document.CreateElement("form", map[string]string{"id": "form"})
+	if err := document.AppendChild(document.Root, form); err != nil {
+		t.Fatal(err)
+	}
+	dispatcher := events.NewDispatcher()
+	New(document, dispatcher, nil).GetElementByID("form").OnSubmit(func(event Event) { event.PreventDefault() })
+	submit := events.Cancelable(events.Submit, form.ID)
+	dispatcher.Dispatch(submit)
+	if !submit.DefaultPrevented() {
+		t.Fatal("WebGo event did not prevent submit default")
+	}
+}

@@ -3,6 +3,7 @@ package browser
 import (
 	"context"
 	"errors"
+	"net/http"
 	"net/url"
 	"reflect"
 	"strings"
@@ -25,6 +26,23 @@ type stubLoader struct {
 type routeLoader struct {
 	responses map[string]*network.Response
 	requested []string
+}
+
+type requestRouteLoader struct {
+	routeLoader
+	request *network.Request
+}
+
+func (loader *requestRouteLoader) Do(_ context.Context, request *network.Request) (*network.Response, error) {
+	copy := *request
+	copy.Body = append([]byte(nil), request.Body...)
+	copy.Header = request.Header.Clone()
+	loader.request = &copy
+	response, ok := loader.responses[request.URL.String()]
+	if !ok {
+		return nil, errors.New("missing response")
+	}
+	return response, nil
 }
 
 func (loader *routeLoader) Get(_ context.Context, resourceURL *url.URL) (*network.Response, error) {
@@ -236,6 +254,32 @@ func TestDispatchClickSubmitsSubmitButton(t *testing.T) {
 
 	if !browser.DispatchClick(button.ID, 0, 0) || !submitted {
 		t.Fatal("submit button click did not submit its form")
+	}
+}
+
+func TestDispatchClickUsesExplicitFormOwnerAndStoresSubmitter(t *testing.T) {
+	document := dom.NewDocument()
+	form := document.CreateElement("form", map[string]string{"id": "search"})
+	button := document.CreateElement("button", map[string]string{"form": "search", "formaction": "/alternate"})
+	if err := document.AppendChild(document.Root, form); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(document.Root, button); err != nil {
+		t.Fatal(err)
+	}
+	dispatcher := events.NewDispatcher()
+	submitted := false
+	dispatcher.AddEventListener(form.ID, events.Submit, func(events.Event) { submitted = true })
+	page := &Page{Document: document, ComputedStyles: style.Compute(document, nil), Events: dispatcher}
+	browser := New(nil)
+	browser.SetPage(page)
+
+	if !browser.DispatchClick(button.ID, 1, 2) || !submitted || page.Submitter != button.ID {
+		t.Fatalf("submitted=%v submitter=%d", submitted, page.Submitter)
+	}
+	config, ok := forms.ResolveSubmission(document, button)
+	if !ok || config.Form != form || config.Action != "/alternate" {
+		t.Fatalf("submission config = %#v, ok=%v", config, ok)
 	}
 }
 
@@ -945,6 +989,159 @@ func TestUpdateFocusDispatchesBlurBeforeFocus(t *testing.T) {
 	want := []string{"focus:first", "blur:first", "focus:second"}
 	if !reflect.DeepEqual(order, want) {
 		t.Fatalf("event order = %v, want %v", order, want)
+	}
+}
+
+func TestValidateFormFocusesFirstInvalidControlAndUpdatesPseudoClass(t *testing.T) {
+	document := dom.NewDocument()
+	form := document.CreateElement("form", nil)
+	first := document.CreateElement("input", map[string]string{"required": "", "class": "field"})
+	second := document.CreateElement("input", map[string]string{"type": "email", "class": "field"})
+	for _, edge := range [][2]*dom.Node{{document.Root, form}, {form, first}, {form, second}} {
+		if err := document.AppendChild(edge[0], edge[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stylesheet, err := css.Parse(strings.NewReader(`.field:valid { color: green } .field:invalid { color: red }`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := &Page{Document: document, Stylesheet: stylesheet, ComputedStyles: style.Compute(document, stylesheet), Events: events.NewDispatcher()}
+	browser := New(nil)
+	browser.SetPage(page)
+
+	if browser.ValidateForm(form.ID) || page.FocusTarget != first.ID {
+		t.Fatalf("validation result=true or focus=%d, want %d", page.FocusTarget, first.ID)
+	}
+	firstStyle, _ := page.ComputedStyles.For(first)
+	if firstStyle.Color != 0xff0000ff {
+		t.Fatalf("invalid color = %#x, want red", firstStyle.Color)
+	}
+	forms.SetCurrentValue(first, "ok")
+	forms.SetCurrentValue(second, "user@example.com")
+	recomputePageStyles(page, time.Now())
+	if !browser.ValidateForm(form.ID) {
+		t.Fatal("valid form was rejected")
+	}
+	firstStyle, _ = page.ComputedStyles.For(first)
+	if firstStyle.Color != 0x008000ff {
+		t.Fatalf("valid color = %#x, want green", firstStyle.Color)
+	}
+}
+
+func TestSubmitGETNavigatesWithEncodedEntriesAndPushesHistory(t *testing.T) {
+	document := dom.NewDocument()
+	form := document.CreateElement("form", map[string]string{"action": "/search?old=1#fragment", "method": "get"})
+	query := document.CreateElement("input", map[string]string{"name": "q", "value": "hello world"})
+	tag := document.CreateElement("input", map[string]string{"name": "tag", "value": "go"})
+	submit := document.CreateElement("button", nil)
+	for _, edge := range [][2]*dom.Node{{document.Root, form}, {form, query}, {form, tag}, {form, submit}} {
+		if err := document.AppendChild(edge[0], edge[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	baseURL := mustParseURL(t, "https://example.com/form")
+	targetURL := mustParseURL(t, "https://example.com/search?q=hello+world&tag=go")
+	loader := &routeLoader{responses: map[string]*network.Response{
+		targetURL.String(): {URL: targetURL, StatusCode: 200, ContentType: "text/html", Body: []byte(`<!doctype html><title>Results</title>`)},
+	}}
+	browser := New(loader)
+	browser.SetPage(&Page{URL: baseURL, Document: document, ComputedStyles: style.Compute(document, nil), Events: events.NewDispatcher()})
+
+	page, err := browser.SubmitGET(context.Background(), form.ID, submit.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.URL.String() != targetURL.String() || !browser.CanBack() {
+		t.Fatalf("page=%s canBack=%v", page.URL, browser.CanBack())
+	}
+	if got := loader.requested; !reflect.DeepEqual(got, []string{targetURL.String()}) {
+		t.Fatalf("requested = %v", got)
+	}
+	if len(browser.history.entries) != 2 || browser.history.entries[0].String() != baseURL.String() {
+		t.Fatalf("history = %#v", browser.history.entries)
+	}
+}
+
+func TestSubmitPOSTSendsEncodedBodyAndNavigatesToResponse(t *testing.T) {
+	document := dom.NewDocument()
+	form := document.CreateElement("form", map[string]string{"action": "/save?mode=fast#fragment", "method": "post"})
+	input := document.CreateElement("input", map[string]string{"name": "message", "value": "hello world"})
+	for _, edge := range [][2]*dom.Node{{document.Root, form}, {form, input}} {
+		if err := document.AppendChild(edge[0], edge[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	baseURL := mustParseURL(t, "https://example.com/form")
+	targetURL := mustParseURL(t, "https://example.com/save?mode=fast")
+	finalURL := mustParseURL(t, "https://example.com/saved")
+	loader := &requestRouteLoader{routeLoader: routeLoader{responses: map[string]*network.Response{
+		targetURL.String(): {URL: finalURL, StatusCode: 200, ContentType: "text/html", Body: []byte(`<!doctype html><title>Saved</title>`)},
+	}}}
+	browser := New(loader)
+	browser.SetPage(&Page{URL: baseURL, Document: document, ComputedStyles: style.Compute(document, nil), Events: events.NewDispatcher()})
+
+	page, err := browser.SubmitPOST(context.Background(), form.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loader.request == nil || loader.request.Method != http.MethodPost || string(loader.request.Body) != "message=hello+world" ||
+		loader.request.Header.Get("Content-Type") != forms.URLEncoded {
+		t.Fatalf("request = %#v", loader.request)
+	}
+	if page.URL.String() != finalURL.String() || !browser.CanBack() {
+		t.Fatalf("page=%s canBack=%v", page.URL, browser.CanBack())
+	}
+}
+
+func TestSubmitHonorsValidationPreventDefaultAndNoValidate(t *testing.T) {
+	newBrowser := func(t *testing.T, formAttributes, buttonAttributes map[string]string) (*Browser, *routeLoader, *Page, *dom.Node, *dom.Node) {
+		t.Helper()
+		document := dom.NewDocument()
+		formAttributes["action"] = "/result"
+		form := document.CreateElement("form", formAttributes)
+		input := document.CreateElement("input", map[string]string{"name": "name", "required": ""})
+		button := document.CreateElement("button", buttonAttributes)
+		for _, edge := range [][2]*dom.Node{{document.Root, form}, {form, input}, {form, button}} {
+			if err := document.AppendChild(edge[0], edge[1]); err != nil {
+				t.Fatal(err)
+			}
+		}
+		baseURL := mustParseURL(t, "https://example.com/form")
+		targetURL := mustParseURL(t, "https://example.com/result?name=")
+		loader := &routeLoader{responses: map[string]*network.Response{
+			targetURL.String(): {URL: targetURL, StatusCode: 200, ContentType: "text/html", Body: []byte(`<!doctype html><title>Result</title>`)},
+		}}
+		page := &Page{URL: baseURL, Document: document, ComputedStyles: style.Compute(document, nil), Events: events.NewDispatcher()}
+		browser := New(loader)
+		browser.SetPage(page)
+		return browser, loader, page, form, button
+	}
+
+	browser, loader, page, form, button := newBrowser(t, map[string]string{}, map[string]string{})
+	if _, err := browser.Submit(context.Background(), form.ID, button.ID); !errors.Is(err, ErrFormValidation) || page.FocusTarget == 0 || len(loader.requested) != 0 {
+		t.Fatalf("validation err=%v focus=%d requests=%v", err, page.FocusTarget, loader.requested)
+	}
+
+	browser, loader, page, form, button = newBrowser(t, map[string]string{"novalidate": ""}, map[string]string{})
+	page.Events.AddEventListener(form.ID, events.Submit, func(event events.Event) { event.PreventDefault() })
+	if _, err := browser.Submit(context.Background(), form.ID, button.ID); !errors.Is(err, ErrSubmissionPrevented) || len(loader.requested) != 0 {
+		t.Fatalf("prevent err=%v requests=%v", err, loader.requested)
+	}
+
+	for name, attributes := range map[string]struct {
+		form   map[string]string
+		button map[string]string
+	}{
+		"novalidate":     {form: map[string]string{"novalidate": ""}, button: map[string]string{}},
+		"formnovalidate": {form: map[string]string{}, button: map[string]string{"formnovalidate": ""}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			browser, loader, _, form, button := newBrowser(t, attributes.form, attributes.button)
+			if _, err := browser.Submit(context.Background(), form.ID, button.ID); err != nil || len(loader.requested) != 1 {
+				t.Fatalf("submit err=%v requests=%v", err, loader.requested)
+			}
+		})
 	}
 }
 
