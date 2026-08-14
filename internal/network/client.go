@@ -9,11 +9,8 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/http/cookiejar"
 	"net/url"
 	"time"
-
-	"golang.org/x/net/publicsuffix"
 )
 
 const (
@@ -45,11 +42,23 @@ type Response struct {
 
 // Request contains the HTTP request data accepted by the network client.
 type Request struct {
-	Method string
-	URL    *url.URL
-	Header http.Header
-	Body   []byte
+	Method  string
+	URL     *url.URL
+	Header  http.Header
+	Body    []byte
+	SiteURL *url.URL
+	Kind    RequestKind
 }
+
+// RequestKind identifies the browser operation that initiated a request.
+type RequestKind uint8
+
+const (
+	RequestNavigation RequestKind = iota
+	RequestSubresource
+	RequestForm
+	RequestFetch
+)
 
 // Client is a size-limited HTTP resource loader.
 type Client struct {
@@ -80,7 +89,7 @@ func NewClientWithLimits(httpClient *http.Client, maxBodyBytes int64) *Client {
 func configuredHTTPClient(source *http.Client) *http.Client {
 	copy := *source
 	if copy.Jar == nil {
-		copy.Jar, _ = cookiejar.New(&cookiejar.Options{PublicSuffixList: publicsuffix.List})
+		copy.Jar = newPolicyCookieJar()
 	}
 	if copy.CheckRedirect == nil {
 		copy.CheckRedirect = applyRedirectPolicy
@@ -154,11 +163,31 @@ func (c *Client) Do(ctx context.Context, requestData *Request) (*Response, error
 		request.Header.Set("User-Agent", "Growse/0.1")
 	}
 
-	response, err := c.httpClient.Do(request)
+	operationClient := *c.httpClient
+	jar := operationClient.Jar
+	operationClient.Jar = nil
+	addRequestCookies(request, jar, requestData)
+	redirectPolicy := operationClient.CheckRedirect
+	operationClient.CheckRedirect = func(redirect *http.Request, via []*http.Request) error {
+		storeResponseCookies(jar, redirect.Response)
+		if redirectPolicy != nil {
+			if err := redirectPolicy(redirect, via); err != nil {
+				return err
+			}
+		}
+		redirect.Header.Del("Cookie")
+		redirectData := *requestData
+		redirectData.URL = redirect.URL
+		redirectData.Method = redirect.Method
+		addRequestCookies(redirect, jar, &redirectData)
+		return nil
+	}
+	response, err := operationClient.Do(request)
 	if err != nil {
 		return nil, classifyRequestError(err)
 	}
 	defer response.Body.Close()
+	storeResponseCookies(jar, response)
 
 	if response.ContentLength > c.maxBodyBytes {
 		return nil, fmt.Errorf("%w: limit is %d bytes", ErrResponseTooLarge, c.maxBodyBytes)
@@ -189,6 +218,26 @@ func (c *Client) Do(ctx context.Context, requestData *Request) (*Response, error
 		Body:        body,
 		Redirected:  finalURL.String() != requestData.URL.String(),
 	}, nil
+}
+
+func addRequestCookies(request *http.Request, jar http.CookieJar, requestData *Request) {
+	if request == nil || jar == nil || requestData == nil {
+		return
+	}
+	cookies := jar.Cookies(request.URL)
+	if policyJar, ok := jar.(*policyCookieJar); ok {
+		cookies = policyJar.cookiesForRequest(request.URL, requestData.SiteURL, requestData.Kind, request.Method)
+	}
+	for _, cookie := range cookies {
+		request.AddCookie(cookie)
+	}
+}
+
+func storeResponseCookies(jar http.CookieJar, response *http.Response) {
+	if jar == nil || response == nil || response.Request == nil || response.Request.URL == nil {
+		return
+	}
+	jar.SetCookies(response.Request.URL, response.Cookies())
 }
 
 func classifyRequestError(err error) error {

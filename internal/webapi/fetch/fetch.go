@@ -220,10 +220,12 @@ func (api *API) prepare(request Request) (*network.Request, error) {
 		header[name] = append([]string(nil), values...)
 	}
 	return &network.Request{
-		Method: method,
-		URL:    resolved,
-		Header: header,
-		Body:   body,
+		Method:  method,
+		URL:     resolved,
+		Header:  header,
+		Body:    body,
+		SiteURL: cloneURL(api.baseURL),
+		Kind:    network.RequestFetch,
 	}, nil
 }
 

@@ -603,7 +603,8 @@ func (b *Browser) SubmitPOST(ctx context.Context, formID, submitterID dom.NodeID
 	body := []byte(forms.EncodeURLEncoded(entries))
 	response, err := loader.Do(ctx, &network.Request{
 		Method: http.MethodPost, URL: target, Body: body,
-		Header: http.Header{"Content-Type": []string{forms.URLEncoded}},
+		Header:  http.Header{"Content-Type": []string{forms.URLEncoded}},
+		SiteURL: cloneURL(page.URL), Kind: network.RequestForm,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("submit form to %s: %w", target.Redacted(), err)
