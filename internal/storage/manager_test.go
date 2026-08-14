@@ -2,6 +2,9 @@ package storage
 
 import (
 	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -73,5 +76,71 @@ func TestPersistentManagerRestoresLocalButNotSessionStorage(t *testing.T) {
 	}
 	if got, found := restoredSession.Get("draft"); found || got != "" {
 		t.Fatalf("Session Storage persisted = (%q, %v)", got, found)
+	}
+}
+
+func TestPersistentAreaRollsBackWhenAtomicRenameFails(t *testing.T) {
+	root := t.TempDir()
+	documentURL := parseURL(t, "https://example.test/app")
+	manager, err := NewPersistentManager(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	local, _, err := manager.Areas(documentURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := local.Set("draft", "stable"); err != nil {
+		t.Fatal(err)
+	}
+	directory := filepath.Join(root, "local-storage")
+	path := persistentFilePath(directory, "https://example.test")
+	backup := path + ".backup"
+	if err := os.Rename(path, backup); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := local.Set("draft", "uncommitted"); err == nil {
+		t.Fatal("Set() error = nil, want atomic rename failure")
+	}
+	if got, found := local.Get("draft"); !found || got != "stable" {
+		t.Fatalf("in-memory rollback = (%q, %v)", got, found)
+	}
+	files, err := os.ReadDir(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range files {
+		if strings.HasPrefix(file.Name(), ".storage-") {
+			t.Fatalf("abandoned transaction file = %q", file.Name())
+		}
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(backup, path); err != nil {
+		t.Fatal(err)
+	}
+
+	restarted, err := NewPersistentManager(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored, _, err := restarted.Areas(documentURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, found := restored.Get("draft"); !found || got != "stable" {
+		t.Fatalf("persisted rollback = (%q, %v)", got, found)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("storage file permissions = %o, want 600", info.Mode().Perm())
 	}
 }
