@@ -131,3 +131,21 @@ func TestPushStateValidatesJSONAndSameOriginBeforeAddingEntry(t *testing.T) {
 		}
 	}
 }
+
+func TestReplaceStateUsesCurrentURLWhenURLIsEmpty(t *testing.T) {
+	base, _ := url.Parse("https://example.test/app?old=1")
+	api := New(base)
+	var state string
+	var target *url.URL
+	api.SetReplaceStateHandler(func(gotState string, gotTarget *url.URL) error {
+		state, target = gotState, gotTarget
+		return nil
+	})
+
+	if err := api.ReplaceState(`["replaced"]`, ""); err != nil {
+		t.Fatalf("ReplaceState() error = %v", err)
+	}
+	if state != `["replaced"]` || target == nil || target.String() != base.String() {
+		t.Fatalf("replacement = (%q, %v)", state, target)
+	}
+}

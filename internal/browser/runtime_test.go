@@ -161,6 +161,36 @@ func TestWebGoPushStateAddsSameDocumentHistoryEntry(t *testing.T) {
 	}
 }
 
+func TestWebGoReplaceStateDoesNotAddHistoryEntry(t *testing.T) {
+	pageURL := mustParseURL(t, "http://localhost/notes")
+	loader := &routeLoader{responses: map[string]*network.Response{
+		pageURL.String(): {URL: pageURL, StatusCode: 200, ContentType: "text/html", Body: []byte(`<script type="text/go">package main; func main() {}</script>`)},
+	}}
+	runtime := &runtimeStub{}
+	browser := NewWithRuntimeFactory(loader, func() runtimemodel.Runtime { return runtime })
+	page, err := browser.Navigate(context.Background(), pageURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := mustParseURL(t, "http://localhost/notes?filter=open")
+	if err := runtime.environment.HistoryReplace(`{"filter":"open"}`, target); err != nil {
+		t.Fatalf("HistoryReplace() error = %v", err)
+	}
+	if browser.Page() != page || page.URL.String() != target.String() {
+		t.Fatalf("active Page or URL changed unexpectedly: %p %v", browser.Page(), page.URL)
+	}
+	if got, want := len(browser.history.entries), 1; got != want {
+		t.Fatalf("history entries = %d, want %d", got, want)
+	}
+	entry := browser.history.entries[0]
+	if entry.State != `{"filter":"open"}` || !entry.SameDocument {
+		t.Fatalf("history entry = %#v", entry)
+	}
+	if got := len(loader.requested); got != 1 {
+		t.Fatalf("network requests = %d, want 1", got)
+	}
+}
+
 func TestNavigateStartsRuntimeForTrustedOrigin(t *testing.T) {
 	pageURL := mustParseURL(t, "http://localhost/index.html")
 	loader := stubLoader{response: &network.Response{

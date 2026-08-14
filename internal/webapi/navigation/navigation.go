@@ -39,11 +39,12 @@ type Location struct {
 
 // API は1つのPageに属するNavigation APIである。
 type API struct {
-	mu        sync.RWMutex
-	base      *url.URL
-	current   Location
-	navigate  func(*url.URL) error
-	pushState func(string, *url.URL) error
+	mu           sync.RWMutex
+	base         *url.URL
+	current      Location
+	navigate     func(*url.URL) error
+	pushState    func(string, *url.URL) error
+	replaceState func(string, *url.URL) error
 }
 
 // SetPushStateHandler はsame-document History entryの追加先を設定する。
@@ -53,6 +54,16 @@ func (api *API) SetPushStateHandler(handler func(string, *url.URL) error) {
 	}
 	api.mu.Lock()
 	api.pushState = handler
+	api.mu.Unlock()
+}
+
+// SetReplaceStateHandler は現在History entryの置換先を設定する。
+func (api *API) SetReplaceStateHandler(handler func(string, *url.URL) error) {
+	if api == nil {
+		return
+	}
+	api.mu.Lock()
+	api.replaceState = handler
 	api.mu.Unlock()
 }
 
@@ -90,8 +101,8 @@ func (api *API) Navigate(rawURL string) error {
 
 // PushState はJSON stateとsame-origin URLを新しいHistory entryへ追加する。
 func (api *API) PushState(stateJSON, rawURL string) error {
-	if len(stateJSON) == 0 || len(stateJSON) > MaxHistoryStateSize || !json.Valid([]byte(stateJSON)) {
-		return errors.New("invalid history state")
+	if err := validateHistoryState(stateJSON); err != nil {
+		return err
 	}
 	target, err := api.resolveHistoryURL(rawURL)
 	if err != nil {
@@ -107,6 +118,35 @@ func (api *API) PushState(stateJSON, rawURL string) error {
 		return err
 	}
 	api.UpdateCurrent(target)
+	return nil
+}
+
+// ReplaceState は現在History entryのJSON stateとsame-origin URLを置換する。
+func (api *API) ReplaceState(stateJSON, rawURL string) error {
+	if err := validateHistoryState(stateJSON); err != nil {
+		return err
+	}
+	target, err := api.resolveHistoryURL(rawURL)
+	if err != nil {
+		return err
+	}
+	api.mu.RLock()
+	handler := api.replaceState
+	api.mu.RUnlock()
+	if handler == nil {
+		return ErrUnavailable
+	}
+	if err := handler(stateJSON, target); err != nil {
+		return err
+	}
+	api.UpdateCurrent(target)
+	return nil
+}
+
+func validateHistoryState(stateJSON string) error {
+	if len(stateJSON) == 0 || len(stateJSON) > MaxHistoryStateSize || !json.Valid([]byte(stateJSON)) {
+		return errors.New("invalid history state")
+	}
 	return nil
 }
 

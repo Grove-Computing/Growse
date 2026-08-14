@@ -913,6 +913,8 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 		return nil
 	}, func(state string, target *url.URL) error {
 		return b.pushHistoryState(page, target, state)
+	}, func(state string, target *url.URL) error {
+		return b.replaceHistoryState(page, target, state)
 	})
 	if err := ctx.Err(); err != nil {
 		close(navigationReady)
@@ -1053,7 +1055,33 @@ func (b *Browser) pushHistoryState(source *Page, target *url.URL, state string) 
 	return nil
 }
 
-func startRuntime(ctx context.Context, factory runtimemodel.Factory, page *Page, client ResourceLoader, onMutation func(), now func() time.Time, navigate func(*url.URL) error, historyPush func(string, *url.URL) error) runtimemodel.Runtime {
+func (b *Browser) replaceHistoryState(source *Page, target *url.URL, state string) error {
+	b.mu.Lock()
+	if source == nil || b.page != source || source.URL == nil || target == nil {
+		b.mu.Unlock()
+		return errors.New("history is unavailable")
+	}
+	if target.User != nil || !network.SameOrigin(source.URL, target) {
+		b.mu.Unlock()
+		return errors.New("history URL is not same-origin")
+	}
+	source.URL = cloneURL(target)
+	b.history.replaceEntry(&historyEntry{
+		URL: target, State: state, SameDocument: true, PageID: source.HistoryID,
+	})
+	activeRuntime := b.activeRuntime
+	onMutation := b.onMutation
+	b.mu.Unlock()
+	if updater, ok := activeRuntime.(runtimemodel.LocationUpdater); ok {
+		updater.UpdateLocation(target)
+	}
+	if onMutation != nil {
+		onMutation()
+	}
+	return nil
+}
+
+func startRuntime(ctx context.Context, factory runtimemodel.Factory, page *Page, client ResourceLoader, onMutation func(), now func() time.Time, navigate func(*url.URL) error, historyPush, historyReplace func(string, *url.URL) error) runtimemodel.Runtime {
 	if factory == nil || page == nil || len(page.Scripts) == 0 {
 		return nil
 	}
@@ -1090,11 +1118,12 @@ func startRuntime(ctx context.Context, factory runtimemodel.Factory, page *Page,
 		return now()
 	}
 	environment := runtimemodel.Environment{
-		Document:    page.Document,
-		Events:      page.Events,
-		BaseURL:     cloneURL(page.URL),
-		Navigate:    navigate,
-		HistoryPush: historyPush,
+		Document:       page.Document,
+		Events:         page.Events,
+		BaseURL:        cloneURL(page.URL),
+		Navigate:       navigate,
+		HistoryPush:    historyPush,
+		HistoryReplace: historyReplace,
 		OnMutation: func() {
 			page.HoverPath = hoverPath(page.Document, page.HoverTarget)
 			if len(page.HoverPath) == 0 {
