@@ -219,6 +219,15 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 			}
 		}
 	}
+	for property, candidate := range winners {
+		if !candidate.important {
+			continue
+		}
+		if computed.ImportantProperties == nil {
+			computed.ImportantProperties = make(map[string]bool)
+		}
+		computed.ImportantProperties[property] = true
+	}
 	computed.CustomProperties = applyCustomProperties(computed.CustomProperties, winners)
 	fontContext := LengthContext{
 		FontSize: parent.FontSize, RootFontSize: environment.RootFontSize,

@@ -435,6 +435,7 @@ type ComputedStyle struct {
 	Opacity             float32
 	Transitions         []Transition
 	Animations          []CSSAnimation
+	ImportantProperties map[string]bool
 	BeforeContent       string
 	AfterContent        string
 	CustomProperties    map[string]string
@@ -487,6 +488,12 @@ type Transition struct {
 // Bold reports whether the computed weight should use a bold face.
 func (s ComputedStyle) Bold() bool {
 	return s.FontWeight >= 600
+}
+
+// Important reports whether the winning author declaration for property was
+// marked !important.
+func (s ComputedStyle) Important(property string) bool {
+	return s.ImportantProperties[property]
 }
 
 // Map stores computed styles by DOM NodeID.
