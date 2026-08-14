@@ -3,6 +3,7 @@ package fetch
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/url"
@@ -27,7 +28,58 @@ type Request struct {
 // Response is delivered to a successful Fetch callback. Additional response
 // metadata and body helpers are added by the HTTP lifecycle implementation.
 type Response struct {
-	Status int
+	Status     int
+	StatusText string
+	URL        string
+	Redirected bool
+	Header     Header
+	body       *responseBody
+}
+
+type responseBody struct {
+	value    []byte
+	consumed bool
+}
+
+// ErrBodyConsumed reports a second attempt to consume one response body.
+var ErrBodyConsumed = errors.New("response body has already been consumed")
+
+// Bytes consumes the response body and returns a defensive copy.
+func (response Response) Bytes() ([]byte, error) {
+	body, err := response.consumeBody()
+	if err != nil {
+		return nil, err
+	}
+	return append([]byte(nil), body...), nil
+}
+
+// Text consumes the response body as UTF-8 text.
+func (response Response) Text() (string, error) {
+	body, err := response.consumeBody()
+	if err != nil {
+		return "", err
+	}
+	return string(body), nil
+}
+
+// JSON consumes and decodes the response body into target.
+func (response Response) JSON(target any) error {
+	body, err := response.consumeBody()
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(body, target)
+}
+
+func (response Response) consumeBody() ([]byte, error) {
+	if response.body == nil {
+		return nil, nil
+	}
+	if response.body.consumed {
+		return nil, ErrBodyConsumed
+	}
+	response.body.consumed = true
+	return response.body.value, nil
 }
 
 // API binds WebGo Fetch calls to one page URL and network executor.
@@ -51,7 +103,29 @@ func (api *API) Fetch(request Request, success func(Response), failure func(stri
 		return
 	}
 	if success != nil {
-		success(Response{Status: response.StatusCode})
+		success(newResponse(response))
+	}
+}
+
+func newResponse(response *network.Response) Response {
+	if response == nil {
+		return Response{}
+	}
+	header := make(Header, len(response.Header))
+	for name, values := range response.Header {
+		header[name] = append([]string(nil), values...)
+	}
+	finalURL := ""
+	if response.URL != nil {
+		finalURL = response.URL.String()
+	}
+	return Response{
+		Status:     response.StatusCode,
+		StatusText: response.Status,
+		URL:        finalURL,
+		Redirected: response.Redirected,
+		Header:     header,
+		body:       &responseBody{value: append([]byte(nil), response.Body...)},
 	}
 }
 

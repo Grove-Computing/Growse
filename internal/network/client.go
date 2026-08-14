@@ -25,8 +25,11 @@ var ErrResponseTooLarge = errors.New("response body is too large")
 type Response struct {
 	URL         *url.URL
 	StatusCode  int
+	Status      string
+	Header      http.Header
 	ContentType string
 	Body        []byte
+	Redirected  bool
 }
 
 // Request contains the HTTP request data accepted by the network client.
@@ -131,8 +134,11 @@ func (c *Client) Do(ctx context.Context, requestData *Request) (*Response, error
 	return &Response{
 		URL:         cloneURL(finalURL),
 		StatusCode:  response.StatusCode,
+		Status:      http.StatusText(response.StatusCode),
+		Header:      response.Header.Clone(),
 		ContentType: response.Header.Get("Content-Type"),
 		Body:        body,
+		Redirected:  finalURL.String() != requestData.URL.String(),
 	}, nil
 }
 
