@@ -48,12 +48,14 @@ type blockStyle struct {
 	flexWrap            stylemodel.FlexWrap
 	justifyContent      stylemodel.JustifyContent
 	alignItems          stylemodel.Align
+	justifyItems        stylemodel.Align
 	alignContent        stylemodel.Align
 	order               int
 	flexGrow            float32
 	flexShrink          float32
 	flexBasis           stylemodel.FlexBasis
 	alignSelf           stylemodel.Align
+	justifySelf         stylemodel.Align
 	rowGap              stylemodel.LengthPercentage
 	columnGap           stylemodel.LengthPercentage
 	gridTemplateColumns []stylemodel.GridTrackSize
@@ -857,9 +859,9 @@ func applyComputed(block blockStyle, computed stylemodel.ComputedStyle) blockSty
 	block.lineHeight, block.whiteSpace = computed.LineHeight, computed.WhiteSpace
 	block.overflowX, block.overflowY = computed.OverflowX, computed.OverflowY
 	block.flexDirection, block.flexWrap = computed.FlexDirection, computed.FlexWrap
-	block.justifyContent, block.alignItems, block.alignContent = computed.JustifyContent, computed.AlignItems, computed.AlignContent
+	block.justifyContent, block.alignItems, block.justifyItems, block.alignContent = computed.JustifyContent, computed.AlignItems, computed.JustifyItems, computed.AlignContent
 	block.order, block.flexGrow, block.flexShrink = computed.Order, computed.FlexGrow, computed.FlexShrink
-	block.flexBasis, block.alignSelf = computed.FlexBasis, computed.AlignSelf
+	block.flexBasis, block.alignSelf, block.justifySelf = computed.FlexBasis, computed.AlignSelf, computed.JustifySelf
 	block.rowGap, block.columnGap = computed.RowGap, computed.ColumnGap
 	block.gridTemplateColumns = append([]stylemodel.GridTrackSize(nil), computed.GridTemplateColumns...)
 	block.gridTemplateRows = append([]stylemodel.GridTrackSize(nil), computed.GridTemplateRows...)

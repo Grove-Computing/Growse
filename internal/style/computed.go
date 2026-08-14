@@ -303,12 +303,14 @@ type ComputedStyle struct {
 	FlexWrap            FlexWrap
 	JustifyContent      JustifyContent
 	AlignItems          Align
+	JustifyItems        Align
 	AlignContent        Align
 	Order               int
 	FlexGrow            float32
 	FlexShrink          float32
 	FlexBasis           FlexBasis
 	AlignSelf           Align
+	JustifySelf         Align
 	RowGap              LengthPercentage
 	ColumnGap           LengthPercentage
 	GridTemplateColumns []GridTrackSize

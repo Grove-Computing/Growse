@@ -929,6 +929,23 @@ func TestComputeGridAutoFlowModes(t *testing.T) {
 	}
 }
 
+func TestComputeGridPlaceShorthands(t *testing.T) {
+	document := dom.NewDocument()
+	container := document.CreateElement("div", map[string]string{"style": "display:grid; place-content:flex-end center; place-items:center flex-end"})
+	item := document.CreateElement("div", map[string]string{"style": "place-self:flex-start center"})
+	appendNode(t, document, document.Root, container)
+	appendNode(t, document, container, item)
+	computed := Compute(document, nil)
+	containerStyle, _ := computed.For(container)
+	itemStyle, _ := computed.For(item)
+	if containerStyle.AlignContent != AlignFlexEnd || containerStyle.JustifyContent != JustifyCenter || containerStyle.AlignItems != AlignCenter || containerStyle.JustifyItems != AlignFlexEnd {
+		t.Fatalf("container place shorthands = %#v", containerStyle)
+	}
+	if itemStyle.AlignSelf != AlignFlexStart || itemStyle.JustifySelf != AlignCenter {
+		t.Fatalf("item place-self = %#v", itemStyle)
+	}
+}
+
 func parseTestSelector(t *testing.T, value string) css.Selector {
 	t.Helper()
 	stylesheet, err := css.Parse(strings.NewReader(value + " { color: red }"))

@@ -105,7 +105,7 @@ func initialStyle() ComputedStyle {
 		Color: defaultTextColor, BackgroundColor: transparent, FontSize: 16, FontWeight: 400,
 		BackgroundRepeat: BackgroundRepeat{X: true, Y: true},
 		DecorationColor:  defaultTextColor, Opacity: 1, FlexShrink: 1,
-		AlignItems: AlignStretch, AlignContent: AlignStretch, AlignSelf: AlignAuto,
+		AlignItems: AlignStretch, JustifyItems: AlignStretch, AlignContent: AlignStretch, AlignSelf: AlignAuto, JustifySelf: AlignAuto,
 		Width: SizeValue{Kind: SizeAuto}, Height: SizeValue{Kind: SizeAuto},
 		MinWidth: SizeValue{Kind: SizeAuto}, MinHeight: SizeValue{Kind: SizeAuto},
 		MaxWidth: SizeValue{Kind: SizeNone}, MaxHeight: SizeValue{Kind: SizeNone},
@@ -119,7 +119,7 @@ func inheritedStyle(parent ComputedStyle) ComputedStyle {
 		BackgroundColor: transparent, Display: DisplayInline,
 		BackgroundRepeat: BackgroundRepeat{X: true, Y: true},
 		DecorationColor:  parent.Color, Opacity: 1, FlexShrink: 1,
-		AlignItems: AlignStretch, AlignContent: AlignStretch, AlignSelf: AlignAuto,
+		AlignItems: AlignStretch, JustifyItems: AlignStretch, AlignContent: AlignStretch, AlignSelf: AlignAuto, JustifySelf: AlignAuto,
 		Width: SizeValue{Kind: SizeAuto}, Height: SizeValue{Kind: SizeAuto},
 		MinWidth: SizeValue{Kind: SizeAuto}, MinHeight: SizeValue{Kind: SizeAuto},
 		MaxWidth: SizeValue{Kind: SizeNone}, MaxHeight: SizeValue{Kind: SizeNone},
@@ -866,6 +866,12 @@ func expandedProperties(property string) []string {
 		return []string{"flex-grow", "flex-shrink", "flex-basis"}
 	case "gap":
 		return []string{"row-gap", "column-gap"}
+	case "place-content":
+		return []string{"align-content", "justify-content"}
+	case "place-items":
+		return []string{"align-items", "justify-items"}
+	case "place-self":
+		return []string{"align-self", "justify-self"}
 	default:
 		return []string{property}
 	}

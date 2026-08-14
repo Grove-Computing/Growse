@@ -122,12 +122,86 @@ func (e *engine) addGridChildren(container *dom.Node, containerStyle blockStyle,
 	}
 	rows := resolveGridTracks(containerStyle.gridTemplateRows, containerStyle.gridAutoRows, rowCount, containingHeight, heightDefinite, rowGap, rowMaxContent, rowMaxContent)
 	startY := e.y
+	columnOffset, distributedColumnGap := justifySpacing(containerStyle.justifyContent, max(width-trackSpanSize(columns, 0, len(columns), columnGap), float32(0)), len(columns), false)
+	rowOffset, distributedRowGap := float32(0), float32(0)
+	if heightDefinite {
+		rowOffset, distributedRowGap = alignContentSpacing(containerStyle.alignContent, max(containingHeight-trackSpanSize(rows, 0, len(rows), rowGap), float32(0)), len(rows))
+	}
+	columnGap += distributedColumnGap
+	rowGap += distributedRowGap
 	for _, item := range items {
-		itemX, itemY := x+trackOffset(columns, item.colStart, columnGap), startY+trackOffset(rows, item.rowStart, rowGap)
+		itemX, itemY := x+columnOffset+trackOffset(columns, item.colStart, columnGap), startY+rowOffset+trackOffset(rows, item.rowStart, rowGap)
 		itemWidth, itemHeight := trackSpanSize(columns, item.colStart, item.colEnd, columnGap), trackSpanSize(rows, item.rowStart, item.rowEnd, rowGap)
+		itemX, itemY, itemWidth, itemHeight = e.alignGridItem(item.node, item.style, containerStyle, itemX, itemY, itemWidth, itemHeight)
 		e.renderGridItem(item.node, item.style, itemX, itemY, itemWidth, itemHeight)
 	}
-	e.y = startY + trackOffset(rows, len(rows), rowGap)
+	e.y = startY + rowOffset + trackSpanSize(rows, 0, len(rows), rowGap)
+}
+
+func (e *engine) alignGridItem(node *dom.Node, item, container blockStyle, x, y, cellWidth, cellHeight float32) (float32, float32, float32, float32) {
+	intrinsicWidth, intrinsicHeight, _ := e.flexIntrinsicSizes(node, item, flexAxis{horizontal: true}, cellWidth, cellWidth, cellHeight, true)
+	justify := item.justifySelf
+	if justify == stylemodel.AlignAuto {
+		justify = container.justifyItems
+	}
+	align := item.alignSelf
+	if align == stylemodel.AlignAuto {
+		align = container.alignItems
+	}
+	width, widthDefinite := gridItemOuterSize(item.width, item, cellWidth, true)
+	height, heightDefinite := gridItemOuterSize(item.height, item, cellHeight, false)
+	availableWidth := max(cellWidth-item.margin.Left-item.margin.Right, float32(0))
+	availableHeight := max(cellHeight-item.margin.Top-item.margin.Bottom, float32(0))
+	if !widthDefinite {
+		if justify == stylemodel.AlignStretch && !item.marginAuto.Left && !item.marginAuto.Right {
+			width = availableWidth
+		} else {
+			width = min(intrinsicWidth, availableWidth)
+		}
+	}
+	if !heightDefinite {
+		if align == stylemodel.AlignStretch && !item.marginAuto.Top && !item.marginAuto.Bottom {
+			height = availableHeight
+		} else {
+			height = min(intrinsicHeight, availableHeight)
+		}
+	}
+	x += item.margin.Left + gridAlignmentOffset(max(availableWidth-width, float32(0)), justify, item.marginAuto.Left, item.marginAuto.Right)
+	y += item.margin.Top + gridAlignmentOffset(max(availableHeight-height, float32(0)), align, item.marginAuto.Top, item.marginAuto.Bottom)
+	return x, y, max(width, float32(0)), max(height, float32(0))
+}
+
+func gridItemOuterSize(value stylemodel.SizeValue, item blockStyle, basis float32, horizontal bool) (float32, bool) {
+	size, definite := resolveSize(value, basis, true)
+	if !definite || item.boxSizing == stylemodel.BoxSizingBorderBox {
+		return size, definite
+	}
+	if horizontal {
+		size += item.padding.Left + item.padding.Right + item.border.Left.Width + item.border.Right.Width
+	} else {
+		size += item.padding.Top + item.padding.Bottom + item.border.Top.Width + item.border.Bottom.Width
+	}
+	return size, true
+}
+
+func gridAlignmentOffset(free float32, alignment stylemodel.Align, autoStart, autoEnd bool) float32 {
+	if autoStart && autoEnd {
+		return free / 2
+	}
+	if autoStart {
+		return free
+	}
+	if autoEnd {
+		return 0
+	}
+	switch alignment {
+	case stylemodel.AlignFlexEnd:
+		return free
+	case stylemodel.AlignCenter:
+		return free / 2
+	default:
+		return 0
+	}
 }
 
 func placementSpan(placement stylemodel.GridPlacement, start, end int) int {

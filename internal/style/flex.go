@@ -11,8 +11,10 @@ func applyFlexProperties(computed, parent ComputedStyle, winners map[string]winn
 	computed.FlexWrap = resolveFlexWrapWinner(computed.FlexWrap, parent.FlexWrap, winners["flex-wrap"], customProperties)
 	computed.JustifyContent = resolveJustifyWinner(computed.JustifyContent, parent.JustifyContent, winners["justify-content"], customProperties)
 	computed.AlignItems = resolveAlignWinner(computed.AlignItems, parent.AlignItems, AlignStretch, false, winners["align-items"], customProperties)
+	computed.JustifyItems = resolveAlignWinner(computed.JustifyItems, parent.JustifyItems, AlignStretch, false, justifyPlaceCandidate(winners["justify-items"]), customProperties)
 	computed.AlignContent = resolveAlignWinner(computed.AlignContent, parent.AlignContent, AlignStretch, true, winners["align-content"], customProperties)
 	computed.AlignSelf = resolveAlignWinner(computed.AlignSelf, parent.AlignSelf, AlignAuto, false, winners["align-self"], customProperties)
+	computed.JustifySelf = resolveAlignWinner(computed.JustifySelf, parent.JustifySelf, AlignAuto, false, justifyPlaceCandidate(winners["justify-self"]), customProperties)
 	computed.Order = resolveIntegerWinner(computed.Order, parent.Order, 0, winners["order"], customProperties)
 	computed.FlexGrow = resolveFactorWinner("flex-grow", computed.FlexGrow, parent.FlexGrow, 0, winners["flex-grow"], customProperties)
 	computed.FlexShrink = resolveFactorWinner("flex-shrink", computed.FlexShrink, parent.FlexShrink, 1, winners["flex-shrink"], customProperties)
@@ -80,6 +82,7 @@ func resolveJustifyWinner(current, parent JustifyContent, candidate winner, cust
 	case globalInitial, globalUnset:
 		return JustifyFlexStart
 	}
+	value = placeShorthandComponent(candidate.source, value, false)
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "normal", "flex-start":
 		return JustifyFlexStart
@@ -109,11 +112,34 @@ func resolveAlignWinner(current, parent, initial Align, distributed bool, candid
 	case globalInitial, globalUnset:
 		return initial
 	}
+	value = placeShorthandComponent(candidate.source, value, true)
 	parsed, valid := parseAlign(value, initial == AlignAuto, distributed)
 	if valid {
 		return parsed
 	}
 	return current
+}
+
+func placeShorthandComponent(source, value string, first bool) string {
+	if source != "place-content" && source != "place-items" && source != "place-self" {
+		return value
+	}
+	parts, valid := splitCSSSpaceSeparated(value)
+	if !valid || len(parts) == 0 || len(parts) > 2 {
+		return value
+	}
+	if first || len(parts) == 1 {
+		return parts[0]
+	}
+	return parts[1]
+}
+
+func justifyPlaceCandidate(candidate winner) winner {
+	if candidate.source == "place-items" || candidate.source == "place-self" {
+		candidate.value = placeShorthandComponent(candidate.source, candidate.value, false)
+		candidate.source = "justify"
+	}
+	return candidate
 }
 
 func resolveIntegerWinner(current, parent, initial int, candidate winner, custom map[string]string) int {

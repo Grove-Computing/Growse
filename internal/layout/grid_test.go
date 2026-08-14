@@ -229,3 +229,32 @@ func TestBuildGridSparseAndDenseAutoPlacement(t *testing.T) {
 		t.Fatalf("dense placement = first %#v second %#v third %#v", denseFirst.Rect, denseSecond.Rect, denseThird.Rect)
 	}
 }
+
+func TestBuildGridGapContentSelfAlignmentAndAutoMargin(t *testing.T) {
+	document := dom.NewDocument()
+	grid := document.CreateElement("div", map[string]string{"class": "grid"})
+	first := document.CreateElement("div", map[string]string{"class": "item"})
+	second := document.CreateElement("div", map[string]string{"class": "item"})
+	autoMargin := document.CreateElement("div", map[string]string{"class": "item auto-margin"})
+	appendNodes(t, document, [2]*dom.Node{document.Root, grid}, [2]*dom.Node{grid, first}, [2]*dom.Node{grid, second}, [2]*dom.Node{grid, autoMargin})
+	stylesheet, err := css.Parse(strings.NewReader(`
+.grid { display:grid; width:300px; height:120px; grid-template-columns:50px 50px; grid-template-rows:30px 30px; gap:10px; place-content:flex-end center; place-items:center; background-color:#eee }
+.item { width:20px; height:10px; background-color:#ddd }
+.auto-margin { margin-left:auto }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := BuildWithViewport(document, stylemodel.Compute(document, stylesheet), 500, 300)
+	containerRect := decorationForNode(t, tree, grid.ID)
+	firstRect, secondRect, autoRect := decorationForNode(t, tree, first.ID), decorationForNode(t, tree, second.ID), decorationForNode(t, tree, autoMargin.ID)
+	if firstRect.X != containerRect.X+110 || firstRect.Y != containerRect.Y+60 {
+		t.Fatalf("content/self alignment = container %#v first %#v", containerRect.Rect, firstRect.Rect)
+	}
+	if secondRect.X-firstRect.X != 60 || secondRect.Y != firstRect.Y {
+		t.Fatalf("column gap = first %#v second %#v", firstRect.Rect, secondRect.Rect)
+	}
+	if autoRect.X != containerRect.X+125 || autoRect.Y != containerRect.Y+100 {
+		t.Fatalf("auto margin alignment = %#v", autoRect.Rect)
+	}
+}
