@@ -94,8 +94,49 @@ func TestClientHonorsContextCancellation(t *testing.T) {
 	defer cancel()
 
 	_, err := NewClient().Get(ctx, mustParseURL(t, server.URL))
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("Get() error = %v, want context deadline exceeded", err)
+	if !errors.Is(err, ErrTimeout) || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Get() error = %v, want ErrTimeout and context deadline exceeded", err)
+	}
+}
+
+func TestClientReportsRedirectLoopAndLimit(t *testing.T) {
+	t.Run("loop", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+			response.Header().Set("Location", "/loop")
+			response.WriteHeader(http.StatusFound)
+		}))
+		defer server.Close()
+		_, err := NewClientWithLimits(server.Client(), 1024).Get(context.Background(), mustParseURL(t, server.URL+"/loop"))
+		if !errors.Is(err, ErrRedirectLoop) {
+			t.Fatalf("Get() error = %v, want ErrRedirectLoop", err)
+		}
+	})
+
+	t.Run("limit", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+			step := 0
+			_, _ = fmt.Sscanf(strings.TrimPrefix(request.URL.Path, "/"), "%d", &step)
+			response.Header().Set("Location", fmt.Sprintf("/%d", step+1))
+			response.WriteHeader(http.StatusFound)
+		}))
+		defer server.Close()
+		_, err := NewClientWithLimits(server.Client(), 1024).Get(context.Background(), mustParseURL(t, server.URL+"/0"))
+		if !errors.Is(err, ErrRedirectLimit) {
+			t.Fatalf("Get() error = %v, want ErrRedirectLimit", err)
+		}
+	})
+}
+
+func TestClientReportsTruncatedResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.Header().Set("Content-Length", "10")
+		_, _ = response.Write([]byte("short"))
+	}))
+	defer server.Close()
+
+	_, err := NewClientWithLimits(server.Client(), 1024).Get(context.Background(), mustParseURL(t, server.URL))
+	if !errors.Is(err, ErrResponseTruncated) {
+		t.Fatalf("Get() error = %v, want ErrResponseTruncated", err)
 	}
 }
 

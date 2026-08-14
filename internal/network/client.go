@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"time"
@@ -15,11 +16,18 @@ import (
 const (
 	defaultTimeout      = 15 * time.Second
 	defaultMaxBodyBytes = 4 << 20 // 4 MiB
+	maxRedirects        = 10
 )
 
 // ErrResponseTooLarge is returned when a response exceeds the configured
 // body-size limit.
-var ErrResponseTooLarge = errors.New("response body is too large")
+var (
+	ErrResponseTooLarge  = errors.New("response body is too large")
+	ErrResponseTruncated = errors.New("response body was truncated")
+	ErrRedirectLoop      = errors.New("redirect loop")
+	ErrRedirectLimit     = errors.New("redirect limit exceeded")
+	ErrTimeout           = errors.New("request timed out")
+)
 
 // Response contains the network metadata needed to construct a browser page.
 type Response struct {
@@ -78,6 +86,14 @@ func applyRedirectPolicy(request *http.Request, via []*http.Request) error {
 	if request == nil || request.Response == nil || len(via) == 0 {
 		return nil
 	}
+	for _, previous := range via {
+		if previous.URL != nil && request.URL != nil && previous.URL.String() == request.URL.String() {
+			return ErrRedirectLoop
+		}
+	}
+	if len(via) >= maxRedirects {
+		return ErrRedirectLimit
+	}
 	previous := via[len(via)-1]
 	switch request.Response.StatusCode {
 	case http.StatusMovedPermanently, http.StatusFound:
@@ -134,7 +150,7 @@ func (c *Client) Do(ctx context.Context, requestData *Request) (*Response, error
 
 	response, err := c.httpClient.Do(request)
 	if err != nil {
-		return nil, fmt.Errorf("send request: %w", err)
+		return nil, classifyRequestError(err)
 	}
 	defer response.Body.Close()
 
@@ -144,6 +160,9 @@ func (c *Client) Do(ctx context.Context, requestData *Request) (*Response, error
 
 	body, err := io.ReadAll(io.LimitReader(response.Body, c.maxBodyBytes+1))
 	if err != nil {
+		if errors.Is(err, io.ErrUnexpectedEOF) {
+			return nil, fmt.Errorf("%w: %v", ErrResponseTruncated, err)
+		}
 		return nil, fmt.Errorf("read response body: %w", err)
 	}
 	if int64(len(body)) > c.maxBodyBytes {
@@ -164,6 +183,24 @@ func (c *Client) Do(ctx context.Context, requestData *Request) (*Response, error
 		Body:        body,
 		Redirected:  finalURL.String() != requestData.URL.String(),
 	}, nil
+}
+
+func classifyRequestError(err error) error {
+	switch {
+	case errors.Is(err, ErrRedirectLoop):
+		return fmt.Errorf("send request: %w", ErrRedirectLoop)
+	case errors.Is(err, ErrRedirectLimit):
+		return fmt.Errorf("send request: %w", ErrRedirectLimit)
+	case errors.Is(err, context.Canceled):
+		return fmt.Errorf("send request: %w", context.Canceled)
+	case errors.Is(err, context.DeadlineExceeded):
+		return fmt.Errorf("%w: %w", ErrTimeout, context.DeadlineExceeded)
+	}
+	var networkError net.Error
+	if errors.As(err, &networkError) && networkError.Timeout() {
+		return fmt.Errorf("%w: %v", ErrTimeout, err)
+	}
+	return fmt.Errorf("send request: %w", err)
 }
 
 func cloneURL(source *url.URL) *url.URL {
