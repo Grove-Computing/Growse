@@ -278,6 +278,32 @@ func (b *Browser) ResetForm(nodeID dom.NodeID) bool {
 	return changed || handled
 }
 
+// ValidateForm focuses the first invalid control and reports whether the form is valid.
+func (b *Browser) ValidateForm(nodeID dom.NodeID) bool {
+	b.mu.RLock()
+	page := b.page
+	if page == nil || page.Document == nil {
+		b.mu.RUnlock()
+		return false
+	}
+	node, ok := page.Document.NodeByID(nodeID)
+	if !ok || !page.Document.IsConnected(node) {
+		b.mu.RUnlock()
+		return false
+	}
+	form := node
+	if form.TagName != "form" {
+		form = nearestForm(node)
+	}
+	first, invalid := forms.FirstInvalidControl(page.Document, form)
+	b.mu.RUnlock()
+	if !invalid {
+		return form != nil
+	}
+	b.UpdateFocus(first.ID)
+	return false
+}
+
 // UpdateHover updates the active page's hovered element path.
 func (b *Browser) UpdateHover(nodeID dom.NodeID, x, y float32) bool {
 	b.mu.Lock()

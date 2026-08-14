@@ -948,6 +948,43 @@ func TestUpdateFocusDispatchesBlurBeforeFocus(t *testing.T) {
 	}
 }
 
+func TestValidateFormFocusesFirstInvalidControlAndUpdatesPseudoClass(t *testing.T) {
+	document := dom.NewDocument()
+	form := document.CreateElement("form", nil)
+	first := document.CreateElement("input", map[string]string{"required": "", "class": "field"})
+	second := document.CreateElement("input", map[string]string{"type": "email", "class": "field"})
+	for _, edge := range [][2]*dom.Node{{document.Root, form}, {form, first}, {form, second}} {
+		if err := document.AppendChild(edge[0], edge[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stylesheet, err := css.Parse(strings.NewReader(`.field:valid { color: green } .field:invalid { color: red }`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := &Page{Document: document, Stylesheet: stylesheet, ComputedStyles: style.Compute(document, stylesheet), Events: events.NewDispatcher()}
+	browser := New(nil)
+	browser.SetPage(page)
+
+	if browser.ValidateForm(form.ID) || page.FocusTarget != first.ID {
+		t.Fatalf("validation result=true or focus=%d, want %d", page.FocusTarget, first.ID)
+	}
+	firstStyle, _ := page.ComputedStyles.For(first)
+	if firstStyle.Color != 0xff0000ff {
+		t.Fatalf("invalid color = %#x, want red", firstStyle.Color)
+	}
+	forms.SetCurrentValue(first, "ok")
+	forms.SetCurrentValue(second, "user@example.com")
+	recomputePageStyles(page, time.Now())
+	if !browser.ValidateForm(form.ID) {
+		t.Fatal("valid form was rejected")
+	}
+	firstStyle, _ = page.ComputedStyles.For(first)
+	if firstStyle.Color != 0x008000ff {
+		t.Fatalf("valid color = %#x, want green", firstStyle.Color)
+	}
+}
+
 func TestNewPageCopiesURL(t *testing.T) {
 	pageURL := mustParseURL(t, "https://example.com/original")
 	page := NewPage(pageURL)

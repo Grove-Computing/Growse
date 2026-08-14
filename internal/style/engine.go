@@ -58,6 +58,7 @@ func ComputeWithEnvironment(document *dom.Document, stylesheet *css.Stylesheet, 
 	if document == nil || document.Root == nil {
 		return result
 	}
+	state.Document = document
 	if environment.ViewportWidth <= 0 {
 		environment.ViewportWidth = defaultEnvironment().ViewportWidth
 	}
@@ -1391,6 +1392,10 @@ func matchesPseudoClass(node *dom.Node, pseudo css.PseudoClass, state Interactio
 		inputType, _ := node.Attribute("type")
 		checked := forms.CurrentChecked(node)
 		return node.TagName == "input" && checked && (strings.EqualFold(inputType, "checkbox") || strings.EqualFold(inputType, "radio"))
+	case css.PseudoValid:
+		return forms.WillValidate(node) && forms.ValidateControl(state.Document, node).Valid()
+	case css.PseudoInvalid:
+		return forms.WillValidate(node) && !forms.ValidateControl(state.Document, node).Valid()
 	default:
 		return false
 	}

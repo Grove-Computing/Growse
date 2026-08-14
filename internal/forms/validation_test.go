@@ -100,3 +100,26 @@ func TestValidateControlIgnoresInvalidPattern(t *testing.T) {
 		t.Fatalf("invalid pattern constrained input = %#v", validity)
 	}
 }
+
+func TestFirstInvalidControlUsesDOMOrderAndSkipsDisabled(t *testing.T) {
+	document := dom.NewDocument()
+	form := document.CreateElement("form", nil)
+	disabled := document.CreateElement("input", map[string]string{"required": "", "disabled": ""})
+	first := document.CreateElement("input", map[string]string{"required": ""})
+	second := document.CreateElement("input", map[string]string{"type": "email"})
+	appendNode(t, document, document.Root, form)
+	appendNode(t, document, form, disabled)
+	appendNode(t, document, form, first)
+	appendNode(t, document, form, second)
+	SetCurrentValue(second, "invalid")
+
+	got, invalid := FirstInvalidControl(document, form)
+	if !invalid || got != first {
+		t.Fatalf("first invalid = (%#v, %v), want first", got, invalid)
+	}
+	SetCurrentValue(first, "ok")
+	got, invalid = FirstInvalidControl(document, form)
+	if !invalid || got != second {
+		t.Fatalf("next invalid = (%#v, %v), want second", got, invalid)
+	}
+}

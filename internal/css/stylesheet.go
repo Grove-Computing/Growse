@@ -174,6 +174,8 @@ const (
 	PseudoEnabled
 	PseudoDisabled
 	PseudoChecked
+	PseudoValid
+	PseudoInvalid
 )
 
 // PseudoClass stores a pseudo-class and its parsed arguments. Nth expressions

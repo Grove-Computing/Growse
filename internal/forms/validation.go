@@ -32,7 +32,7 @@ func (validity Validity) Valid() bool {
 
 // ValidateControl evaluates supported constraints against browser-owned live state.
 func ValidateControl(document *dom.Document, node *dom.Node) Validity {
-	if node == nil || Disabled(node) {
+	if !WillValidate(node) {
 		return Validity{}
 	}
 	value := CurrentValue(node)
@@ -69,6 +69,32 @@ func ValidateControl(document *dom.Document, node *dom.Node) Validity {
 	return validity
 }
 
+// WillValidate reports whether a control participates in constraint validation.
+func WillValidate(node *dom.Node) bool {
+	if node == nil || Disabled(node) || ReadOnly(node) {
+		return false
+	}
+	if IsEditableTextControl(node) || node.TagName == "select" {
+		return true
+	}
+	_, checkable := CheckableState(node)
+	return checkable
+}
+
+// FirstInvalidControl returns the first invalid descendant in DOM order.
+func FirstInvalidControl(document *dom.Document, form *dom.Node) (*dom.Node, bool) {
+	if document == nil || form == nil || form.Type != dom.NodeElement || form.TagName != "form" {
+		return nil, false
+	}
+	var first *dom.Node
+	forEachElement(form, func(node *dom.Node) {
+		if first == nil && WillValidate(node) && !ValidateControl(document, node).Valid() {
+			first = node
+		}
+	})
+	return first, first != nil
+}
+
 func validEmail(value string) bool {
 	if strings.TrimSpace(value) != value || strings.ContainsAny(value, "\r\n\t ") || strings.Count(value, "@") != 1 {
 		return false
@@ -92,7 +118,7 @@ func requiredValueMissing(document *dom.Document, node *dom.Node, value string) 
 		}
 		name, _ := node.Attribute("name")
 		owner := nearestForm(node)
-		missing := true
+		missing := !state.Checked
 		if document != nil {
 			forEachElement(document.Root, func(candidate *dom.Node) {
 				candidateState, ok := CheckableState(candidate)

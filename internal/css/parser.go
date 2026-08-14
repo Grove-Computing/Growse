@@ -635,6 +635,10 @@ func parsePseudoClass(value string, start int) (*PseudoClass, int, bool) {
 		pseudo.Kind = PseudoDisabled
 	case "checked":
 		pseudo.Kind = PseudoChecked
+	case "valid":
+		pseudo.Kind = PseudoValid
+	case "invalid":
+		pseudo.Kind = PseudoInvalid
 	default:
 		return nil, 0, false
 	}
