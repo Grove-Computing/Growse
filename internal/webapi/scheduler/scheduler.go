@@ -5,6 +5,7 @@ import (
 	"container/heap"
 	"context"
 	"errors"
+	"log/slog"
 	"sync"
 	"time"
 )
@@ -238,7 +239,7 @@ func (api *API) RunAnimationFrame(current time.Time) bool {
 	deliver := func() {
 		for _, id := range order {
 			if callback := callbacks[id]; callback != nil {
-				callback(Timestamp(elapsed))
+				invokeSchedulerCallback("frame", func() { callback(Timestamp(elapsed)) })
 			}
 		}
 	}
@@ -456,7 +457,7 @@ func (api *API) execute(entry *timerEntry) {
 	api.mu.Unlock()
 
 	if callback != nil {
-		callback()
+		invokeSchedulerCallback("timer", callback)
 	}
 
 	api.mu.Lock()
@@ -480,6 +481,15 @@ func (api *API) execute(entry *timerEntry) {
 	heap.Push(&api.queue, entry)
 	api.mu.Unlock()
 	api.signal()
+}
+
+func invokeSchedulerCallback(callbackType string, callback func()) {
+	defer func() {
+		if recover() != nil {
+			slog.Error("WebGo Scheduler callbackでpanicが発生しました", "component", "scheduler", "type", callbackType)
+		}
+	}()
+	callback()
 }
 
 func normalizeDelay(delay time.Duration, nesting int) (time.Duration, error) {

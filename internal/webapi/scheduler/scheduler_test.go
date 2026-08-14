@@ -1,7 +1,10 @@
 package scheduler
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 )
@@ -234,6 +237,38 @@ func TestSchedulerBoundsCallbacksDeliveredPerTurn(t *testing.T) {
 	api.runDue(clock.Now())
 	if delivered != MaxCallbacksPerTurn+1 {
 		t.Fatalf("second turn callbacks = %d, want %d", delivered, MaxCallbacksPerTurn+1)
+	}
+}
+
+func TestSchedulerRecoversCallbackPanicsWithoutLoggingPayload(t *testing.T) {
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	clock := &fakeClock{current: time.Unix(100, 0)}
+	api := newAPI(context.Background(), clock, func(callback func()) bool {
+		callback()
+		return true
+	}, nil, false)
+	t.Cleanup(api.Close)
+	delivered := 0
+	_, _ = api.SetTimeout(0, func() { panic("storage-value-secret") })
+	_, _ = api.SetTimeout(0, func() { delivered++ })
+	api.runDue(clock.Now())
+	_, _ = api.RequestAnimationFrame(func(Timestamp) { panic("credential-secret") })
+	_, _ = api.RequestAnimationFrame(func(Timestamp) { delivered++ })
+	api.RunAnimationFrame(clock.Now())
+	if delivered != 2 {
+		t.Fatalf("callbacks after panic = %d, want 2", delivered)
+	}
+	message := logs.String()
+	if !strings.Contains(message, "component=scheduler") || !strings.Contains(message, "type=timer") || !strings.Contains(message, "type=frame") {
+		t.Fatalf("generic Scheduler panic logs = %q", message)
+	}
+	for _, secret := range []string{"storage-value-secret", "credential-secret"} {
+		if strings.Contains(message, secret) {
+			t.Fatalf("Scheduler panic log exposed %q: %s", secret, message)
+		}
 	}
 }
 
