@@ -334,6 +334,128 @@ func TestBuildFlexUsesPercentageFallbackAndAspectRatio(t *testing.T) {
 	}
 }
 
+func TestBuildInlineFlexUsesFirstLineBaselineWithSurroundingText(t *testing.T) {
+	document := dom.NewDocument()
+	paragraph := document.CreateElement("p", nil)
+	container := document.CreateElement("span", map[string]string{"class": "inline-flex"})
+	first := document.CreateElement("span", map[string]string{"class": "item"})
+	second := document.CreateElement("span", map[string]string{"class": "item"})
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, paragraph},
+		[2]*dom.Node{paragraph, document.CreateText("before ")},
+		[2]*dom.Node{paragraph, container},
+		[2]*dom.Node{container, first}, [2]*dom.Node{first, document.CreateText("A")},
+		[2]*dom.Node{container, second}, [2]*dom.Node{second, document.CreateText("B")},
+		[2]*dom.Node{paragraph, document.CreateText(" after")},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.inline-flex { display:inline-flex; column-gap:5px; }
+.item { flex:0 0 30px; height:20px; background-color:#ddd; }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, stylemodel.Compute(document, stylesheet), 500)
+	line := boxForNode(t, tree, paragraph.ID)
+	firstText := boxForNode(t, tree, first.ID)
+	firstDecoration, secondDecoration := decorationForNode(t, tree, first.ID), decorationForNode(t, tree, second.ID)
+	if firstDecoration.Width != 30 || secondDecoration.X != firstDecoration.X+35 {
+		t.Fatalf("inline-flex geometry = first %#v, second %#v", firstDecoration.Rect, secondDecoration.Rect)
+	}
+	if firstText.Baseline != line.Baseline {
+		t.Fatalf("inline-flex baseline = %v, surrounding baseline = %v", firstText.Baseline, line.Baseline)
+	}
+}
+
+func TestBuildNestedFlexAndMixedItems(t *testing.T) {
+	document := dom.NewDocument()
+	outer := document.CreateElement("div", map[string]string{"class": "outer"})
+	inner := document.CreateElement("div", map[string]string{"class": "inner"})
+	block := document.CreateElement("div", map[string]string{"class": "block"})
+	input := document.CreateElement("input", map[string]string{"type": "text", "value": "edit"})
+	button := document.CreateElement("button", map[string]string{"class": "button"})
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, outer},
+		[2]*dom.Node{outer, document.CreateText("text")},
+		[2]*dom.Node{outer, input},
+		[2]*dom.Node{outer, button}, [2]*dom.Node{button, document.CreateText("button")},
+		[2]*dom.Node{outer, inner},
+		[2]*dom.Node{inner, block}, [2]*dom.Node{block, document.CreateText("nested")},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.outer { display:flex; width:500px; gap:10px; }
+.outer > * { flex:0 0 80px; height:30px; }
+.inner { display:flex; flex-direction:column; background-color:#eee; }
+.block { background-color:#ddd; }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, stylemodel.Compute(document, stylesheet), 700)
+	inputBox, buttonBox, nestedBox := boxForNode(t, tree, input.ID), boxForNode(t, tree, button.ID), decorationForNode(t, tree, block.ID)
+	if !inputBox.Input || !(inputBox.X < buttonBox.X && buttonBox.X < nestedBox.X) {
+		t.Fatalf("mixed flex geometry = input %#v, button %#v, nested %#v", inputBox, buttonBox, nestedBox.Rect)
+	}
+	if hit, ok := HitTest(tree, inputBox.X+1, inputBox.Y+1); !ok || hit != input.ID {
+		t.Fatalf("input hit = (%d, %v), want %d", hit, ok, input.ID)
+	}
+}
+
+func TestBuildFlexRecomputesForViewportAndInteractionChanges(t *testing.T) {
+	document := dom.NewDocument()
+	container := document.CreateElement("div", map[string]string{"class": "container"})
+	first := document.CreateElement("div", map[string]string{"class": "item"})
+	second := document.CreateElement("div", map[string]string{"class": "item"})
+	appendNodes(t, document, [2]*dom.Node{document.Root, container}, [2]*dom.Node{container, first}, [2]*dom.Node{container, second})
+	stylesheet, err := css.Parse(strings.NewReader(`
+.container { display:flex; }
+.container:hover, .container.column { flex-direction:column; }
+.item { flex:1 1 0; height:20px; background-color:#ddd; }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wide := Build(document, stylemodel.Compute(document, stylesheet), 500)
+	narrow := Build(document, stylemodel.Compute(document, stylesheet), 300)
+	if decorationForNode(t, wide, first.ID).Width <= decorationForNode(t, narrow, first.ID).Width {
+		t.Fatal("viewport resize did not recompute flex width")
+	}
+	hovered := stylemodel.ComputeWithState(document, stylesheet, stylemodel.InteractionState{Hovered: map[dom.NodeID]bool{container.ID: true}})
+	hoverTree := Build(document, hovered, 500)
+	if decorationForNode(t, hoverTree, second.ID).Y <= decorationForNode(t, hoverTree, first.ID).Y {
+		t.Fatal("hover did not change flex direction")
+	}
+	if !document.SetAttribute(container.ID, "class", "container column") {
+		t.Fatal("class mutation was not applied")
+	}
+	mutated := Build(document, stylemodel.Compute(document, stylesheet), 500)
+	if decorationForNode(t, mutated, second.ID).Y <= decorationForNode(t, mutated, first.ID).Y {
+		t.Fatal("DOM mutation did not update flex layout")
+	}
+}
+
+func TestBuildFlexOverflowClipScrollAndHitTestingShareGeometry(t *testing.T) {
+	document := dom.NewDocument()
+	container := document.CreateElement("div", map[string]string{"class": "container"})
+	item := document.CreateElement("div", map[string]string{"class": "item"})
+	appendNodes(t, document, [2]*dom.Node{document.Root, container}, [2]*dom.Node{container, item})
+	stylesheet, err := css.Parse(strings.NewReader(`
+.container { display:flex; width:100px; height:30px; overflow:hidden; }
+.item { flex:0 0 200px; height:30px; background-color:#ddd; }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, stylemodel.Compute(document, stylesheet), 160)
+	itemBox := decorationForNode(t, tree, item.ID)
+	if itemBox.Clip == nil || itemBox.Clip.Width != 100 || tree.ScrollWidth < itemBox.X+itemBox.Width {
+		t.Fatalf("overflow geometry = item %#v, scroll width %v", itemBox, tree.ScrollWidth)
+	}
+	if _, ok := HitTest(tree, itemBox.X+150, itemBox.Y+1); ok {
+		t.Fatal("hit testing ignored flex overflow clip")
+	}
+}
+
 func decorationForNode(t *testing.T, tree *Tree, nodeID dom.NodeID) Decoration {
 	t.Helper()
 	for _, decoration := range tree.Decorations {

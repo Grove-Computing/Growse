@@ -1,11 +1,53 @@
 package paint
 
 import (
+	"strings"
 	"testing"
 
+	"github.com/saku0512/growse/internal/css"
+	"github.com/saku0512/growse/internal/dom"
 	"github.com/saku0512/growse/internal/layout"
 	"github.com/saku0512/growse/internal/style"
 )
+
+func TestBuildPreservesFlexOverflowGeometry(t *testing.T) {
+	document := dom.NewDocument()
+	container := document.CreateElement("div", map[string]string{"class": "container"})
+	item := document.CreateElement("div", map[string]string{"class": "item"})
+	if err := document.AppendChild(document.Root, container); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(container, item); err != nil {
+		t.Fatal(err)
+	}
+	stylesheet, err := css.Parse(strings.NewReader(`
+.container { display:flex; width:100px; height:30px; overflow:hidden; }
+.item { flex:0 0 200px; height:30px; background-color:#ddd; }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := layout.Build(document, style.Compute(document, stylesheet), 160)
+	list := Build(tree)
+	var command DrawBox
+	found := false
+	for _, candidate := range list.Commands {
+		box, ok := candidate.(DrawBox)
+		if ok && box.NodeID == item.ID {
+			command, found = box, true
+			break
+		}
+	}
+	if !found || command.Width != 200 || command.Clip == nil || command.Clip.Width != 100 {
+		t.Fatalf("flex paint command = %#v", command)
+	}
+	if list.ScrollWidth != tree.ScrollWidth || list.ScrollHeight != tree.ScrollHeight {
+		t.Fatalf("scroll geometry = list (%v,%v), tree (%v,%v)", list.ScrollWidth, list.ScrollHeight, tree.ScrollWidth, tree.ScrollHeight)
+	}
+	if _, ok := layout.HitTest(tree, command.X+150, command.Y+1); ok {
+		t.Fatal("painted clip and hit testing geometry diverged")
+	}
+}
 
 func TestBuildPreservesPaintOrder(t *testing.T) {
 	tree := &layout.Tree{Width: 400, Height: 100, Boxes: []layout.Box{

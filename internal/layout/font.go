@@ -41,6 +41,9 @@ func measureText(text string, size float32, bold bool) (width, height, ascent fl
 }
 
 func usedLineMetrics(run inlineRun) (height, ascent float32) {
+	if run.flex && run.height > 0 {
+		return run.height, min(max(run.baseline, float32(0)), run.height)
+	}
 	_, measuredHeight, measuredAscent := measureText("Mg", run.style.fontSize, run.style.bold)
 	height = measuredHeight
 	if run.style.lineHeight > 0 {

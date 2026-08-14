@@ -505,13 +505,77 @@ func (e *engine) renderFlexItem(item *flexLayoutItem, axis flexAxis, x, y, mainS
 	} else if isTextInput(item.node) {
 		e.addInput(item.node, style, 0, outerWidth, outerHeight, true)
 	} else {
-		if style.display != stylemodel.DisplayFlex {
+		if style.display == stylemodel.DisplayInlineFlex {
+			style.display = stylemodel.DisplayFlex
+		} else if style.display != stylemodel.DisplayFlex {
 			style.display = stylemodel.DisplayBlock
 		}
 		e.addBlock(item.node, style, 0, outerWidth, outerHeight, true, nil)
 	}
 	e.y, e.clip = savedY, savedClip
 	translateFlexGeometry(e.tree, startBoxes, startDecorations, x, y, savedClip)
+}
+
+func (e *engine) resolveInlineFlexSize(node *dom.Node, containerStyle blockStyle, containingWidth float32) (float32, float32, float32) {
+	axis := axisFor(containerStyle.flexDirection, containerStyle.flexWrap)
+	mainSize, crossSize := float32(0), float32(0)
+	itemCount := 0
+	baseline := float32(0)
+	for _, child := range node.Children {
+		if child.Type != dom.NodeElement && (child.Type != dom.NodeText || strings.TrimSpace(child.Text) == "") {
+			continue
+		}
+		childStyle := e.styleFor(child)
+		if childStyle.display == stylemodel.DisplayNone {
+			continue
+		}
+		main, cross, _ := e.flexIntrinsicSizes(child, childStyle, axis, containingWidth, containingWidth, 0, false)
+		if axis.horizontal {
+			mainSize += main + childStyle.margin.Left + childStyle.margin.Right
+			crossSize = max(crossSize, cross+childStyle.margin.Top+childStyle.margin.Bottom)
+		} else {
+			mainSize += main + childStyle.margin.Top + childStyle.margin.Bottom
+			crossSize = max(crossSize, cross+childStyle.margin.Left+childStyle.margin.Right)
+		}
+		if itemCount == 0 {
+			_, _, ascent := measureText("Mg", childStyle.fontSize, childStyle.bold)
+			baseline = ascent + childStyle.margin.Top + childStyle.border.Top.Width + childStyle.padding.Top
+		}
+		itemCount++
+	}
+	gap := containerStyle.columnGap.Resolve(containingWidth)
+	if !axis.horizontal {
+		gap = containerStyle.rowGap.Resolve(0)
+	}
+	if itemCount > 1 {
+		mainSize += gap * float32(itemCount-1)
+	}
+	contentWidth, contentHeight := mainSize, crossSize
+	if !axis.horizontal {
+		contentWidth, contentHeight = crossSize, mainSize
+	}
+	horizontalExtras := containerStyle.padding.Left + containerStyle.padding.Right + containerStyle.border.Left.Width + containerStyle.border.Right.Width
+	verticalExtras := containerStyle.padding.Top + containerStyle.padding.Bottom + containerStyle.border.Top.Width + containerStyle.border.Bottom.Width
+	width, height := contentWidth+horizontalExtras, contentHeight+verticalExtras
+	if resolved, ok := resolveSize(containerStyle.width, containingWidth, true); ok {
+		width = resolved
+		if containerStyle.boxSizing == stylemodel.BoxSizingContentBox {
+			width += horizontalExtras
+		}
+	}
+	if resolved, ok := resolveSize(containerStyle.height, 0, false); ok {
+		height = resolved
+		if containerStyle.boxSizing == stylemodel.BoxSizingContentBox {
+			height += verticalExtras
+		}
+	}
+	width = constrainSize(width, containerStyle.minWidth, containerStyle.maxWidth, containingWidth, true)
+	height = constrainSize(height, containerStyle.minHeight, containerStyle.maxHeight, 0, false)
+	baseline += containerStyle.border.Top.Width + containerStyle.padding.Top
+	if baseline <= 0 || baseline > height {
+		baseline = height
+	}
+	return max(width, float32(1)), max(height, float32(1)), baseline
 }
 
 func pixelSize(value float32) stylemodel.SizeValue {

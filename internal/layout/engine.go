@@ -61,14 +61,18 @@ type blockStyle struct {
 }
 
 type inlineRun struct {
-	nodeID  dom.NodeID
-	tag     string
-	text    string
-	style   blockStyle
-	atomic  bool
-	width   float32
-	height  float32
-	opacity float32
+	nodeID      dom.NodeID
+	node        *dom.Node
+	tag         string
+	text        string
+	style       blockStyle
+	atomic      bool
+	flex        bool
+	width       float32
+	widthOffset float32
+	height      float32
+	baseline    float32
+	opacity     float32
 }
 
 // Build creates a vertical block layout with a minimal inline text flow.
@@ -410,8 +414,11 @@ func (e *engine) collectInlineRunsWithOpacity(node, owner *dom.Node, opacity flo
 	if style.display == stylemodel.DisplayNone {
 		return nil
 	}
-	if style.display == stylemodel.DisplayInlineBlock || style.display == stylemodel.DisplayInlineFlex {
+	if style.display == stylemodel.DisplayInlineBlock {
 		return []inlineRun{{nodeID: node.ID, tag: node.TagName, text: e.inlineText(node), style: style, atomic: true, opacity: opacity}}
+	}
+	if style.display == stylemodel.DisplayInlineFlex {
+		return []inlineRun{{nodeID: node.ID, node: node, tag: node.TagName, style: style, atomic: true, flex: true, opacity: opacity}}
 	}
 	if node.TagName == "br" {
 		return []inlineRun{{nodeID: node.ID, tag: node.TagName, text: "\n", style: style, opacity: opacity}}
@@ -467,6 +474,7 @@ func (e *engine) addText(nodeID dom.NodeID, tag, text string, style blockStyle, 
 
 func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, container blockStyle, x, width float32) {
 	var lineRuns []TextRun
+	var flexPlacements []inlineRun
 	var lineText strings.Builder
 	var usedWidth, lineHeight, lineAscent float32
 	var pendingSpace *inlineRun
@@ -487,10 +495,16 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 			Runs:     append([]TextRun(nil), lineRuns...),
 			Baseline: e.y + lineAscent, Clip: cloneRect(e.clip),
 		})
+		for _, placement := range flexPlacements {
+			item := &flexLayoutItem{node: placement.node, style: placement.style, crossSize: placement.height}
+			item.algorithm = &flexItem{target: placement.width}
+			e.renderFlexItem(item, flexAxis{horizontal: true}, x+placement.widthOffset, e.y+lineAscent-placement.baseline, placement.width, placement.height)
+		}
 		e.y += lineHeight
 		lineRuns = lineRuns[:0]
 		lineText.Reset()
 		usedWidth, lineHeight, lineAscent, pendingSpace = 0, 0, 0, nil
+		flexPlacements = flexPlacements[:0]
 	}
 
 	appendPiece := func(run inlineRun, text string, pieceWidth float32) {
@@ -521,11 +535,21 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 
 	for _, token := range tokenizeInlineRuns(runs) {
 		if token.atomic {
-			token.width, token.height = resolveAtomicSize(token, width)
+			if token.flex {
+				token.width, token.height, token.baseline = e.resolveInlineFlexSize(token.node, token.style, width)
+			} else {
+				token.width, token.height = resolveAtomicSize(token, width)
+			}
 			if usedWidth > 0 && usedWidth+token.width > width && wrapsWhitespace(token.style.whiteSpace) {
 				flushLine()
 			}
-			appendPiece(token, token.text, token.width)
+			if token.flex {
+				token.widthOffset = usedWidth
+				flexPlacements = append(flexPlacements, token)
+				appendPiece(token, "", token.width)
+			} else {
+				appendPiece(token, token.text, token.width)
+			}
 			continue
 		}
 		if token.text == "\n" {
