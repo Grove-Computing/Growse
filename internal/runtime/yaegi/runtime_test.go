@@ -245,6 +245,43 @@ func main() {
 	}
 }
 
+func TestRuntimeStopDiscardsQueuedAndFutureCallbacks(t *testing.T) {
+	runtime := New()
+	scripts := []runtimemodel.Script{{Source: "package main\nfunc main() {}"}}
+	if err := runtime.Load(context.Background(), scripts, runtimemodel.Environment{}); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	staleCallback := make(chan struct{}, 1)
+	if !runtime.enqueueCallback(func() {
+		close(firstStarted)
+		<-releaseFirst
+	}) || !runtime.enqueueCallback(func() { staleCallback <- struct{}{} }) {
+		t.Fatal("failed to enqueue active page callbacks")
+	}
+	<-firstStarted
+	stopped := make(chan struct{})
+	go func() {
+		_ = runtime.Stop()
+		close(stopped)
+	}()
+	<-runtime.runtimeCtx.Done()
+	close(releaseFirst)
+	<-stopped
+	select {
+	case <-staleCallback:
+		t.Fatal("queued callback was delivered after Runtime cancellation")
+	default:
+	}
+	if runtime.enqueueCallback(func() { staleCallback <- struct{}{} }) {
+		t.Fatal("stopped Runtime accepted an old Page callback")
+	}
+}
+
 func equalStrings(left, right []string) bool {
 	if len(left) != len(right) {
 		return false

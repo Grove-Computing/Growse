@@ -184,6 +184,11 @@ func (r *Runtime) enqueueCallback(callback func()) bool {
 		return false
 	}
 	select {
+	case <-ctx.Done():
+		return false
+	default:
+	}
+	select {
 	case queue <- callback:
 		return true
 	case <-ctx.Done():
@@ -197,11 +202,27 @@ func (r *Runtime) runCallbacks(ctx context.Context, queue <-chan func(), done ch
 		select {
 		case <-ctx.Done():
 			return
+		default:
+		}
+		select {
+		case <-ctx.Done():
+			return
 		case callback := <-queue:
 			if callback == nil {
 				continue
 			}
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
 			r.executionMu.Lock()
+			select {
+			case <-ctx.Done():
+				r.executionMu.Unlock()
+				return
+			default:
+			}
 			callback()
 			r.executionMu.Unlock()
 		}
