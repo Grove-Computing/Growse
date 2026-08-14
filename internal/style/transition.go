@@ -37,6 +37,82 @@ type StartedTransition struct {
 	Timing   animation.Timing
 }
 
+// RunningTransition retains the state needed to sample and interrupt one CSS
+// transition without writing animated values back to author style.
+type RunningTransition struct {
+	StartedTransition
+	StartTime                 time.Time
+	Current                   TransitionValue
+	ReversingAdjustedStart    TransitionValue
+	ReversingShorteningFactor float64
+}
+
+// NewRunningTransition starts a transition at frameTime.
+func NewRunningTransition(started StartedTransition, frameTime time.Time) *RunningTransition {
+	return &RunningTransition{
+		StartedTransition:         started,
+		StartTime:                 frameTime,
+		Current:                   cloneTransitionValue(started.From),
+		ReversingAdjustedStart:    cloneTransitionValue(started.From),
+		ReversingShorteningFactor: 1,
+	}
+}
+
+// Advance samples the current value and reports whether the transition remains active.
+func (running *RunningTransition) Advance(frameTime time.Time) (TransitionValue, bool) {
+	sample := running.Timing.Sample(running.StartTime, frameTime)
+	running.Current = interpolateTransitionValue(running.From, running.To, sample.Progress)
+	return cloneTransitionValue(running.Current), sample.Phase != animation.PhaseAfter
+}
+
+// Interrupt starts a replacement transition from the currently displayed
+// value. Returning to the reversing-adjusted start shortens the new duration.
+func (running *RunningTransition) Interrupt(frameTime time.Time, target TransitionValue, timing animation.Timing) {
+	current, _ := running.Advance(frameTime)
+	factor := 1.0
+	reversingStart := cloneTransitionValue(current)
+	if reflect.DeepEqual(target, running.ReversingAdjustedStart) {
+		oldSample := running.Timing.Sample(running.StartTime, frameTime)
+		factor = math.Abs(oldSample.Progress*running.ReversingShorteningFactor + 1 - running.ReversingShorteningFactor)
+		factor = min(max(factor, 0), 1)
+		reversingStart = cloneTransitionValue(running.To)
+	}
+	timing.Duration = time.Duration(float64(timing.Duration) * factor)
+	if timing.Delay < 0 {
+		timing.Delay = time.Duration(float64(timing.Delay) * factor)
+	}
+	running.From = current
+	running.To = cloneTransitionValue(target)
+	running.Current = cloneTransitionValue(current)
+	running.Timing = timing
+	running.StartTime = frameTime
+	running.ReversingAdjustedStart = reversingStart
+	running.ReversingShorteningFactor = factor
+}
+
+func interpolateTransitionValue(from, to TransitionValue, progress float64) TransitionValue {
+	if from.Kind != to.Kind {
+		if progress >= 1 {
+			return cloneTransitionValue(to)
+		}
+		return cloneTransitionValue(from)
+	}
+	switch from.Kind {
+	case TransitionNumber:
+		return TransitionValue{Kind: TransitionNumber, Number: from.Number + (to.Number-from.Number)*float32(progress)}
+	default:
+		if progress >= 1 {
+			return cloneTransitionValue(to)
+		}
+		return cloneTransitionValue(from)
+	}
+}
+
+func cloneTransitionValue(value TransitionValue) TransitionValue {
+	value.Transform = append([]TransformFunction(nil), value.Transform...)
+	return value
+}
+
 type transitionLists struct {
 	properties []string
 	durations  []time.Duration

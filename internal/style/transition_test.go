@@ -98,6 +98,55 @@ func TestStartTransitionsUsesLastMatchingEntryAndSkipsZeroDuration(t *testing.T)
 	}
 }
 
+func TestRunningTransitionInterruptsFromCurrentValueAndShortensReverse(t *testing.T) {
+	start := time.Unix(100, 0)
+	timing, err := animation.NewTiming(time.Second, 0, animation.Linear{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	running := NewRunningTransition(StartedTransition{
+		NodeID: 1, Property: "opacity",
+		From:   TransitionValue{Kind: TransitionNumber, Number: 0},
+		To:     TransitionValue{Kind: TransitionNumber, Number: 1},
+		Timing: timing,
+	}, start)
+
+	current, active := running.Advance(start.Add(250 * time.Millisecond))
+	if !active || current.Number != 0.25 {
+		t.Fatalf("quarter sample = (%v, %v), want (0.25, active)", current.Number, active)
+	}
+
+	running.Interrupt(start.Add(250*time.Millisecond), TransitionValue{Kind: TransitionNumber, Number: 0}, timing)
+	if running.From.Number != 0.25 || running.To.Number != 0 {
+		t.Fatalf("reversed range = %v -> %v, want 0.25 -> 0", running.From.Number, running.To.Number)
+	}
+	if running.Timing.Duration != 250*time.Millisecond {
+		t.Fatalf("reversed duration = %v, want 250ms", running.Timing.Duration)
+	}
+
+	current, active = running.Advance(start.Add(375 * time.Millisecond))
+	if !active || current.Number != 0.125 {
+		t.Fatalf("reversed midpoint = (%v, %v), want (0.125, active)", current.Number, active)
+	}
+	current, active = running.Advance(start.Add(500 * time.Millisecond))
+	if active || current.Number != 0 {
+		t.Fatalf("reversed end = (%v, %v), want (0, inactive)", current.Number, active)
+	}
+}
+
+func TestRunningTransitionInterruptsTowardNewTargetAtFullDuration(t *testing.T) {
+	start := time.Unix(100, 0)
+	timing, _ := animation.NewTiming(time.Second, 0, animation.Linear{})
+	running := NewRunningTransition(StartedTransition{
+		From: TransitionValue{Kind: TransitionNumber, Number: 0},
+		To:   TransitionValue{Kind: TransitionNumber, Number: 1}, Timing: timing,
+	}, start)
+	running.Interrupt(start.Add(400*time.Millisecond), TransitionValue{Kind: TransitionNumber, Number: 0.8}, timing)
+	if running.From.Number != 0.4 || running.To.Number != 0.8 || running.Timing.Duration != time.Second {
+		t.Fatalf("replacement transition = %v -> %v in %v", running.From.Number, running.To.Number, running.Timing.Duration)
+	}
+}
+
 func transitionTestStyle(t *testing.T, declarations string) ComputedStyle {
 	t.Helper()
 	document := dom.NewDocument()
