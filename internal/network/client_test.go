@@ -82,6 +82,49 @@ func TestClientConditionallyRevalidatesStaleResponse(t *testing.T) {
 	}
 }
 
+func TestClientMerges304AndReusesStoredBody(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		requests++
+		if requests == 1 {
+			response.Header().Set("Cache-Control", "no-cache")
+			response.Header().Set("ETag", `"v1"`)
+			response.Header().Set("Content-Type", "text/plain")
+			_, _ = response.Write([]byte("stored-body"))
+			return
+		}
+		if request.Header.Get("If-None-Match") != `"v1"` {
+			t.Errorf("If-None-Match = %q", request.Header.Get("If-None-Match"))
+		}
+		response.Header().Set("Cache-Control", "max-age=60")
+		response.Header().Set("X-Revalidated", "yes")
+		response.WriteHeader(http.StatusNotModified)
+	}))
+	defer server.Close()
+	client := NewClientWithLimits(server.Client(), 1024)
+	target := mustParseURL(t, server.URL+"/data")
+	for range 3 {
+		result, err := client.Get(context.Background(), target)
+		if err != nil || result.StatusCode != http.StatusOK || string(result.Body) != "stored-body" {
+			t.Fatalf("Get() = (%#v, %v)", result, err)
+		}
+	}
+	if requests != 2 {
+		t.Fatalf("Network requests = %d, want 2", requests)
+	}
+}
+
+func TestClientRejects304WithoutStoredEntry(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusNotModified)
+	}))
+	defer server.Close()
+	_, err := NewClientWithLimits(server.Client(), 1024).Get(context.Background(), mustParseURL(t, server.URL))
+	if !errors.Is(err, ErrCacheValidation) {
+		t.Fatalf("Get() error = %v, want ErrCacheValidation", err)
+	}
+}
+
 func TestClientDoSendsMethodHeadersAndBody(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		body, _ := io.ReadAll(request.Body)

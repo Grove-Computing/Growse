@@ -1,6 +1,7 @@
 package network
 
 import (
+	"errors"
 	"math"
 	"net/http"
 	"net/url"
@@ -10,6 +11,8 @@ import (
 	"sync"
 	"time"
 )
+
+var ErrCacheValidation = errors.New("HTTP cache validation failed")
 
 const (
 	maxCacheKeyBytes = 8 * 1024
@@ -218,6 +221,47 @@ func (cache *HTTPCache) RevalidationHeaders(request *Request) (http.Header, bool
 		return header, true
 	}
 	return nil, false
+}
+
+// MergeNotModified は304 Headerを保存済みentryへmergeしてBody付きResponseを返す。
+func (cache *HTTPCache) MergeNotModified(request *Request, notModified http.Header) (*Response, bool) {
+	key, ok := baseCacheKey(request)
+	if cache == nil || !ok {
+		return nil, false
+	}
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	for _, entry := range cache.entries[key] {
+		if !equalStrings(entry.varyValues, requestHeaderValues(request.Header, entry.vary)) {
+			continue
+		}
+		merged := entry.response.Header.Clone()
+		for name, values := range notModified {
+			if hopByHopHeader(name) || strings.EqualFold(name, "Content-Length") {
+				continue
+			}
+			merged[name] = append([]string(nil), values...)
+		}
+		policy := parseCachePolicy(merged.Values("Cache-Control"))
+		if policy.noStore {
+			return nil, false
+		}
+		entry.response.Header = merged
+		entry.response.ContentType = merged.Get("Content-Type")
+		entry.freshness = calculateFreshness(merged, cache.now())
+		entry.policy = policy
+		return cloneResponse(entry.response), true
+	}
+	return nil, false
+}
+
+func hopByHopHeader(name string) bool {
+	switch strings.ToLower(name) {
+	case "connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade":
+		return true
+	default:
+		return false
+	}
 }
 
 func headerValue(header http.Header, name string) string {

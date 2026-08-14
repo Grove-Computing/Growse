@@ -275,6 +275,13 @@ func (c *Client) Do(ctx context.Context, requestData *Request) (*Response, error
 		Body:        body,
 		Redirected:  finalURL.String() != requestData.URL.String(),
 	}
+	if result.StatusCode == http.StatusNotModified {
+		merged, ok := c.cache.MergeNotModified(&cacheRequest, result.Header)
+		if !ok {
+			return nil, ErrCacheValidation
+		}
+		return merged, nil
+	}
 	c.cache.Store(&cacheRequest, result)
 	return result, nil
 }

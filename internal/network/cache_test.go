@@ -160,6 +160,28 @@ func TestRevalidationHeadersPreferETagAndFallbackToLastModified(t *testing.T) {
 	}
 }
 
+func TestMergeNotModifiedUpdatesHeadersAndReusesStoredBody(t *testing.T) {
+	now := time.Date(2026, time.August, 15, 12, 0, 0, 0, time.UTC)
+	cache := NewHTTPCache()
+	cache.now = func() time.Time { return now }
+	request := &Request{Method: http.MethodGet, URL: mustParseURL(t, "https://example.test/data")}
+	cache.Store(request, &Response{URL: request.URL, StatusCode: http.StatusOK, Header: http.Header{
+		"Cache-Control": []string{"no-cache"}, "ETag": []string{`"v1"`}, "Content-Type": []string{"text/plain"},
+	}, Body: []byte("stored")})
+	merged, ok := cache.MergeNotModified(request, http.Header{
+		"Cache-Control": []string{"max-age=60"}, "X-Revalidated": []string{"yes"}, "Content-Length": []string{"0"},
+	})
+	if !ok || merged.StatusCode != http.StatusOK || string(merged.Body) != "stored" || merged.Header.Get("X-Revalidated") != "yes" {
+		t.Fatalf("MergeNotModified() = (%#v, %v)", merged, ok)
+	}
+	if merged.Header.Get("Content-Length") != "" {
+		t.Fatalf("304 Content-Length was merged: %v", merged.Header)
+	}
+	if _, ok := cache.MatchFresh(request); !ok {
+		t.Fatal("revalidated entry was not fresh")
+	}
+}
+
 func TestHTTPCacheRejectsUnsafeOrUnusableKeys(t *testing.T) {
 	cache := NewHTTPCache()
 	response := &Response{StatusCode: http.StatusOK, Header: make(http.Header)}
