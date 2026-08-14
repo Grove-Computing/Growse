@@ -29,6 +29,38 @@
 
 受領後7日以内に初回回答を行い、影響範囲と修正方針が確定するまでは報告内容を非公開で扱います。
 
+## Supply Chain Security
+
+GitHub Releaseの各Archiveには、同名の`.sha256`と、`growse_<version>_<platform>_<arch>.spdx.json`形式のSPDX JSON SBOMを公開します。SHA-256 checksumは取得時の破損や改変を検出し、SBOMはArchiveへ含まれるGo moduleとpackage componentsを確認するために使います。ArchiveとSBOMにはGitHub Artifact Attestationによる署名付きProvenanceを付与します。
+
+たとえばLinux amd64のArchiveを検証する場合は、次を実行します。
+
+```sh
+VERSION=v0.8.0
+ASSET="growse_${VERSION}_linux_amd64.tar.gz"
+gh release download "$VERSION" --repo Grove-Computing/Growse \
+  --pattern "$ASSET" --pattern "$ASSET.sha256" \
+  --pattern "growse_${VERSION}_linux_amd64.spdx.json"
+sha256sum -c "$ASSET.sha256"
+gh attestation verify "$ASSET" --repo Grove-Computing/Growse
+jq -e '.spdxVersion and (.packages | length > 0)' \
+  "growse_${VERSION}_linux_amd64.spdx.json"
+```
+
+GHCRのDocker imageは、可変tagではなくRelease workflowが出力するimmutable digestで検証します。BuildKitのSPDX SBOMとSLSA ProvenanceはOCI attestationとしてimageへ付与され、GitHub Artifact Attestationもdigestへ結び付けられます。
+
+```sh
+IMAGE=ghcr.io/grove-computing/growse
+DIGEST=sha256:<release-workflowが出力したdigest>
+docker buildx imagetools inspect "$IMAGE@$DIGEST" \
+  --format '{{ json .SBOM.SPDX }}' | jq -e '.spdxVersion and (.packages | length > 0)'
+docker buildx imagetools inspect "$IMAGE@$DIGEST" \
+  --format '{{ json .Provenance.SLSA }}' | jq -e '.buildType and .materials'
+gh attestation verify "oci://$IMAGE@$DIGEST" --repo Grove-Computing/Growse
+```
+
+Release時は最終imageをdigest指定でscanし、修正の有無にかかわらずHigh/Criticalの既知脆弱性があれば公開を停止します。Supply Chain Securityの例外が必要な場合は、対象、理由、影響評価、代替策、失効日をIssueへ記録し、期限付きの変更としてreviewします。理由や失効日のない恒久的なignoreは追加しません。
+
 ## WebGo Security Boundary
 
 Growse v0.8.0のYaegi Runtimeは、信頼できないGoコードを安全に実行するSandboxではありません。

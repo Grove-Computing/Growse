@@ -31,24 +31,28 @@ jobs:
             goarch: amd64
             cgo_enabled: "1"
             artifact: linux_amd64
+            archive_extension: tar.gz
           - name: macOS Intel
             runner: macos-15-intel
             goos: darwin
             goarch: amd64
             cgo_enabled: "1"
             artifact: macos_amd64
+            archive_extension: tar.gz
           - name: macOS Apple Silicon
             runner: macos-15
             goos: darwin
             goarch: arm64
             cgo_enabled: "1"
             artifact: macos_arm64
+            archive_extension: tar.gz
           - name: Windows amd64
             runner: windows-2025
             goos: windows
             goarch: amd64
             cgo_enabled: "0"
             artifact: windows_amd64
+            archive_extension: zip
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     steps:
@@ -122,6 +126,19 @@ jobs:
           $hash = (Get-FileHash "dist/$archiveName" -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  $archiveName" | Set-Content "dist/$archiveName.sha256" -Encoding ascii
 
+      - name: Generate SPDX SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          path: dist/package
+          format: spdx-json
+          output-file: dist/growse_${{ env.RELEASE_TAG }}_${{ matrix.artifact }}.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Validate SPDX SBOM
+        shell: bash
+        run: scripts/validate-sbom.sh "dist/growse_${RELEASE_TAG}_${{ matrix.artifact }}.spdx.json"
+
       - name: Upload release files
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -130,17 +147,69 @@ jobs:
             dist/*.tar.gz
             dist/*.zip
             dist/*.sha256
+            dist/*.spdx.json
           if-no-files-found: error
           retention-days: 7
 
+  attest:
+    name: Attest ${{ matrix.name }}
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux amd64
+            artifact: linux_amd64
+            archive_extension: tar.gz
+          - name: macOS Intel
+            artifact: macos_amd64
+            archive_extension: tar.gz
+          - name: macOS Apple Silicon
+            artifact: macos_arm64
+            archive_extension: tar.gz
+          - name: Windows amd64
+            artifact: windows_amd64
+            archive_extension: zip
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download release files
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: release-${{ matrix.artifact }}
+          path: dist
+
+      - name: Attest archive provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/growse_${{ env.RELEASE_TAG }}_${{ matrix.artifact }}.${{ matrix.archive_extension }}
+
+      - name: Attest SBOM provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/growse_${{ env.RELEASE_TAG }}_${{ matrix.artifact }}.spdx.json
+
+      - name: Attest archive SBOM
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/growse_${{ env.RELEASE_TAG }}_${{ matrix.artifact }}.${{ matrix.archive_extension }}
+          sbom-path: dist/growse_${{ env.RELEASE_TAG }}_${{ matrix.artifact }}.spdx.json
+
   docker:
-    name: Publish Docker image
+    name: Build, scan, and publish Docker image
     needs: build
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
       contents: read
       packages: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+      image: ${{ steps.image.outputs.name }}
     steps:
       - name: Checkout release tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -148,38 +217,92 @@ jobs:
           persist-credentials: false
 
       - name: Set image name
+        id: image
         shell: bash
-        run: echo "IMAGE_NAME=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+        run: |
+          image_name="ghcr.io/${GITHUB_REPOSITORY,,}"
+          echo "IMAGE_NAME=$image_name" >> "$GITHUB_ENV"
+          echo "name=$image_name" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
       - name: Log in to GitHub Container Registry
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: printf '%s' "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679fd # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
 
-      - name: Build Docker image
+      - name: Build and push Docker image with attestations
+        id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.IMAGE_NAME }}:build-${{ github.run_id }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.version=${{ env.RELEASE_TAG }}
+          sbom: true
+          provenance: mode=max
+
+      - name: Verify OCI SBOM and provenance by digest
         shell: bash
         run: |
-          docker build \
-            --label "org.opencontainers.image.created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
-            --label "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
-            --label "org.opencontainers.image.version=$RELEASE_TAG" \
+          image_ref="$IMAGE_NAME@${{ steps.build.outputs.digest }}"
+          test "$(docker buildx imagetools inspect "$image_ref" --format '{{ json .SBOM.SPDX }}')" != "null"
+          test "$(docker buildx imagetools inspect "$image_ref" --format '{{ json .Provenance.SLSA }}')" != "null"
+
+      - name: Scan published image by digest
+        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
+        with:
+          image: ${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
+          fail-build: true
+          severity-cutoff: high
+          output-format: table
+
+      - name: Promote verified image tags by digest
+        shell: bash
+        run: |
+          docker buildx imagetools create \
             --tag "$IMAGE_NAME:$RELEASE_TAG" \
             --tag "$IMAGE_NAME:latest" \
-            .
+            "$IMAGE_NAME@${{ steps.build.outputs.digest }}"
 
-      - name: Push Docker image
+  container-attest:
+    name: Attest Docker image
+    needs: docker
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Attest container provenance by digest
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ needs.docker.outputs.image }}
+          subject-digest: ${{ needs.docker.outputs.digest }}
+          push-to-registry: true
+
+      - name: Verify GitHub attestation by digest
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: bash
-        run: |
-          docker push "$IMAGE_NAME:$RELEASE_TAG"
-          docker push "$IMAGE_NAME:latest"
+        run: gh attestation verify "oci://${{ needs.docker.outputs.image }}@${{ needs.docker.outputs.digest }}" --repo "$GITHUB_REPOSITORY"
 
   publish:
     name: Publish GitHub Release
     needs:
       - build
+      - attest
       - docker
+      - container-attest
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:

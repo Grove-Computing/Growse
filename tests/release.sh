@@ -43,6 +43,12 @@ for value in \
     'tar -czf "dist/$archive_name"' \
     "Compress-Archive" \
     ".sha256" \
+    "anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610" \
+    'dist/growse_${{ env.RELEASE_TAG }}_${{ matrix.artifact }}.spdx.json' \
+    'scripts/validate-sbom.sh' \
+    "actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8" \
+    "actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6" \
+    "sbom-path:" \
     "if-no-files-found: error"
 do
     require "$value"
@@ -100,4 +106,4 @@ do
     fi
 done
 
-echo "release成果物matrix検証成功: Linux Desktop, macOS App Bundle, Windows Start Menu"
+echo "release成果物matrix検証成功: GUI package, checksum, SPDX SBOM, attestation"
