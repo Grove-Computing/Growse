@@ -13,6 +13,7 @@ import (
 	"github.com/Grove-Computing/Growse/internal/network"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 	runtimeyaegi "github.com/Grove-Computing/Growse/internal/runtime/yaegi"
+	storagecore "github.com/Grove-Computing/Growse/internal/storage"
 )
 
 type runtimeStub struct {
@@ -320,6 +321,127 @@ func TestCrossDocumentTraversalDispatchesPopStateToNewRuntime(t *testing.T) {
 	}
 	if got := runtimes[2].popStates; len(got) != 1 || got[0] != `{"document":"first"}` {
 		t.Fatalf("new Runtime popstate events = %v", got)
+	}
+}
+
+func TestNavigationSwitchesStorageByOrigin(t *testing.T) {
+	firstURL := mustParseURL(t, "http://localhost/storage-a")
+	sameOriginURL := mustParseURL(t, "http://localhost/storage-b?view=2")
+	otherOriginURL := mustParseURL(t, "http://127.0.0.1/storage-c")
+	script := `<script type="text/go">package main; func main() {}</script>`
+	loader := &routeLoader{responses: map[string]*network.Response{
+		firstURL.String():       {URL: firstURL, StatusCode: 200, ContentType: "text/html", Body: []byte(script)},
+		sameOriginURL.String():  {URL: sameOriginURL, StatusCode: 200, ContentType: "text/html", Body: []byte(script)},
+		otherOriginURL.String(): {URL: otherOriginURL, StatusCode: 200, ContentType: "text/html", Body: []byte(script)},
+	}}
+	var runtimes []*runtimeStub
+	browser := NewWithRuntimeFactory(loader, func() runtimemodel.Runtime {
+		runtime := &runtimeStub{}
+		runtimes = append(runtimes, runtime)
+		return runtime
+	})
+	if _, err := browser.Navigate(context.Background(), firstURL.String()); err != nil {
+		t.Fatal(err)
+	}
+	runtimes[0].environment.LocalStorage.Set("shared", "yes")
+	if _, err := browser.Navigate(context.Background(), sameOriginURL.String()); err != nil {
+		t.Fatal(err)
+	}
+	if got, found := runtimes[1].environment.LocalStorage.Get("shared"); !found || got != "yes" {
+		t.Fatalf("same-Origin Local Storage = (%q, %v)", got, found)
+	}
+	if _, err := browser.Navigate(context.Background(), otherOriginURL.String()); err != nil {
+		t.Fatal(err)
+	}
+	if got, found := runtimes[2].environment.LocalStorage.Get("shared"); found || got != "" {
+		t.Fatalf("cross-Origin Local Storage leaked = (%q, %v)", got, found)
+	}
+}
+
+func TestSessionStorageSurvivesSameDocumentNavigationAndReload(t *testing.T) {
+	pageURL := mustParseURL(t, "http://localhost/session-storage")
+	script := `<script type="text/go">package main; func main() {}</script>`
+	loader := &routeLoader{responses: map[string]*network.Response{
+		pageURL.String(): {URL: pageURL, StatusCode: 200, ContentType: "text/html", Body: []byte(script)},
+	}}
+	var runtimes []*runtimeStub
+	browser := NewWithRuntimeFactory(loader, func() runtimemodel.Runtime {
+		runtime := &runtimeStub{}
+		runtimes = append(runtimes, runtime)
+		return runtime
+	})
+	page, err := browser.Navigate(context.Background(), pageURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtimes[0].environment.SessionStorage.Set("draft", "kept"); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtimes[0].environment.HistoryPush(`{"route":2}`, pageURL); err != nil {
+		t.Fatal(err)
+	}
+	if browser.Page() != page || len(runtimes) != 1 {
+		t.Fatal("same-document Navigation replaced Page or Runtime")
+	}
+	if got, found := runtimes[0].environment.SessionStorage.Get("draft"); !found || got != "kept" {
+		t.Fatalf("same-document Session Storage = (%q, %v)", got, found)
+	}
+
+	reloaded, err := browser.Reload(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded == page || len(runtimes) != 2 {
+		t.Fatal("reload did not rebuild Page and Runtime")
+	}
+	if got, found := runtimes[1].environment.SessionStorage.Get("draft"); !found || got != "kept" {
+		t.Fatalf("reloaded Session Storage = (%q, %v)", got, found)
+	}
+	if runtimes[0].environment.SessionStorage != runtimes[1].environment.SessionStorage {
+		t.Fatal("reload switched Session Storage Area")
+	}
+}
+
+func TestNewBrowserSessionDoesNotInheritSessionStorage(t *testing.T) {
+	pageURL := mustParseURL(t, "http://localhost/new-session")
+	script := `<script type="text/go">package main; func main() {}</script>`
+	loader := &routeLoader{responses: map[string]*network.Response{
+		pageURL.String(): {URL: pageURL, StatusCode: 200, ContentType: "text/html", Body: []byte(script)},
+	}}
+	root := t.TempDir()
+	firstManager, err := storagecore.NewPersistentManager(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstRuntime := &runtimeStub{}
+	firstBrowser := NewWithRuntimeFactoryAndStorage(loader, func() runtimemodel.Runtime { return firstRuntime }, firstManager)
+	if _, err := firstBrowser.Navigate(context.Background(), pageURL.String()); err != nil {
+		t.Fatal(err)
+	}
+	if err := firstRuntime.environment.LocalStorage.Set("local", "persisted"); err != nil {
+		t.Fatal(err)
+	}
+	if err := firstRuntime.environment.SessionStorage.Set("session", "temporary"); err != nil {
+		t.Fatal(err)
+	}
+	if err := firstBrowser.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	secondManager, err := storagecore.NewPersistentManager(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondRuntime := &runtimeStub{}
+	secondBrowser := NewWithRuntimeFactoryAndStorage(loader, func() runtimemodel.Runtime { return secondRuntime }, secondManager)
+	if _, err := secondBrowser.Navigate(context.Background(), pageURL.String()); err != nil {
+		t.Fatal(err)
+	}
+	if got, found := secondRuntime.environment.LocalStorage.Get("local"); !found || got != "persisted" {
+		t.Fatalf("new Browser Local Storage = (%q, %v)", got, found)
+	}
+	if got, found := secondRuntime.environment.SessionStorage.Get("session"); found || got != "" {
+		t.Fatalf("new Browser inherited Session Storage = (%q, %v)", got, found)
 	}
 }
 

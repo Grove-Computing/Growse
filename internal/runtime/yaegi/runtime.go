@@ -23,6 +23,7 @@ import (
 	fetchapi "github.com/Grove-Computing/Growse/internal/webapi/fetch"
 	navigationapi "github.com/Grove-Computing/Growse/internal/webapi/navigation"
 	schedulerapi "github.com/Grove-Computing/Growse/internal/webapi/scheduler"
+	storageapi "github.com/Grove-Computing/Growse/internal/webapi/storage"
 	strconvapi "github.com/Grove-Computing/Growse/internal/webapi/strconv"
 	"github.com/traefik/yaegi/interp"
 )
@@ -106,6 +107,7 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 	scheduler := schedulerapi.NewPage(r.runtimeCtx, r.enqueueCallback, environment.RequestFrame)
 	scheduler.SetFrameScope(environment.FrameScope)
 	r.schedulerAPI = scheduler
+	storage := storageapi.New(environment.LocalStorage, environment.SessionStorage)
 	if err := r.interpreter.Use(interp.Exports{
 		"growse/console/console": {
 			"Log": reflect.ValueOf(console.Log),
@@ -155,6 +157,11 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 			"SetTimeout":            reflect.ValueOf(scheduler.SetTimeout),
 			"TimerID":               reflect.ValueOf((*schedulerapi.TimerID)(nil)),
 			"Timestamp":             reflect.ValueOf((*schedulerapi.Timestamp)(nil)),
+		},
+		"growse/storage/storage": {
+			"Local":   reflect.ValueOf(storage.Local),
+			"Session": reflect.ValueOf(storage.Session),
+			"Storage": reflect.ValueOf((*storageapi.Storage)(nil)),
 		},
 		"growse/strconv/strconv": {
 			"Itoa": reflect.ValueOf(strconvapi.Itoa),

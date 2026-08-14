@@ -15,6 +15,7 @@ import (
 	"github.com/Grove-Computing/Growse/internal/forms"
 	"github.com/Grove-Computing/Growse/internal/network"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
+	storagecore "github.com/Grove-Computing/Growse/internal/storage"
 )
 
 func TestRuntimeStartsMainAfterLoadingMultipleScripts(t *testing.T) {
@@ -82,6 +83,42 @@ func main() { console.Log("Hello from Go", 42) }`}}
 	}
 	if got, want := messages[0], "[WebGo] Hello from Go42"; got != want {
 		t.Fatalf("console message = %q, want %q", got, want)
+	}
+}
+
+func TestRuntimeExposesLocalAndSessionStorage(t *testing.T) {
+	runtime := New()
+	scripts := []runtimemodel.Script{{Source: `package main
+import "growse/storage"
+var LocalValue string
+var SessionValue string
+var Failure string
+func main() {
+	local := storage.Local()
+	session := storage.Session()
+	if err := local.Set("mode", "local"); err != nil { Failure = err.Error(); return }
+	if err := session.Set("mode", "session"); err != nil { Failure = err.Error(); return }
+	LocalValue, _, _ = local.Get("mode")
+	SessionValue, _, _ = session.Get("mode")
+	_ = local.Remove("mode")
+	_ = session.Clear()
+}`}}
+	environment := runtimemodel.Environment{LocalStorage: storagecore.NewArea(), SessionStorage: storagecore.NewArea()}
+	if err := runtime.Load(context.Background(), scripts, environment); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	symbols := runtime.interpreter.Symbols("page")["page"]
+	if got := symbols["Failure"].String(); got != "" {
+		t.Fatalf("Failure = %q", got)
+	}
+	if got := symbols["LocalValue"].String(); got != "local" {
+		t.Fatalf("LocalValue = %q", got)
+	}
+	if got := symbols["SessionValue"].String(); got != "session" {
+		t.Fatalf("SessionValue = %q", got)
 	}
 }
 

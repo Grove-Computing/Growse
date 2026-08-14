@@ -23,6 +23,7 @@ import (
 	htmlparser "github.com/Grove-Computing/Growse/internal/html"
 	"github.com/Grove-Computing/Growse/internal/network"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
+	storagecore "github.com/Grove-Computing/Growse/internal/storage"
 	"github.com/Grove-Computing/Growse/internal/style"
 )
 
@@ -67,6 +68,7 @@ type Browser struct {
 	history        history
 	clock          animationmodel.Clock
 	reducedMotion  bool
+	storage        *storagecore.Manager
 }
 
 var (
@@ -81,7 +83,15 @@ func New(client ResourceLoader) *Browser {
 
 // NewWithRuntimeFactory は信頼済みページのスクリプトを実行するBrowserを生成する。
 func NewWithRuntimeFactory(client ResourceLoader, factory runtimemodel.Factory) *Browser {
-	return &Browser{client: client, runtimeFactory: factory, history: newHistory(), clock: animationmodel.SystemClock{}}
+	return NewWithRuntimeFactoryAndStorage(client, factory, storagecore.NewManager())
+}
+
+// NewWithRuntimeFactoryAndStorage は注入されたStorage profileを使用するBrowserを生成する。
+func NewWithRuntimeFactoryAndStorage(client ResourceLoader, factory runtimemodel.Factory, manager *storagecore.Manager) *Browser {
+	if manager == nil {
+		manager = storagecore.NewManager()
+	}
+	return &Browser{client: client, runtimeFactory: factory, history: newHistory(), clock: animationmodel.SystemClock{}, storage: manager}
 }
 
 // SetAnimationClock replaces the page animation clock. Tests can inject a
@@ -657,6 +667,7 @@ func (b *Browser) SubmitPOST(ctx context.Context, formID, submitterID dom.NodeID
 	b.navigationID++
 	navigationID := b.navigationID
 	runtimeFactory := b.runtimeFactory
+	storageManager := b.storage
 	onMutation := b.onMutation
 	reducedMotion := b.reducedMotion
 	b.mu.Unlock()
@@ -674,7 +685,7 @@ func (b *Browser) SubmitPOST(ctx context.Context, formID, submitterID dom.NodeID
 	if err != nil {
 		return nil, fmt.Errorf("submit form to %s: %w", network.RedactedURL(target), err)
 	}
-	return b.finishLoad(ctx, target, response, historyPush, -1, navigationID, client, client, runtimeFactory, onMutation, reducedMotion)
+	return b.finishLoad(ctx, target, response, historyPush, -1, navigationID, client, client, runtimeFactory, storageManager, onMutation, reducedMotion)
 }
 
 // Submit validates and dispatches a cancelable submit event before navigation.
@@ -876,6 +887,7 @@ func (b *Browser) loadWithClient(ctx context.Context, pageURL *url.URL, commit h
 	navigationID := b.navigationID
 	client := b.client
 	runtimeFactory := b.runtimeFactory
+	storageManager := b.storage
 	onMutation := b.onMutation
 	reducedMotion := b.reducedMotion
 	b.mu.Unlock()
@@ -892,7 +904,7 @@ func (b *Browser) loadWithClient(ctx context.Context, pageURL *url.URL, commit h
 	if err != nil {
 		return nil, fmt.Errorf("navigate to %s: %w", network.RedactedURL(pageURL), err)
 	}
-	return b.finishLoad(ctx, pageURL, response, commit, historyIndex, navigationID, resourceClient, client, runtimeFactory, onMutation, reducedMotion)
+	return b.finishLoad(ctx, pageURL, response, commit, historyIndex, navigationID, resourceClient, client, runtimeFactory, storageManager, onMutation, reducedMotion)
 }
 
 type cacheRevalidatingLoader struct {
@@ -913,7 +925,7 @@ func (loader cacheRevalidatingLoader) Get(ctx context.Context, resourceURL *url.
 	return loader.ResourceLoader.Get(ctx, resourceURL)
 }
 
-func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *network.Response, commit historyCommit, historyIndex int, navigationID uint64, resourceClient ResourceLoader, runtimeClient ResourceLoader, runtimeFactory runtimemodel.Factory, onMutation func(), reducedMotion bool) (*Page, error) {
+func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *network.Response, commit historyCommit, historyIndex int, navigationID uint64, resourceClient ResourceLoader, runtimeClient ResourceLoader, runtimeFactory runtimemodel.Factory, storageManager *storagecore.Manager, onMutation func(), reducedMotion bool) (*Page, error) {
 	mediaType, _, err := mime.ParseMediaType(response.ContentType)
 	if err != nil {
 		return nil, fmt.Errorf("invalid Content-Type %q: %w", response.ContentType, err)
@@ -956,7 +968,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	}
 	page.Animations.Reconcile(computedStyles, b.currentTime())
 	navigationReady := make(chan struct{})
-	pageRuntime := startRuntime(ctx, runtimeFactory, page, runtimeClient, onMutation, b.currentTime, func(target *url.URL) error {
+	pageRuntime := startRuntime(ctx, runtimeFactory, page, runtimeClient, storageManager, onMutation, b.currentTime, func(target *url.URL) error {
 		resolved := cloneURL(target)
 		go func() {
 			<-navigationReady
@@ -1233,7 +1245,7 @@ func (b *Browser) traverseFromRuntime(source *Page, delta int) {
 	}
 }
 
-func startRuntime(ctx context.Context, factory runtimemodel.Factory, page *Page, client ResourceLoader, onMutation func(), now func() time.Time, navigate func(*url.URL) error, historyPush, historyReplace func(string, *url.URL) error, historyTraverse func(int) error, historyInfo func() (int, string)) runtimemodel.Runtime {
+func startRuntime(ctx context.Context, factory runtimemodel.Factory, page *Page, client ResourceLoader, storageManager *storagecore.Manager, onMutation func(), now func() time.Time, navigate func(*url.URL) error, historyPush, historyReplace func(string, *url.URL) error, historyTraverse func(int) error, historyInfo func() (int, string)) runtimemodel.Runtime {
 	if factory == nil || page == nil || len(page.Scripts) == 0 {
 		return nil
 	}
@@ -1303,6 +1315,10 @@ func startRuntime(ctx context.Context, factory runtimemodel.Factory, page *Page,
 			}()
 			callback()
 		},
+	}
+	if local, session, _ := storageManager.Areas(page.URL); local != nil || session != nil {
+		environment.LocalStorage = local
+		environment.SessionStorage = session
 	}
 	if loader, ok := client.(requestLoader); ok {
 		environment.Fetch = loader.Do
