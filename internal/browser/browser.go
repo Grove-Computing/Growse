@@ -50,6 +50,11 @@ type Browser struct {
 	reducedMotion  bool
 }
 
+var (
+	ErrFormValidation      = errors.New("form validation failed")
+	ErrSubmissionPrevented = errors.New("form submission was prevented")
+)
+
 // New creates a browser with no page loaded.
 func New(client ResourceLoader) *Browser {
 	return NewWithRuntimeFactory(client, nil)
@@ -604,6 +609,65 @@ func (b *Browser) SubmitPOST(ctx context.Context, formID, submitterID dom.NodeID
 		return nil, fmt.Errorf("submit form to %s: %w", target.Redacted(), err)
 	}
 	return b.finishLoad(ctx, target, response, historyPush, -1, navigationID, client, runtimeFactory, onMutation, reducedMotion)
+}
+
+// Submit validates and dispatches a cancelable submit event before navigation.
+func (b *Browser) Submit(ctx context.Context, formID, submitterID dom.NodeID) (*Page, error) {
+	b.mu.RLock()
+	page := b.page
+	if page == nil || page.Document == nil {
+		b.mu.RUnlock()
+		return nil, errors.New("no active page for form submission")
+	}
+	form, ok := page.Document.NodeByID(formID)
+	if !ok || form.TagName != "form" {
+		b.mu.RUnlock()
+		return nil, errors.New("form was not found")
+	}
+	var submitter *dom.Node
+	if submitterID != 0 {
+		submitter, ok = page.Document.NodeByID(submitterID)
+		if !ok {
+			b.mu.RUnlock()
+			return nil, errors.New("submitter was not found")
+		}
+	}
+	config, ok := forms.ResolveFormSubmission(page.Document, form, submitter)
+	if !ok {
+		b.mu.RUnlock()
+		return nil, errors.New("invalid form submission configuration")
+	}
+	firstInvalid, invalid := forms.FirstInvalidControl(page.Document, form)
+	dispatcher := page.Events
+	b.mu.RUnlock()
+	b.mu.Lock()
+	if b.page == page {
+		page.Submitter = submitterID
+	}
+	b.mu.Unlock()
+
+	if invalid && !config.NoValidate {
+		b.UpdateFocus(firstInvalid.ID)
+		return nil, ErrFormValidation
+	}
+	submitEvent := events.Cancelable(events.Submit, form.ID)
+	if dispatcher != nil {
+		dispatcher.Dispatch(submitEvent)
+	}
+	if submitEvent.DefaultPrevented() {
+		return nil, ErrSubmissionPrevented
+	}
+	if config.Target != "_self" {
+		return nil, fmt.Errorf("unsupported form target %q", config.Target)
+	}
+	switch config.Method {
+	case "get":
+		return b.SubmitGET(ctx, formID, submitterID)
+	case "post":
+		return b.SubmitPOST(ctx, formID, submitterID)
+	default:
+		return nil, fmt.Errorf("unsupported form method %q", config.Method)
+	}
 }
 
 func resolveFormAction(baseURL *url.URL, action string) (*url.URL, error) {

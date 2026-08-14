@@ -55,6 +55,15 @@ func TestDispatchReportsUnhandledEvent(t *testing.T) {
 	}
 }
 
+func TestCancelableEventSharesPreventDefaultAcrossCopies(t *testing.T) {
+	dispatcher := NewDispatcher()
+	dispatcher.AddEventListener(1, Submit, func(event Event) { event.PreventDefault() })
+	event := Cancelable(Submit, 1)
+	if !dispatcher.Dispatch(event) || !event.DefaultPrevented() {
+		t.Fatal("cancelable submit event was not prevented")
+	}
+}
+
 func TestRemoveEventListenersRemovesSpecifiedNodes(t *testing.T) {
 	dispatcher := NewDispatcher()
 	dispatcher.AddEventListener(1, Click, func(Event) {})

@@ -1094,6 +1094,57 @@ func TestSubmitPOSTSendsEncodedBodyAndNavigatesToResponse(t *testing.T) {
 	}
 }
 
+func TestSubmitHonorsValidationPreventDefaultAndNoValidate(t *testing.T) {
+	newBrowser := func(t *testing.T, formAttributes, buttonAttributes map[string]string) (*Browser, *routeLoader, *Page, *dom.Node, *dom.Node) {
+		t.Helper()
+		document := dom.NewDocument()
+		formAttributes["action"] = "/result"
+		form := document.CreateElement("form", formAttributes)
+		input := document.CreateElement("input", map[string]string{"name": "name", "required": ""})
+		button := document.CreateElement("button", buttonAttributes)
+		for _, edge := range [][2]*dom.Node{{document.Root, form}, {form, input}, {form, button}} {
+			if err := document.AppendChild(edge[0], edge[1]); err != nil {
+				t.Fatal(err)
+			}
+		}
+		baseURL := mustParseURL(t, "https://example.com/form")
+		targetURL := mustParseURL(t, "https://example.com/result?name=")
+		loader := &routeLoader{responses: map[string]*network.Response{
+			targetURL.String(): {URL: targetURL, StatusCode: 200, ContentType: "text/html", Body: []byte(`<!doctype html><title>Result</title>`)},
+		}}
+		page := &Page{URL: baseURL, Document: document, ComputedStyles: style.Compute(document, nil), Events: events.NewDispatcher()}
+		browser := New(loader)
+		browser.SetPage(page)
+		return browser, loader, page, form, button
+	}
+
+	browser, loader, page, form, button := newBrowser(t, map[string]string{}, map[string]string{})
+	if _, err := browser.Submit(context.Background(), form.ID, button.ID); !errors.Is(err, ErrFormValidation) || page.FocusTarget == 0 || len(loader.requested) != 0 {
+		t.Fatalf("validation err=%v focus=%d requests=%v", err, page.FocusTarget, loader.requested)
+	}
+
+	browser, loader, page, form, button = newBrowser(t, map[string]string{"novalidate": ""}, map[string]string{})
+	page.Events.AddEventListener(form.ID, events.Submit, func(event events.Event) { event.PreventDefault() })
+	if _, err := browser.Submit(context.Background(), form.ID, button.ID); !errors.Is(err, ErrSubmissionPrevented) || len(loader.requested) != 0 {
+		t.Fatalf("prevent err=%v requests=%v", err, loader.requested)
+	}
+
+	for name, attributes := range map[string]struct {
+		form   map[string]string
+		button map[string]string
+	}{
+		"novalidate":     {form: map[string]string{"novalidate": ""}, button: map[string]string{}},
+		"formnovalidate": {form: map[string]string{}, button: map[string]string{"formnovalidate": ""}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			browser, loader, _, form, button := newBrowser(t, attributes.form, attributes.button)
+			if _, err := browser.Submit(context.Background(), form.ID, button.ID); err != nil || len(loader.requested) != 1 {
+				t.Fatalf("submit err=%v requests=%v", err, loader.requested)
+			}
+		})
+	}
+}
+
 func TestNewPageCopiesURL(t *testing.T) {
 	pageURL := mustParseURL(t, "https://example.com/original")
 	page := NewPage(pageURL)

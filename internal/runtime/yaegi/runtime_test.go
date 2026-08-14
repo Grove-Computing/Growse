@@ -419,6 +419,32 @@ func main() {
 	}
 }
 
+func TestRuntimeSubmitHandlerCanPreventDefault(t *testing.T) {
+	document := dommodel.NewDocument()
+	form := document.CreateElement("form", map[string]string{"id": "form"})
+	if err := document.AppendChild(document.Root, form); err != nil {
+		t.Fatal(err)
+	}
+	dispatcher := events.NewDispatcher()
+	runtime := New()
+	scripts := []runtimemodel.Script{{Source: `package main
+import "growse/dom"
+func main() {
+	dom.GetElementByID("form").OnSubmit(func(event dom.Event) { event.PreventDefault() })
+}`}}
+	if err := runtime.Load(context.Background(), scripts, runtimemodel.Environment{Document: document, Events: dispatcher}); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	submit := events.Cancelable(events.Submit, form.ID)
+	dispatcher.Dispatch(submit)
+	if !submit.DefaultPrevented() {
+		t.Fatal("WebGo submit handler did not prevent default")
+	}
+}
+
 func TestRuntimeReceivesInputEvent(t *testing.T) {
 	document := dommodel.NewDocument()
 	input := document.CreateElement("input", map[string]string{"id": "query"})
