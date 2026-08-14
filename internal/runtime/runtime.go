@@ -47,5 +47,11 @@ type LocationUpdater interface {
 	UpdateLocation(*url.URL)
 }
 
+// NavigationEventDispatcher はNavigation Eventを現在Runtimeへ配送する。
+type NavigationEventDispatcher interface {
+	DispatchPopState(state string)
+	DispatchHashChange(oldURL, newURL string)
+}
+
 // Factory はページごとに独立したRuntimeを生成する。
 type Factory func() Runtime

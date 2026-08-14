@@ -814,6 +814,7 @@ func (b *Browser) traverse(ctx context.Context, delta int) (*Page, error) {
 	entry, index, ok := b.history.targetEntry(delta)
 	page := b.page
 	if ok && page != nil && entry.PageID != 0 && entry.PageID == page.HistoryID {
+		oldURL := cloneURL(page.URL)
 		page.URL = cloneURL(entry.URL)
 		page.HistoryState = entry.State
 		page.ScrollFirst = entry.ScrollFirst
@@ -825,6 +826,12 @@ func (b *Browser) traverse(ctx context.Context, delta int) (*Page, error) {
 		b.mu.Unlock()
 		if updater, supportsUpdate := activeRuntime.(runtimemodel.LocationUpdater); supportsUpdate {
 			updater.UpdateLocation(entry.URL)
+		}
+		if dispatcher, supportsEvents := activeRuntime.(runtimemodel.NavigationEventDispatcher); supportsEvents {
+			dispatcher.DispatchPopState(entry.State)
+			if oldURL != nil && oldURL.Fragment != entry.URL.Fragment {
+				dispatcher.DispatchHashChange(network.RedactedURL(oldURL), network.RedactedURL(entry.URL))
+			}
 		}
 		if onMutation != nil {
 			onMutation()
@@ -987,6 +994,8 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	if previousPage != nil && previousPage != page && previousPage.Transitions != nil {
 		previousPage.Transitions.Clear()
 	}
+	dispatchPopState := false
+	popState := ""
 	switch commit {
 	case historyPush:
 		b.history.pushEntry(&historyEntry{URL: page.URL, PageID: page.HistoryID})
@@ -994,6 +1003,8 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 		previousEntry := cloneHistoryEntry(b.history.entries[historyIndex])
 		b.history.index = historyIndex
 		if previousEntry != nil {
+			dispatchPopState = true
+			popState = previousEntry.State
 			page.HistoryState = previousEntry.State
 			page.ScrollFirst = previousEntry.ScrollFirst
 			page.ScrollOffset = previousEntry.ScrollOffset
@@ -1018,6 +1029,11 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	close(navigationReady)
 	if previousRuntime != nil {
 		_ = previousRuntime.Stop()
+	}
+	if dispatchPopState {
+		if dispatcher, ok := pageRuntime.(runtimemodel.NavigationEventDispatcher); ok {
+			dispatcher.DispatchPopState(popState)
+		}
 	}
 	return page, nil
 }
@@ -1055,14 +1071,21 @@ func (b *Browser) commitFragmentNavigation(target *url.URL) (*Page, bool) {
 		b.mu.Unlock()
 		return nil, false
 	}
+	oldURL := cloneURL(page.URL)
 	page.URL = cloneURL(target)
 	page.HistoryState = ""
-	b.history.pushEntry(&historyEntry{URL: target, SameDocument: true, PageID: page.HistoryID})
+	b.history.pushEntry(&historyEntry{
+		URL: target, SameDocument: true, PageID: page.HistoryID,
+		ScrollFirst: page.ScrollFirst, ScrollOffset: page.ScrollOffset,
+	})
 	activeRuntime := b.activeRuntime
 	onMutation := b.onMutation
 	b.mu.Unlock()
 	if updater, ok := activeRuntime.(runtimemodel.LocationUpdater); ok {
 		updater.UpdateLocation(target)
+	}
+	if dispatcher, ok := activeRuntime.(runtimemodel.NavigationEventDispatcher); ok {
+		dispatcher.DispatchHashChange(network.RedactedURL(oldURL), network.RedactedURL(target))
 	}
 	if onMutation != nil {
 		onMutation()

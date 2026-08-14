@@ -15,14 +15,17 @@ import (
 )
 
 type runtimeStub struct {
-	loadCalls       int
-	startCalls      int
-	stopCalls       int
-	loadErr         error
-	startErr        error
-	environment     runtimemodel.Environment
-	mutateOnStart   bool
-	navigateOnStart string
+	loadCalls        int
+	startCalls       int
+	stopCalls        int
+	loadErr          error
+	startErr         error
+	environment      runtimemodel.Environment
+	mutateOnStart    bool
+	navigateOnStart  string
+	popStates        []string
+	hashChanges      [][2]string
+	navigationEvents []string
 }
 
 func TestAnimationFrameMutationUsesSharedFrameTimestamp(t *testing.T) {
@@ -104,6 +107,16 @@ func (runtime *runtimeStub) Stop() error {
 	return nil
 }
 
+func (runtime *runtimeStub) DispatchPopState(state string) {
+	runtime.popStates = append(runtime.popStates, state)
+	runtime.navigationEvents = append(runtime.navigationEvents, "popstate")
+}
+
+func (runtime *runtimeStub) DispatchHashChange(oldURL, newURL string) {
+	runtime.hashChanges = append(runtime.hashChanges, [2]string{oldURL, newURL})
+	runtime.navigationEvents = append(runtime.navigationEvents, "hashchange")
+}
+
 func TestWebGoNavigationUsesBrowserLifecycleAfterPageActivation(t *testing.T) {
 	firstURL := mustParseURL(t, "http://localhost/app/index.html")
 	secondURL := mustParseURL(t, "http://localhost/next")
@@ -159,6 +172,21 @@ func TestWebGoPushStateAddsSameDocumentHistoryEntry(t *testing.T) {
 	if entry.State != `{"note":7}` || !entry.SameDocument || entry.PageID != page.HistoryID {
 		t.Fatalf("history entry = %#v", entry)
 	}
+	if len(runtime.popStates) != 0 || len(runtime.hashChanges) != 0 {
+		t.Fatalf("PushState dispatched events: pop=%v hash=%v", runtime.popStates, runtime.hashChanges)
+	}
+	if _, err := browser.Back(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := browser.Forward(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(runtime.popStates) != 2 || runtime.popStates[0] != "" || runtime.popStates[1] != `{"note":7}` {
+		t.Fatalf("traversal popstate events = %v", runtime.popStates)
+	}
+	if len(runtime.hashChanges) != 0 {
+		t.Fatalf("History API traversal hashchange events = %v, want none", runtime.hashChanges)
+	}
 }
 
 func TestWebGoReplaceStateDoesNotAddHistoryEntry(t *testing.T) {
@@ -188,6 +216,9 @@ func TestWebGoReplaceStateDoesNotAddHistoryEntry(t *testing.T) {
 	}
 	if got := len(loader.requested); got != 1 {
 		t.Fatalf("network requests = %d, want 1", got)
+	}
+	if len(runtime.popStates) != 0 || len(runtime.hashChanges) != 0 {
+		t.Fatalf("ReplaceState dispatched events: pop=%v hash=%v", runtime.popStates, runtime.hashChanges)
 	}
 }
 
@@ -221,6 +252,41 @@ func TestWebGoHistoryTraversalUsesCrossDocumentLifecycle(t *testing.T) {
 	}
 	if browser.history.index != 0 || runtime.stopCalls != 1 {
 		t.Fatalf("history index = %d, Runtime Stop calls = %d", browser.history.index, runtime.stopCalls)
+	}
+}
+
+func TestCrossDocumentTraversalDispatchesPopStateToNewRuntime(t *testing.T) {
+	firstURL := mustParseURL(t, "http://localhost/first-state")
+	secondURL := mustParseURL(t, "http://localhost/second-state")
+	script := `<script type="text/go">package main; func main() {}</script>`
+	loader := &routeLoader{responses: map[string]*network.Response{
+		firstURL.String():  {URL: firstURL, StatusCode: 200, ContentType: "text/html", Body: []byte(script)},
+		secondURL.String(): {URL: secondURL, StatusCode: 200, ContentType: "text/html", Body: []byte(script)},
+	}}
+	var runtimes []*runtimeStub
+	browser := NewWithRuntimeFactory(loader, func() runtimemodel.Runtime {
+		runtime := &runtimeStub{}
+		runtimes = append(runtimes, runtime)
+		return runtime
+	})
+	first, err := browser.Navigate(context.Background(), firstURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := browser.replaceHistoryState(first, firstURL, `{"document":"first"}`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := browser.Navigate(context.Background(), secondURL.String()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := browser.Back(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(runtimes) != 3 {
+		t.Fatalf("Runtime count = %d, want 3", len(runtimes))
+	}
+	if got := runtimes[2].popStates; len(got) != 1 || got[0] != `{"document":"first"}` {
+		t.Fatalf("new Runtime popstate events = %v", got)
 	}
 }
 

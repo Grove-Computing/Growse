@@ -594,6 +594,25 @@ func TestFragmentNavigationReusesDocumentAndRuntimeWithoutNetwork(t *testing.T) 
 	if got, want := len(browser.history.entries), 2; got != want {
 		t.Fatalf("history entries = %d, want %d", got, want)
 	}
+	if len(runtime.hashChanges) != 1 || runtime.hashChanges[0] != [2]string{pageURL.String(), fragmentURL} {
+		t.Fatalf("hashchange events = %v", runtime.hashChanges)
+	}
+	if len(runtime.popStates) != 0 {
+		t.Fatalf("popstate events = %v, want none", runtime.popStates)
+	}
+	if _, err := browser.Back(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(runtime.popStates) != 1 || runtime.popStates[0] != "" {
+		t.Fatalf("traversal popstate events = %v", runtime.popStates)
+	}
+	if len(runtime.hashChanges) != 2 || runtime.hashChanges[1] != [2]string{fragmentURL, pageURL.String()} {
+		t.Fatalf("traversal hashchange events = %v", runtime.hashChanges)
+	}
+	wantOrder := []string{"hashchange", "popstate", "hashchange"}
+	if !reflect.DeepEqual(runtime.navigationEvents, wantOrder) {
+		t.Fatalf("Navigation Event order = %v, want %v", runtime.navigationEvents, wantOrder)
+	}
 }
 
 func TestBackAndForwardLoadHistoryEntries(t *testing.T) {

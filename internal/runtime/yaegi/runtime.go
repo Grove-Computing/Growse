@@ -128,17 +128,21 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 			"Response":              reflect.ValueOf((*fetchapi.Response)(nil)),
 		},
 		"growse/navigation/navigation": {
-			"Back":          reflect.ValueOf(navigation.Back),
-			"Current":       reflect.ValueOf(navigation.Current),
-			"Forward":       reflect.ValueOf(navigation.Forward),
-			"Go":            reflect.ValueOf(navigation.Go),
-			"HistoryLength": reflect.ValueOf(navigation.HistoryLength),
-			"HistoryState":  reflect.ValueOf(navigation.HistoryState),
-			"Location":      reflect.ValueOf((*navigationapi.Location)(nil)),
-			"Navigate":      reflect.ValueOf(navigation.Navigate),
-			"PushState":     reflect.ValueOf(navigation.PushState),
-			"ReplaceState":  reflect.ValueOf(navigation.ReplaceState),
-			"Resolve":       reflect.ValueOf(navigation.Resolve),
+			"Back":            reflect.ValueOf(navigation.Back),
+			"Current":         reflect.ValueOf(navigation.Current),
+			"Forward":         reflect.ValueOf(navigation.Forward),
+			"Go":              reflect.ValueOf(navigation.Go),
+			"HashChangeEvent": reflect.ValueOf((*navigationapi.HashChangeEvent)(nil)),
+			"HistoryLength":   reflect.ValueOf(navigation.HistoryLength),
+			"HistoryState":    reflect.ValueOf(navigation.HistoryState),
+			"Location":        reflect.ValueOf((*navigationapi.Location)(nil)),
+			"Navigate":        reflect.ValueOf(navigation.Navigate),
+			"OnHashChange":    reflect.ValueOf(navigation.OnHashChange),
+			"OnPopState":      reflect.ValueOf(navigation.OnPopState),
+			"PopStateEvent":   reflect.ValueOf((*navigationapi.PopStateEvent)(nil)),
+			"PushState":       reflect.ValueOf(navigation.PushState),
+			"ReplaceState":    reflect.ValueOf(navigation.ReplaceState),
+			"Resolve":         reflect.ValueOf(navigation.Resolve),
 		},
 		"growse/scheduler/scheduler": {
 			"CancelAnimationFrame":  reflect.ValueOf(scheduler.CancelAnimationFrame),
@@ -169,6 +173,26 @@ func (r *Runtime) UpdateLocation(documentURL *url.URL) {
 	r.mu.Unlock()
 	if navigation != nil {
 		navigation.UpdateCurrent(documentURL)
+	}
+}
+
+// DispatchPopState はpopstate相当EventをPage callback queueへ追加する。
+func (r *Runtime) DispatchPopState(state string) {
+	r.mu.Lock()
+	navigation := r.navigationAPI
+	r.mu.Unlock()
+	if navigation != nil {
+		r.enqueueCallback(func() { navigation.DispatchPopState(state) })
+	}
+}
+
+// DispatchHashChange はhashchange相当EventをPage callback queueへ追加する。
+func (r *Runtime) DispatchHashChange(oldURL, newURL string) {
+	r.mu.Lock()
+	navigation := r.navigationAPI
+	r.mu.Unlock()
+	if navigation != nil {
+		r.enqueueCallback(func() { navigation.DispatchHashChange(oldURL, newURL) })
 	}
 }
 

@@ -174,3 +174,17 @@ func TestHistoryTraversalAndSnapshotUseBrowserHandlers(t *testing.T) {
 		t.Fatalf("history snapshot = (%d, %q)", api.HistoryLength(), api.HistoryState())
 	}
 }
+
+func TestNavigationEventListenersReceivePayloadsInOrder(t *testing.T) {
+	api := New(nil)
+	var events []string
+	api.OnPopState(func(event PopStateEvent) { events = append(events, "pop:"+event.State) })
+	api.OnHashChange(func(event HashChangeEvent) { events = append(events, "hash:"+event.OldURL+"->"+event.NewURL) })
+
+	api.DispatchPopState(`{"page":1}`)
+	api.DispatchHashChange("https://example.test/#one", "https://example.test/#two")
+	want := []string{`pop:{"page":1}`, "hash:https://example.test/#one->https://example.test/#two"}
+	if len(events) != len(want) || events[0] != want[0] || events[1] != want[1] {
+		t.Fatalf("events = %v, want %v", events, want)
+	}
+}

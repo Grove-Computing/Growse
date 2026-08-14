@@ -371,6 +371,65 @@ func main() {
 	}
 }
 
+func TestRuntimeDeliversNavigationEventsThroughPageQueue(t *testing.T) {
+	runtime := New()
+	scripts := []runtimemodel.Script{{Source: `package main
+import "growse/dom"
+import "growse/navigation"
+var PopState string
+var OldURL string
+var NewURL string
+func main() {
+	navigation.OnPopState(func(event navigation.PopStateEvent) {
+		PopState = event.State
+		dom.GetElementByID("result").SetText("pop")
+	})
+	navigation.OnHashChange(func(event navigation.HashChangeEvent) {
+		OldURL = event.OldURL
+		NewURL = event.NewURL
+		dom.GetElementByID("result").SetText("hash")
+	})
+}`}}
+	document := dommodel.NewDocument()
+	result := document.CreateElement("p", map[string]string{"id": "result"})
+	if err := document.AppendChild(document.Root, result); err != nil {
+		t.Fatal(err)
+	}
+	mutated := make(chan struct{}, 2)
+	environment := runtimemodel.Environment{
+		Document: document, Events: events.NewDispatcher(),
+		OnMutation: func() { mutated <- struct{}{} },
+	}
+	if err := runtime.Load(context.Background(), scripts, environment); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	runtime.DispatchPopState(`{"page":2}`)
+	runtime.DispatchHashChange("https://example.test/#one", "https://example.test/#two")
+	for range 2 {
+		select {
+		case <-mutated:
+		case <-time.After(time.Second):
+			t.Fatal("Navigation Event callback was not delivered")
+		}
+	}
+	symbols := runtime.interpreter.Symbols("page")["page"]
+	if got := symbols["PopState"].String(); got != `{"page":2}` {
+		t.Fatalf("PopState = %q", got)
+	}
+	if got := symbols["OldURL"].String(); got != "https://example.test/#one" {
+		t.Fatalf("OldURL = %q", got)
+	}
+	if got := symbols["NewURL"].String(); got != "https://example.test/#two" {
+		t.Fatalf("NewURL = %q", got)
+	}
+	if err := runtime.Stop(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRuntimeFetchSendsMethodRelativeURLHeadersAndTextBody(t *testing.T) {
 	runtime := New()
 	var captured *network.Request

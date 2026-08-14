@@ -4,6 +4,7 @@ package navigation
 import (
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/url"
 	"strings"
 	"sync"
@@ -37,16 +38,29 @@ type Location struct {
 	Fragment string
 }
 
+// PopStateEvent はHistory traversal後のWebGo Eventである。
+type PopStateEvent struct {
+	State string
+}
+
+// HashChangeEvent はfragment変更前後のcredentialを含まないURLを保持する。
+type HashChangeEvent struct {
+	OldURL string
+	NewURL string
+}
+
 // API は1つのPageに属するNavigation APIである。
 type API struct {
-	mu           sync.RWMutex
-	base         *url.URL
-	current      Location
-	navigate     func(*url.URL) error
-	pushState    func(string, *url.URL) error
-	replaceState func(string, *url.URL) error
-	traverse     func(int) error
-	historyInfo  func() (int, string)
+	mu                  sync.RWMutex
+	base                *url.URL
+	current             Location
+	navigate            func(*url.URL) error
+	pushState           func(string, *url.URL) error
+	replaceState        func(string, *url.URL) error
+	traverse            func(int) error
+	historyInfo         func() (int, string)
+	popStateListeners   []func(PopStateEvent)
+	hashChangeListeners []func(HashChangeEvent)
 }
 
 // SetPushStateHandler はsame-document History entryの追加先を設定する。
@@ -213,6 +227,63 @@ func (api *API) historySnapshot() (int, string) {
 		return 0, ""
 	}
 	return info()
+}
+
+// OnPopState はHistory traversal後に呼ばれるlistenerを登録する。
+func (api *API) OnPopState(listener func(PopStateEvent)) {
+	if api == nil || listener == nil {
+		return
+	}
+	api.mu.Lock()
+	api.popStateListeners = append(api.popStateListeners, listener)
+	api.mu.Unlock()
+}
+
+// OnHashChange はfragment Navigation後に呼ばれるlistenerを登録する。
+func (api *API) OnHashChange(listener func(HashChangeEvent)) {
+	if api == nil || listener == nil {
+		return
+	}
+	api.mu.Lock()
+	api.hashChangeListeners = append(api.hashChangeListeners, listener)
+	api.mu.Unlock()
+}
+
+// DispatchPopState はBrowserからpopstate相当Eventを配送する。
+func (api *API) DispatchPopState(state string) {
+	if api == nil {
+		return
+	}
+	api.mu.RLock()
+	listeners := append([]func(PopStateEvent){}, api.popStateListeners...)
+	api.mu.RUnlock()
+	event := PopStateEvent{State: state}
+	for _, listener := range listeners {
+		invokeNavigationListener("popstate", func() { listener(event) })
+	}
+}
+
+// DispatchHashChange はBrowserからhashchange相当Eventを配送する。
+func (api *API) DispatchHashChange(oldURL, newURL string) {
+	if api == nil {
+		return
+	}
+	api.mu.RLock()
+	listeners := append([]func(HashChangeEvent){}, api.hashChangeListeners...)
+	api.mu.RUnlock()
+	event := HashChangeEvent{OldURL: oldURL, NewURL: newURL}
+	for _, listener := range listeners {
+		invokeNavigationListener("hashchange", func() { listener(event) })
+	}
+}
+
+func invokeNavigationListener(eventType string, listener func()) {
+	defer func() {
+		if recover() != nil {
+			slog.Error("WebGo Navigation Event handlerでpanicが発生しました", "component", "navigation", "type", eventType)
+		}
+	}()
+	listener()
 }
 
 func (api *API) resolveHistoryURL(rawURL string) (*url.URL, error) {
