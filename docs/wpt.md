@@ -17,5 +17,15 @@ GrowseはWeb Platform Tests（WPT）をブラウザで直接実行せず、対�
 | `TestWPTFlexGrow001DistributesPositiveFreeSpaceByFactor` | `css/css-flexbox/flex-grow-001.xht` | 240pxのmain sizeをgrow factor 0:1:2へ分配し、各itemの数値geometryを比較 | 視覚的な参照画像を数値比較へ変換 |
 | `TestWPTFlexWrap002FormsTwoColumnFlexLines` | `css/css-flexbox/flex-wrap-002.html` | 100pxのcolumn main axisへ100pxのitemを2つ置き、2 line形成を比較 | fit-content cross sizeの詳細はGrowse対応範囲外 |
 | `TestWPTFlexDirectionRowReverseMapsMainAxis` | `css/css-flexbox/flex-direction-row-reverse.html` | row-reverseのhorizontal/reverse axis変換を直接比較 | 視覚的な順序比較を内部axisの数値比較へ変換 |
+| `TestWPTComputedGridColumnPlacesItemOnSecondColumn` | `css/css-grid/computed-grid-column.html` | row 1 / column 2のcomputed placementと最終geometryを比較 | upstreamの複雑な`calc()`式は未対応のため、同じ計算結果となる整数値へ縮約 |
+| `TestWPTAbsoluteWithoutPositionedAncestorUsesInitialContainingBlock` | `css/CSS2/abspos/abspos-containing-block-initial-005b.xht` | positioned ancestorがないabsolute要素をviewport基準で配置し、数値geometryを比較 | upstreamのroot要素に対するreftestを通常要素のright/bottom解決へ縮約 |
+| `TestWPTTransformOriginZeroDiffersFromDefaultCenter` | `css/css-transforms/transform-origin-001.html` | 45度回転時の`0% 0%`と既定`50% 50%`の変換行列が異なることを比較 | mismatch画像比較を変換行列の比較へ変換 |
 
 Upstreamのファイル全体はコピーせず、assertionの意味と最小入力だけを移植する。ケースを追加または更新するときは、Revision、Source、適応内容、および意図的な差分をこの表へ記録する。
+
+## v0.6.0の選定範囲
+
+- Grid Level 1はtrack sizing、placement、auto-placement、alignmentを選定対象とする。Grid Level 2のsubgridとmasonryはリリース対象外のため移植しない。
+- Positioned Layoutはrelative、absolute、fixed、stickyと包含ブロックを選定対象とする。Anchor Positioningとtop layerはプロパティモデル自体が対象外のため移植しない。
+- Transforms Level 1は2D transformとtransform-originを選定対象とする。3D transform、perspective、preserve-3dはv0.6.0の明示的な対象外のため移植しない。
+- WPT harness、WebDriver、Font依存のassertionは直接実行せず、Growseの責務に対応するcomputed value、Layout geometry、Display List、Hit Testの決定的なassertionへ縮約する。

@@ -200,6 +200,14 @@ func (e *engine) walk(node *dom.Node, x, width, containingHeight float32, height
 		if style.display == stylemodel.DisplayNone {
 			return
 		}
+		// Top-level positioned elements do not pass through a block parent's
+		// positioned-child collection. Resolve them against the current
+		// containing block (or the initial containing block when it is nil)
+		// instead of accidentally laying them out in normal flow.
+		if style.layoutPosition == stylemodel.PositionAbsolute || style.layoutPosition == stylemodel.PositionFixed {
+			e.renderPositionedChild(node, style)
+			return
+		}
 		if isTextInput(node) {
 			e.addInput(node, style, x, width, containingHeight, heightDefinite)
 			return
