@@ -3,6 +3,7 @@ package navigation
 import (
 	"errors"
 	"net/url"
+	"strings"
 	"testing"
 )
 
@@ -125,10 +126,37 @@ func TestPushStateValidatesJSONAndSameOriginBeforeAddingEntry(t *testing.T) {
 		{state: `{`, rawURL: "/bad-json"},
 		{state: `null`, rawURL: "https://other.test/cross-origin"},
 		{state: `null`, rawURL: "https://user:secret@example.test/private"},
+		{state: `"` + strings.Repeat("x", MaxHistoryStateSize) + `"`, rawURL: "/huge"},
 	} {
 		if err := api.PushState(test.state, test.rawURL); err == nil {
 			t.Errorf("PushState(%q, %q) error = nil", test.state, test.rawURL)
+		} else if strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), test.state) {
+			t.Errorf("PushState error exposed sensitive input: %q", err)
 		}
+	}
+}
+
+func TestHistoryRejectsInvalidUTF8CredentialAndLongURLWithoutCallingBrowser(t *testing.T) {
+	base, _ := url.Parse("https://example.test/app")
+	api := New(base)
+	called := false
+	api.SetPushStateHandler(func(string, *url.URL) error { called = true; return nil })
+	tests := []struct{ state, rawURL string }{
+		{state: string([]byte{'"', 0xff, '"'}), rawURL: "/invalid-utf8"},
+		{state: `null`, rawURL: "https://alice:super-secret@example.test/private"},
+		{state: `null`, rawURL: "/" + strings.Repeat("x", MaxURLSize)},
+	}
+	for _, test := range tests {
+		err := api.PushState(test.state, test.rawURL)
+		if err == nil {
+			t.Fatalf("PushState() error = nil for rejected input")
+		}
+		if strings.Contains(err.Error(), "super-secret") || strings.Contains(err.Error(), "alice") || strings.Contains(err.Error(), test.state) {
+			t.Fatalf("error exposed rejected input: %q", err)
+		}
+	}
+	if called {
+		t.Fatal("rejected History input reached Browser handler")
 	}
 }
 

@@ -222,6 +222,38 @@ func TestWebGoReplaceStateDoesNotAddHistoryEntry(t *testing.T) {
 	}
 }
 
+func TestBrowserRejectsUnvalidatedHistoryInputWithoutMutation(t *testing.T) {
+	pageURL := mustParseURL(t, "http://localhost/safe")
+	loader := &routeLoader{responses: map[string]*network.Response{
+		pageURL.String(): {URL: pageURL, StatusCode: 200, ContentType: "text/html", Body: []byte(`<p>Safe</p>`)},
+	}}
+	browser := New(loader)
+	page, err := browser.Navigate(context.Background(), pageURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	credentialURL := mustParseURL(t, "http://alice:super-secret@localhost/private")
+	for _, test := range []struct {
+		state  string
+		target *url.URL
+	}{
+		{state: `{`, target: pageURL},
+		{state: `"` + strings.Repeat("x", maxHistoryStateBytes) + `"`, target: pageURL},
+		{state: `null`, target: credentialURL},
+	} {
+		err := browser.pushHistoryState(page, test.target, test.state)
+		if err == nil {
+			t.Fatal("pushHistoryState() accepted unsafe input")
+		}
+		if strings.Contains(err.Error(), "super-secret") || strings.Contains(err.Error(), test.state) {
+			t.Fatalf("error exposed unsafe input: %q", err)
+		}
+	}
+	if len(browser.history.entries) != 1 || page.URL.String() != pageURL.String() {
+		t.Fatalf("rejected input mutated History or URL: entries=%d URL=%v", len(browser.history.entries), page.URL)
+	}
+}
+
 func TestWebGoHistoryTraversalUsesCrossDocumentLifecycle(t *testing.T) {
 	firstURL := mustParseURL(t, "http://localhost/first")
 	secondURL := mustParseURL(t, "http://localhost/second")

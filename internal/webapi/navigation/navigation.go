@@ -8,12 +8,13 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/Grove-Computing/Growse/internal/network"
 )
 
 const (
-	maxURLBytes         = 8192
+	MaxURLSize          = 8 * 1024
 	MaxHistoryStateSize = 64 * 1024
 )
 
@@ -171,7 +172,7 @@ func (api *API) ReplaceState(stateJSON, rawURL string) error {
 }
 
 func validateHistoryState(stateJSON string) error {
-	if len(stateJSON) == 0 || len(stateJSON) > MaxHistoryStateSize || !json.Valid([]byte(stateJSON)) {
+	if len(stateJSON) == 0 || len(stateJSON) > MaxHistoryStateSize || !utf8.ValidString(stateJSON) || !json.Valid([]byte(stateJSON)) {
 		return errors.New("invalid history state")
 	}
 	return nil
@@ -294,6 +295,9 @@ func (api *API) resolveHistoryURL(rawURL string) (*url.URL, error) {
 		return nil, ErrInvalidURL
 	}
 	if rawURL == "" {
+		if base.User != nil || len(base.String()) > MaxURLSize {
+			return nil, ErrInvalidURL
+		}
 		return base, nil
 	}
 	target, err := api.resolve(rawURL)
@@ -304,7 +308,7 @@ func (api *API) resolveHistoryURL(rawURL string) (*url.URL, error) {
 }
 
 func (api *API) resolve(rawURL string) (*url.URL, error) {
-	if api == nil || len(rawURL) == 0 || len(rawURL) > maxURLBytes || strings.TrimSpace(rawURL) != rawURL {
+	if api == nil || len(rawURL) == 0 || len(rawURL) > MaxURLSize || strings.TrimSpace(rawURL) != rawURL {
 		return nil, ErrInvalidURL
 	}
 	api.mu.RLock()
@@ -318,7 +322,7 @@ func (api *API) resolve(rawURL string) (*url.URL, error) {
 		return nil, ErrInvalidURL
 	}
 	target := base.ResolveReference(reference)
-	if target.Scheme != "http" && target.Scheme != "https" || target.Hostname() == "" || target.User != nil {
+	if len(target.String()) > MaxURLSize || target.Scheme != "http" && target.Scheme != "https" || target.Hostname() == "" || target.User != nil {
 		return nil, ErrInvalidURL
 	}
 	if _, err := network.OriginFromURL(target); err != nil {

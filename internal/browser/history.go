@@ -47,6 +47,10 @@ func (h *history) pushEntry(entry *historyEntry) {
 	if h.index+1 < len(h.entries) {
 		h.entries = h.entries[:h.index+1]
 	}
+	if len(h.entries) >= maxHistoryEntries {
+		h.entries = h.entries[1:]
+		h.index--
+	}
 	h.entries = append(h.entries, cloneHistoryEntry(entry))
 	h.index = len(h.entries) - 1
 }
@@ -82,11 +86,35 @@ func (h *history) target(delta int) (*url.URL, int, bool) {
 }
 
 func (h *history) targetEntry(delta int) (*historyEntry, int, bool) {
+	if delta > len(h.entries) || delta < -len(h.entries) {
+		return nil, h.index, false
+	}
 	index := h.index + delta
 	if index < 0 || index >= len(h.entries) {
 		return nil, h.index, false
 	}
 	return cloneHistoryEntry(h.entries[index]), index, true
+}
+
+func (h *history) stateBytesAfterPush(state string) int {
+	total := len(state)
+	last := min(h.index, len(h.entries)-1)
+	for index := 0; index <= last; index++ {
+		if h.entries[index] != nil {
+			total += len(h.entries[index].State)
+		}
+	}
+	return total
+}
+
+func (h *history) stateBytesAfterReplace(state string) int {
+	total := len(state)
+	for index, entry := range h.entries {
+		if index != h.index && entry != nil {
+			total += len(entry.State)
+		}
+	}
+	return total
 }
 
 func (h *history) current() (*historyEntry, bool) {

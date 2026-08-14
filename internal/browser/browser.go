@@ -5,6 +5,7 @@ package browser
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"mime"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	animationmodel "github.com/Grove-Computing/Growse/internal/animation"
 	"github.com/Grove-Computing/Growse/internal/dom"
@@ -22,6 +24,13 @@ import (
 	"github.com/Grove-Computing/Growse/internal/network"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 	"github.com/Grove-Computing/Growse/internal/style"
+)
+
+const (
+	maxHistoryEntries           = 1024
+	maxHistoryStateBytes        = 64 * 1024
+	maxHistorySessionStateBytes = 4 * 1024 * 1024
+	maxHistoryURLBytes          = 8 * 1024
 )
 
 // ResourceLoader retrieves a resource for navigation.
@@ -1110,9 +1119,14 @@ func (b *Browser) pushHistoryState(source *Page, target *url.URL, state string) 
 		b.mu.Unlock()
 		return errors.New("history is unavailable")
 	}
-	if target.User != nil || !network.SameOrigin(source.URL, target) {
+	if !validBrowserHistoryState(state) || len(target.String()) > maxHistoryURLBytes || target.User != nil || !network.SameOrigin(source.URL, target) {
 		b.mu.Unlock()
-		return errors.New("history URL is not same-origin")
+		return errors.New("invalid history entry")
+	}
+	newLength := b.history.index + 2
+	if newLength > maxHistoryEntries || b.history.stateBytesAfterPush(state) > maxHistorySessionStateBytes {
+		b.mu.Unlock()
+		return errors.New("history capacity exceeded")
 	}
 	source.URL = cloneURL(target)
 	source.HistoryState = state
@@ -1138,9 +1152,13 @@ func (b *Browser) replaceHistoryState(source *Page, target *url.URL, state strin
 		b.mu.Unlock()
 		return errors.New("history is unavailable")
 	}
-	if target.User != nil || !network.SameOrigin(source.URL, target) {
+	if !validBrowserHistoryState(state) || len(target.String()) > maxHistoryURLBytes || target.User != nil || !network.SameOrigin(source.URL, target) {
 		b.mu.Unlock()
-		return errors.New("history URL is not same-origin")
+		return errors.New("invalid history entry")
+	}
+	if b.history.stateBytesAfterReplace(state) > maxHistorySessionStateBytes {
+		b.mu.Unlock()
+		return errors.New("history capacity exceeded")
 	}
 	source.URL = cloneURL(target)
 	source.HistoryState = state
@@ -1158,6 +1176,10 @@ func (b *Browser) replaceHistoryState(source *Page, target *url.URL, state strin
 		onMutation()
 	}
 	return nil
+}
+
+func validBrowserHistoryState(state string) bool {
+	return len(state) > 0 && len(state) <= maxHistoryStateBytes && utf8.ValidString(state) && json.Valid([]byte(state))
 }
 
 func (b *Browser) historyInfo() (int, string) {
