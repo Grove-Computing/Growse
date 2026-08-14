@@ -278,6 +278,10 @@ func TestFetchCredentialsModesControlCookieSendAndStore(t *testing.T) {
 	var receivedCookie string
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		receivedCookie = request.Header.Get("Cookie")
+		if origin := request.Header.Get("Origin"); origin != "" {
+			response.Header().Set("Access-Control-Allow-Origin", origin)
+			response.Header().Set("Access-Control-Allow-Credentials", "true")
+		}
 		http.SetCookie(response, &http.Cookie{Name: "received", Value: "yes", Path: "/"})
 		_, _ = response.Write([]byte("ok"))
 	}))

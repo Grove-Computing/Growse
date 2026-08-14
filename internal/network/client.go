@@ -177,8 +177,14 @@ func (c *Client) Do(ctx context.Context, requestData *Request) (*Response, error
 	jar := operationClient.Jar
 	operationClient.Jar = nil
 	addRequestCookies(request, jar, requestData)
+	if err := applyCORSRequest(request, requestData); err != nil {
+		return nil, err
+	}
 	redirectPolicy := operationClient.CheckRedirect
 	operationClient.CheckRedirect = func(redirect *http.Request, via []*http.Request) error {
+		if err := validateCORSResponse(redirect.Response, requestData); err != nil {
+			return err
+		}
 		storeResponseCookies(jar, redirect.Response, requestData)
 		if redirectPolicy != nil {
 			if err := redirectPolicy(redirect, via); err != nil {
@@ -190,7 +196,7 @@ func (c *Client) Do(ctx context.Context, requestData *Request) (*Response, error
 		redirectData.URL = redirect.URL
 		redirectData.Method = redirect.Method
 		addRequestCookies(redirect, jar, &redirectData)
-		return nil
+		return applyCORSRequest(redirect, &redirectData)
 	}
 	response, err := operationClient.Do(request)
 	if err != nil {
@@ -198,6 +204,9 @@ func (c *Client) Do(ctx context.Context, requestData *Request) (*Response, error
 	}
 	defer response.Body.Close()
 	storeResponseCookies(jar, response, requestData)
+	if err := validateCORSResponse(response, requestData); err != nil {
+		return nil, err
+	}
 
 	if response.ContentLength > c.maxBodyBytes {
 		return nil, fmt.Errorf("%w: limit is %d bytes", ErrResponseTooLarge, c.maxBodyBytes)
@@ -278,6 +287,10 @@ func classifyRequestError(err error) error {
 		return fmt.Errorf("send request: %w", ErrRedirectLoop)
 	case errors.Is(err, ErrRedirectLimit):
 		return fmt.Errorf("send request: %w", ErrRedirectLimit)
+	case errors.Is(err, ErrCORS):
+		return fmt.Errorf("send request: %w", ErrCORS)
+	case errors.Is(err, ErrCORSPreflightRequired):
+		return fmt.Errorf("send request: %w", ErrCORSPreflightRequired)
 	case errors.Is(err, context.Canceled):
 		return fmt.Errorf("send request: %w", context.Canceled)
 	case errors.Is(err, context.DeadlineExceeded):
