@@ -86,6 +86,7 @@ type API struct {
 	queue    timerQueue
 	nextID   TimerID
 	sequence uint64
+	lastNow  time.Time
 	closed   bool
 
 	wake chan struct{}
@@ -181,7 +182,7 @@ func (api *API) schedule(delay, interval time.Duration, repeat bool, callback fu
 	api.sequence++
 	entry := &timerEntry{
 		id:       api.nextID,
-		deadline: api.clock.Now().Add(delay),
+		deadline: api.nowLocked().Add(delay),
 		interval: interval,
 		repeat:   repeat,
 		callback: callback,
@@ -210,7 +211,7 @@ func (api *API) run() {
 		var delay time.Duration
 		hasDeadline := len(api.queue) != 0
 		if hasDeadline {
-			delay = api.queue[0].deadline.Sub(api.clock.Now())
+			delay = api.queue[0].deadline.Sub(api.nowLocked())
 			if delay < 0 {
 				delay = 0
 			}
@@ -249,6 +250,9 @@ func (api *API) run() {
 }
 
 func (api *API) runDue(current time.Time) {
+	api.mu.Lock()
+	current = api.observeLocked(current)
+	api.mu.Unlock()
 	for {
 		api.mu.Lock()
 		if api.closed || len(api.queue) == 0 || api.queue[0].deadline.After(current) {
@@ -300,10 +304,22 @@ func (api *API) execute(entry *timerEntry) {
 	}
 	api.sequence++
 	entry.sequence = api.sequence
-	entry.deadline = api.clock.Now().Add(entry.interval)
+	entry.deadline = api.nowLocked().Add(entry.interval)
 	heap.Push(&api.queue, entry)
 	api.mu.Unlock()
 	api.signal()
+}
+
+func (api *API) nowLocked() time.Time {
+	return api.observeLocked(api.clock.Now())
+}
+
+func (api *API) observeLocked(current time.Time) time.Time {
+	if !api.lastNow.IsZero() && current.Before(api.lastNow) {
+		return api.lastNow
+	}
+	api.lastNow = current
+	return current
 }
 
 func (api *API) signal() {

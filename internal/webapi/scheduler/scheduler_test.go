@@ -117,3 +117,37 @@ func TestIntervalCanClearItself(t *testing.T) {
 		t.Fatalf("callback count = %d, want 1", callbackCount)
 	}
 }
+
+func TestSchedulerClampsRegressedClockAndKeepsRegistrationOrder(t *testing.T) {
+	start := time.Unix(100, 0)
+	clock := &fakeClock{current: start}
+	var callbacks []int
+	api := newAPI(context.Background(), clock, func(callback func()) bool {
+		callback()
+		return true
+	}, false)
+	t.Cleanup(api.Close)
+
+	if _, err := api.SetTimeout(10*time.Millisecond, func() { callbacks = append(callbacks, 1) }); err != nil {
+		t.Fatal(err)
+	}
+	clock.current = start.Add(-time.Hour)
+	if _, err := api.SetTimeout(10*time.Millisecond, func() { callbacks = append(callbacks, 2) }); err != nil {
+		t.Fatal(err)
+	}
+
+	clock.current = start.Add(10 * time.Millisecond)
+	api.runDue(clock.Now())
+	if len(callbacks) != 2 || callbacks[0] != 1 || callbacks[1] != 2 {
+		t.Fatalf("callbacks = %v, want [1 2]", callbacks)
+	}
+	if got := api.lastNow; !got.Equal(clock.current) {
+		t.Fatalf("last observed time = %v, want %v", got, clock.current)
+	}
+
+	clock.current = start
+	api.runDue(clock.Now())
+	if got := api.lastNow; !got.Equal(start.Add(10 * time.Millisecond)) {
+		t.Fatalf("regressed clock changed observed time to %v", got)
+	}
+}
