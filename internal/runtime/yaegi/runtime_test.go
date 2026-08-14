@@ -85,6 +85,149 @@ func main() { console.Log("Hello from Go", 42) }`}}
 	}
 }
 
+func TestRuntimeExposesWebGoTimeoutAndInterval(t *testing.T) {
+	runtime := New()
+	mutated := make(chan struct{}, 4)
+	document := dommodel.NewDocument()
+	result := document.CreateElement("p", map[string]string{"id": "result"})
+	if err := document.AppendChild(document.Root, result); err != nil {
+		t.Fatal(err)
+	}
+	scripts := []runtimemodel.Script{{Source: `package main
+import (
+	"growse/dom"
+	"growse/scheduler"
+)
+var TimeoutID scheduler.TimerID
+var IntervalID scheduler.TimerID
+func main() {
+	TimeoutID, _ = scheduler.SetTimeout(0, func() {
+		dom.GetElementByID("result").SetText("timeout")
+	})
+	IntervalID, _ = scheduler.SetInterval(scheduler.Millisecond, func() {
+		dom.GetElementByID("result").SetText("interval")
+	})
+}`}}
+	environment := runtimemodel.Environment{
+		Document: document,
+		Events:   events.NewDispatcher(),
+		OnMutation: func() {
+			mutated <- struct{}{}
+		},
+	}
+
+	if err := runtime.Load(context.Background(), scripts, environment); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	select {
+	case <-mutated:
+	case <-time.After(time.Second):
+		t.Fatal("Scheduler callback was not delivered through the page queue")
+	}
+	symbols := runtime.interpreter.Symbols("page")["page"]
+	if symbols["TimeoutID"].Uint() == 0 || symbols["IntervalID"].Uint() == 0 {
+		t.Fatalf("timer IDs = timeout:%d interval:%d, want non-zero", symbols["TimeoutID"].Uint(), symbols["IntervalID"].Uint())
+	}
+	if err := runtime.Stop(); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+}
+
+func TestRuntimeExposesWebGoTimerCancellation(t *testing.T) {
+	runtime := New()
+	scripts := []runtimemodel.Script{{Source: `package main
+import "growse/scheduler"
+var Cleared bool
+func main() {
+	id, _ := scheduler.SetTimeout(scheduler.Second, func() {})
+	Cleared = scheduler.ClearTimer(id)
+}`}}
+	if err := runtime.Load(context.Background(), scripts, runtimemodel.Environment{}); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if !runtime.interpreter.Symbols("page")["page"]["Cleared"].Bool() {
+		t.Fatal("WebGo ClearTimer() did not cancel the active timeout")
+	}
+	if err := runtime.Stop(); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+}
+
+func TestRuntimeExposesAnimationFrameRegistrationAndCancellation(t *testing.T) {
+	runtime := New()
+	document := dommodel.NewDocument()
+	result := document.CreateElement("p", map[string]string{"id": "result"})
+	if err := document.AppendChild(document.Root, result); err != nil {
+		t.Fatal(err)
+	}
+	frameRequests := 0
+	mutated := make(chan struct{}, 1)
+	scripts := []runtimemodel.Script{{Source: `package main
+import (
+	"growse/dom"
+	"growse/scheduler"
+)
+var FrameID scheduler.FrameID
+var Canceled bool
+var LastTimestamp scheduler.Timestamp
+func main() {
+	canceledID, _ := scheduler.RequestAnimationFrame(func(scheduler.Timestamp) {
+		dom.GetElementByID("result").SetText("canceled")
+	})
+	Canceled = scheduler.CancelAnimationFrame(canceledID)
+	FrameID, _ = scheduler.RequestAnimationFrame(func(timestamp scheduler.Timestamp) {
+		LastTimestamp = timestamp
+		dom.GetElementByID("result").SetText("frame")
+	})
+}`}}
+	environment := runtimemodel.Environment{
+		Document: document,
+		Events:   events.NewDispatcher(),
+		RequestFrame: func() {
+			frameRequests++
+		},
+		OnMutation: func() {
+			mutated <- struct{}{}
+		},
+	}
+	if err := runtime.Load(context.Background(), scripts, environment); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if frameRequests != 2 {
+		t.Fatalf("frame requests = %d, want 2", frameRequests)
+	}
+	if !runtime.RunAnimationFrame(time.Now()) {
+		t.Fatal("RunAnimationFrame() did not deliver the active callback")
+	}
+	select {
+	case <-mutated:
+	default:
+		t.Fatal("frame callback did not mutate the DOM")
+	}
+	symbols := runtime.interpreter.Symbols("page")["page"]
+	if symbols["FrameID"].Uint() == 0 || !symbols["Canceled"].Bool() {
+		t.Fatalf("frame state = id:%d canceled:%v", symbols["FrameID"].Uint(), symbols["Canceled"].Bool())
+	}
+	if got := result.TextContent(); got != "frame" {
+		t.Fatalf("result text = %q, want frame", got)
+	}
+	if runtime.HasAnimationFrameCallbacks() {
+		t.Fatal("one-shot frame callback remained active")
+	}
+	if err := runtime.Stop(); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+}
+
 func TestRuntimeFetchSendsMethodRelativeURLHeadersAndTextBody(t *testing.T) {
 	runtime := New()
 	var captured *network.Request
@@ -202,6 +345,67 @@ func TestRuntimeSerializesPageCallbacksInQueueOrder(t *testing.T) {
 	}
 }
 
+func TestRuntimeSerializesDOMEventBehindQueuedCallback(t *testing.T) {
+	runtime := New()
+	document := dommodel.NewDocument()
+	button := document.CreateElement("button", map[string]string{"id": "button"})
+	if err := document.AppendChild(document.Root, button); err != nil {
+		t.Fatal(err)
+	}
+	dispatcher := events.NewDispatcher()
+	scripts := []runtimemodel.Script{{Source: `package main
+import "growse/dom"
+var Clicks int
+func main() {
+	dom.GetElementByID("button").OnClick(func() { Clicks++ })
+}`}}
+	if err := runtime.Load(context.Background(), scripts, runtimemodel.Environment{
+		Document: document,
+		Events:   dispatcher,
+	}); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	if !runtime.enqueueCallback(func() {
+		close(firstStarted)
+		<-releaseFirst
+	}) {
+		t.Fatal("failed to enqueue blocking page callback")
+	}
+	<-firstStarted
+	eventDone := make(chan bool, 1)
+	go func() {
+		eventDone <- runtime.DispatchPageEvent(func() bool {
+			return dispatcher.Dispatch(events.Event{Type: events.Click, Target: button.ID})
+		})
+	}()
+	select {
+	case <-eventDone:
+		t.Fatal("DOM event ran concurrently with an earlier page callback")
+	default:
+	}
+	close(releaseFirst)
+	select {
+	case handled := <-eventDone:
+		if !handled {
+			t.Fatal("queued DOM event was not handled")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("queued DOM event was not delivered")
+	}
+	if got := runtime.interpreter.Symbols("page")["page"]["Clicks"].Int(); got != 1 {
+		t.Fatalf("click count = %d, want 1", got)
+	}
+	if err := runtime.Stop(); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+}
+
 func TestRuntimeStopCancelsInFlightFetch(t *testing.T) {
 	runtime := New()
 	requestStarted := make(chan struct{})
@@ -279,6 +483,39 @@ func TestRuntimeStopDiscardsQueuedAndFutureCallbacks(t *testing.T) {
 	}
 	if runtime.enqueueCallback(func() { staleCallback <- struct{}{} }) {
 		t.Fatal("stopped Runtime accepted an old Page callback")
+	}
+}
+
+func TestRuntimeStopDiscardsSchedulerCallbacks(t *testing.T) {
+	runtime := New()
+	scripts := []runtimemodel.Script{{Source: `package main
+import "growse/scheduler"
+func main() {
+	_, _ = scheduler.SetTimeout(scheduler.Second, func() {})
+	_, _ = scheduler.RequestAnimationFrame(func(timestamp scheduler.Timestamp) {
+		_ = timestamp
+	})
+}`}}
+	if err := runtime.Load(context.Background(), scripts, runtimemodel.Environment{}); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if !runtime.HasAnimationFrameCallbacks() {
+		t.Fatal("runtime did not retain the registered frame before Stop")
+	}
+	if err := runtime.Stop(); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+	if runtime.HasAnimationFrameCallbacks() || runtime.RunAnimationFrame(time.Now()) {
+		t.Fatal("stopped runtime retained a frame callback")
+	}
+	if runtime.schedulerAPI == nil {
+		t.Fatal("scheduler API was not initialized")
+	}
+	if _, err := runtime.schedulerAPI.SetTimeout(0, func() {}); err == nil {
+		t.Fatal("stopped runtime scheduler accepted a new timer")
 	}
 }
 

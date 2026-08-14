@@ -33,6 +33,15 @@ type requestLoader interface {
 	Do(ctx context.Context, request *network.Request) (*network.Response, error)
 }
 
+type animationFrameRuntime interface {
+	RunAnimationFrame(time.Time) bool
+	HasAnimationFrameCallbacks() bool
+}
+
+type pageEventRuntime interface {
+	DispatchPageEvent(func() bool) bool
+}
+
 // Browser owns the state for one browser window.
 //
 // MVPでは1つのアクティブページ、線形の閲覧履歴、信頼済みページごとに
@@ -91,6 +100,40 @@ func (b *Browser) Page() *Page {
 	return b.page
 }
 
+// RunAnimationFrame delivers one Gio frame timestamp to the active WebGo runtime.
+func (b *Browser) RunAnimationFrame(current time.Time) bool {
+	b.mu.RLock()
+	activeRuntime := b.activeRuntime
+	b.mu.RUnlock()
+	runtime, ok := activeRuntime.(animationFrameRuntime)
+	return ok && runtime.RunAnimationFrame(current)
+}
+
+// HasAnimationFrameCallbacks reports whether WebGo requested another frame.
+func (b *Browser) HasAnimationFrameCallbacks() bool {
+	b.mu.RLock()
+	activeRuntime := b.activeRuntime
+	b.mu.RUnlock()
+	runtime, ok := activeRuntime.(animationFrameRuntime)
+	return ok && runtime.HasAnimationFrameCallbacks()
+}
+
+func (b *Browser) dispatchPageEvent(page *Page, event events.Event) bool {
+	if page == nil || page.Events == nil {
+		return false
+	}
+	b.mu.RLock()
+	activeRuntime := b.activeRuntime
+	active := b.page == page
+	b.mu.RUnlock()
+	if runtime, ok := activeRuntime.(pageEventRuntime); ok && active {
+		return runtime.DispatchPageEvent(func() bool {
+			return page.Events.Dispatch(event)
+		})
+	}
+	return page.Events.Dispatch(event)
+}
+
 // DispatchClick はアクティブページの対象ノードへクリックを配信する。
 func (b *Browser) DispatchClick(nodeID dom.NodeID, x, y float32) bool {
 	b.mu.RLock()
@@ -104,7 +147,7 @@ func (b *Browser) DispatchClick(nodeID dom.NodeID, x, y float32) bool {
 			return false
 		}
 	}
-	clickHandled := page.Events.Dispatch(events.Event{Type: events.Click, Target: nodeID, X: x, Y: y})
+	clickHandled := b.dispatchPageEvent(page, events.Event{Type: events.Click, Target: nodeID, X: x, Y: y})
 	labelHandled := false
 	if page.Document != nil {
 		if node, ok := page.Document.NodeByID(nodeID); ok {
@@ -125,7 +168,7 @@ func (b *Browser) DispatchClick(nodeID dom.NodeID, x, y float32) bool {
 					page.Submitter = node.ID
 				}
 				b.mu.Unlock()
-				submitHandled = page.Events.Dispatch(events.Event{Type: events.Submit, Target: form.ID})
+				submitHandled = b.dispatchPageEvent(page, events.Event{Type: events.Submit, Target: form.ID})
 			}
 		}
 	}
@@ -156,7 +199,7 @@ func (b *Browser) SetInputValue(nodeID dom.NodeID, value string) bool {
 		onMutation()
 	}
 	if changed && dispatcher != nil {
-		dispatcher.Dispatch(events.Event{Type: events.Input, Target: nodeID, Value: value})
+		b.dispatchPageEvent(page, events.Event{Type: events.Input, Target: nodeID, Value: value})
 	}
 	return changed
 }
@@ -178,8 +221,8 @@ func (b *Browser) SetSelectValue(nodeID dom.NodeID, value string) bool {
 		onMutation()
 	}
 	if dispatcher != nil {
-		dispatcher.Dispatch(events.Event{Type: events.Input, Target: nodeID, Value: value})
-		dispatcher.Dispatch(events.Event{Type: events.Change, Target: nodeID, Value: value})
+		b.dispatchPageEvent(page, events.Event{Type: events.Input, Target: nodeID, Value: value})
+		b.dispatchPageEvent(page, events.Event{Type: events.Change, Target: nodeID, Value: value})
 	}
 	return true
 }
@@ -209,8 +252,8 @@ func (b *Browser) ActivateCheckable(nodeID dom.NodeID) bool {
 		value = "true"
 	}
 	if dispatcher != nil {
-		dispatcher.Dispatch(events.Event{Type: events.Input, Target: nodeID, Value: value})
-		dispatcher.Dispatch(events.Event{Type: events.Change, Target: nodeID, Value: value})
+		b.dispatchPageEvent(page, events.Event{Type: events.Input, Target: nodeID, Value: value})
+		b.dispatchPageEvent(page, events.Event{Type: events.Change, Target: nodeID, Value: value})
 	}
 	return true
 }
@@ -228,9 +271,8 @@ func (b *Browser) CommitInputValue(nodeID dom.NodeID, value string) bool {
 		b.mu.RUnlock()
 		return false
 	}
-	dispatcher := page.Events
 	b.mu.RUnlock()
-	return dispatcher.Dispatch(events.Event{Type: events.Change, Target: nodeID, Value: value})
+	return b.dispatchPageEvent(page, events.Event{Type: events.Change, Target: nodeID, Value: value})
 }
 
 // SubmitForm はinputを含む最も近いformへsubmitイベントを配信する。
@@ -247,7 +289,6 @@ func (b *Browser) SubmitForm(nodeID dom.NodeID) bool {
 		return false
 	}
 	form := forms.FormOwner(page.Document, node)
-	dispatcher := page.Events
 	b.mu.RUnlock()
 	if form == nil {
 		return false
@@ -257,7 +298,7 @@ func (b *Browser) SubmitForm(nodeID dom.NodeID) bool {
 		page.Submitter = 0
 	}
 	b.mu.Unlock()
-	return dispatcher.Dispatch(events.Event{Type: events.Submit, Target: form.ID})
+	return b.dispatchPageEvent(page, events.Event{Type: events.Submit, Target: form.ID})
 }
 
 // ResetForm restores a form's controls to their HTML attribute defaults.
@@ -286,15 +327,11 @@ func (b *Browser) ResetForm(nodeID dom.NodeID) bool {
 	if changed {
 		recomputePageStyles(page, b.currentTime())
 	}
-	dispatcher := page.Events
 	b.mu.Unlock()
 	if changed && onMutation != nil {
 		onMutation()
 	}
-	handled := false
-	if dispatcher != nil {
-		handled = dispatcher.Dispatch(events.Event{Type: events.Reset, Target: form.ID})
-	}
+	handled := b.dispatchPageEvent(page, events.Event{Type: events.Reset, Target: form.ID})
 	return changed || handled
 }
 
@@ -345,12 +382,11 @@ func (b *Browser) UpdateHover(nodeID dom.NodeID, x, y float32) bool {
 	}
 	page.HoverPath = path
 	recomputePageStyles(page, b.currentTime())
-	dispatcher := page.Events
 	b.mu.Unlock()
 	if onMutation != nil {
 		onMutation()
 	}
-	dispatchHoverEvents(dispatcher, previousPath, path, x, y)
+	b.dispatchHoverEvents(page, previousPath, path, x, y)
 	return true
 }
 
@@ -383,10 +419,10 @@ func (b *Browser) UpdateFocus(nodeID dom.NodeID) bool {
 	}
 	if dispatcher != nil {
 		if previous != 0 {
-			dispatcher.Dispatch(events.Event{Type: events.Blur, Target: previous})
+			b.dispatchPageEvent(page, events.Event{Type: events.Blur, Target: previous})
 		}
 		if target != 0 {
-			dispatcher.Dispatch(events.Event{Type: events.Focus, Target: target})
+			b.dispatchPageEvent(page, events.Event{Type: events.Focus, Target: target})
 		}
 	}
 	return true
@@ -661,7 +697,7 @@ func (b *Browser) Submit(ctx context.Context, formID, submitterID dom.NodeID) (*
 	}
 	submitEvent := events.Cancelable(events.Submit, form.ID)
 	if dispatcher != nil {
-		dispatcher.Dispatch(submitEvent)
+		b.dispatchPageEvent(page, submitEvent)
 	}
 	if submitEvent.DefaultPrevented() {
 		return nil, ErrSubmissionPrevented
@@ -925,6 +961,18 @@ func startRuntime(ctx context.Context, factory runtimemodel.Factory, page *Page,
 		page.RuntimeError = "Go runtime factory returned nil"
 		return nil
 	}
+	var frameMu sync.RWMutex
+	var frameTime time.Time
+	frameActive := false
+	runtimeNow := func() time.Time {
+		frameMu.RLock()
+		active, current := frameActive, frameTime
+		frameMu.RUnlock()
+		if active {
+			return current
+		}
+		return now()
+	}
 	environment := runtimemodel.Environment{
 		Document: page.Document,
 		Events:   page.Events,
@@ -935,10 +983,24 @@ func startRuntime(ctx context.Context, factory runtimemodel.Factory, page *Page,
 				page.HoverTarget = 0
 			}
 			page.FocusTarget = validFocusTarget(page.Document, page.FocusTarget)
-			recomputePageStyles(page, now())
+			recomputePageStyles(page, runtimeNow())
 			if onMutation != nil {
 				onMutation()
 			}
+		},
+		RequestFrame: onMutation,
+		FrameScope: func(current time.Time, callback func()) {
+			frameMu.Lock()
+			frameTime = current
+			frameActive = true
+			frameMu.Unlock()
+			defer func() {
+				frameMu.Lock()
+				frameActive = false
+				frameTime = time.Time{}
+				frameMu.Unlock()
+			}()
+			callback()
 		},
 	}
 	if loader, ok := client.(requestLoader); ok {
@@ -1050,8 +1112,8 @@ func equalNodeIDs(left, right []dom.NodeID) bool {
 	return true
 }
 
-func dispatchHoverEvents(dispatcher *events.Dispatcher, previous, current []dom.NodeID, x, y float32) {
-	if dispatcher == nil {
+func (b *Browser) dispatchHoverEvents(page *Page, previous, current []dom.NodeID, x, y float32) {
+	if page == nil || page.Events == nil {
 		return
 	}
 	common := 0
@@ -1059,10 +1121,10 @@ func dispatchHoverEvents(dispatcher *events.Dispatcher, previous, current []dom.
 		common++
 	}
 	for index := len(previous) - 1; index >= common; index-- {
-		dispatcher.Dispatch(events.Event{Type: events.MouseLeave, Target: previous[index], X: x, Y: y})
+		b.dispatchPageEvent(page, events.Event{Type: events.MouseLeave, Target: previous[index], X: x, Y: y})
 	}
 	for index := common; index < len(current); index++ {
-		dispatcher.Dispatch(events.Event{Type: events.MouseEnter, Target: current[index], X: x, Y: y})
+		b.dispatchPageEvent(page, events.Event{Type: events.MouseEnter, Target: current[index], X: x, Y: y})
 	}
 }
 

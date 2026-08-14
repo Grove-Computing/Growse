@@ -4,6 +4,7 @@ package runtime
 import (
 	"context"
 	"net/url"
+	"time"
 
 	"github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/events"
@@ -19,12 +20,14 @@ type Script struct {
 
 // Environment はRuntimeへ公開するページの状態を保持する。
 type Environment struct {
-	Document   *dom.Document
-	Events     *events.Dispatcher
-	BaseURL    *url.URL
-	Fetch      func(context.Context, *network.Request) (*network.Response, error)
-	OnMutation func()
-	ConsoleLog func(message string)
+	Document     *dom.Document
+	Events       *events.Dispatcher
+	BaseURL      *url.URL
+	Fetch        func(context.Context, *network.Request) (*network.Response, error)
+	OnMutation   func()
+	RequestFrame func()
+	FrameScope   func(time.Time, func())
+	ConsoleLog   func(message string)
 }
 
 // Runtime は1ページに属するGoスクリプトを実行する。
