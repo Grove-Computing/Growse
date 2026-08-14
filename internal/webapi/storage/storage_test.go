@@ -48,3 +48,13 @@ func TestGetDistinguishesEmptyValueFromMissingKey(t *testing.T) {
 		t.Fatalf("Get(missing) = (%q, %v, %v)", value, found, err)
 	}
 }
+
+func TestFailedAreaPreservesSpecificInitializationError(t *testing.T) {
+	storage := New(storagecore.NewFailedArea(storagecore.ErrCorruptData), storagecore.NewArea()).Local()
+	if _, _, err := storage.Get("key"); !errors.Is(err, storagecore.ErrCorruptData) {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if err := storage.Set("key", "value"); !errors.Is(err, storagecore.ErrCorruptData) {
+		t.Fatalf("Set() error = %v", err)
+	}
+}

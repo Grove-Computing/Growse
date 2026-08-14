@@ -11,6 +11,12 @@ import (
 
 var ErrInvalidOrigin = errors.New("invalid storage origin")
 
+var (
+	ErrSchemaMismatch = errors.New("storage schema mismatch")
+	ErrCorruptData    = errors.New("corrupt storage data")
+	ErrStorageIO      = errors.New("storage I/O failure")
+)
+
 // Manager は1つのBrowser Windowに属するLocal / Session Storageを保持する。
 type Manager struct {
 	mu       sync.Mutex
@@ -51,7 +57,7 @@ func (manager *Manager) Areas(documentURL *url.URL) (local, session *Area, err e
 	defer manager.mu.Unlock()
 	local = manager.local[key]
 	if local == nil {
-		if len(manager.local) >= MaxStorageOrigins {
+		if _, knownSession := manager.session[key]; !knownSession && len(manager.session) >= MaxStorageOrigins {
 			return nil, nil, ErrQuotaExceeded
 		}
 		if manager.localDir == "" {
@@ -59,15 +65,17 @@ func (manager *Manager) Areas(documentURL *url.URL) (local, session *Area, err e
 		} else {
 			local, err = loadPersistentArea(manager.localDir, key)
 			if err != nil {
-				return nil, nil, err
+				local = NewFailedArea(err)
 			}
 		}
-		manager.local[key] = local
+		if err == nil {
+			manager.local[key] = local
+		}
 	}
 	session = manager.session[key]
 	if session == nil {
 		session = NewArea()
 		manager.session[key] = session
 	}
-	return local, session, nil
+	return local, session, err
 }

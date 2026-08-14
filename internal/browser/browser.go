@@ -1316,7 +1316,7 @@ func startRuntime(ctx context.Context, factory runtimemodel.Factory, page *Page,
 			callback()
 		},
 	}
-	if local, session, err := storageManager.Areas(page.URL); err == nil {
+	if local, session, _ := storageManager.Areas(page.URL); local != nil || session != nil {
 		environment.LocalStorage = local
 		environment.SessionStorage = session
 	}

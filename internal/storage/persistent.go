@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"unicode/utf8"
 )
 
 const (
@@ -36,10 +37,10 @@ func DefaultDataRoot() (string, error) {
 
 func ensurePrivateDirectory(path string) error {
 	if err := os.MkdirAll(path, 0o700); err != nil {
-		return fmt.Errorf("create storage directory: %w", err)
+		return storageIOError("create directory")
 	}
 	if err := os.Chmod(path, 0o700); err != nil {
-		return fmt.Errorf("protect storage directory: %w", err)
+		return storageIOError("protect directory")
 	}
 	return nil
 }
@@ -53,17 +54,23 @@ func loadPersistentArea(directory, origin string) (*Area, error) {
 		}), nil
 	}
 	if err != nil {
-		return nil, errors.New("open local storage")
+		return nil, storageIOError("open data")
 	}
 	defer file.Close()
 	limited := io.LimitReader(file, maxStorageFileBytes+1)
 	content, err := io.ReadAll(limited)
 	if err != nil || len(content) > maxStorageFileBytes {
-		return nil, errors.New("read local storage")
+		return nil, storageIOError("read data")
 	}
 	var data persistentData
-	if err := json.Unmarshal(content, &data); err != nil || data.Version != storageSchemaVersion || data.Origin != origin {
-		return nil, errors.New("invalid local storage data")
+	if err := json.Unmarshal(content, &data); err != nil {
+		return nil, ErrCorruptData
+	}
+	if data.Version != storageSchemaVersion {
+		return nil, ErrSchemaMismatch
+	}
+	if data.Origin != origin || !validPersistentEntries(data.Entries) {
+		return nil, ErrCorruptData
 	}
 	return newPersistentArea(data.Entries, func(entries []Entry) error {
 		return savePersistentArea(directory, origin, entries)
@@ -73,7 +80,7 @@ func loadPersistentArea(directory, origin string) (*Area, error) {
 func savePersistentArea(directory, origin string, entries []Entry) error {
 	content, err := json.Marshal(persistentData{Version: storageSchemaVersion, Origin: origin, Entries: entries})
 	if err != nil {
-		return errors.New("encode local storage")
+		return storageIOError("encode data")
 	}
 	targetPath := persistentFilePath(directory, origin)
 	if exceedsProfileQuota(directory, targetPath, int64(len(content))) {
@@ -81,7 +88,7 @@ func savePersistentArea(directory, origin string, entries []Entry) error {
 	}
 	temporary, err := os.CreateTemp(directory, ".storage-*.tmp")
 	if err != nil {
-		return errors.New("create local storage transaction")
+		return storageIOError("create transaction")
 	}
 	temporaryPath := temporary.Name()
 	committed := false
@@ -92,19 +99,19 @@ func savePersistentArea(directory, origin string, entries []Entry) error {
 		}
 	}()
 	if err := temporary.Chmod(0o600); err != nil {
-		return errors.New("protect local storage transaction")
+		return storageIOError("protect transaction")
 	}
 	if _, err := temporary.Write(content); err != nil {
-		return errors.New("write local storage transaction")
+		return storageIOError("write transaction")
 	}
 	if err := temporary.Sync(); err != nil {
-		return errors.New("sync local storage transaction")
+		return storageIOError("sync transaction")
 	}
 	if err := temporary.Close(); err != nil {
-		return errors.New("close local storage transaction")
+		return storageIOError("close transaction")
 	}
 	if err := os.Rename(temporaryPath, targetPath); err != nil {
-		return errors.New("commit local storage transaction")
+		return storageIOError("commit transaction")
 	}
 	committed = true
 	if directoryHandle, err := os.Open(directory); err == nil {
@@ -112,6 +119,29 @@ func savePersistentArea(directory, origin string, entries []Entry) error {
 		_ = directoryHandle.Close()
 	}
 	return nil
+}
+
+func validPersistentEntries(entries []Entry) bool {
+	seen := make(map[string]struct{}, len(entries))
+	total := 0
+	for _, entry := range entries {
+		if ValidateKey(entry.Key) != nil || !utf8.ValidString(entry.Value) || len(entry.Value) > MaxValueBytes {
+			return false
+		}
+		if _, duplicate := seen[entry.Key]; duplicate {
+			return false
+		}
+		seen[entry.Key] = struct{}{}
+		total += len(entry.Key) + len(entry.Value)
+		if total > MaxOriginStorageBytes {
+			return false
+		}
+	}
+	return true
+}
+
+func storageIOError(operation string) error {
+	return fmt.Errorf("%w: %s", ErrStorageIO, operation)
 }
 
 func exceedsProfileQuota(directory, targetPath string, replacementBytes int64) bool {

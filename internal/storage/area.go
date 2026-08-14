@@ -26,6 +26,7 @@ type Area struct {
 	values  map[string]string
 	ordered []string
 	commit  func([]Entry) error
+	failure error
 }
 
 // Entry は永続化可能な挿入順key/valueである。
@@ -37,6 +38,19 @@ type Entry struct {
 // NewArea は空のStorage Areaを生成する。
 func NewArea() *Area {
 	return &Area{values: make(map[string]string)}
+}
+
+// NewFailedArea は初期化Errorを各操作から返す利用不能なAreaを生成する。
+func NewFailedArea(err error) *Area {
+	return &Area{values: make(map[string]string), failure: err}
+}
+
+// Error はArea初期化時のErrorを返す。
+func (area *Area) Error() error {
+	if area == nil {
+		return ErrStorageIO
+	}
+	return area.failure
 }
 
 func newPersistentArea(entries []Entry, commit func([]Entry) error) *Area {
@@ -66,6 +80,9 @@ func (area *Area) Get(key string) (string, bool) {
 func (area *Area) Set(key, value string) error {
 	if area == nil {
 		return nil
+	}
+	if area.failure != nil {
+		return area.failure
 	}
 	if err := ValidateKey(key); err != nil {
 		return err
@@ -105,6 +122,9 @@ func (area *Area) Remove(key string) error {
 	if area == nil {
 		return nil
 	}
+	if area.failure != nil {
+		return area.failure
+	}
 	if err := ValidateKey(key); err != nil {
 		return err
 	}
@@ -143,6 +163,9 @@ func ValidateKey(key string) error {
 func (area *Area) Clear() error {
 	if area == nil {
 		return nil
+	}
+	if area.failure != nil {
+		return area.failure
 	}
 	area.mu.Lock()
 	defer area.mu.Unlock()

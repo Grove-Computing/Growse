@@ -105,8 +105,8 @@ func TestPersistentAreaRollsBackWhenAtomicRenameFails(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := local.Set("draft", "uncommitted"); err == nil {
-		t.Fatal("Set() error = nil, want atomic rename failure")
+	if err := local.Set("draft", "uncommitted"); !errors.Is(err, ErrStorageIO) {
+		t.Fatalf("Set() error = %v, want ErrStorageIO", err)
 	}
 	if got, found := local.Get("draft"); !found || got != "stable" {
 		t.Fatalf("in-memory rollback = (%q, %v)", got, found)
@@ -185,5 +185,51 @@ func TestPersistentManagerAppliesProfileQuotaBeforeWrite(t *testing.T) {
 	}
 	if _, found := local.Get("key"); found {
 		t.Fatal("profile quota failure mutated Local Storage")
+	}
+}
+
+func TestPersistentManagerLocalizesSchemaAndCorruptDataErrors(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    error
+	}{
+		{name: "schema", content: `{"version":99,"origin":"https://broken.test","entries":[]}`, want: ErrSchemaMismatch},
+		{name: "json", content: `{broken`, want: ErrCorruptData},
+		{name: "duplicate", content: `{"version":1,"origin":"https://broken.test","entries":[{"key":"x","value":"1"},{"key":"x","value":"2"}]}`, want: ErrCorruptData},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			manager, err := NewPersistentManager(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := persistentFilePath(filepath.Join(root, "local-storage"), "https://broken.test")
+			if err := os.WriteFile(path, []byte(test.content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			local, session, err := manager.Areas(parseURL(t, "https://broken.test/"))
+			if !errors.Is(err, test.want) || local == nil || !errors.Is(local.Error(), test.want) {
+				t.Fatalf("broken Origin = local:%v error:%v", local, err)
+			}
+			if session == nil || session.Set("available", "yes") != nil {
+				t.Fatal("broken Local Storage disabled Session Storage")
+			}
+			other, _, err := manager.Areas(parseURL(t, "https://healthy.test/"))
+			if err != nil || other.Set("healthy", "yes") != nil {
+				t.Fatalf("broken Origin affected healthy Origin: %v", err)
+			}
+		})
+	}
+}
+
+func TestPersistentManagerReportsProfilePathIOError(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "profile-file")
+	if err := os.WriteFile(root, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewPersistentManager(root); !errors.Is(err, ErrStorageIO) {
+		t.Fatalf("NewPersistentManager() error = %v, want ErrStorageIO", err)
 	}
 }
