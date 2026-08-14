@@ -117,6 +117,12 @@ func NewPage(parent context.Context, enqueue func(func()) bool, requestFrame fun
 	return newAPI(parent, systemClock{}, enqueue, requestFrame, true)
 }
 
+// NewPageWithClock creates a manually driven page Scheduler. Embedders and
+// tests advance timers through RunDue, so no wall-clock goroutine is started.
+func NewPageWithClock(parent context.Context, clock Clock, enqueue func(func()) bool, requestFrame func()) *API {
+	return newAPI(parent, clock, enqueue, requestFrame, false)
+}
+
 func newAPI(parent context.Context, clock Clock, enqueue func(func()) bool, requestFrame func(), auto bool) *API {
 	if parent == nil {
 		parent = context.Background()
@@ -408,6 +414,15 @@ func (api *API) runDue(current time.Time) {
 			api.mu.Unlock()
 		}
 	}
+}
+
+// RunDue synchronously queues all timers whose deadline is at or before
+// current. It is intended for a manually driven Scheduler.
+func (api *API) RunDue(current time.Time) {
+	if api == nil {
+		return
+	}
+	api.runDue(current)
 }
 
 func (api *API) execute(entry *timerEntry) {
