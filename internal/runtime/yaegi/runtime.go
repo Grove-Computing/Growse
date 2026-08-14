@@ -172,6 +172,32 @@ func (r *Runtime) HasAnimationFrameCallbacks() bool {
 	return scheduler != nil && scheduler.HasAnimationFrameCallbacks()
 }
 
+// DispatchPageEvent runs a browser-originated DOM event on the page queue and
+// waits for cancelation/default-action state to become observable.
+func (r *Runtime) DispatchPageEvent(callback func() bool) bool {
+	if callback == nil {
+		return false
+	}
+	r.mu.Lock()
+	ctx := r.runtimeCtx
+	r.mu.Unlock()
+	if ctx == nil {
+		return false
+	}
+	result := make(chan bool, 1)
+	if !r.enqueueCallback(func() {
+		result <- callback()
+	}) {
+		return false
+	}
+	select {
+	case handled := <-result:
+		return handled
+	case <-ctx.Done():
+		return false
+	}
+}
+
 // portableFS はOS固有の区切り文字をio/fs形式へ正規化する。
 type portableFS struct {
 	fs.FS

@@ -345,6 +345,67 @@ func TestRuntimeSerializesPageCallbacksInQueueOrder(t *testing.T) {
 	}
 }
 
+func TestRuntimeSerializesDOMEventBehindQueuedCallback(t *testing.T) {
+	runtime := New()
+	document := dommodel.NewDocument()
+	button := document.CreateElement("button", map[string]string{"id": "button"})
+	if err := document.AppendChild(document.Root, button); err != nil {
+		t.Fatal(err)
+	}
+	dispatcher := events.NewDispatcher()
+	scripts := []runtimemodel.Script{{Source: `package main
+import "growse/dom"
+var Clicks int
+func main() {
+	dom.GetElementByID("button").OnClick(func() { Clicks++ })
+}`}}
+	if err := runtime.Load(context.Background(), scripts, runtimemodel.Environment{
+		Document: document,
+		Events:   dispatcher,
+	}); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	if !runtime.enqueueCallback(func() {
+		close(firstStarted)
+		<-releaseFirst
+	}) {
+		t.Fatal("failed to enqueue blocking page callback")
+	}
+	<-firstStarted
+	eventDone := make(chan bool, 1)
+	go func() {
+		eventDone <- runtime.DispatchPageEvent(func() bool {
+			return dispatcher.Dispatch(events.Event{Type: events.Click, Target: button.ID})
+		})
+	}()
+	select {
+	case <-eventDone:
+		t.Fatal("DOM event ran concurrently with an earlier page callback")
+	default:
+	}
+	close(releaseFirst)
+	select {
+	case handled := <-eventDone:
+		if !handled {
+			t.Fatal("queued DOM event was not handled")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("queued DOM event was not delivered")
+	}
+	if got := runtime.interpreter.Symbols("page")["page"]["Clicks"].Int(); got != 1 {
+		t.Fatalf("click count = %d, want 1", got)
+	}
+	if err := runtime.Stop(); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+}
+
 func TestRuntimeStopCancelsInFlightFetch(t *testing.T) {
 	runtime := New()
 	requestStarted := make(chan struct{})
