@@ -64,6 +64,57 @@ func TestComputedAnimationRejectsNegativeDuration(t *testing.T) {
 	}
 }
 
+func TestCSSAnimationAppliesDelayIterationsDirectionAndFill(t *testing.T) {
+	start := time.Unix(100, 0)
+	timing, _ := animationmodel.NewTiming(time.Second, 200*time.Millisecond, animationmodel.Linear{})
+	item := CSSAnimation{
+		Name: "pulse", Timing: timing, Iterations: 2,
+		Direction: AnimationAlternate, FillMode: AnimationFillBoth,
+	}
+
+	before := item.Sample(start, start.Add(100*time.Millisecond))
+	if before.Phase != animationmodel.PhaseBefore || !before.Applies || before.Progress != 0 {
+		t.Fatalf("before sample = %#v", before)
+	}
+	first := item.Sample(start, start.Add(700*time.Millisecond))
+	if first.Phase != animationmodel.PhaseActive || first.Iteration != 0 || first.Progress != 0.5 {
+		t.Fatalf("first iteration sample = %#v", first)
+	}
+	second := item.Sample(start, start.Add(1700*time.Millisecond))
+	if second.Iteration != 1 || second.Progress != 0.5 {
+		t.Fatalf("alternate iteration sample = %#v", second)
+	}
+	after := item.Sample(start, start.Add(2200*time.Millisecond))
+	if after.Phase != animationmodel.PhaseAfter || !after.Applies || after.Iteration != 1 || after.Progress != 0 {
+		t.Fatalf("forwards fill sample = %#v", after)
+	}
+}
+
+func TestCSSAnimationNegativeDelayAndNoFill(t *testing.T) {
+	start := time.Unix(100, 0)
+	timing, _ := animationmodel.NewTiming(time.Second, -1500*time.Millisecond, animationmodel.Linear{})
+	item := CSSAnimation{Name: "slide", Timing: timing, Iterations: 2, Direction: AnimationNormal, FillMode: AnimationFillNone}
+
+	active := item.Sample(start, start)
+	if active.Phase != animationmodel.PhaseActive || active.Iteration != 1 || active.Progress != 0.5 || !active.Applies {
+		t.Fatalf("negative-delay sample = %#v", active)
+	}
+	after := item.Sample(start, start.Add(500*time.Millisecond))
+	if after.Phase != animationmodel.PhaseAfter || after.Applies {
+		t.Fatalf("no-fill after sample = %#v", after)
+	}
+}
+
+func TestCSSAnimationReverseFractionalFinalProgress(t *testing.T) {
+	start := time.Unix(100, 0)
+	timing, _ := animationmodel.NewTiming(time.Second, 0, animationmodel.Linear{})
+	item := CSSAnimation{Name: "reverse", Timing: timing, Iterations: 1.25, Direction: AnimationReverse, FillMode: AnimationFillForwards}
+	after := item.Sample(start, start.Add(2*time.Second))
+	if !after.Applies || after.Iteration != 1 || after.Progress != 0.75 {
+		t.Fatalf("fractional reverse final sample = %#v", after)
+	}
+}
+
 func animationTestStyle(t *testing.T, declarations string) ComputedStyle {
 	t.Helper()
 	document := dom.NewDocument()

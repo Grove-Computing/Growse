@@ -20,6 +20,71 @@ type animationLists struct {
 	plays      []AnimationPlayState
 }
 
+// AnimationSample is one CSS animation's directed and eased progress.
+type AnimationSample struct {
+	Phase     animationmodel.Phase
+	Progress  float64
+	Iteration uint64
+	Applies   bool
+}
+
+// Sample evaluates delay, iteration count, direction, fill mode, and easing.
+func (item CSSAnimation) Sample(start, current time.Time) AnimationSample {
+	elapsed := current.Sub(start) - item.Timing.Delay
+	if elapsed < 0 {
+		progress := directedAnimationProgress(0, 0, item.Direction)
+		return AnimationSample{
+			Phase: animationmodel.PhaseBefore, Progress: item.Timing.Easing.Transform(progress, true),
+			Applies: item.FillMode == AnimationFillBackwards || item.FillMode == AnimationFillBoth,
+		}
+	}
+	if item.Timing.Duration <= 0 || item.Iterations <= 0 {
+		return item.afterSample()
+	}
+
+	overall := float64(elapsed) / float64(item.Timing.Duration)
+	if !math.IsInf(item.Iterations, 1) && overall >= item.Iterations {
+		return item.afterSample()
+	}
+	iteration := uint64(math.Floor(overall))
+	progress := overall - math.Floor(overall)
+	progress = directedAnimationProgress(progress, iteration, item.Direction)
+	return AnimationSample{
+		Phase: animationmodel.PhaseActive, Progress: item.Timing.Easing.Transform(progress, false),
+		Iteration: iteration, Applies: true,
+	}
+}
+
+func (item CSSAnimation) afterSample() AnimationSample {
+	iteration, progress := uint64(0), 0.0
+	if item.Iterations > 0 && !math.IsInf(item.Iterations, 1) {
+		whole, fraction := math.Modf(item.Iterations)
+		if fraction == 0 {
+			iteration = uint64(max(whole-1, 0))
+			progress = 1
+		} else {
+			iteration = uint64(whole)
+			progress = fraction
+		}
+	}
+	progress = directedAnimationProgress(progress, iteration, item.Direction)
+	return AnimationSample{
+		Phase: animationmodel.PhaseAfter, Progress: item.Timing.Easing.Transform(progress, false),
+		Iteration: iteration, Applies: item.FillMode == AnimationFillForwards || item.FillMode == AnimationFillBoth,
+	}
+}
+
+func directedAnimationProgress(progress float64, iteration uint64, direction AnimationDirection) float64 {
+	reversed := direction == AnimationReverse || direction == AnimationAlternateReverse
+	if (direction == AnimationAlternate || direction == AnimationAlternateReverse) && iteration%2 == 1 {
+		reversed = !reversed
+	}
+	if reversed {
+		return 1 - progress
+	}
+	return progress
+}
+
 func defaultAnimations() []CSSAnimation {
 	timing, _ := animationmodel.NewTiming(0, 0, defaultTransitionEasing())
 	return []CSSAnimation{{Name: "none", Timing: timing, Iterations: 1}}
