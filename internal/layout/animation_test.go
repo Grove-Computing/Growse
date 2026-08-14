@@ -1,8 +1,10 @@
 package layout_test
 
 import (
+	"strings"
 	"testing"
 
+	"github.com/Grove-Computing/Growse/internal/css"
 	"github.com/Grove-Computing/Growse/internal/dom"
 	layoutmodel "github.com/Grove-Computing/Growse/internal/layout"
 	paintmodel "github.com/Grove-Computing/Growse/internal/paint"
@@ -60,5 +62,52 @@ func TestCloneKeepsCachedLayoutPaintStateImmutable(t *testing.T) {
 	if original.Decorations[0].Background != 0xff0000ff || original.Decorations[0].Opacity != 1 ||
 		original.Boxes[0].Color != 0xff0000ff || original.Boxes[0].Runs[0].Color != 0xff0000ff {
 		t.Fatalf("cached layout was mutated: %#v", original)
+	}
+}
+
+func TestAnimatedParentTransformAndOpacityPropagateToDescendants(t *testing.T) {
+	document := dom.NewDocument()
+	parent := document.CreateElement("div", map[string]string{"class": "parent"})
+	child := document.CreateElement("div", map[string]string{"class": "child"})
+	if err := document.AppendChild(document.Root, parent); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(parent, child); err != nil {
+		t.Fatal(err)
+	}
+	stylesheet, err := css.Parse(strings.NewReader(`
+.parent { width: 100px; height: 100px; }
+.child { width: 20px; height: 20px; background-color: red; }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	computed := stylemodel.Compute(document, stylesheet)
+	tree := layoutmodel.Build(document, computed, 320)
+	animated := make(stylemodel.Map, len(computed))
+	for nodeID, value := range computed {
+		animated[nodeID] = value
+	}
+	parentStyle := animated[parent.ID]
+	parentStyle.Opacity = 0.5
+	parentStyle.Transform = []stylemodel.TransformFunction{{Kind: stylemodel.TransformTranslate, X: stylemodel.LengthPercentage{Pixels: 100}}}
+	animated[parent.ID] = parentStyle
+	layoutmodel.ApplyAnimatedStyles(tree, animated)
+
+	var childDecoration *layoutmodel.Decoration
+	for index := range tree.Decorations {
+		if tree.Decorations[index].NodeID == child.ID {
+			childDecoration = &tree.Decorations[index]
+			break
+		}
+	}
+	if childDecoration == nil {
+		t.Fatal("child decoration is missing")
+	}
+	if childDecoration.Opacity != 0.5 || childDecoration.Transform.E != 100 {
+		t.Fatalf("descendant animation state = opacity:%v transform:%#v", childDecoration.Opacity, childDecoration.Transform)
+	}
+	if hit, ok := layoutmodel.HitTest(tree, childDecoration.X+101, childDecoration.Y+1); !ok || hit != child.ID {
+		t.Fatalf("transformed descendant hit = (%d, %v), want child %d", hit, ok, child.ID)
 	}
 }

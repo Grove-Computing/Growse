@@ -18,6 +18,8 @@ type Tree struct {
 	ScrollWidth      float32
 	ScrollHeight     float32
 	StackingContexts []StackingContext
+	Parents          map[dom.NodeID]dom.NodeID
+	Bounds           map[dom.NodeID]Rect
 }
 
 // StackingContext records atomic paint-order ownership.
