@@ -202,6 +202,49 @@ func TestRuntimeSerializesPageCallbacksInQueueOrder(t *testing.T) {
 	}
 }
 
+func TestRuntimeStopCancelsInFlightFetch(t *testing.T) {
+	runtime := New()
+	requestStarted := make(chan struct{})
+	requestCanceled := make(chan struct{})
+	scripts := []runtimemodel.Script{{Source: `package main
+import "growse/fetch"
+func main() {
+	fetch.Fetch(fetch.Request{URL: "/slow"}, func(fetch.Response) {}, func(string) {})
+}`}}
+	baseURL, err := url.Parse("https://example.test/page")
+	if err != nil {
+		t.Fatal(err)
+	}
+	environment := runtimemodel.Environment{
+		BaseURL: baseURL,
+		Fetch: func(ctx context.Context, _ *network.Request) (*network.Response, error) {
+			close(requestStarted)
+			<-ctx.Done()
+			close(requestCanceled)
+			return nil, ctx.Err()
+		},
+	}
+	if err := runtime.Load(context.Background(), scripts, environment); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	select {
+	case <-requestStarted:
+	case <-time.After(time.Second):
+		t.Fatal("Fetch request did not start")
+	}
+	if err := runtime.Stop(); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+	select {
+	case <-requestCanceled:
+	case <-time.After(time.Second):
+		t.Fatal("in-flight Fetch did not observe Runtime cancellation")
+	}
+}
+
 func equalStrings(left, right []string) bool {
 	if len(left) != len(right) {
 		return false
