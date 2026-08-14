@@ -946,6 +946,23 @@ func TestComputeGridPlaceShorthands(t *testing.T) {
 	}
 }
 
+func TestComputeGridAutoFillAndAutoFit(t *testing.T) {
+	document := dom.NewDocument()
+	fill := document.CreateElement("div", map[string]string{"style": "display:grid; grid-template-columns:repeat(auto-fill, minmax(100px, 1fr))"})
+	fit := document.CreateElement("div", map[string]string{"style": "display:grid; grid-template-columns:repeat(auto-fit, 80px)"})
+	appendNode(t, document, document.Root, fill)
+	appendNode(t, document, document.Root, fit)
+	computed := Compute(document, nil)
+	fillStyle, _ := computed.For(fill)
+	fitStyle, _ := computed.For(fit)
+	if len(fillStyle.GridTemplateColumns) != 1 || fillStyle.GridTemplateColumns[0].AutoRepeat != GridAutoRepeatFill || len(fillStyle.GridTemplateColumns[0].RepeatPattern) != 1 {
+		t.Fatalf("auto-fill = %#v", fillStyle.GridTemplateColumns)
+	}
+	if len(fitStyle.GridTemplateColumns) != 1 || fitStyle.GridTemplateColumns[0].AutoRepeat != GridAutoRepeatFit {
+		t.Fatalf("auto-fit = %#v", fitStyle.GridTemplateColumns)
+	}
+}
+
 func parseTestSelector(t *testing.T, value string) css.Selector {
 	t.Helper()
 	stylesheet, err := css.Parse(strings.NewReader(value + " { color: red }"))

@@ -115,17 +115,29 @@ const (
 	GridTrackFraction
 	GridTrackMinContent
 	GridTrackMaxContent
+	GridTrackAutoRepeat
+)
+
+// GridAutoRepeat identifies repeat(auto-fill, ...) and repeat(auto-fit, ...).
+type GridAutoRepeat uint8
+
+const (
+	GridAutoRepeatNone GridAutoRepeat = iota
+	GridAutoRepeatFill
+	GridAutoRepeatFit
 )
 
 // GridTrackSize retains track sizing values until the grid container is laid out.
 type GridTrackSize struct {
-	Kind     GridTrackKind
-	Value    LengthPercentage
-	Flex     float32
-	MinKind  GridTrackKind
-	MinValue LengthPercentage
-	MinSet   bool
-	FitLimit *LengthPercentage
+	Kind          GridTrackKind
+	Value         LengthPercentage
+	Flex          float32
+	MinKind       GridTrackKind
+	MinValue      LengthPercentage
+	MinSet        bool
+	FitLimit      *LengthPercentage
+	AutoRepeat    GridAutoRepeat
+	RepeatPattern []GridTrackSize
 }
 
 // GridLine selects a numbered/named line or spans tracks from the opposite edge.

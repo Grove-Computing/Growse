@@ -44,14 +44,18 @@ func (e *engine) addGridChildren(container *dom.Node, containerStyle blockStyle,
 	if len(items) == 0 {
 		return
 	}
-	columnCount := len(containerStyle.gridTemplateColumns)
+	columnGap := containerStyle.columnGap.Resolve(width)
+	rowGap := containerStyle.rowGap.Resolve(containingHeight)
+	columnTemplate := expandAutoRepeatTracks(containerStyle.gridTemplateColumns, width, columnGap, len(items))
+	rowTemplate := expandAutoRepeatTracks(containerStyle.gridTemplateRows, containingHeight, rowGap, len(items))
+	columnCount := len(columnTemplate)
 	for _, area := range containerStyle.gridTemplateAreas {
 		columnCount = max(columnCount, area.ColumnEnd)
 	}
 	if columnCount == 0 {
 		columnCount = 1
 	}
-	rowCount := len(containerStyle.gridTemplateRows)
+	rowCount := len(rowTemplate)
 	occupied := make(map[[2]int]bool)
 	for index := range items {
 		item := &items[index]
@@ -108,9 +112,7 @@ func (e *engine) addGridChildren(container *dom.Node, containerStyle blockStyle,
 			columnMinContent[column] = max(columnMinContent[column], (minContent+horizontalMargin)/float32(span))
 		}
 	}
-	columnGap := containerStyle.columnGap.Resolve(width)
-	rowGap := containerStyle.rowGap.Resolve(containingHeight)
-	columns := resolveGridTracks(containerStyle.gridTemplateColumns, containerStyle.gridAutoColumns, columnCount, width, true, columnGap, columnMinContent, columnMaxContent)
+	columns := resolveGridTracks(columnTemplate, containerStyle.gridAutoColumns, columnCount, width, true, columnGap, columnMinContent, columnMaxContent)
 	rowMaxContent := make([]float32, rowCount)
 	for _, item := range items {
 		itemWidth := trackSpanSize(columns, item.colStart, item.colEnd, columnGap)
@@ -120,7 +122,7 @@ func (e *engine) addGridChildren(container *dom.Node, containerStyle blockStyle,
 			rowMaxContent[row] = max(rowMaxContent[row], (intrinsicHeight+item.style.margin.Top+item.style.margin.Bottom)/float32(rowSpan))
 		}
 	}
-	rows := resolveGridTracks(containerStyle.gridTemplateRows, containerStyle.gridAutoRows, rowCount, containingHeight, heightDefinite, rowGap, rowMaxContent, rowMaxContent)
+	rows := resolveGridTracks(rowTemplate, containerStyle.gridAutoRows, rowCount, containingHeight, heightDefinite, rowGap, rowMaxContent, rowMaxContent)
 	startY := e.y
 	columnOffset, distributedColumnGap := justifySpacing(containerStyle.justifyContent, max(width-trackSpanSize(columns, 0, len(columns), columnGap), float32(0)), len(columns), false)
 	rowOffset, distributedRowGap := float32(0), float32(0)
@@ -136,6 +138,45 @@ func (e *engine) addGridChildren(container *dom.Node, containerStyle blockStyle,
 		e.renderGridItem(item.node, item.style, itemX, itemY, itemWidth, itemHeight)
 	}
 	e.y = startY + rowOffset + trackSpanSize(rows, 0, len(rows), rowGap)
+}
+
+func expandAutoRepeatTracks(tracks []stylemodel.GridTrackSize, basis, gap float32, itemCount int) []stylemodel.GridTrackSize {
+	var result []stylemodel.GridTrackSize
+	for _, track := range tracks {
+		if track.Kind != stylemodel.GridTrackAutoRepeat || len(track.RepeatPattern) == 0 {
+			result = append(result, track)
+			continue
+		}
+		patternSize := gap * float32(max(len(track.RepeatPattern)-1, 0))
+		for _, patternTrack := range track.RepeatPattern {
+			patternSize += autoRepeatMinimum(patternTrack, basis)
+		}
+		count := 1
+		if patternSize > 0 {
+			count = max(int((basis+gap)/(patternSize+gap)), 1)
+		}
+		if track.AutoRepeat == stylemodel.GridAutoRepeatFit {
+			count = min(count, max((itemCount+len(track.RepeatPattern)-1)/len(track.RepeatPattern), 1))
+		}
+		count = min(count, 1000/max(len(track.RepeatPattern), 1))
+		for index := 0; index < count; index++ {
+			result = append(result, track.RepeatPattern...)
+		}
+	}
+	return result
+}
+
+func autoRepeatMinimum(track stylemodel.GridTrackSize, basis float32) float32 {
+	if track.MinSet && track.MinKind == stylemodel.GridTrackLength {
+		return max(track.MinValue.Resolve(basis), float32(1))
+	}
+	if track.Kind == stylemodel.GridTrackLength {
+		return max(track.Value.Resolve(basis), float32(1))
+	}
+	if track.FitLimit != nil {
+		return max(track.FitLimit.Resolve(basis), float32(1))
+	}
+	return 1
 }
 
 func (e *engine) alignGridItem(node *dom.Node, item, container blockStyle, x, y, cellWidth, cellHeight float32) (float32, float32, float32, float32) {

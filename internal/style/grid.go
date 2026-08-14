@@ -304,6 +304,18 @@ func parseGridRepeat(value string, context LengthContext) ([]GridTrackSize, bool
 	if !valid || len(arguments) != 2 {
 		return nil, true, false
 	}
+	repeatMode := strings.ToLower(strings.TrimSpace(arguments[0]))
+	if repeatMode == "auto-fill" || repeatMode == "auto-fit" {
+		pattern, valid := parseGridTrackList(arguments[1], context, false)
+		if !valid || len(pattern) == 0 {
+			return nil, true, false
+		}
+		mode := GridAutoRepeatFill
+		if repeatMode == "auto-fit" {
+			mode = GridAutoRepeatFit
+		}
+		return []GridTrackSize{{Kind: GridTrackAutoRepeat, AutoRepeat: mode, RepeatPattern: pattern}}, true, true
+	}
 	count, err := strconv.Atoi(strings.TrimSpace(arguments[0]))
 	if err != nil || count < 1 || count > 1000 {
 		return nil, true, false

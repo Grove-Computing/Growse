@@ -308,3 +308,44 @@ func TestBuildNestedGridGridInFlexAndFlexInGrid(t *testing.T) {
 		t.Fatalf("flex in grid = first %#v second %#v", flexFirstRect.Rect, flexSecondRect.Rect)
 	}
 }
+
+func TestBuildGridReevaluatesAutoFillAndAutoFitAfterResize(t *testing.T) {
+	document := dom.NewDocument()
+	grid := document.CreateElement("div", map[string]string{"class": "grid"})
+	items := make([]*dom.Node, 4)
+	appendNodes(t, document, [2]*dom.Node{document.Root, grid})
+	for index := range items {
+		items[index] = document.CreateElement("div", map[string]string{"class": "item"})
+		appendNodes(t, document, [2]*dom.Node{grid, items[index]})
+	}
+	stylesheet, err := css.Parse(strings.NewReader(`
+.grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(100px, 1fr)); grid-auto-rows:20px }
+.item { background-color:#ddd }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	computed := stylemodel.Compute(document, stylesheet)
+	narrow, wide := Build(document, computed, 350), Build(document, computed, 564)
+	narrowFirst, narrowThird := decorationForNode(t, narrow, items[0].ID), decorationForNode(t, narrow, items[2].ID)
+	wideFirst, wideThird := decorationForNode(t, wide, items[0].ID), decorationForNode(t, wide, items[2].ID)
+	if narrowThird.Y <= narrowFirst.Y || wideThird.Y != wideFirst.Y || narrowFirst.Width <= wideFirst.Width {
+		t.Fatalf("auto-fill resize = narrow first %#v third %#v; wide first %#v third %#v", narrowFirst.Rect, narrowThird.Rect, wideFirst.Rect, wideThird.Rect)
+	}
+
+	fitDocument := dom.NewDocument()
+	fitGrid := fitDocument.CreateElement("div", map[string]string{"class": "fit"})
+	fitItem := fitDocument.CreateElement("div", map[string]string{"class": "item"})
+	appendNodes(t, fitDocument, [2]*dom.Node{fitDocument.Root, fitGrid}, [2]*dom.Node{fitGrid, fitItem})
+	fitStyles, err := css.Parse(strings.NewReader(`
+.fit { display:grid; grid-template-columns:repeat(auto-fit, minmax(100px, 1fr)); grid-template-rows:20px }
+.item { background-color:#ddd }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fitTree := Build(fitDocument, stylemodel.Compute(fitDocument, fitStyles), 564)
+	if fitRect := decorationForNode(t, fitTree, fitItem.ID); fitRect.Width != 500 {
+		t.Fatalf("auto-fit did not collapse empty tracks: %#v", fitRect.Rect)
+	}
+}
