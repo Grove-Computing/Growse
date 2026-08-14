@@ -73,6 +73,7 @@ type DrawBox struct {
 	Height   float32
 	Color    uint32
 	Image    stylemodel.BackgroundImage
+	Layers   []stylemodel.BackgroundLayer
 	Repeat   stylemodel.BackgroundRepeat
 	Position stylemodel.BackgroundPosition
 	Size     stylemodel.BackgroundSize
@@ -135,7 +136,7 @@ func Build(tree *layout.Tree) *DisplayList {
 			list.Commands = append(list.Commands, DrawBox{
 				NodeID: decoration.NodeID, X: decoration.X, Y: decoration.Y, Top: top,
 				Width: decoration.Width, Height: decoration.Height, Color: decoration.Background,
-				Image: cloneBackgroundImage(decoration.Image), Repeat: decoration.Repeat,
+				Image: cloneBackgroundImage(decoration.Image), Layers: cloneBackgroundLayers(decoration.Layers), Repeat: decoration.Repeat,
 				Position: decoration.Position, Size: decoration.Size, Clip: cloneLayoutRect(decoration.Clip),
 				Border: decoration.Border, Radius: decoration.Radius, Opacity: decoration.Opacity,
 			})
@@ -204,5 +205,13 @@ func cloneLayoutRect(source *layout.Rect) *layout.Rect {
 func cloneBackgroundImage(source stylemodel.BackgroundImage) stylemodel.BackgroundImage {
 	result := source
 	result.GradientStops = append([]stylemodel.GradientStop(nil), source.GradientStops...)
+	return result
+}
+
+func cloneBackgroundLayers(source []stylemodel.BackgroundLayer) []stylemodel.BackgroundLayer {
+	result := append([]stylemodel.BackgroundLayer(nil), source...)
+	for index := range result {
+		result[index].Image = cloneBackgroundImage(result[index].Image)
+	}
 	return result
 }

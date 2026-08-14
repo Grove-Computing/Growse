@@ -25,6 +25,7 @@ type blockStyle struct {
 	repeat              stylemodel.BackgroundRepeat
 	position            stylemodel.BackgroundPosition
 	backgroundSize      stylemodel.BackgroundSize
+	backgroundLayers    []stylemodel.BackgroundLayer
 	layoutPosition      stylemodel.Position
 	inset               stylemodel.Insets
 	zIndex              int
@@ -301,7 +302,7 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 		e.tree.Decorations = append(e.tree.Decorations, Decoration{
 			Order: e.nextOrder(), StackingID: e.stackingID, NodeID: node.ID,
 			Rect:       Rect{X: x, Y: boxTop, Width: outerWidth},
-			Background: style.background, Image: cloneBackgroundImage(style.image),
+			Background: style.background, Image: cloneBackgroundImage(style.image), Layers: cloneBackgroundLayers(style.backgroundLayers),
 			Repeat: style.repeat, Position: style.position, Size: style.backgroundSize, Clip: cloneRect(e.clip),
 			Border: style.border, Opacity: e.opacity,
 		})
@@ -850,6 +851,14 @@ func cloneBackgroundImage(source stylemodel.BackgroundImage) stylemodel.Backgrou
 	return result
 }
 
+func cloneBackgroundLayers(source []stylemodel.BackgroundLayer) []stylemodel.BackgroundLayer {
+	result := append([]stylemodel.BackgroundLayer(nil), source...)
+	for index := range result {
+		result[index].Image = cloneBackgroundImage(result[index].Image)
+	}
+	return result
+}
+
 func intersectClip(parent *Rect, child Rect) *Rect {
 	if parent == nil {
 		return &child
@@ -951,6 +960,7 @@ func applyComputed(block blockStyle, computed stylemodel.ComputedStyle) blockSty
 	block.repeat = computed.BackgroundRepeat
 	block.position = computed.BackgroundPos
 	block.backgroundSize = computed.BackgroundSize
+	block.backgroundLayers = cloneBackgroundLayers(computed.BackgroundLayers)
 	block.layoutPosition, block.inset = computed.Position, computed.Inset
 	block.zIndex, block.zIndexAuto = computed.ZIndex, computed.ZIndexAuto
 	block.radius = computed.BorderRadius

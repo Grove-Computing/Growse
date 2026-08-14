@@ -26,36 +26,41 @@ func loadBackgroundImages(ctx context.Context, client ResourceLoader, computed s
 	}
 	seen := make(map[string]bool)
 	for _, computedStyle := range computed {
-		background := computedStyle.BackgroundImage
-		if background.Kind != style.BackgroundImageURL || seen[background.URL] {
-			continue
+		backgrounds := []style.BackgroundImage{computedStyle.BackgroundImage}
+		for _, layer := range computedStyle.BackgroundLayers {
+			backgrounds = append(backgrounds, layer.Image)
 		}
-		seen[background.URL] = true
-		resourceURL, err := url.Parse(background.URL)
-		if err != nil || resourceURL.Scheme != "http" && resourceURL.Scheme != "https" {
-			errors = append(errors, "background image URL is not a supported HTTP(S) URL")
-			continue
+		for _, background := range backgrounds {
+			if background.Kind != style.BackgroundImageURL || seen[background.URL] {
+				continue
+			}
+			seen[background.URL] = true
+			resourceURL, err := url.Parse(background.URL)
+			if err != nil || resourceURL.Scheme != "http" && resourceURL.Scheme != "https" {
+				errors = append(errors, "background image URL is not a supported HTTP(S) URL")
+				continue
+			}
+			response, err := client.Get(ctx, resourceURL)
+			if err != nil || response == nil {
+				errors = append(errors, "background image request failed: "+resourceURL.Redacted())
+				continue
+			}
+			if len(response.Body) > maxBackgroundImageBytes || !isImageContentType(response.ContentType) {
+				errors = append(errors, "background image response was rejected: "+resourceURL.Redacted())
+				continue
+			}
+			config, _, err := image.DecodeConfig(bytes.NewReader(response.Body))
+			if err != nil || config.Width <= 0 || config.Height <= 0 || config.Width > maxBackgroundImagePixels/config.Height {
+				errors = append(errors, "background image dimensions were rejected: "+resourceURL.Redacted())
+				continue
+			}
+			decoded, _, err := image.Decode(bytes.NewReader(response.Body))
+			if err != nil {
+				errors = append(errors, "background image decode failed: "+resourceURL.Redacted())
+				continue
+			}
+			images[background.URL] = decoded
 		}
-		response, err := client.Get(ctx, resourceURL)
-		if err != nil || response == nil {
-			errors = append(errors, "background image request failed: "+resourceURL.Redacted())
-			continue
-		}
-		if len(response.Body) > maxBackgroundImageBytes || !isImageContentType(response.ContentType) {
-			errors = append(errors, "background image response was rejected: "+resourceURL.Redacted())
-			continue
-		}
-		config, _, err := image.DecodeConfig(bytes.NewReader(response.Body))
-		if err != nil || config.Width <= 0 || config.Height <= 0 || config.Width > maxBackgroundImagePixels/config.Height {
-			errors = append(errors, "background image dimensions were rejected: "+resourceURL.Redacted())
-			continue
-		}
-		decoded, _, err := image.Decode(bytes.NewReader(response.Body))
-		if err != nil {
-			errors = append(errors, "background image decode failed: "+resourceURL.Redacted())
-			continue
-		}
-		images[background.URL] = decoded
 	}
 	return images, errors
 }

@@ -322,6 +322,7 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 			}
 		}
 	}
+	computed = applyBackgroundLayers(computed, parent, winners, computed.CustomProperties, fontContext)
 	if value, ok := winners["font-size"]; ok {
 		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
 			parseFontSize := func(value string) (float32, bool) {

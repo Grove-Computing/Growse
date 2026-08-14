@@ -266,6 +266,7 @@ const (
 	BackgroundImageNone BackgroundImageKind = iota
 	BackgroundImageURL
 	BackgroundImageLinearGradient
+	BackgroundImageRadialGradient
 )
 
 // GradientStop is one color stop in a linear gradient. Position is normalized
@@ -277,10 +278,20 @@ type GradientStop struct {
 
 // BackgroundImage is either one URL image or one linear gradient.
 type BackgroundImage struct {
-	Kind          BackgroundImageKind
-	URL           string
-	GradientAngle float32
-	GradientStops []GradientStop
+	Kind           BackgroundImageKind
+	URL            string
+	GradientAngle  float32
+	GradientStops  []GradientStop
+	GradientCenter BackgroundPosition
+	RadialCircle   bool
+}
+
+// BackgroundLayer groups one image with its layer-specific placement values.
+type BackgroundLayer struct {
+	Image    BackgroundImage
+	Repeat   BackgroundRepeat
+	Position BackgroundPosition
+	Size     BackgroundSize
 }
 
 // BackgroundRepeat stores repetition independently for each axis.
@@ -320,6 +331,7 @@ type ComputedStyle struct {
 	BackgroundRepeat    BackgroundRepeat
 	BackgroundPos       BackgroundPosition
 	BackgroundSize      BackgroundSize
+	BackgroundLayers    []BackgroundLayer
 	FontSize            float32
 	FontWeight          int
 	LineHeight          float32

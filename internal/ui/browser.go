@@ -481,7 +481,7 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 		case paintmodel.DrawInput:
 			return ui.layoutDrawInput(gtx, command)
 		case paintmodel.DrawBox:
-			return layoutDrawBox(gtx, command, page.BackgroundImages[command.Image.URL])
+			return layoutDrawBox(gtx, command, page.BackgroundImages)
 		default:
 			return layout.Dimensions{}
 		}
@@ -617,7 +617,7 @@ func commandDocumentY(command paintmodel.Command) (float32, bool) {
 	}
 }
 
-func layoutDrawBox(gtx layout.Context, command paintmodel.DrawBox, backgroundImage image.Image) layout.Dimensions {
+func layoutDrawBox(gtx layout.Context, command paintmodel.DrawBox, backgroundImages map[string]image.Image) layout.Dimensions {
 	return layout.Inset{Top: unit.Dp(command.Top), Left: unit.Dp(command.X)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		if command.Clip != nil {
 			defer commandClip(gtx, command.Clip, command.X, command.Y).Push(gtx.Ops).Pop()
@@ -633,20 +633,27 @@ func layoutDrawBox(gtx layout.Context, command paintmodel.DrawBox, backgroundIma
 		if command.Color != 0 {
 			paint.FillShape(gtx.Ops, rgba(command.Color), bounds.Op())
 		}
-		if command.Image.Kind == stylemodel.BackgroundImageLinearGradient && width > 0 && height > 0 {
-			area := bounds.Push(gtx.Ops)
-			widget.Image{
-				Src: paint.NewImageOp(rasterLinearGradient(width, height, command.Image)),
-				Fit: widget.Unscaled, Scale: 1 / gtx.Metric.PxPerDp,
-			}.Layout(gtx)
-			area.Pop()
-		} else if command.Image.Kind == stylemodel.BackgroundImageURL && backgroundImage != nil && width > 0 && height > 0 {
-			area := bounds.Push(gtx.Ops)
-			widget.Image{
-				Src: paint.NewImageOp(rasterBackgroundImage(width, height, backgroundImage, command, gtx.Metric.PxPerDp)),
-				Fit: widget.Unscaled, Scale: 1 / gtx.Metric.PxPerDp,
-			}.Layout(gtx)
-			area.Pop()
+		layers := command.Layers
+		if len(layers) == 0 && command.Image.Kind != stylemodel.BackgroundImageNone {
+			layers = []stylemodel.BackgroundLayer{{Image: command.Image, Repeat: command.Repeat, Position: command.Position, Size: command.Size}}
+		}
+		for index := len(layers) - 1; index >= 0; index-- {
+			layer := layers[index]
+			var raster image.Image
+			if layer.Image.Kind == stylemodel.BackgroundImageLinearGradient && width > 0 && height > 0 {
+				raster = rasterLinearGradient(width, height, layer.Image)
+			} else if layer.Image.Kind == stylemodel.BackgroundImageRadialGradient && width > 0 && height > 0 {
+				raster = rasterRadialGradient(width, height, layer.Image)
+			} else if layer.Image.Kind == stylemodel.BackgroundImageURL && backgroundImages[layer.Image.URL] != nil && width > 0 && height > 0 {
+				layerCommand := command
+				layerCommand.Image, layerCommand.Repeat, layerCommand.Position, layerCommand.Size = layer.Image, layer.Repeat, layer.Position, layer.Size
+				raster = rasterBackgroundImage(width, height, backgroundImages[layer.Image.URL], layerCommand, gtx.Metric.PxPerDp)
+			}
+			if raster != nil {
+				area := bounds.Push(gtx.Ops)
+				widget.Image{Src: paint.NewImageOp(raster), Fit: widget.Unscaled, Scale: 1 / gtx.Metric.PxPerDp}.Layout(gtx)
+				area.Pop()
+			}
 		}
 		paintBoxBorder(gtx, command.Border, width, height)
 		return layout.Dimensions{}
@@ -846,6 +853,27 @@ func rasterLinearGradient(width, height int, background stylemodel.BackgroundIma
 			projection := directionX*(float32(x)-float32(width-1)/2) + directionY*(float32(y)-float32(height-1)/2)
 			position := projection/span + .5
 			result.SetNRGBA(x, y, gradientColor(background.GradientStops, position))
+		}
+	}
+	return result
+}
+
+func rasterRadialGradient(width, height int, background stylemodel.BackgroundImage) *image.NRGBA {
+	result := image.NewNRGBA(image.Rect(0, 0, width, height))
+	if len(background.GradientStops) == 0 || width <= 0 || height <= 0 {
+		return result
+	}
+	centerX := background.GradientCenter.X.Resolve(float32(width))
+	centerY := background.GradientCenter.Y.Resolve(float32(height))
+	radiusX, radiusY := max(centerX, float32(width)-centerX), max(centerY, float32(height)-centerY)
+	if background.RadialCircle {
+		radius := max(radiusX, radiusY)
+		radiusX, radiusY = radius, radius
+	}
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			dx, dy := (float32(x)-centerX)/max(radiusX, 1), (float32(y)-centerY)/max(radiusY, 1)
+			result.SetNRGBA(x, y, gradientColor(background.GradientStops, min(float32(math.Sqrt(float64(dx*dx+dy*dy))), 1)))
 		}
 	}
 	return result

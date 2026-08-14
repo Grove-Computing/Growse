@@ -979,6 +979,26 @@ func TestComputePositionAndLogicalInsets(t *testing.T) {
 	}
 }
 
+func TestComputeMultipleBackgroundsAndRadialGradient(t *testing.T) {
+	document := dom.NewDocument()
+	item := document.CreateElement("div", map[string]string{"style": `background-image:linear-gradient(red, transparent), radial-gradient(circle at left top, blue, white), url("card.png"); background-repeat:no-repeat, repeat-x; background-position:center, left top; background-size:cover, 20px 10px`})
+	appendNode(t, document, document.Root, item)
+	computed, _ := Compute(document, nil).For(item)
+	if len(computed.BackgroundLayers) != 3 {
+		t.Fatalf("background layers = %#v", computed.BackgroundLayers)
+	}
+	if computed.BackgroundLayers[0].Image.Kind != BackgroundImageLinearGradient || computed.BackgroundLayers[1].Image.Kind != BackgroundImageRadialGradient || computed.BackgroundLayers[2].Image.Kind != BackgroundImageURL {
+		t.Fatalf("background layer kinds = %#v", computed.BackgroundLayers)
+	}
+	radial := computed.BackgroundLayers[1]
+	if !radial.Image.RadialCircle || radial.Image.GradientCenter.X.Percentage != 0 || radial.Image.GradientCenter.Y.Percentage != 0 || !radial.Repeat.X || radial.Repeat.Y {
+		t.Fatalf("radial layer = %#v", radial)
+	}
+	if computed.BackgroundLayers[2].Size.Kind != BackgroundSizeCover {
+		t.Fatalf("cycled layer values = %#v", computed.BackgroundLayers[2])
+	}
+}
+
 func parseTestSelector(t *testing.T, value string) css.Selector {
 	t.Helper()
 	stylesheet, err := css.Parse(strings.NewReader(value + " { color: red }"))

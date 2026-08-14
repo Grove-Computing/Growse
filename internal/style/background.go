@@ -23,16 +23,39 @@ func parseBackgroundImage(value string, currentColor uint32) (BackgroundImage, b
 		}
 		return BackgroundImage{Kind: BackgroundImageURL, URL: raw}, true
 	}
-	if !strings.HasPrefix(strings.ToLower(value), "linear-gradient(") || !strings.HasSuffix(value, ")") {
+	lower := strings.ToLower(value)
+	linear := strings.HasPrefix(lower, "linear-gradient(")
+	radial := strings.HasPrefix(lower, "radial-gradient(")
+	if (!linear && !radial) || !strings.HasSuffix(value, ")") {
 		return BackgroundImage{}, false
 	}
-	parts := splitBackgroundArguments(value[len("linear-gradient(") : len(value)-1])
+	prefixLength := len("linear-gradient(")
+	if radial {
+		prefixLength = len("radial-gradient(")
+	}
+	parts := splitBackgroundArguments(value[prefixLength : len(value)-1])
 	if len(parts) < 2 {
 		return BackgroundImage{}, false
 	}
 	angle := float32(180)
-	if parsed, ok := parseGradientDirection(parts[0]); ok {
-		angle = parsed
+	center := BackgroundPosition{X: LengthPercentage{Percentage: 50}, Y: LengthPercentage{Percentage: 50}}
+	circle := false
+	if linear {
+		if parsed, ok := parseGradientDirection(parts[0]); ok {
+			angle = parsed
+			parts = parts[1:]
+		}
+	} else if descriptor := strings.ToLower(strings.TrimSpace(parts[0])); strings.HasPrefix(descriptor, "circle") || strings.HasPrefix(descriptor, "ellipse") || strings.HasPrefix(descriptor, "at ") {
+		circle = strings.HasPrefix(descriptor, "circle")
+		if at := strings.Index(descriptor, " at "); at >= 0 {
+			if parsed, valid := parseBackgroundPosition(descriptor[at+4:], LengthContext{}); valid {
+				center = parsed
+			}
+		} else if strings.HasPrefix(descriptor, "at ") {
+			if parsed, valid := parseBackgroundPosition(descriptor[3:], LengthContext{}); valid {
+				center = parsed
+			}
+		}
 		parts = parts[1:]
 	}
 	stops := make([]GradientStop, 0, len(parts))
@@ -50,7 +73,88 @@ func parseBackgroundImage(value string, currentColor uint32) (BackgroundImage, b
 		return BackgroundImage{}, false
 	}
 	distributeGradientStops(stops, positions)
-	return BackgroundImage{Kind: BackgroundImageLinearGradient, GradientAngle: angle, GradientStops: stops}, true
+	kind := BackgroundImageLinearGradient
+	if radial {
+		kind = BackgroundImageRadialGradient
+	}
+	return BackgroundImage{Kind: kind, GradientAngle: angle, GradientStops: stops, GradientCenter: center, RadialCircle: circle}, true
+}
+
+func applyBackgroundLayers(computed, parent ComputedStyle, winners map[string]winner, custom map[string]string, context LengthContext) ComputedStyle {
+	candidate, hasImages := winners["background-image"]
+	if !hasImages {
+		return computed
+	}
+	value, valid := winnerValue(candidate, custom)
+	if !valid {
+		return computed
+	}
+	if parseGlobalKeyword(value) == globalInherit {
+		computed.BackgroundLayers = cloneBackgroundLayers(parent.BackgroundLayers)
+		return computed
+	}
+	if parseGlobalKeyword(value) != globalNone {
+		computed.BackgroundLayers = nil
+		return computed
+	}
+	imageValues := splitBackgroundArguments(value)
+	layers := make([]BackgroundLayer, 0, len(imageValues))
+	for _, imageValue := range imageValues {
+		image, valid := parseBackgroundImage(imageValue, computed.Color)
+		if !valid {
+			return computed
+		}
+		layers = append(layers, BackgroundLayer{Image: image, Repeat: BackgroundRepeat{X: true, Y: true}})
+	}
+	applyLayerValues := func(property string, apply func(*BackgroundLayer, string) bool) bool {
+		candidate, ok := winners[property]
+		if !ok {
+			return true
+		}
+		value, valid := winnerValue(candidate, custom)
+		if !valid || parseGlobalKeyword(value) != globalNone {
+			return valid
+		}
+		values := splitBackgroundArguments(value)
+		if len(values) == 0 {
+			return false
+		}
+		for index := range layers {
+			if !apply(&layers[index], values[index%len(values)]) {
+				return false
+			}
+		}
+		return true
+	}
+	if !applyLayerValues("background-repeat", func(layer *BackgroundLayer, value string) bool {
+		parsed, valid := parseBackgroundRepeat(value)
+		layer.Repeat = parsed
+		return valid
+	}) || !applyLayerValues("background-position", func(layer *BackgroundLayer, value string) bool {
+		parsed, valid := parseBackgroundPosition(value, context)
+		layer.Position = parsed
+		return valid
+	}) || !applyLayerValues("background-size", func(layer *BackgroundLayer, value string) bool {
+		parsed, valid := parseBackgroundSize(value, context)
+		layer.Size = parsed
+		return valid
+	}) {
+		return computed
+	}
+	computed.BackgroundLayers = layers
+	if len(layers) != 0 {
+		computed.BackgroundImage, computed.BackgroundRepeat = layers[0].Image, layers[0].Repeat
+		computed.BackgroundPos, computed.BackgroundSize = layers[0].Position, layers[0].Size
+	}
+	return computed
+}
+
+func cloneBackgroundLayers(source []BackgroundLayer) []BackgroundLayer {
+	result := append([]BackgroundLayer(nil), source...)
+	for index := range result {
+		result[index].Image.GradientStops = append([]GradientStop(nil), result[index].Image.GradientStops...)
+	}
+	return result
 }
 
 func splitBackgroundArguments(value string) []string {

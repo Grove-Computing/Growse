@@ -83,6 +83,23 @@ func TestBuildPreservesLinearGradientStops(t *testing.T) {
 	}
 }
 
+func TestBuildPreservesIndependentBackgroundLayers(t *testing.T) {
+	tree := &layout.Tree{Decorations: []layout.Decoration{{
+		Layers: []style.BackgroundLayer{
+			{Image: style.BackgroundImage{Kind: style.BackgroundImageLinearGradient, GradientStops: []style.GradientStop{{Color: 0xff0000ff}, {Color: 0x0000ffff}}}, Repeat: style.BackgroundRepeat{}},
+			{Image: style.BackgroundImage{Kind: style.BackgroundImageRadialGradient, GradientStops: []style.GradientStop{{Color: 0xffffffff}, {Color: 0x000000ff}}}, Repeat: style.BackgroundRepeat{X: true}},
+		},
+	}}}
+	command := Build(tree).Commands[0].(DrawBox)
+	if len(command.Layers) != 2 || command.Layers[1].Image.Kind != style.BackgroundImageRadialGradient || !command.Layers[1].Repeat.X {
+		t.Fatalf("display-list layers = %#v", command.Layers)
+	}
+	tree.Decorations[0].Layers[1].Image.GradientStops[0].Color = 0
+	if command.Layers[1].Image.GradientStops[0].Color != 0xffffffff {
+		t.Fatal("display list shares mutable background layers")
+	}
+}
+
 func TestBuildPreservesBackgroundImagePlacement(t *testing.T) {
 	tree := &layout.Tree{Decorations: []layout.Decoration{{
 		Image:  style.BackgroundImage{Kind: style.BackgroundImageURL, URL: "https://example.com/card.png"},
