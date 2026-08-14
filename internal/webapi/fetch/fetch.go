@@ -144,21 +144,85 @@ func (api *API) fetch(ctx context.Context, request Request) (*network.Response, 
 	if api.baseURL != nil {
 		resolved = api.baseURL.ResolveReference(reference)
 	}
+	if resolved.Scheme != "http" && resolved.Scheme != "https" || resolved.Host == "" {
+		return nil, errors.New("Fetch URL must use HTTP or HTTPS")
+	}
 
+	hasBody := request.Body != nil || request.Text != ""
 	body := append([]byte(nil), request.Body...)
 	if request.Body == nil && request.Text != "" {
 		body = []byte(request.Text)
 	}
+	method := strings.ToUpper(strings.TrimSpace(request.Method))
+	if method == "" {
+		method = http.MethodGet
+	}
+	if !allowedMethod(method) || !validToken(method) {
+		return nil, errors.New("invalid or unsupported Fetch method")
+	}
+	if (method == http.MethodGet || method == http.MethodHead) && hasBody {
+		return nil, errors.New("GET and HEAD Fetch requests cannot have a body")
+	}
 	header := make(http.Header, len(request.Header))
 	for name, values := range request.Header {
+		if !validToken(name) {
+			return nil, errors.New("invalid Fetch header name")
+		}
+		if forbiddenHeader(name) {
+			return nil, errors.New("forbidden Fetch request header: " + name)
+		}
+		for _, value := range values {
+			if strings.ContainsAny(value, "\r\n\x00") {
+				return nil, errors.New("invalid Fetch header value")
+			}
+		}
 		header[name] = append([]string(nil), values...)
 	}
 	return api.do(ctx, &network.Request{
-		Method: request.Method,
+		Method: method,
 		URL:    resolved,
 		Header: header,
 		Body:   body,
 	})
+}
+
+func allowedMethod(method string) bool {
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+		return true
+	default:
+		return false
+	}
+}
+
+func forbiddenHeader(name string) bool {
+	lower := strings.ToLower(name)
+	if strings.HasPrefix(lower, "proxy-") || strings.HasPrefix(lower, "sec-") {
+		return true
+	}
+	switch lower {
+	case "accept-charset", "accept-encoding", "access-control-request-headers", "access-control-request-method",
+		"connection", "content-length", "cookie", "cookie2", "date", "dnt", "expect", "host",
+		"keep-alive", "origin", "permissions-policy", "referer", "te", "trailer", "transfer-encoding", "upgrade", "via":
+		return true
+	default:
+		return false
+	}
+}
+
+func validToken(value string) bool {
+	if value == "" {
+		return false
+	}
+	for index := 0; index < len(value); index++ {
+		character := value[index]
+		if character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' ||
+			character >= '0' && character <= '9' || strings.ContainsRune("!#$%&'*+-.^_`|~", rune(character)) {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func cloneURL(source *url.URL) *url.URL {

@@ -70,6 +70,44 @@ func TestResponseBytesAndTextReturnBody(t *testing.T) {
 	}
 }
 
+func TestFetchRejectsInvalidRequestBeforeSending(t *testing.T) {
+	baseURL, err := url.Parse("https://example.test/page")
+	if err != nil {
+		t.Fatal(err)
+	}
+	requests := 0
+	api := New(baseURL, func(context.Context, *network.Request) (*network.Response, error) {
+		requests++
+		return &network.Response{}, nil
+	})
+	tests := []struct {
+		name    string
+		request Request
+	}{
+		{name: "unsupported method", request: Request{Method: "TRACE", URL: "/data"}},
+		{name: "invalid method token", request: Request{Method: "PO ST", URL: "/data"}},
+		{name: "unsupported URL scheme", request: Request{URL: "file:///tmp/data"}},
+		{name: "forbidden host", request: Request{URL: "/data", Header: Header{"Host": []string{"other.test"}}}},
+		{name: "forbidden cookie case insensitive", request: Request{URL: "/data", Header: Header{"cOoKiE": []string{"session=secret"}}}},
+		{name: "forbidden sec prefix", request: Request{URL: "/data", Header: Header{"Sec-Fetch-Site": []string{"same-origin"}}}},
+		{name: "invalid header name", request: Request{URL: "/data", Header: Header{"Bad Header": []string{"value"}}}},
+		{name: "invalid header value", request: Request{URL: "/data", Header: Header{"X-Test": []string{"safe\r\ninjected"}}}},
+		{name: "GET body", request: Request{Method: http.MethodGet, URL: "/data", Body: []byte{}}},
+		{name: "HEAD text body", request: Request{Method: http.MethodHead, URL: "/data", Text: "body"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			before := requests
+			if _, err := api.fetch(context.Background(), test.request); err == nil {
+				t.Fatal("fetch() error = nil")
+			}
+			if requests != before {
+				t.Fatalf("network requests = %d, want %d", requests, before)
+			}
+		})
+	}
+}
+
 func equalStrings(left, right []string) bool {
 	if len(left) != len(right) {
 		return false
