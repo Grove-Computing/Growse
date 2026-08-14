@@ -106,6 +106,24 @@ type SizeValue struct {
 	Value LengthPercentage
 }
 
+// GridTrackKind identifies the sizing function used by one grid track.
+type GridTrackKind uint8
+
+const (
+	GridTrackAuto GridTrackKind = iota
+	GridTrackLength
+	GridTrackFraction
+	GridTrackMinContent
+	GridTrackMaxContent
+)
+
+// GridTrackSize retains track sizing values until the grid container is laid out.
+type GridTrackSize struct {
+	Kind  GridTrackKind
+	Value LengthPercentage
+	Flex  float32
+}
+
 // Edges contains resolved pixel values in CSS clockwise order.
 type Edges struct {
 	Top    float32
@@ -240,50 +258,54 @@ type BackgroundSize struct {
 
 // ComputedStyle contains the MVP properties consumed by layout and paint.
 type ComputedStyle struct {
-	Color            uint32
-	BackgroundColor  uint32
-	BackgroundImage  BackgroundImage
-	BackgroundRepeat BackgroundRepeat
-	BackgroundPos    BackgroundPosition
-	BackgroundSize   BackgroundSize
-	FontSize         float32
-	FontWeight       int
-	LineHeight       float32
-	WhiteSpace       WhiteSpace
-	OverflowX        Overflow
-	OverflowY        Overflow
-	Display          Display
-	FlexDirection    FlexDirection
-	FlexWrap         FlexWrap
-	JustifyContent   JustifyContent
-	AlignItems       Align
-	AlignContent     Align
-	Order            int
-	FlexGrow         float32
-	FlexShrink       float32
-	FlexBasis        FlexBasis
-	AlignSelf        Align
-	RowGap           LengthPercentage
-	ColumnGap        LengthPercentage
-	AspectRatio      float32
-	BoxSizing        BoxSizing
-	Width            SizeValue
-	Height           SizeValue
-	MinWidth         SizeValue
-	MinHeight        SizeValue
-	MaxWidth         SizeValue
-	MaxHeight        SizeValue
-	Margin           Edges
-	MarginAuto       AutoEdges
-	Padding          Edges
-	Border           Borders
-	BorderRadius     BorderRadii
-	TextDecoration   TextDecorationLine
-	DecorationColor  uint32
-	Opacity          float32
-	BeforeContent    string
-	AfterContent     string
-	CustomProperties map[string]string
+	Color               uint32
+	BackgroundColor     uint32
+	BackgroundImage     BackgroundImage
+	BackgroundRepeat    BackgroundRepeat
+	BackgroundPos       BackgroundPosition
+	BackgroundSize      BackgroundSize
+	FontSize            float32
+	FontWeight          int
+	LineHeight          float32
+	WhiteSpace          WhiteSpace
+	OverflowX           Overflow
+	OverflowY           Overflow
+	Display             Display
+	FlexDirection       FlexDirection
+	FlexWrap            FlexWrap
+	JustifyContent      JustifyContent
+	AlignItems          Align
+	AlignContent        Align
+	Order               int
+	FlexGrow            float32
+	FlexShrink          float32
+	FlexBasis           FlexBasis
+	AlignSelf           Align
+	RowGap              LengthPercentage
+	ColumnGap           LengthPercentage
+	GridTemplateColumns []GridTrackSize
+	GridTemplateRows    []GridTrackSize
+	GridAutoColumns     []GridTrackSize
+	GridAutoRows        []GridTrackSize
+	AspectRatio         float32
+	BoxSizing           BoxSizing
+	Width               SizeValue
+	Height              SizeValue
+	MinWidth            SizeValue
+	MinHeight           SizeValue
+	MaxWidth            SizeValue
+	MaxHeight           SizeValue
+	Margin              Edges
+	MarginAuto          AutoEdges
+	Padding             Edges
+	Border              Borders
+	BorderRadius        BorderRadii
+	TextDecoration      TextDecorationLine
+	DecorationColor     uint32
+	Opacity             float32
+	BeforeContent       string
+	AfterContent        string
+	CustomProperties    map[string]string
 }
 
 // Bold reports whether the computed weight should use a bold face.

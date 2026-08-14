@@ -17,47 +17,51 @@ const (
 )
 
 type blockStyle struct {
-	fontSize        float32
-	bold            bool
-	color           uint32
-	background      uint32
-	image           stylemodel.BackgroundImage
-	repeat          stylemodel.BackgroundRepeat
-	position        stylemodel.BackgroundPosition
-	backgroundSize  stylemodel.BackgroundSize
-	radius          stylemodel.BorderRadii
-	decoration      stylemodel.TextDecorationLine
-	decorationColor uint32
-	opacity         float32
-	display         stylemodel.Display
-	margin          stylemodel.Edges
-	padding         stylemodel.Edges
-	border          stylemodel.Borders
-	boxSizing       stylemodel.BoxSizing
-	width           stylemodel.SizeValue
-	height          stylemodel.SizeValue
-	minWidth        stylemodel.SizeValue
-	minHeight       stylemodel.SizeValue
-	maxWidth        stylemodel.SizeValue
-	maxHeight       stylemodel.SizeValue
-	lineHeight      float32
-	whiteSpace      stylemodel.WhiteSpace
-	overflowX       stylemodel.Overflow
-	overflowY       stylemodel.Overflow
-	flexDirection   stylemodel.FlexDirection
-	flexWrap        stylemodel.FlexWrap
-	justifyContent  stylemodel.JustifyContent
-	alignItems      stylemodel.Align
-	alignContent    stylemodel.Align
-	order           int
-	flexGrow        float32
-	flexShrink      float32
-	flexBasis       stylemodel.FlexBasis
-	alignSelf       stylemodel.Align
-	rowGap          stylemodel.LengthPercentage
-	columnGap       stylemodel.LengthPercentage
-	marginAuto      stylemodel.AutoEdges
-	aspectRatio     float32
+	fontSize            float32
+	bold                bool
+	color               uint32
+	background          uint32
+	image               stylemodel.BackgroundImage
+	repeat              stylemodel.BackgroundRepeat
+	position            stylemodel.BackgroundPosition
+	backgroundSize      stylemodel.BackgroundSize
+	radius              stylemodel.BorderRadii
+	decoration          stylemodel.TextDecorationLine
+	decorationColor     uint32
+	opacity             float32
+	display             stylemodel.Display
+	margin              stylemodel.Edges
+	padding             stylemodel.Edges
+	border              stylemodel.Borders
+	boxSizing           stylemodel.BoxSizing
+	width               stylemodel.SizeValue
+	height              stylemodel.SizeValue
+	minWidth            stylemodel.SizeValue
+	minHeight           stylemodel.SizeValue
+	maxWidth            stylemodel.SizeValue
+	maxHeight           stylemodel.SizeValue
+	lineHeight          float32
+	whiteSpace          stylemodel.WhiteSpace
+	overflowX           stylemodel.Overflow
+	overflowY           stylemodel.Overflow
+	flexDirection       stylemodel.FlexDirection
+	flexWrap            stylemodel.FlexWrap
+	justifyContent      stylemodel.JustifyContent
+	alignItems          stylemodel.Align
+	alignContent        stylemodel.Align
+	order               int
+	flexGrow            float32
+	flexShrink          float32
+	flexBasis           stylemodel.FlexBasis
+	alignSelf           stylemodel.Align
+	rowGap              stylemodel.LengthPercentage
+	columnGap           stylemodel.LengthPercentage
+	gridTemplateColumns []stylemodel.GridTrackSize
+	gridTemplateRows    []stylemodel.GridTrackSize
+	gridAutoColumns     []stylemodel.GridTrackSize
+	gridAutoRows        []stylemodel.GridTrackSize
+	marginAuto          stylemodel.AutoEdges
+	aspectRatio         float32
 }
 
 type inlineRun struct {
@@ -302,7 +306,7 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 	if style.display == stylemodel.DisplayFlex {
 		e.addFlexChildren(node, style, contentX, contentWidth, childContainingHeight, declaredHeightDefinite)
 	} else if style.display == stylemodel.DisplayGrid {
-		e.addGridChildren(node, contentX, contentWidth, childContainingHeight, declaredHeightDefinite)
+		e.addGridChildren(node, style, contentX, contentWidth, childContainingHeight, declaredHeightDefinite)
 	} else {
 		inlineRuns := e.generatedRuns(node, true, style)
 		previousBlock := false
@@ -850,6 +854,10 @@ func applyComputed(block blockStyle, computed stylemodel.ComputedStyle) blockSty
 	block.order, block.flexGrow, block.flexShrink = computed.Order, computed.FlexGrow, computed.FlexShrink
 	block.flexBasis, block.alignSelf = computed.FlexBasis, computed.AlignSelf
 	block.rowGap, block.columnGap = computed.RowGap, computed.ColumnGap
+	block.gridTemplateColumns = append([]stylemodel.GridTrackSize(nil), computed.GridTemplateColumns...)
+	block.gridTemplateRows = append([]stylemodel.GridTrackSize(nil), computed.GridTemplateRows...)
+	block.gridAutoColumns = append([]stylemodel.GridTrackSize(nil), computed.GridAutoColumns...)
+	block.gridAutoRows = append([]stylemodel.GridTrackSize(nil), computed.GridAutoRows...)
 	block.marginAuto, block.aspectRatio = computed.MarginAuto, computed.AspectRatio
 	return block
 }

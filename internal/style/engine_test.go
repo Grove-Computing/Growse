@@ -851,6 +851,22 @@ func TestComputeGridDisplayValues(t *testing.T) {
 	}
 }
 
+func TestComputeGridExplicitAndImplicitTracks(t *testing.T) {
+	document := dom.NewDocument()
+	grid := document.CreateElement("div", map[string]string{"style": "display:grid; grid-template-columns:100px 25%; grid-template-rows:30px; grid-auto-columns:12px; grid-auto-rows:40px 50px"})
+	appendNode(t, document, document.Root, grid)
+	computed, _ := Compute(document, nil).For(grid)
+	if len(computed.GridTemplateColumns) != 2 || computed.GridTemplateColumns[0].Value.Pixels != 100 || computed.GridTemplateColumns[1].Value.Percentage != 25 {
+		t.Fatalf("explicit columns = %#v", computed.GridTemplateColumns)
+	}
+	if len(computed.GridTemplateRows) != 1 || computed.GridTemplateRows[0].Value.Pixels != 30 {
+		t.Fatalf("explicit rows = %#v", computed.GridTemplateRows)
+	}
+	if len(computed.GridAutoColumns) != 1 || len(computed.GridAutoRows) != 2 || computed.GridAutoRows[1].Value.Pixels != 50 {
+		t.Fatalf("implicit track patterns = columns %#v rows %#v", computed.GridAutoColumns, computed.GridAutoRows)
+	}
+}
+
 func parseTestSelector(t *testing.T, value string) css.Selector {
 	t.Helper()
 	stylesheet, err := css.Parse(strings.NewReader(value + " { color: red }"))

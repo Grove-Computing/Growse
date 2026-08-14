@@ -45,3 +45,29 @@ func TestBuildGridEstablishesFormattingContexts(t *testing.T) {
 		t.Fatalf("inline-grid did not participate atomically in inline flow: line=(%v,%v,%v,%v) item=%#v", line.X, line.Y, line.Width, line.Height, inlineRect.Rect)
 	}
 }
+
+func TestBuildGridGeneratesExplicitAndImplicitTracks(t *testing.T) {
+	document := dom.NewDocument()
+	grid := document.CreateElement("div", map[string]string{"class": "grid"})
+	items := make([]*dom.Node, 3)
+	appendNodes(t, document, [2]*dom.Node{document.Root, grid})
+	for index := range items {
+		items[index] = document.CreateElement("div", map[string]string{"class": "item"})
+		appendNodes(t, document, [2]*dom.Node{grid, items[index]}, [2]*dom.Node{items[index], document.CreateText("item")})
+	}
+	stylesheet, err := css.Parse(strings.NewReader(`
+.grid { display:grid; width:300px; grid-template-columns:100px 200px; grid-template-rows:30px; grid-auto-rows:40px }
+.item { background-color:#ddd }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, stylemodel.Compute(document, stylesheet), 500)
+	first, second, third := decorationForNode(t, tree, items[0].ID), decorationForNode(t, tree, items[1].ID), decorationForNode(t, tree, items[2].ID)
+	if first.Width != 100 || first.Height != 30 || second.X != first.X+100 || second.Width != 200 || second.Height != 30 {
+		t.Fatalf("explicit tracks = first %#v second %#v", first.Rect, second.Rect)
+	}
+	if third.X != first.X || third.Y != first.Y+30 || third.Width != 100 || third.Height != 40 {
+		t.Fatalf("implicit row = %#v", third.Rect)
+	}
+}

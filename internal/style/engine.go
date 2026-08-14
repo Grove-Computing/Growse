@@ -397,6 +397,7 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 	computed.Border = applyBorders(computed.Border, parent.Border, winners, computed.CustomProperties, lengthContext, computed.Color)
 	computed.BorderRadius = applyBorderRadii(computed.BorderRadius, parent.BorderRadius, winners, computed.CustomProperties, lengthContext)
 	computed = applyFlexProperties(computed, parent, winners, computed.CustomProperties, lengthContext)
+	computed = applyGridProperties(computed, parent, winners, computed.CustomProperties, lengthContext)
 	return computed
 }
 
