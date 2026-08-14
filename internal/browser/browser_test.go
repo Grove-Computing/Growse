@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Grove-Computing/Growse/internal/css"
 	"github.com/Grove-Computing/Growse/internal/dom"
@@ -242,6 +243,50 @@ func TestUpdateHoverTracksAncestorPathAndRecomputesStyles(t *testing.T) {
 	}
 	if got, want := invalidations, 2; got != want {
 		t.Fatalf("invalidation count = %d, want %d", got, want)
+	}
+}
+
+func TestHoverTransitionFlowsThroughPageFrameStylesAndReverses(t *testing.T) {
+	document := dom.NewDocument()
+	button := document.CreateElement("button", nil)
+	if err := document.AppendChild(document.Root, button); err != nil {
+		t.Fatal(err)
+	}
+	stylesheet, err := css.Parse(strings.NewReader(`
+button { opacity: 0; transition: opacity 1s linear; }
+button:hover { opacity: 1; }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Date(2026, time.August, 14, 12, 0, 0, 0, time.UTC)
+	clock := &browserFakeClock{current: start}
+	page := NewPage(mustParseURL(t, "http://localhost"))
+	page.Document, page.Stylesheet = document, stylesheet
+	page.ComputedStyles = style.Compute(document, stylesheet)
+	browserState := New(nil)
+	browserState.SetAnimationClock(clock)
+	browserState.SetPage(page)
+
+	if !browserState.UpdateHover(button.ID, 0, 0) {
+		t.Fatal("hover did not start transition")
+	}
+	midpoint, _ := page.AnimatedStyles(start.Add(500 * time.Millisecond)).For(button)
+	if midpoint.Opacity != 0.5 || !page.ActiveAnimations(start.Add(500*time.Millisecond)) {
+		t.Fatalf("hover midpoint = %v, active=%v; want 0.5, true", midpoint.Opacity, page.ActiveAnimations(start.Add(500*time.Millisecond)))
+	}
+
+	clock.current = start.Add(500 * time.Millisecond)
+	if !browserState.ClearHover() {
+		t.Fatal("clear hover did not reverse transition")
+	}
+	reversing, _ := page.AnimatedStyles(start.Add(750 * time.Millisecond)).For(button)
+	if reversing.Opacity != 0.25 {
+		t.Fatalf("reversing opacity = %v, want 0.25", reversing.Opacity)
+	}
+	finished, _ := page.AnimatedStyles(start.Add(time.Second)).For(button)
+	if finished.Opacity != 0 || page.ActiveAnimations(start.Add(time.Second)) || page.Transitions.Count(button.ID) != 0 {
+		t.Fatalf("finished transition = opacity:%v active:%v count:%d", finished.Opacity, page.ActiveAnimations(start.Add(time.Second)), page.Transitions.Count(button.ID))
 	}
 }
 

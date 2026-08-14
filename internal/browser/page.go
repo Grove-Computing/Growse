@@ -26,6 +26,7 @@ type Page struct {
 	Stylesheet       *css.Stylesheet
 	ComputedStyles   style.Map
 	Animations       *style.AnimationRegistry
+	Transitions      *style.TransitionRegistry
 	BackgroundImages map[string]image.Image
 	BackgroundErrors []string
 	Scripts          []Script
@@ -40,16 +41,26 @@ type Page struct {
 	ReducedMotion    bool
 }
 
-// AnimatedStyles samples this page's CSS Animations at current without
+// AnimatedStyles samples this page's CSS Animations and Transitions at current without
 // changing its underlying computed style map.
 func (p *Page) AnimatedStyles(current time.Time) style.Map {
 	if p == nil {
 		return nil
 	}
-	if p.Animations == nil {
-		return p.ComputedStyles
+	result := p.ComputedStyles
+	if p.Animations != nil {
+		result = p.Animations.AnimatedStyles(p.ComputedStyles, p.Stylesheet, current)
 	}
-	return p.Animations.AnimatedStyles(p.ComputedStyles, p.Stylesheet, current)
+	if p.Transitions != nil {
+		result = p.Transitions.Apply(result, current)
+	}
+	return result
+}
+
+// ActiveAnimations reports whether this page needs another animation frame.
+func (p *Page) ActiveAnimations(current time.Time) bool {
+	return p != nil && ((p.Animations != nil && p.Animations.Active(current)) ||
+		(p.Transitions != nil && p.Transitions.Active(current)))
 }
 
 // NewPage creates a page for pageURL. A nil URL is allowed for documents such

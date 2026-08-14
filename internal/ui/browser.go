@@ -500,7 +500,7 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 	ui.viewportClick.Add(gtx.Ops)
 	pass.Pop()
 	area.Pop()
-	if page.Animations != nil && page.Animations.Active(gtx.Now) && ui.invalidate != nil {
+	if page.ActiveAnimations(gtx.Now) && ui.invalidate != nil {
 		ui.invalidate()
 	}
 	return dimensions

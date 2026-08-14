@@ -276,12 +276,18 @@ func (b *Browser) SetPage(page *Page) {
 	if previousPage != nil && previousPage != page && previousPage.Animations != nil {
 		previousPage.Animations.Clear()
 	}
+	if previousPage != nil && previousPage != page && previousPage.Transitions != nil {
+		previousPage.Transitions.Clear()
+	}
 	if page != nil {
 		if page.ComputedStyles == nil {
 			page.ComputedStyles = computePageStyles(page)
 		}
 		if page.Animations == nil {
 			page.Animations = style.NewAnimationRegistry()
+		}
+		if page.Transitions == nil {
+			page.Transitions = style.NewTransitionRegistry()
 		}
 		page.Animations.Reconcile(page.ComputedStyles, b.currentTime())
 	}
@@ -305,6 +311,9 @@ func (b *Browser) Close() error {
 	b.activeRuntime = nil
 	if page != nil && page.Animations != nil {
 		page.Animations.Clear()
+	}
+	if page != nil && page.Transitions != nil {
+		page.Transitions.Clear()
 	}
 	b.mu.Unlock()
 	if activeRuntime != nil {
@@ -429,6 +438,7 @@ func (b *Browser) load(ctx context.Context, pageURL *url.URL, commit historyComm
 		Stylesheet:       stylesheet,
 		ComputedStyles:   computedStyles,
 		Animations:       style.NewAnimationRegistry(),
+		Transitions:      style.NewTransitionRegistry(),
 		ReducedMotion:    reducedMotion,
 		BackgroundImages: backgroundImages,
 		BackgroundErrors: backgroundErrors,
@@ -439,6 +449,7 @@ func (b *Browser) load(ctx context.Context, pageURL *url.URL, commit historyComm
 	pageRuntime := startRuntime(ctx, runtimeFactory, page, onMutation, b.currentTime)
 	if err := ctx.Err(); err != nil {
 		page.Animations.Clear()
+		page.Transitions.Clear()
 		if pageRuntime != nil {
 			_ = pageRuntime.Stop()
 		}
@@ -448,6 +459,7 @@ func (b *Browser) load(ctx context.Context, pageURL *url.URL, commit historyComm
 	if navigationID != b.navigationID {
 		b.mu.Unlock()
 		page.Animations.Clear()
+		page.Transitions.Clear()
 		if pageRuntime != nil {
 			_ = pageRuntime.Stop()
 		}
@@ -459,6 +471,9 @@ func (b *Browser) load(ctx context.Context, pageURL *url.URL, commit historyComm
 	b.page = page
 	if previousPage != nil && previousPage != page && previousPage.Animations != nil {
 		previousPage.Animations.Clear()
+	}
+	if previousPage != nil && previousPage != page && previousPage.Transitions != nil {
+		previousPage.Transitions.Clear()
 	}
 	switch commit {
 	case historyPush:
@@ -580,7 +595,12 @@ func recomputePageStyles(page *Page, current time.Time) {
 	if page == nil {
 		return
 	}
+	previous := page.ComputedStyles
 	page.ComputedStyles = computePageStyles(page)
+	if page.Transitions == nil {
+		page.Transitions = style.NewTransitionRegistry()
+	}
+	page.Transitions.Reconcile(previous, page.ComputedStyles, current)
 	if page.Animations == nil {
 		page.Animations = style.NewAnimationRegistry()
 	}
