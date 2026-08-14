@@ -289,6 +289,9 @@ func (b *Browser) SetPage(page *Page) {
 		if page.Transitions == nil {
 			page.Transitions = style.NewTransitionRegistry()
 		}
+		if page.StyleRevision == 0 {
+			page.StyleRevision = 1
+		}
 		page.Animations.Reconcile(page.ComputedStyles, b.currentTime())
 	}
 	if page == nil {
@@ -439,6 +442,7 @@ func (b *Browser) load(ctx context.Context, pageURL *url.URL, commit historyComm
 		ComputedStyles:   computedStyles,
 		Animations:       style.NewAnimationRegistry(),
 		Transitions:      style.NewTransitionRegistry(),
+		StyleRevision:    1,
 		ReducedMotion:    reducedMotion,
 		BackgroundImages: backgroundImages,
 		BackgroundErrors: backgroundErrors,
@@ -597,6 +601,7 @@ func recomputePageStyles(page *Page, current time.Time) {
 	}
 	previous := page.ComputedStyles
 	page.ComputedStyles = computePageStyles(page)
+	page.StyleRevision++
 	if page.Transitions == nil {
 		page.Transitions = style.NewTransitionRegistry()
 	}

@@ -2,6 +2,22 @@ package layout
 
 import stylemodel "github.com/Grove-Computing/Growse/internal/style"
 
+// Clone returns a frame-local copy of a layout tree. Geometry can be cached
+// while ApplyAnimatedStyles mutates paint and hit-test state on the copy.
+func Clone(tree *Tree) *Tree {
+	if tree == nil {
+		return nil
+	}
+	clone := *tree
+	clone.Decorations = append([]Decoration(nil), tree.Decorations...)
+	clone.Boxes = append([]Box(nil), tree.Boxes...)
+	clone.StackingContexts = append([]StackingContext(nil), tree.StackingContexts...)
+	for index := range clone.Boxes {
+		clone.Boxes[index].Runs = append([]TextRun(nil), tree.Boxes[index].Runs...)
+	}
+	return &clone
+}
+
 // ApplyAnimatedStyles applies paint and hit-test state to an existing layout
 // tree without changing its geometry. Paint.Build and HitTest consequently
 // observe the exact same transform matrix.

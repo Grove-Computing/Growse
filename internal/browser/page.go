@@ -39,6 +39,7 @@ type Page struct {
 	ViewportWidth    float32
 	ViewportHeight   float32
 	ReducedMotion    bool
+	StyleRevision    uint64
 }
 
 // AnimatedStyles samples this page's CSS Animations and Transitions at current without

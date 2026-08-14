@@ -126,7 +126,11 @@ func (navigator *stubNavigator) SetInputValue(nodeID dom.NodeID, value string) b
 	if navigator.page == nil || navigator.page.Document == nil {
 		return false
 	}
-	return navigator.page.Document.SetAttribute(nodeID, "value", value)
+	changed := navigator.page.Document.SetAttribute(nodeID, "value", value)
+	if changed {
+		navigator.recomputeHoverStyles()
+	}
+	return changed
 }
 func (navigator *stubNavigator) CommitInputValue(nodeID dom.NodeID, value string) bool {
 	if navigator.page == nil || navigator.page.Events == nil {
@@ -225,6 +229,7 @@ func (navigator *stubNavigator) recomputeHoverStyles() {
 			ResolutionDPI: 96, ColorScheme: "light", Hover: true, Pointer: "fine",
 		},
 	)
+	navigator.page.StyleRevision++
 }
 func equalNodeIDPath(left, right []dom.NodeID) bool {
 	if len(left) != len(right) {
@@ -612,6 +617,46 @@ func TestTextInputReceivesFocusFromPointerPress(t *testing.T) {
 	}
 	if got, want := page.FocusTarget, inputNode.ID; got != want {
 		t.Fatalf("page focus target = %d, want %d", got, want)
+	}
+}
+
+func TestPaintOnlyAnimationFramesReuseLayoutTree(t *testing.T) {
+	document := dom.NewDocument()
+	target := document.CreateElement("div", nil)
+	if err := document.AppendChild(document.Root, target); err != nil {
+		t.Fatal(err)
+	}
+	stylesheet, err := css.Parse(strings.NewReader(`
+@keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+div { width: 100px; height: 100px; animation: fade 1s linear infinite; }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Date(2026, time.August, 14, 12, 0, 0, 0, time.UTC)
+	computed := style.Compute(document, stylesheet)
+	page := &browser.Page{
+		Document: document, Stylesheet: stylesheet, ComputedStyles: computed,
+		Animations: style.NewAnimationRegistry(), StyleRevision: 1,
+	}
+	page.Animations.Reconcile(computed, start)
+	ui := NewBrowserUI(&stubNavigator{page: page}, nil)
+	builds := 0
+	ui.layoutBuild = func(document *dom.Document, styles style.Map, width, height, scrollX, scrollY float32) *layoutengine.Tree {
+		builds++
+		return layoutengine.BuildWithScroll(document, styles, width, height, scrollX, scrollY)
+	}
+	gtx := layout.Context{
+		Now: start, Ops: new(op.Ops), Constraints: layout.Exact(image.Pt(800, 600)),
+		Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1},
+	}
+
+	ui.layoutDocument(gtx, page)
+	gtx.Reset()
+	gtx.Now = start.Add(500 * time.Millisecond)
+	ui.layoutDocument(gtx, page)
+	if builds != 1 {
+		t.Fatalf("layout builds across animation frames = %d, want 1", builds)
 	}
 }
 

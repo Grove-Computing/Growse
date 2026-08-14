@@ -46,3 +46,19 @@ func TestNonInvertibleAnimatedTransformIsNotHitTested(t *testing.T) {
 		t.Fatalf("non-invertible transform hit = (%d, %v), want miss", hit, ok)
 	}
 }
+
+func TestCloneKeepsCachedLayoutPaintStateImmutable(t *testing.T) {
+	nodeID := dom.NodeID(9)
+	original := &layoutmodel.Tree{
+		Decorations: []layoutmodel.Decoration{{NodeID: nodeID, Background: 0xff0000ff, Opacity: 1}},
+		Boxes:       []layoutmodel.Box{{NodeID: nodeID, Color: 0xff0000ff, Runs: []layoutmodel.TextRun{{NodeID: nodeID, Color: 0xff0000ff}}}},
+	}
+	frame := layoutmodel.Clone(original)
+	layoutmodel.ApplyAnimatedStyles(frame, stylemodel.Map{nodeID: {
+		Color: 0x0000ffff, BackgroundColor: 0x0000ffff, Opacity: 0.5,
+	}})
+	if original.Decorations[0].Background != 0xff0000ff || original.Decorations[0].Opacity != 1 ||
+		original.Boxes[0].Color != 0xff0000ff || original.Boxes[0].Runs[0].Color != 0xff0000ff {
+		t.Fatalf("cached layout was mutated: %#v", original)
+	}
+}
