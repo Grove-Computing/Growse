@@ -139,6 +139,8 @@ type Box struct {
 	Checkable  bool
 	Checked    bool
 	InputType  string
+	Disabled   bool
+	ReadOnly   bool
 
 	X        float32
 	Y        float32

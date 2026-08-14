@@ -35,13 +35,13 @@ func TestActivateCheckableKeepsOneRadioCheckedPerFormAndName(t *testing.T) {
 	if checked, changed := ActivateCheckable(document, second.ID); !changed || !checked {
 		t.Fatalf("radio activation = (%v, %v)", checked, changed)
 	}
-	if _, checked := first.Attribute("checked"); checked {
+	if CurrentChecked(first) {
 		t.Fatal("previous radio in the group remained checked")
 	}
-	if _, checked := second.Attribute("checked"); !checked {
+	if !CurrentChecked(second) {
 		t.Fatal("activated radio was not checked")
 	}
-	if _, checked := otherForm.Attribute("checked"); !checked {
+	if !CurrentChecked(otherForm) {
 		t.Fatal("radio in another form was unexpectedly unchecked")
 	}
 }

@@ -628,8 +628,14 @@ func focusableNodeID(document *dom.Document, nodeID dom.NodeID) dom.NodeID {
 	if !ok {
 		return 0
 	}
+	if control := forms.LabeledControl(document, node); control != nil && !forms.Disabled(control) {
+		return control.ID
+	}
 	for current := node; current != nil; current = current.Parent {
 		if current.Type != dom.NodeElement {
+			continue
+		}
+		if forms.Disabled(current) {
 			continue
 		}
 		if _, hasTabIndex := current.Attribute("tabindex"); hasTabIndex {
@@ -1008,6 +1014,9 @@ func (ui *BrowserUI) layoutDrawInput(gtx layout.Context, command paintmodel.Draw
 		if command.Opacity < 1 {
 			defer paint.PushOpacity(gtx.Ops, max(command.Opacity, 0)).Pop()
 		}
+		if command.Disabled {
+			gtx = gtx.Disabled()
+		}
 		height := gtx.Dp(unit.Dp(command.Height))
 		gtx.Constraints.Min.Y = height
 		gtx.Constraints.Max.Y = height
@@ -1032,6 +1041,7 @@ func (ui *BrowserUI) layoutDrawInput(gtx layout.Context, command paintmodel.Draw
 		} else {
 			editor.Mask = 0
 		}
+		editor.ReadOnly = command.ReadOnly || command.Disabled
 		for {
 			event, ok := editor.Update(gtx)
 			if !ok {
@@ -1083,6 +1093,9 @@ func (ui *BrowserUI) layoutDrawSelect(gtx layout.Context, command paintmodel.Dra
 		if command.Opacity < 1 {
 			defer paint.PushOpacity(gtx.Ops, max(command.Opacity, 0)).Pop()
 		}
+		if command.Disabled {
+			gtx = gtx.Disabled()
+		}
 		button := ui.selectButtons[command.NodeID]
 		if button == nil {
 			button = new(widget.Clickable)
@@ -1115,6 +1128,9 @@ func (ui *BrowserUI) layoutDrawCheckable(gtx layout.Context, command paintmodel.
 		}
 		if command.Opacity < 1 {
 			defer paint.PushOpacity(gtx.Ops, max(command.Opacity, 0)).Pop()
+		}
+		if command.Disabled {
+			gtx = gtx.Disabled()
 		}
 		button := ui.checkableButtons[command.NodeID]
 		if button == nil {

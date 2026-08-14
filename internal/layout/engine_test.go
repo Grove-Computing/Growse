@@ -471,6 +471,18 @@ func TestBuildCreatesEditableBoxesForSupportedAndUnknownTextTypes(t *testing.T) 
 	}
 }
 
+func TestBuildCarriesDisabledAndReadonlyControlState(t *testing.T) {
+	document := dom.NewDocument()
+	readonly := document.CreateElement("input", map[string]string{"readonly": ""})
+	disabled := document.CreateElement("select", map[string]string{"disabled": ""})
+	appendNodes(t, document, [2]*dom.Node{document.Root, readonly}, [2]*dom.Node{document.Root, disabled})
+
+	boxes := Build(document, style.Compute(document, nil), 800).Boxes
+	if len(boxes) != 2 || !boxes[0].ReadOnly || boxes[0].Disabled || !boxes[1].Disabled {
+		t.Fatalf("control states = %#v", boxes)
+	}
+}
+
 func TestBuildIgnoresHiddenInputType(t *testing.T) {
 	document := dom.NewDocument()
 	input := document.CreateElement("input", map[string]string{"type": "hidden"})

@@ -22,8 +22,7 @@ func CheckableState(node *dom.Node) (Checkable, bool) {
 	if kind != "checkbox" && kind != "radio" {
 		return Checkable{}, false
 	}
-	_, checked := node.Attribute("checked")
-	return Checkable{Kind: kind, Checked: checked}, true
+	return Checkable{Kind: kind, Checked: CurrentChecked(node)}, true
 }
 
 // ActivateCheckable applies the default activation behavior and returns the
@@ -37,14 +36,13 @@ func ActivateCheckable(document *dom.Document, nodeID dom.NodeID) (bool, bool) {
 		return false, false
 	}
 	state, ok := CheckableState(node)
-	if !ok {
+	if !ok || Disabled(node) {
 		return false, false
 	}
 	if state.Kind == "checkbox" {
-		if state.Checked {
-			return false, document.RemoveAttribute(node.ID, "checked")
-		}
-		return true, document.SetAttribute(node.ID, "checked", "")
+		node.ControlChecked = !state.Checked
+		node.ControlCheckedDirty = true
+		return node.ControlChecked, true
 	}
 	if state.Checked {
 		return true, false
@@ -58,10 +56,13 @@ func ActivateCheckable(document *dom.Document, nodeID dom.NodeID) (bool, bool) {
 		candidateState, candidateOK := CheckableState(candidate)
 		candidateName, _ := candidate.Attribute("name")
 		if candidateOK && candidateState.Kind == "radio" && candidateName == name {
-			document.RemoveAttribute(candidate.ID, "checked")
+			candidate.ControlChecked = false
+			candidate.ControlCheckedDirty = true
 		}
 	})
-	return true, document.SetAttribute(node.ID, "checked", "")
+	node.ControlChecked = true
+	node.ControlCheckedDirty = true
+	return true, true
 }
 
 func nearestForm(node *dom.Node) *dom.Node {

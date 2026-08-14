@@ -58,6 +58,8 @@ type DrawInput struct {
 	Value     string
 	InputType string
 	Multiline bool
+	Disabled  bool
+	ReadOnly  bool
 	X         float32
 	Y         float32
 	Top       float32
@@ -84,6 +86,7 @@ type DrawSelect struct {
 	Color    uint32
 	Opacity  float32
 	Clip     *layout.Rect
+	Disabled bool
 }
 
 func (DrawSelect) paintCommand() {}
@@ -101,6 +104,7 @@ type DrawCheckable struct {
 	Color     uint32
 	Opacity   float32
 	Clip      *layout.Rect
+	Disabled  bool
 }
 
 func (DrawCheckable) paintCommand() {}
@@ -213,6 +217,8 @@ func Build(tree *layout.Tree) *DisplayList {
 				Value:     box.Text,
 				InputType: box.InputType,
 				Multiline: box.Multiline,
+				Disabled:  box.Disabled,
+				ReadOnly:  box.ReadOnly,
 				X:         box.X,
 				Y:         box.Y,
 				Top:       top,
@@ -230,6 +236,7 @@ func Build(tree *layout.Tree) *DisplayList {
 				NodeID: box.NodeID, Options: append([]forms.Option(nil), box.Options...), Selected: box.Selected, Label: box.Text,
 				X: box.X, Y: box.Y, Top: top, Width: box.Width, Height: box.Height,
 				Color: box.Color, Opacity: box.Opacity, Clip: cloneLayoutRect(box.Clip),
+				Disabled: box.Disabled,
 			})
 			previousBottom = box.Y + box.Height
 			continue
@@ -239,6 +246,7 @@ func Build(tree *layout.Tree) *DisplayList {
 				NodeID: box.NodeID, InputType: box.InputType, Checked: box.Checked,
 				X: box.X, Y: box.Y, Top: top, Width: box.Width, Height: box.Height,
 				Color: box.Color, Opacity: box.Opacity, Clip: cloneLayoutRect(box.Clip),
+				Disabled: box.Disabled,
 			})
 			previousBottom = box.Y + box.Height
 			continue

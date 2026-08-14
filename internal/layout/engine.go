@@ -267,10 +267,7 @@ func (e *engine) addInput(node *dom.Node, style blockStyle, x, width, containing
 		usedHeight = resolved
 	}
 	usedHeight = constrainSize(usedHeight, style.minHeight, style.maxHeight, containingHeight, heightDefinite)
-	value, hasValue := node.Attribute("value")
-	if multiline && !hasValue {
-		value = node.TextContent()
-	}
+	value := forms.CurrentValue(node)
 	inputType, _ := forms.EditableTextControlType(node)
 	e.tree.Boxes = append(e.tree.Boxes, Box{
 		Order:       e.nextOrder(),
@@ -281,6 +278,8 @@ func (e *engine) addInput(node *dom.Node, style blockStyle, x, width, containing
 		Input:       true,
 		Multiline:   multiline,
 		InputType:   inputType,
+		Disabled:    forms.Disabled(node),
+		ReadOnly:    forms.ReadOnly(node),
 		X:           x,
 		Y:           e.y,
 		Width:       usedWidth,
@@ -324,7 +323,8 @@ func (e *engine) addCheckable(node *dom.Node, style blockStyle, x, width, contai
 	e.tree.Boxes = append(e.tree.Boxes, Box{
 		Order: e.nextOrder(), StackingID: e.stackingID, NodeID: node.ID, Tag: node.TagName,
 		Checkable: true, Checked: state.Checked, InputType: state.Kind,
-		X: x, Y: e.y, Width: max(usedWidth, float32(1)), Height: max(usedHeight, float32(1)), Color: style.color,
+		Disabled: forms.Disabled(node),
+		X:        x, Y: e.y, Width: max(usedWidth, float32(1)), Height: max(usedHeight, float32(1)), Color: style.color,
 		Clip: cloneRect(e.clip), Clips: cloneClipRegions(e.clips), Opacity: e.opacity * style.opacity,
 		Transform: stylemodel.IdentityMatrix(), Hidden: style.hidden,
 	})
@@ -354,7 +354,8 @@ func (e *engine) addSelect(node *dom.Node, style blockStyle, x, width, containin
 	e.tree.Boxes = append(e.tree.Boxes, Box{
 		Order: e.nextOrder(), StackingID: e.stackingID, NodeID: node.ID, Tag: node.TagName,
 		Text: label, Select: true, Options: options, Selected: selected,
-		X: x, Y: e.y, Width: usedWidth, Height: usedHeight, Color: style.color,
+		Disabled: forms.Disabled(node),
+		X:        x, Y: e.y, Width: usedWidth, Height: usedHeight, Color: style.color,
 		Clip: cloneRect(e.clip), Clips: cloneClipRegions(e.clips), Opacity: e.opacity * style.opacity,
 		Transform: stylemodel.IdentityMatrix(), Hidden: style.hidden,
 	})

@@ -9,6 +9,7 @@ import (
 
 	dommodel "github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/events"
+	"github.com/Grove-Computing/Growse/internal/forms"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 )
 
@@ -333,8 +334,8 @@ func main() {
 	if err := runtime.Start(context.Background()); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
-	if got, ok := input.Attribute("value"); !ok || got != "after" {
-		t.Fatalf("input value = (%q, %v), want (after, true)", got, ok)
+	if got := forms.CurrentValue(input); got != "after" {
+		t.Fatalf("input value = %q, want after", got)
 	}
 }
 

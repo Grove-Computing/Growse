@@ -127,7 +127,11 @@ func (navigator *stubNavigator) SetInputValue(nodeID dom.NodeID, value string) b
 	if navigator.page == nil || navigator.page.Document == nil {
 		return false
 	}
-	changed := navigator.page.Document.SetAttribute(nodeID, "value", value)
+	node, ok := navigator.page.Document.NodeByID(nodeID)
+	if !ok || forms.Disabled(node) || forms.ReadOnly(node) {
+		return false
+	}
+	changed := forms.SetCurrentValue(node, value)
 	if changed {
 		navigator.recomputeHoverStyles()
 	}
@@ -727,8 +731,8 @@ func TestTextInputWritesKeyboardEditsToDOM(t *testing.T) {
 	gtx.Reset()
 	ui.layoutDocument(gtx, page)
 
-	if got, ok := inputNode.Attribute("value"); !ok || got != "hello" {
-		t.Fatalf("DOM input value = (%q, %v), want (hello, true)", got, ok)
+	if got := forms.CurrentValue(inputNode); got != "hello" {
+		t.Fatalf("DOM input value = %q, want hello", got)
 	}
 	if got, want := editor.Text(), "hello"; got != want {
 		t.Fatalf("editor text = %q, want %q", got, want)
@@ -766,8 +770,8 @@ func TestTextareaEditorAcceptsNewlineAndWritesDOMValue(t *testing.T) {
 	gtx.Reset()
 	ui.layoutDocument(gtx, page)
 
-	if got, ok := textarea.Attribute("value"); !ok || got != "first\nsecond" {
-		t.Fatalf("textarea DOM value = (%q, %v)", got, ok)
+	if got := forms.CurrentValue(textarea); got != "first\nsecond" {
+		t.Fatalf("textarea DOM value = %q", got)
 	}
 	if editor.Text() != "first\nsecond" {
 		t.Fatalf("textarea editor text = %q", editor.Text())
@@ -791,6 +795,26 @@ func TestPasswordEditorMasksDisplayWithoutChangingValue(t *testing.T) {
 	}
 	if editor.Mask != '•' || editor.Text() != "secret" {
 		t.Fatalf("password mask=%q text=%q", editor.Mask, editor.Text())
+	}
+}
+
+func TestReadonlyAndDisabledEditorsRejectEditing(t *testing.T) {
+	document := dom.NewDocument()
+	readonly := document.CreateElement("input", map[string]string{"value": "fixed", "readonly": ""})
+	disabled := document.CreateElement("input", map[string]string{"value": "disabled", "disabled": ""})
+	if err := document.AppendChild(document.Root, readonly); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(document.Root, disabled); err != nil {
+		t.Fatal(err)
+	}
+	page := &browser.Page{Document: document, ComputedStyles: style.Compute(document, nil)}
+	ui := NewBrowserUI(&stubNavigator{page: page}, nil)
+	gtx := layout.Context{Ops: new(op.Ops), Constraints: layout.Exact(image.Pt(800, 600)), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}}
+
+	ui.layoutDocument(gtx, page)
+	if !ui.inputEditors[readonly.ID].ReadOnly || !ui.inputEditors[disabled.ID].ReadOnly {
+		t.Fatal("readonly or disabled editor remained editable")
 	}
 }
 
@@ -875,8 +899,8 @@ func TestSelectButtonDisplaysAndChangesSelectedOption(t *testing.T) {
 	button.Click()
 	gtx.Reset()
 	ui.layoutDocument(gtx, page)
-	if got, ok := selectNode.Attribute("value"); !ok || got != "two" {
-		t.Fatalf("selected value = (%q, %v), want (two, true)", got, ok)
+	if got := forms.CurrentValue(selectNode); got != "two" {
+		t.Fatalf("selected value = %q, want two", got)
 	}
 }
 
@@ -898,7 +922,7 @@ func TestCheckableButtonUsesSharedActivationPath(t *testing.T) {
 	button.Click()
 	gtx.Reset()
 	ui.layoutDocument(gtx, page)
-	if _, checked := checkbox.Attribute("checked"); !checked {
+	if !forms.CurrentChecked(checkbox) {
 		t.Fatal("checkbox was not activated")
 	}
 }
@@ -928,7 +952,7 @@ func TestCheckableButtonActivatesWithSpaceKey(t *testing.T) {
 	gtx.Reset()
 	ui.layoutDocument(gtx, page)
 
-	if _, checked := checkbox.Attribute("checked"); !checked {
+	if !forms.CurrentChecked(checkbox) {
 		t.Fatal("Space did not activate checkbox")
 	}
 }

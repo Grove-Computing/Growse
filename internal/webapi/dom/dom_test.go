@@ -353,6 +353,30 @@ func TestValueAPIIgnoresNonTextInput(t *testing.T) {
 	}
 }
 
+func TestFormResetRestoresDefaultValue(t *testing.T) {
+	document := dommodel.NewDocument()
+	form := document.CreateElement("form", map[string]string{"id": "profile"})
+	input := document.CreateElement("input", map[string]string{"id": "name", "value": "default"})
+	if err := document.AppendChild(document.Root, form); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(form, input); err != nil {
+		t.Fatal(err)
+	}
+	mutations := 0
+	api := New(document, events.NewDispatcher(), func() { mutations++ })
+	if !api.GetElementByID("name").SetValue("edited") {
+		t.Fatal("SetValue = false")
+	}
+	document.SetAttribute(input.ID, "value", "new-default")
+	if !api.GetElementByID("profile").Reset() {
+		t.Fatal("Reset = false")
+	}
+	if got := api.GetElementByID("name").Value(); got != "new-default" || mutations != 2 {
+		t.Fatalf("value=%q mutations=%d", got, mutations)
+	}
+}
+
 func TestOnClickRegistersHandler(t *testing.T) {
 	document := dommodel.NewDocument()
 	button := document.CreateElement("button", map[string]string{"id": "button"})

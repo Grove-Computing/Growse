@@ -90,13 +90,22 @@ func (b *Browser) DispatchClick(nodeID dom.NodeID, x, y float32) bool {
 		return false
 	}
 	clickHandled := page.Events.Dispatch(events.Event{Type: events.Click, Target: nodeID, X: x, Y: y})
+	labelHandled := false
+	if node, ok := page.Document.NodeByID(nodeID); ok {
+		if control := forms.LabeledControl(page.Document, node); control != nil && !forms.Disabled(control) {
+			b.UpdateFocus(control.ID)
+			if _, checkable := forms.CheckableState(control); checkable {
+				labelHandled = b.ActivateCheckable(control.ID)
+			}
+		}
+	}
 	submitHandled := false
 	if node, ok := page.Document.NodeByID(nodeID); ok && isSubmitButton(node) {
 		if form := nearestForm(node); form != nil {
 			submitHandled = page.Events.Dispatch(events.Event{Type: events.Submit, Target: form.ID})
 		}
 	}
-	return clickHandled || submitHandled
+	return clickHandled || submitHandled || labelHandled
 }
 
 // SetInputValue はユーザー入力をアクティブページの編集可能なText Controlへ反映する。
@@ -109,11 +118,11 @@ func (b *Browser) SetInputValue(nodeID dom.NodeID, value string) bool {
 		return false
 	}
 	node, ok := page.Document.NodeByID(nodeID)
-	if !ok || !isEditableTextControl(node) || !page.Document.IsConnected(node) {
+	if !ok || !isEditableTextControl(node) || !page.Document.IsConnected(node) || forms.Disabled(node) || forms.ReadOnly(node) {
 		b.mu.Unlock()
 		return false
 	}
-	changed := page.Document.SetAttribute(nodeID, "value", value)
+	changed := forms.SetCurrentValue(node, value)
 	if changed {
 		recomputePageStyles(page, b.currentTime())
 	}
@@ -220,6 +229,44 @@ func (b *Browser) SubmitForm(nodeID dom.NodeID) bool {
 		return false
 	}
 	return dispatcher.Dispatch(events.Event{Type: events.Submit, Target: form.ID})
+}
+
+// ResetForm restores a form's controls to their HTML attribute defaults.
+func (b *Browser) ResetForm(nodeID dom.NodeID) bool {
+	b.mu.Lock()
+	page := b.page
+	onMutation := b.onMutation
+	if page == nil || page.Document == nil {
+		b.mu.Unlock()
+		return false
+	}
+	node, ok := page.Document.NodeByID(nodeID)
+	if !ok || !page.Document.IsConnected(node) {
+		b.mu.Unlock()
+		return false
+	}
+	form := node
+	if form.TagName != "form" {
+		form = nearestForm(node)
+	}
+	if form == nil {
+		b.mu.Unlock()
+		return false
+	}
+	changed := forms.Reset(form)
+	if changed {
+		recomputePageStyles(page, b.currentTime())
+	}
+	dispatcher := page.Events
+	b.mu.Unlock()
+	if changed && onMutation != nil {
+		onMutation()
+	}
+	handled := false
+	if dispatcher != nil {
+		handled = dispatcher.Dispatch(events.Event{Type: events.Reset, Target: form.ID})
+	}
+	return changed || handled
 }
 
 // UpdateHover updates the active page's hovered element path.

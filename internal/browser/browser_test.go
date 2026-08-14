@@ -12,6 +12,7 @@ import (
 	"github.com/Grove-Computing/Growse/internal/css"
 	"github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/events"
+	"github.com/Grove-Computing/Growse/internal/forms"
 	"github.com/Grove-Computing/Growse/internal/network"
 	"github.com/Grove-Computing/Growse/internal/style"
 )
@@ -90,8 +91,8 @@ func TestSetInputValueUpdatesActiveTextInput(t *testing.T) {
 	if !browser.SetInputValue(input.ID, "hello") {
 		t.Fatal("SetInputValue() = false, want true")
 	}
-	if got, ok := input.Attribute("value"); !ok || got != "hello" {
-		t.Fatalf("input value = (%q, %v), want (hello, true)", got, ok)
+	if got := forms.CurrentValue(input); got != "hello" {
+		t.Fatalf("input value = %q, want hello", got)
 	}
 	if browser.SetInputValue(input.ID, "hello") {
 		t.Fatal("SetInputValue() = true for unchanged value")
@@ -119,8 +120,8 @@ func TestSetInputValueUpdatesTextareaWithNewlines(t *testing.T) {
 	if !browserState.SetInputValue(textarea.ID, "first\nsecond") {
 		t.Fatal("SetInputValue(textarea) = false, want true")
 	}
-	if got, ok := textarea.Attribute("value"); !ok || got != "first\nsecond" {
-		t.Fatalf("textarea value = (%q, %v)", got, ok)
+	if got := forms.CurrentValue(textarea); got != "first\nsecond" {
+		t.Fatalf("textarea value = %q", got)
 	}
 }
 
@@ -138,7 +139,7 @@ func TestSetInputValueUpdatesSupportedTextInputTypes(t *testing.T) {
 			if !browser.SetInputValue(input.ID, "edited") {
 				t.Fatalf("SetInputValue(%s) = false", inputType)
 			}
-			if value, _ := input.Attribute("value"); value != "edited" {
+			if value := forms.CurrentValue(input); value != "edited" {
 				t.Fatalf("value = %q", value)
 			}
 		})
@@ -825,8 +826,8 @@ func TestSetSelectValueChangesEnabledOptionAndDispatchesEvents(t *testing.T) {
 	if !browser.SetSelectValue(selectNode.ID, "two") {
 		t.Fatal("SetSelectValue returned false")
 	}
-	if got, ok := selectNode.Attribute("value"); !ok || got != "two" {
-		t.Fatalf("select value = (%q, %v)", got, ok)
+	if got := forms.CurrentValue(selectNode); got != "two" {
+		t.Fatalf("select value = %q", got)
 	}
 	if !reflect.DeepEqual(received, []events.Type{events.Input, events.Change}) {
 		t.Fatalf("events = %#v", received)
@@ -853,14 +854,44 @@ func TestActivateCheckableUpdatesRadioGroupAndDispatchesEvents(t *testing.T) {
 	if !browser.ActivateCheckable(second.ID) {
 		t.Fatal("ActivateCheckable returned false")
 	}
-	if _, checked := first.Attribute("checked"); checked {
+	if forms.CurrentChecked(first) {
 		t.Fatal("first radio remained checked")
 	}
-	if _, checked := second.Attribute("checked"); !checked {
+	if !forms.CurrentChecked(second) {
 		t.Fatal("second radio was not checked")
 	}
 	if !reflect.DeepEqual(received, []events.Type{events.Input, events.Change}) {
 		t.Fatalf("events = %#v", received)
+	}
+}
+
+func TestDisabledReadonlyLabelAndResetBehavior(t *testing.T) {
+	document := dom.NewDocument()
+	form := document.CreateElement("form", nil)
+	readonly := document.CreateElement("input", map[string]string{"id": "readonly", "value": "default", "readonly": ""})
+	disabled := document.CreateElement("input", map[string]string{"id": "disabled", "disabled": ""})
+	checkbox := document.CreateElement("input", map[string]string{"id": "accept", "type": "checkbox"})
+	label := document.CreateElement("label", map[string]string{"for": "accept"})
+	labelText := document.CreateText("Accept")
+	for _, edge := range [][2]*dom.Node{{document.Root, form}, {form, readonly}, {form, disabled}, {form, checkbox}, {form, label}, {label, labelText}} {
+		if err := document.AppendChild(edge[0], edge[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	page := &Page{Document: document, ComputedStyles: style.Compute(document, nil), Events: events.NewDispatcher()}
+	resetEvents := 0
+	page.Events.AddEventListener(form.ID, events.Reset, func(events.Event) { resetEvents++ })
+	browser := New(nil)
+	browser.SetPage(page)
+
+	if browser.SetInputValue(readonly.ID, "changed") || browser.SetInputValue(disabled.ID, "changed") {
+		t.Fatal("readonly or disabled input accepted editing")
+	}
+	if !browser.DispatchClick(labelText.ID, 10, 10) || !forms.CurrentChecked(checkbox) || page.FocusTarget != checkbox.ID {
+		t.Fatalf("label activation: checked=%v focus=%d", forms.CurrentChecked(checkbox), page.FocusTarget)
+	}
+	if !browser.ResetForm(form.ID) || forms.CurrentChecked(checkbox) || forms.CurrentValue(readonly) != "default" || resetEvents != 1 {
+		t.Fatalf("reset: checked=%v value=%q events=%d", forms.CurrentChecked(checkbox), forms.CurrentValue(readonly), resetEvents)
 	}
 }
 

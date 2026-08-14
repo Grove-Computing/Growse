@@ -56,7 +56,8 @@ func SelectedIndex(selectNode *dom.Node, options []Option) int {
 	if len(options) == 0 {
 		return -1
 	}
-	if current, exists := selectNode.Attribute("value"); exists {
+	if selectNode.ControlValueDirty {
+		current := selectNode.ControlValue
 		for index, option := range options {
 			if option.Value == current {
 				return index
@@ -79,12 +80,12 @@ func SetSelectedValue(document *dom.Document, nodeID dom.NodeID, value string) b
 		return false
 	}
 	selectNode, ok := document.NodeByID(nodeID)
-	if !ok || !document.IsConnected(selectNode) || selectNode.TagName != "select" {
+	if !ok || !document.IsConnected(selectNode) || selectNode.TagName != "select" || Disabled(selectNode) {
 		return false
 	}
 	for _, option := range SelectOptions(selectNode) {
 		if option.Value == value && !option.Disabled {
-			return document.SetAttribute(nodeID, "value", value)
+			return SetCurrentValue(selectNode, value)
 		}
 	}
 	return false
