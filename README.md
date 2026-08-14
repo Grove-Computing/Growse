@@ -31,6 +31,8 @@ Installerはcommandに加えて、OSごとのGUI Applicationも登録します�
 - macOS: `Growse.app`を`~/Applications`へ配置し、`growse` commandから同じApplication Bundleを起動します。
 - Windows: 専用Iconを配置し、ユーザーのStart Menu ProgramsへGrowse Shortcutを登録します。
 
+実行中は、リリース確認、環境判定、検証、インストールの進捗を段階ごとに表示します。対話端末ではColor表示になり、CIやFileへのRedirectでは自動的にColorを無効化します。明示的に切り替える場合は`GROWSE_COLOR=always|never`を、Colorを使わない一般的な設定には`NO_COLOR=1`を指定できます。
+
 ```sh
 wget -qO- https://github.com/Grove-Computing/Growse/releases/latest/download/install.sh | bash
 ```
