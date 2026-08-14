@@ -216,3 +216,34 @@ func TestSchedulerClampsDeeplyNestedTimers(t *testing.T) {
 		t.Fatalf("callbacks after second clamp = %d, want 7", callbackCount)
 	}
 }
+
+func TestDelayedIntervalSkipsMissedExecutions(t *testing.T) {
+	start := time.Unix(100, 0)
+	clock := &fakeClock{current: start}
+	callbackCount := 0
+	api := newAPI(context.Background(), clock, func(callback func()) bool {
+		callback()
+		return true
+	}, false)
+	t.Cleanup(api.Close)
+
+	intervalID, err := api.SetInterval(10*time.Millisecond, func() { callbackCount++ })
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock.current = start.Add(time.Second)
+	api.runDue(clock.Now())
+	if callbackCount != 1 {
+		t.Fatalf("delayed callback count = %d, want 1", callbackCount)
+	}
+	api.mu.Lock()
+	nextDeadline := api.timers[intervalID].deadline
+	api.mu.Unlock()
+	if want := clock.current.Add(10 * time.Millisecond); !nextDeadline.Equal(want) {
+		t.Fatalf("next deadline = %v, want %v", nextDeadline, want)
+	}
+	api.runDue(clock.Now())
+	if callbackCount != 1 {
+		t.Fatalf("missed intervals were delivered in a burst: %d", callbackCount)
+	}
+}
