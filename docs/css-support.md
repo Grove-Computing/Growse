@@ -1,6 +1,6 @@
 # CSS対応表
 
-この表はGrowse v0.4.0の実装を基準とする。「部分対応」は一般的な値を扱えるが、仕様全体を実装していない機能を表す。
+この表はGrowse v0.5.0の実装を基準とする。「部分対応」は一般的な値を扱えるが、仕様全体を実装していない機能を表す。
 
 ## SelectorとCascade
 
@@ -32,9 +32,9 @@
 
 | Property | 状態 | 制限 |
 |---|---|---|
-| `display` | 対応 | `none`、`inline`、`block`、`inline-block` |
+| `display` | 対応 | `none`、`inline`、`block`、`inline-block`、`flex`、`inline-flex` |
 | width/height、min/max、`box-sizing` | 対応 | Blockと主要Inline Block。Intrinsic Sizing Keywordは未対応 |
-| margin、padding | 部分対応 | 1〜4値とLonghand。percentage対応、`auto` marginは未対応 |
+| margin、padding | 部分対応 | 1〜4値とLonghand、percentage。`auto` marginはFlex itemのmain/cross axisで対応 |
 | border | 対応 | 各Shorthand/Longhandと`solid`、`dotted`、`dashed`、`double` |
 | `border-radius` | 対応 | 1〜4値、slash区切りの楕円角、percentage |
 | overflow | 部分対応 | `visible`、`hidden`、`auto`、`scroll`のclipとscroll extent。Scrollbar UIは未対応 |
@@ -46,11 +46,22 @@
 | `color` | 対応 | CSS Color Level 3の対応範囲 |
 | `text-decoration-line/color` | 対応 | underline、overline、line-through |
 | `opacity` | 対応 | 0〜1。要素Subtreeの実効値を描画へ反映 |
-| `visibility`、`font-family/style`、`text-align/transform` | 未対応 | v0.4.0ではDeclarationを描画へ反映しない |
-| `word-break`、`overflow-wrap`、letter/word spacing、`vertical-align` | 未対応 | v0.4.0ではDeclarationを描画へ反映しない |
+| `flex-direction`、`flex-wrap`、`flex-flow` | 対応 | horizontal writing modeのrow/column、reverse、wrap |
+| `flex-grow`、`flex-shrink`、`flex-basis`、`flex` | 対応 | Length、Percentage、`auto`、`content`。indefinite sizeのPercentageはauto相当 |
+| `justify-content` | 対応 | flex-start/end、center、space-between/around/evenly |
+| `align-items`、`align-self`、`align-content` | 対応 | stretch、flex-start/end、center、baseline、対応する分散値 |
+| `row-gap`、`column-gap`、`gap` | 対応 | LengthとPercentage。単一のrow/column gap |
+| `order` | 対応 | 視覚順とPaint順だけを変更し、DOM・focus順は維持 |
+| `aspect-ratio` | 部分対応 | Flex itemのdefiniteな片軸から他軸を転送。replaced element固有比率は未対応 |
+| `visibility`、`font-family/style`、`text-align/transform` | 未対応 | v0.5.0ではDeclarationを描画へ反映しない |
+| `word-break`、`overflow-wrap`、letter/word spacing、`vertical-align` | 未対応 | v0.5.0ではDeclarationを描画へ反映しない |
 
 ## LayoutとPaint
 
-Block Flow、隣接Blockのmargin collapsing、Inline Text Run、Atomic Inline Block、実フォント計測、line-height、baseline、折り返し、Overflow Clipを実装する。Flexbox、Grid、Float、Positioned Layout、Multi-column、Vertical Writing Mode、Animation、Transitionは未対応である。
+Block Flow、隣接Blockのmargin collapsing、Inline Text Run、Atomic Inline Block、実フォント計測、line-height、baseline、折り返し、Overflow Clipを実装する。
+
+Flexboxはhorizontal writing modeで、単一・複数line、grow/shrinkのfreeze、min/maxとautomatic minimum size、alignment、auto margin、gap、order、nested flex、inline-flex baselineを実装する。Text、Input、Button、Blockをitemとして扱い、最終geometryをPaint、Overflow、Scroll extent、Hit Testingへ共有する。Intrinsic contributionはTextと対応済みInputを中心とする。Vertical Writing Mode、absolute positioned flex child、Fragmentationは未対応である。
+
+Grid、Float、Positioned Layout、Multi-column、Animation、Transitionは未対応である。
 
 WPTから適応した回帰テストと出典は[Web Platform Tests由来テスト](wpt.md)に記録する。
