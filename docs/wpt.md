@@ -20,6 +20,9 @@ GrowseはWeb Platform Tests（WPT）をブラウザで直接実行せず、対�
 | `TestWPTComputedGridColumnPlacesItemOnSecondColumn` | `css/css-grid/computed-grid-column.html` | row 1 / column 2のcomputed placementと最終geometryを比較 | upstreamの複雑な`calc()`式は未対応のため、同じ計算結果となる整数値へ縮約 |
 | `TestWPTAbsoluteWithoutPositionedAncestorUsesInitialContainingBlock` | `css/CSS2/abspos/abspos-containing-block-initial-005b.xht` | positioned ancestorがないabsolute要素をviewport基準で配置し、数値geometryを比較 | upstreamのroot要素に対するreftestを通常要素のright/bottom解決へ縮約 |
 | `TestWPTTransformOriginZeroDiffersFromDefaultCenter` | `css/css-transforms/transform-origin-001.html` | 45度回転時の`0% 0%`と既定`50% 50%`の変換行列が異なることを比較 | mismatch画像比較を変換行列の比較へ変換 |
+| `TestWPTAnimationImportantWithTransitionCascade` | `css/css-animations/animation-important-with-transition.html` | Transition、Animation、`!important`が同時に存在するcomputed valueの優先順を比較 | Web Animations APIの型・列挙順はv0.7.0対象外 |
+| `TestWPTAnimationFillModeNoneRestoresUnderlyingColor` | `css/css-animations/animation-fill-mode-001-manual.html` | Animation終了後にFillなしでunderlying background colorへ戻ることを比較 | 5秒の目視試験をfake timestampのcomputed value判定へ変換 |
+| `TestWPTTransitionDurationShorthandUsesLastMatchingProperty` | `css/css-transitions/transition-duration-shorthand.html` | shorthand内で最後に一致する0秒のPropertyは即時反映され、別PropertyだけTransitionを開始することを比較 | Layout対象のwidth/heightをv0.7.0対応のopacity/colorへ置換 |
 
 Upstreamのファイル全体はコピーせず、assertionの意味と最小入力だけを移植する。ケースを追加または更新するときは、Revision、Source、適応内容、および意図的な差分をこの表へ記録する。
 
@@ -29,3 +32,9 @@ Upstreamのファイル全体はコピーせず、assertionの意味と最小入
 - Positioned Layoutはrelative、absolute、fixed、stickyと包含ブロックを選定対象とする。Anchor Positioningとtop layerはプロパティモデル自体が対象外のため移植しない。
 - Transforms Level 1は2D transformとtransform-originを選定対象とする。3D transform、perspective、preserve-3dはv0.6.0の明示的な対象外のため移植しない。
 - WPT harness、WebDriver、Font依存のassertionは直接実行せず、Growseの責務に対応するcomputed value、Layout geometry、Display List、Hit Testの決定的なassertionへ縮約する。
+
+## v0.7.0の選定範囲
+
+- CSS Transitions Level 2、CSS Animations Level 1、CSS Easing Functions Level 1から、v0.7.0が対応する構文、Timing、補間、Cascade、Lifecycleを選定対象とする。
+- Web Animations API、Animation Event、3D Transform、およびLayoutを変更するPropertyのAnimationは対象外とし、同じ仕様上のassertionをpaint-only Propertyとfake timestampへ縮約できる場合だけ移植する。
+- 追加時は固定Revisionに対象Sourceが存在することを確認し、Goテストの直前コメントと対応表の両方へSource pathを記録する。
