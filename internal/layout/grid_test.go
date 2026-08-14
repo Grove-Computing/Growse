@@ -188,3 +188,44 @@ func TestBuildGridPlacesNamedLinesSpansAndTemplateAreas(t *testing.T) {
 		t.Fatalf("area placement = hero %#v main %#v", heroRect.Rect, mainRect.Rect)
 	}
 }
+
+func TestBuildGridSparseAndDenseAutoPlacement(t *testing.T) {
+	build := func(t *testing.T, dense bool) (*Tree, []*dom.Node) {
+		t.Helper()
+		document := dom.NewDocument()
+		grid := document.CreateElement("div", map[string]string{"class": "grid"})
+		items := make([]*dom.Node, 3)
+		appendNodes(t, document, [2]*dom.Node{document.Root, grid})
+		for index := range items {
+			class := "item"
+			if index < 2 {
+				class += " wide"
+			}
+			items[index] = document.CreateElement("div", map[string]string{"class": class})
+			appendNodes(t, document, [2]*dom.Node{grid, items[index]})
+		}
+		flow := "row"
+		if dense {
+			flow += " dense"
+		}
+		stylesheet, err := css.Parse(strings.NewReader(`
+.grid { display:grid; width:300px; grid-template-columns:repeat(3, 100px); grid-auto-rows:20px; grid-auto-flow:` + flow + ` }
+.item { background-color:#ddd }
+.wide { grid-column:span 2 }
+`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return Build(document, stylemodel.Compute(document, stylesheet), 500), items
+	}
+	sparseTree, sparseItems := build(t, false)
+	sparseFirst, sparseSecond, sparseThird := decorationForNode(t, sparseTree, sparseItems[0].ID), decorationForNode(t, sparseTree, sparseItems[1].ID), decorationForNode(t, sparseTree, sparseItems[2].ID)
+	if sparseFirst.Width != 200 || sparseSecond.Width != 200 || sparseThird.Y != sparseSecond.Y || sparseThird.X != sparseSecond.X+200 {
+		t.Fatalf("sparse placement = first %#v second %#v third %#v", sparseFirst.Rect, sparseSecond.Rect, sparseThird.Rect)
+	}
+	denseTree, denseItems := build(t, true)
+	denseFirst, denseSecond, denseThird := decorationForNode(t, denseTree, denseItems[0].ID), decorationForNode(t, denseTree, denseItems[1].ID), decorationForNode(t, denseTree, denseItems[2].ID)
+	if denseThird.Y != denseFirst.Y || denseThird.X != denseFirst.X+200 || denseSecond.Y <= denseFirst.Y {
+		t.Fatalf("dense placement = first %#v second %#v third %#v", denseFirst.Rect, denseSecond.Rect, denseThird.Rect)
+	}
+}

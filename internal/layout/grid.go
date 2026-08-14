@@ -73,10 +73,23 @@ func (e *engine) addGridChildren(container *dom.Node, containerStyle blockStyle,
 		if item.colStart >= 0 && item.rowStart >= 0 {
 			continue
 		}
-		colSpan, rowSpan := max(item.colEnd-item.colStart, 1), max(item.rowEnd-item.rowStart, 1)
+		if containerStyle.gridAutoFlow.Dense {
+			cursor = 0
+		}
+		colSpan := placementSpan(item.style.gridColumn, item.colStart, item.colEnd)
+		rowSpan := placementSpan(item.style.gridRow, item.rowStart, item.rowEnd)
 		for {
-			row, column := cursor/columnCount, cursor%columnCount
+			row, column := autoPlacementCell(cursor, containerStyle.gridAutoFlow.Column, columnCount, max(rowCount, 1))
 			cursor++
+			if item.colStart >= 0 {
+				column = item.colStart
+			}
+			if item.rowStart >= 0 {
+				row = item.rowStart
+			}
+			if containerStyle.gridAutoFlow.Column && column+colSpan > columnCount {
+				columnCount = column + colSpan
+			}
 			if column+colSpan <= columnCount && gridCellsFree(occupied, row, row+rowSpan, column, column+colSpan) {
 				item.rowStart, item.rowEnd, item.colStart, item.colEnd = row, row+rowSpan, column, column+colSpan
 				occupyGridCells(occupied, item.rowStart, item.rowEnd, item.colStart, item.colEnd)
@@ -115,6 +128,26 @@ func (e *engine) addGridChildren(container *dom.Node, containerStyle blockStyle,
 		e.renderGridItem(item.node, item.style, itemX, itemY, itemWidth, itemHeight)
 	}
 	e.y = startY + trackOffset(rows, len(rows), rowGap)
+}
+
+func placementSpan(placement stylemodel.GridPlacement, start, end int) int {
+	if end > start && start >= 0 {
+		return end - start
+	}
+	if placement.Start.Span > 0 {
+		return placement.Start.Span
+	}
+	if placement.End.Span > 0 {
+		return placement.End.Span
+	}
+	return 1
+}
+
+func autoPlacementCell(cursor int, columnFlow bool, columnCount, rowCount int) (int, int) {
+	if columnFlow {
+		return cursor % rowCount, cursor / rowCount
+	}
+	return cursor / columnCount, cursor % columnCount
 }
 
 func resolveGridAxis(placement stylemodel.GridPlacement, named map[string][]int, explicitTracks int) (int, int) {

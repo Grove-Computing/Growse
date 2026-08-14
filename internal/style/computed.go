@@ -146,6 +146,12 @@ type GridArea struct {
 	RowStart, RowEnd, ColumnStart, ColumnEnd int
 }
 
+// GridAutoFlow selects the auto-placement major axis and optional backfilling.
+type GridAutoFlow struct {
+	Column bool
+	Dense  bool
+}
+
 // Edges contains resolved pixel values in CSS clockwise order.
 type Edges struct {
 	Top    float32
@@ -315,6 +321,7 @@ type ComputedStyle struct {
 	GridColumn          GridPlacement
 	GridRow             GridPlacement
 	GridAreaName        string
+	GridAutoFlow        GridAutoFlow
 	AspectRatio         float32
 	BoxSizing           BoxSizing
 	Width               SizeValue

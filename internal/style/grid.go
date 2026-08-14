@@ -17,12 +17,40 @@ func applyGridProperties(computed, parent ComputedStyle, winners map[string]winn
 	computed.GridTemplateAreas = resolveTemplateAreas(computed.GridTemplateAreas, parent.GridTemplateAreas, winners["grid-template-areas"], custom)
 	computed.GridColumn = resolveGridPlacement(computed.GridColumn, parent.GridColumn, winners, "grid-column", custom)
 	computed.GridRow = resolveGridPlacement(computed.GridRow, parent.GridRow, winners, "grid-row", custom)
+	computed.GridAutoFlow = resolveGridAutoFlow(computed.GridAutoFlow, parent.GridAutoFlow, winners["grid-auto-flow"], custom)
 	if candidate, ok := winners["grid-area"]; ok {
 		if value, valid := winnerValue(candidate, custom); valid && !strings.Contains(value, "/") && parseGlobalKeyword(value) == globalNone {
 			computed.GridAreaName = strings.TrimSpace(value)
 		}
 	}
 	return computed
+}
+
+func resolveGridAutoFlow(current, parent GridAutoFlow, candidate winner, custom map[string]string) GridAutoFlow {
+	value, ok := winnerValue(candidate, custom)
+	if !ok {
+		return current
+	}
+	switch parseGlobalKeyword(value) {
+	case globalInherit:
+		return parent
+	case globalInitial, globalUnset:
+		return GridAutoFlow{}
+	}
+	result := GridAutoFlow{}
+	for _, field := range strings.Fields(strings.ToLower(value)) {
+		switch field {
+		case "row":
+			result.Column = false
+		case "column":
+			result.Column = true
+		case "dense":
+			result.Dense = true
+		default:
+			return current
+		}
+	}
+	return result
 }
 
 func resolveTrackListWinner(current, parent []GridTrackSize, candidate winner, custom map[string]string, context LengthContext, allowNone bool) []GridTrackSize {

@@ -915,6 +915,20 @@ func TestComputeGridNamedLinesSpanAndAreas(t *testing.T) {
 	}
 }
 
+func TestComputeGridAutoFlowModes(t *testing.T) {
+	document := dom.NewDocument()
+	row := document.CreateElement("div", map[string]string{"style": "display:grid; grid-auto-flow:row"})
+	columnDense := document.CreateElement("div", map[string]string{"style": "display:grid; grid-auto-flow:column dense"})
+	appendNode(t, document, document.Root, row)
+	appendNode(t, document, document.Root, columnDense)
+	computed := Compute(document, nil)
+	rowStyle, _ := computed.For(row)
+	columnStyle, _ := computed.For(columnDense)
+	if rowStyle.GridAutoFlow.Column || rowStyle.GridAutoFlow.Dense || !columnStyle.GridAutoFlow.Column || !columnStyle.GridAutoFlow.Dense {
+		t.Fatalf("auto-flow modes = %#v / %#v", rowStyle.GridAutoFlow, columnStyle.GridAutoFlow)
+	}
+}
+
 func parseTestSelector(t *testing.T, value string) css.Selector {
 	t.Helper()
 	stylesheet, err := css.Parse(strings.NewReader(value + " { color: red }"))

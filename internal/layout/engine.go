@@ -66,6 +66,7 @@ type blockStyle struct {
 	gridColumn          stylemodel.GridPlacement
 	gridRow             stylemodel.GridPlacement
 	gridAreaName        string
+	gridAutoFlow        stylemodel.GridAutoFlow
 	marginAuto          stylemodel.AutoEdges
 	aspectRatio         float32
 }
@@ -870,6 +871,7 @@ func applyComputed(block blockStyle, computed stylemodel.ComputedStyle) blockSty
 	block.gridColumn = computed.GridColumn
 	block.gridRow = computed.GridRow
 	block.gridAreaName = computed.GridAreaName
+	block.gridAutoFlow = computed.GridAutoFlow
 	block.marginAuto, block.aspectRatio = computed.MarginAuto, computed.AspectRatio
 	return block
 }
