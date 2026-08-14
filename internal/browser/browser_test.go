@@ -124,6 +124,27 @@ func TestSetInputValueUpdatesTextareaWithNewlines(t *testing.T) {
 	}
 }
 
+func TestSetInputValueUpdatesSupportedTextInputTypes(t *testing.T) {
+	for _, inputType := range []string{"password", "email", "url", "number", "unknown-control"} {
+		t.Run(inputType, func(t *testing.T) {
+			document := dom.NewDocument()
+			input := document.CreateElement("input", map[string]string{"type": inputType})
+			if err := document.AppendChild(document.Root, input); err != nil {
+				t.Fatal(err)
+			}
+			page := &Page{Document: document, ComputedStyles: style.Compute(document, nil), Events: events.NewDispatcher()}
+			browser := New(nil)
+			browser.SetPage(page)
+			if !browser.SetInputValue(input.ID, "edited") {
+				t.Fatalf("SetInputValue(%s) = false", inputType)
+			}
+			if value, _ := input.Attribute("value"); value != "edited" {
+				t.Fatalf("value = %q", value)
+			}
+		})
+	}
+}
+
 func TestSetInputValueRejectsUnsupportedOrInactiveNode(t *testing.T) {
 	document := dom.NewDocument()
 	checkbox := document.CreateElement("input", map[string]string{"type": "checkbox"})

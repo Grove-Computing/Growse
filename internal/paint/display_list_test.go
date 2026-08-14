@@ -192,7 +192,7 @@ func TestBuildUsesExactLayoutDecorationGeometry(t *testing.T) {
 
 func TestBuildCreatesInputCommand(t *testing.T) {
 	tree := &layout.Tree{Width: 400, Height: 100, Boxes: []layout.Box{{
-		NodeID: 7, Tag: "input", Text: "hello", Input: true,
+		NodeID: 7, Tag: "input", Text: "hello", Input: true, InputType: "email",
 		X: 20, Y: 30, Width: 280, Height: 40,
 	}}}
 
@@ -201,7 +201,7 @@ func TestBuildCreatesInputCommand(t *testing.T) {
 		t.Fatalf("command count = %d, want %d", got, want)
 	}
 	input, ok := list.Commands[0].(DrawInput)
-	if !ok || input.NodeID != 7 || input.Value != "hello" || input.Width != 280 || input.Height != 40 {
+	if !ok || input.NodeID != 7 || input.Value != "hello" || input.InputType != "email" || input.Width != 280 || input.Height != 40 {
 		t.Fatalf("input command = %#v, want node 7 with value and geometry", list.Commands[0])
 	}
 }

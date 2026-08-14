@@ -774,6 +774,26 @@ func TestTextareaEditorAcceptsNewlineAndWritesDOMValue(t *testing.T) {
 	}
 }
 
+func TestPasswordEditorMasksDisplayWithoutChangingValue(t *testing.T) {
+	document := dom.NewDocument()
+	password := document.CreateElement("input", map[string]string{"type": "password", "value": "secret"})
+	if err := document.AppendChild(document.Root, password); err != nil {
+		t.Fatal(err)
+	}
+	page := &browser.Page{Document: document, ComputedStyles: style.Compute(document, nil)}
+	ui := NewBrowserUI(&stubNavigator{page: page}, nil)
+	gtx := layout.Context{Ops: new(op.Ops), Constraints: layout.Exact(image.Pt(800, 600)), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}}
+
+	ui.layoutDocument(gtx, page)
+	editor := ui.inputEditors[password.ID]
+	if editor == nil {
+		t.Fatal("password editor was not created")
+	}
+	if editor.Mask != '•' || editor.Text() != "secret" {
+		t.Fatalf("password mask=%q text=%q", editor.Mask, editor.Text())
+	}
+}
+
 func TestTextInputEnterDispatchesChangeAfterEdit(t *testing.T) {
 	document := dom.NewDocument()
 	form := document.CreateElement("form", map[string]string{"id": "search-form"})

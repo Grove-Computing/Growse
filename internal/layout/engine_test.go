@@ -448,6 +448,29 @@ func TestBuildCreatesTextInputBox(t *testing.T) {
 	}
 }
 
+func TestBuildCreatesEditableBoxesForSupportedAndUnknownTextTypes(t *testing.T) {
+	document := dom.NewDocument()
+	types := []string{"password", "email", "url", "number", "unknown-control"}
+	for _, inputType := range types {
+		input := document.CreateElement("input", map[string]string{"type": inputType, "value": inputType + "-value"})
+		appendNodes(t, document, [2]*dom.Node{document.Root, input})
+	}
+
+	boxes := Build(document, style.Compute(document, nil), 800).Boxes
+	if len(boxes) != len(types) {
+		t.Fatalf("boxes = %#v", boxes)
+	}
+	for index, box := range boxes {
+		wantType := types[index]
+		if wantType == "unknown-control" {
+			wantType = "text"
+		}
+		if !box.Input || box.InputType != wantType || box.Text != types[index]+"-value" {
+			t.Errorf("box %d = %#v", index, box)
+		}
+	}
+}
+
 func TestBuildIgnoresHiddenInputType(t *testing.T) {
 	document := dom.NewDocument()
 	input := document.CreateElement("input", map[string]string{"type": "hidden"})

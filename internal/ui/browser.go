@@ -1017,12 +1017,20 @@ func (ui *BrowserUI) layoutDrawInput(gtx layout.Context, command paintmodel.Draw
 			editor = new(widget.Editor)
 			editor.SingleLine = !command.Multiline
 			editor.Submit = !command.Multiline
+			if command.InputType == "password" {
+				editor.Mask = '•'
+			}
 			editor.SetText(command.Value)
 			ui.inputEditors[command.NodeID] = editor
 			ui.inputCommitted[command.NodeID] = command.Value
 		} else if editor.Text() != command.Value {
 			editor.SetText(command.Value)
 			ui.inputCommitted[command.NodeID] = command.Value
+		}
+		if command.InputType == "password" {
+			editor.Mask = '•'
+		} else {
+			editor.Mask = 0
 		}
 		for {
 			event, ok := editor.Update(gtx)

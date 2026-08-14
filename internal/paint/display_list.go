@@ -56,6 +56,7 @@ func (DrawText) paintCommand() {}
 type DrawInput struct {
 	NodeID    dom.NodeID
 	Value     string
+	InputType string
 	Multiline bool
 	X         float32
 	Y         float32
@@ -210,6 +211,7 @@ func Build(tree *layout.Tree) *DisplayList {
 			list.Commands = append(list.Commands, DrawInput{
 				NodeID:    box.NodeID,
 				Value:     box.Text,
+				InputType: box.InputType,
 				Multiline: box.Multiline,
 				X:         box.X,
 				Y:         box.Y,

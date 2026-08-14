@@ -721,17 +721,7 @@ func runtimeOrigin(sourceURL *url.URL) string {
 }
 
 func isEditableTextControl(node *dom.Node) bool {
-	if node == nil || node.Type != dom.NodeElement {
-		return false
-	}
-	if node.TagName == "textarea" {
-		return true
-	}
-	if node.TagName != "input" {
-		return false
-	}
-	typeValue, ok := node.Attribute("type")
-	return !ok || strings.EqualFold(strings.TrimSpace(typeValue), "text")
+	return forms.IsEditableTextControl(node)
 }
 
 func isTextInput(node *dom.Node) bool {

@@ -271,6 +271,7 @@ func (e *engine) addInput(node *dom.Node, style blockStyle, x, width, containing
 	if multiline && !hasValue {
 		value = node.TextContent()
 	}
+	inputType, _ := forms.EditableTextControlType(node)
 	e.tree.Boxes = append(e.tree.Boxes, Box{
 		Order:       e.nextOrder(),
 		StackingID:  e.stackingID,
@@ -279,6 +280,7 @@ func (e *engine) addInput(node *dom.Node, style blockStyle, x, width, containing
 		Text:        value,
 		Input:       true,
 		Multiline:   multiline,
+		InputType:   inputType,
 		X:           x,
 		Y:           e.y,
 		Width:       usedWidth,
@@ -296,17 +298,7 @@ func (e *engine) addInput(node *dom.Node, style blockStyle, x, width, containing
 }
 
 func isEditableTextControl(node *dom.Node) bool {
-	if node == nil || node.Type != dom.NodeElement {
-		return false
-	}
-	if node.TagName == "textarea" {
-		return true
-	}
-	if node.TagName != "input" {
-		return false
-	}
-	typeValue, ok := node.Attribute("type")
-	return !ok || strings.EqualFold(strings.TrimSpace(typeValue), "text")
+	return forms.IsEditableTextControl(node)
 }
 
 func isSelectControl(node *dom.Node) bool {
