@@ -606,11 +606,19 @@ func translateFlexGeometry(tree *Tree, boxStart, decorationStart int, x, y float
 			tree.Boxes[index].Runs[runIndex].Baseline += y
 		}
 		tree.Boxes[index].Clip = translateClip(tree.Boxes[index].Clip)
+		for clipIndex := range tree.Boxes[index].Clips {
+			tree.Boxes[index].Clips[clipIndex].X += x
+			tree.Boxes[index].Clips[clipIndex].Y += y
+		}
 	}
 	for index := decorationStart; index < len(tree.Decorations); index++ {
 		tree.Decorations[index].X += x
 		tree.Decorations[index].Y += y
 		tree.Decorations[index].Clip = translateClip(tree.Decorations[index].Clip)
+		for clipIndex := range tree.Decorations[index].Clips {
+			tree.Decorations[index].Clips[clipIndex].X += x
+			tree.Decorations[index].Clips[clipIndex].Y += y
+		}
 	}
 }
 

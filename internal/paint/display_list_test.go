@@ -159,6 +159,23 @@ func TestBuildPreservesTransformMatrix(t *testing.T) {
 	}
 }
 
+func TestBuildPreservesNestedClipsAndCompositingLayers(t *testing.T) {
+	clips := []layout.ClipRegion{{Rect: layout.Rect{Width: 100, Height: 100}, Radius: layout.BorderRadii{TopLeft: layout.CornerRadius{X: 20, Y: 20}}}, {Rect: layout.Rect{Width: 80, Height: 80}, Radius: layout.BorderRadii{TopLeft: layout.CornerRadius{X: 10, Y: 10}}}}
+	tree := &layout.Tree{
+		StackingContexts: []layout.StackingContext{{Parent: -1}, {Parent: 0, NodeID: 7, Opacity: .5, Offscreen: true}},
+		Decorations:      []layout.Decoration{{Clips: clips}},
+	}
+	list := Build(tree)
+	command := list.Commands[0].(DrawBox)
+	if len(command.Clips) != 2 || len(list.CompositingLayers) != 2 || !list.CompositingLayers[1].Offscreen {
+		t.Fatalf("clip/layer display data = %#v / %#v", command.Clips, list.CompositingLayers)
+	}
+	tree.Decorations[0].Clips[0].Width = 1
+	if command.Clips[0].Width != 100 {
+		t.Fatal("display list shares clip regions")
+	}
+}
+
 func TestBuildUsesExactLayoutDecorationGeometry(t *testing.T) {
 	tree := &layout.Tree{Decorations: []layout.Decoration{{
 		NodeID: 12, Rect: layout.Rect{X: 14, Y: 25, Width: 120, Height: 60},

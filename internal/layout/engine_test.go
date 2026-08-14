@@ -541,6 +541,38 @@ func TestBuildAppliesTransformOriginToDisplayGeometry(t *testing.T) {
 	}
 }
 
+func TestBuildCarriesNestedRoundedClipsAndOpacityLayer(t *testing.T) {
+	document := dom.NewDocument()
+	outer := document.CreateElement("div", map[string]string{"class": "outer"})
+	inner := document.CreateElement("div", map[string]string{"class": "inner"})
+	group := document.CreateElement("div", map[string]string{"class": "group"})
+	child := document.CreateElement("div", map[string]string{"class": "child"})
+	appendNodes(t, document, [2]*dom.Node{document.Root, outer}, [2]*dom.Node{outer, inner}, [2]*dom.Node{inner, group}, [2]*dom.Node{group, child})
+	stylesheet, err := css.Parse(strings.NewReader(`
+.outer { width:100px; height:100px; overflow:hidden; border-radius:20px; background-color:#eee }
+.inner { width:80px; height:80px; overflow:hidden; border-radius:10px; background-color:#ddd }
+.group { opacity:.5 }
+.child { width:120px; height:40px; background-color:#ccc }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, style.Compute(document, stylesheet), 300)
+	childDecoration := decorationForNode(t, tree, child.ID)
+	if len(childDecoration.Clips) != 2 || childDecoration.Clips[0].Radius.TopLeft.X != 20 || childDecoration.Clips[1].Radius.TopLeft.X != 10 {
+		t.Fatalf("nested rounded clips = %#v", childDecoration.Clips)
+	}
+	foundLayer := false
+	for _, context := range tree.StackingContexts {
+		if context.NodeID == group.ID && context.Offscreen && context.Opacity == .5 {
+			foundLayer = true
+		}
+	}
+	if !foundLayer {
+		t.Fatalf("opacity compositing contexts = %#v", tree.StackingContexts)
+	}
+}
+
 func appendNodes(t *testing.T, document *dom.Document, edges ...[2]*dom.Node) {
 	t.Helper()
 	for _, edge := range edges {

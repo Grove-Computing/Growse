@@ -157,6 +157,7 @@ type engine struct {
 	computed                      stylemodel.Map
 	y                             float32
 	clip                          *Rect
+	clips                         []ClipRegion
 	order                         int
 	opacity                       float32
 	viewportWidth, viewportHeight float32
@@ -244,6 +245,7 @@ func (e *engine) addInput(node *dom.Node, style blockStyle, x, width, containing
 		Height:      usedHeight,
 		Color:       style.color,
 		Clip:        cloneRect(e.clip),
+		Clips:       cloneClipRegions(e.clips),
 		Opacity:     e.opacity * style.opacity,
 		TextShadows: append([]stylemodel.Shadow(nil), style.textShadows...),
 		Transform:   stylemodel.IdentityMatrix(),
@@ -264,7 +266,7 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 	previousStackingID := e.stackingID
 	if style.opacity < 1 || len(style.transform) != 0 || style.layoutPosition != stylemodel.PositionStatic && !style.zIndexAuto {
 		e.stackingID = len(e.tree.StackingContexts)
-		e.tree.StackingContexts = append(e.tree.StackingContexts, StackingContext{Parent: previousStackingID, NodeID: node.ID, ZIndex: style.zIndex, Order: e.order})
+		e.tree.StackingContexts = append(e.tree.StackingContexts, StackingContext{Parent: previousStackingID, NodeID: node.ID, ZIndex: style.zIndex, Order: e.order, Opacity: style.opacity, Offscreen: style.opacity < 1})
 	}
 	previousOpacity := e.opacity
 	e.opacity *= style.opacity
@@ -312,6 +314,7 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 			Rect:       Rect{X: x, Y: boxTop, Width: outerWidth},
 			Background: style.background, Image: cloneBackgroundImage(style.image), Layers: cloneBackgroundLayers(style.backgroundLayers),
 			Repeat: style.repeat, Position: style.position, Size: style.backgroundSize, Clip: cloneRect(e.clip),
+			Clips:  cloneClipRegions(e.clips),
 			Border: style.border, Opacity: e.opacity, BoxShadows: append([]stylemodel.Shadow(nil), style.boxShadows...),
 			Outline: style.outline, OutlineOffset: style.outlineOffset,
 			Transform: stylemodel.IdentityMatrix(),
@@ -328,6 +331,7 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 		}
 	}
 	previousClip := e.clip
+	previousClips := e.clips
 	previousPositionCB := e.positionCB
 	if style.layoutPosition != stylemodel.PositionStatic {
 		cbHeight := childContainingHeight
@@ -345,6 +349,8 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 			X: x + style.border.Left.Width, Y: boxTop + style.border.Top.Width,
 			Width: outerWidth - horizontalBorder, Height: clipHeight,
 		})
+		clipRect := *e.clip
+		e.clips = append(cloneClipRegions(previousClips), ClipRegion{Rect: clipRect, Radius: resolveBorderRadii(style.radius, clipRect.Width, clipRect.Height)})
 	}
 
 	var positionedChildren []*dom.Node
@@ -402,6 +408,7 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 		flushInline()
 	}
 	e.clip = previousClip
+	e.clips = previousClips
 
 	contentHeight := e.y - contentTop
 	sizingHeight := contentHeight
@@ -651,7 +658,7 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 			TextShadows: append([]stylemodel.Shadow(nil), container.textShadows...),
 			Transform:   stylemodel.IdentityMatrix(),
 			Runs:        append([]TextRun(nil), lineRuns...),
-			Baseline:    e.y + lineAscent, Clip: cloneRect(e.clip),
+			Baseline:    e.y + lineAscent, Clip: cloneRect(e.clip), Clips: cloneClipRegions(e.clips),
 		})
 		for _, placement := range flexPlacements {
 			placementX, placementY := x+placement.widthOffset, e.y+lineAscent-placement.baseline
@@ -875,6 +882,10 @@ func cloneRect(source *Rect) *Rect {
 	}
 	copy := *source
 	return &copy
+}
+
+func cloneClipRegions(source []ClipRegion) []ClipRegion {
+	return append([]ClipRegion(nil), source...)
 }
 
 func cloneBackgroundImage(source stylemodel.BackgroundImage) stylemodel.BackgroundImage {

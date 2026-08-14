@@ -9,12 +9,13 @@ import (
 
 // DisplayList is an ordered collection of page painting commands.
 type DisplayList struct {
-	Width        float32
-	Height       float32
-	ScrollWidth  float32
-	ScrollHeight float32
-	Background   uint32
-	Commands     []Command
+	Width             float32
+	Height            float32
+	ScrollWidth       float32
+	ScrollHeight      float32
+	Background        uint32
+	Commands          []Command
+	CompositingLayers []layout.StackingContext
 }
 
 // Command is implemented by every display-list operation.
@@ -33,6 +34,7 @@ type DrawText struct {
 	Height   float32
 	Baseline float32
 	Clip     *layout.Rect
+	Clips    []layout.ClipRegion
 
 	FontSize        float32
 	Bold            bool
@@ -83,6 +85,7 @@ type DrawBox struct {
 	Radius        layout.BorderRadii
 	Opacity       float32
 	Clip          *layout.Rect
+	Clips         []layout.ClipRegion
 	BoxShadows    []stylemodel.Shadow
 	Outline       stylemodel.BorderSide
 	OutlineOffset float32
@@ -118,6 +121,7 @@ func Build(tree *layout.Tree) *DisplayList {
 	list := &DisplayList{
 		Width: tree.Width, Height: tree.Height, ScrollWidth: tree.ScrollWidth,
 		ScrollHeight: tree.ScrollHeight, Background: tree.Background,
+		CompositingLayers: append([]layout.StackingContext(nil), tree.StackingContexts...),
 	}
 	type orderedItem struct {
 		order      int
@@ -148,6 +152,7 @@ func Build(tree *layout.Tree) *DisplayList {
 				Border: decoration.Border, Radius: decoration.Radius, Opacity: decoration.Opacity,
 				BoxShadows: append([]stylemodel.Shadow(nil), decoration.BoxShadows...), Outline: decoration.Outline, OutlineOffset: decoration.OutlineOffset,
 				Transform: decoration.Transform,
+				Clips:     cloneClipRegions(decoration.Clips),
 			})
 			previousBottom += top
 			continue
@@ -189,6 +194,7 @@ func Build(tree *layout.Tree) *DisplayList {
 			Clip:        cloneLayoutRect(box.Clip),
 			TextShadows: append([]stylemodel.Shadow(nil), box.TextShadows...),
 			Transform:   box.Transform,
+			Clips:       cloneClipRegions(box.Clips),
 		}
 		command.Runs = make([]TextRun, 0, len(box.Runs))
 		for _, run := range box.Runs {
@@ -212,6 +218,10 @@ func cloneLayoutRect(source *layout.Rect) *layout.Rect {
 	}
 	copy := *source
 	return &copy
+}
+
+func cloneClipRegions(source []layout.ClipRegion) []layout.ClipRegion {
+	return append([]layout.ClipRegion(nil), source...)
 }
 
 func cloneBackgroundImage(source stylemodel.BackgroundImage) stylemodel.BackgroundImage {

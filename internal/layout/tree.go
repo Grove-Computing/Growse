@@ -22,10 +22,18 @@ type Tree struct {
 
 // StackingContext records atomic paint-order ownership.
 type StackingContext struct {
-	Parent int
-	NodeID dom.NodeID
-	ZIndex int
-	Order  int
+	Parent    int
+	NodeID    dom.NodeID
+	ZIndex    int
+	Order     int
+	Opacity   float32
+	Offscreen bool
+}
+
+// ClipRegion is one nested rectangular or rounded clipping boundary.
+type ClipRegion struct {
+	Rect
+	Radius BorderRadii
 }
 
 // PaintEntry references one visual in final forward paint order.
@@ -92,6 +100,7 @@ type Decoration struct {
 	Radius        BorderRadii
 	Opacity       float32
 	Clip          *Rect
+	Clips         []ClipRegion
 	BoxShadows    []stylemodel.Shadow
 	Outline       stylemodel.BorderSide
 	OutlineOffset float32
@@ -126,6 +135,7 @@ type Box struct {
 	Height   float32
 	Baseline float32
 	Clip     *Rect
+	Clips    []ClipRegion
 	Opacity  float32
 
 	FontSize        float32

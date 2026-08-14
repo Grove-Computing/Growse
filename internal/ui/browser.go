@@ -625,6 +625,9 @@ func layoutDrawBox(gtx layout.Context, command paintmodel.DrawBox, backgroundIma
 		if command.Clip != nil {
 			defer commandClip(gtx, command.Clip, command.X, command.Y).Push(gtx.Ops).Pop()
 		}
+		for _, region := range command.Clips {
+			defer commandRoundedClip(gtx, region, command.X, command.Y).Push(gtx.Ops).Pop()
+		}
 		width := min(gtx.Dp(unit.Dp(command.Width)), gtx.Constraints.Max.X)
 		height := min(gtx.Dp(unit.Dp(command.Height)), gtx.Constraints.Max.Y)
 		bounds := clip.Rect{Max: image.Pt(width, height)}
@@ -1022,6 +1025,9 @@ func (ui *BrowserUI) layoutDrawText(gtx layout.Context, command paintmodel.DrawT
 		if command.Clip != nil {
 			defer commandClip(gtx, command.Clip, command.X, command.Y).Push(gtx.Ops).Pop()
 		}
+		for _, region := range command.Clips {
+			defer commandRoundedClip(gtx, region, command.X, command.Y).Push(gtx.Ops).Pop()
+		}
 		height := gtx.Dp(unit.Dp(command.Height))
 		if height < 1 {
 			height = 1
@@ -1067,6 +1073,15 @@ func commandClip(gtx layout.Context, rectangle *layoutengine.Rect, originX, orig
 			gtx.Dp(unit.Dp(rectangle.Y+rectangle.Height-originY)),
 		),
 	}
+}
+
+func commandRoundedClip(gtx layout.Context, region layoutengine.ClipRegion, originX, originY float32) clip.Op {
+	left := gtx.Dp(unit.Dp(region.X - originX))
+	top := gtx.Dp(unit.Dp(region.Y - originY))
+	right := gtx.Dp(unit.Dp(region.X + region.Width - originX))
+	bottom := gtx.Dp(unit.Dp(region.Y + region.Height - originY))
+	radius := func(corner layoutengine.CornerRadius) int { return gtx.Dp(unit.Dp(max(corner.X, corner.Y))) }
+	return clip.RRect{Rect: image.Rect(left, top, right, bottom), NW: radius(region.Radius.TopLeft), NE: radius(region.Radius.TopRight), SE: radius(region.Radius.BottomRight), SW: radius(region.Radius.BottomLeft)}.Op(gtx.Ops)
 }
 
 func (ui *BrowserUI) layoutTextRun(gtx layout.Context, run paintmodel.TextRun, height int) layout.Dimensions {
