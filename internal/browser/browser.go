@@ -803,7 +803,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 		ScriptErrors:     scriptErrors,
 	}
 	page.Animations.Reconcile(computedStyles, b.currentTime())
-	pageRuntime := startRuntime(ctx, runtimeFactory, page, onMutation, b.currentTime)
+	pageRuntime := startRuntime(ctx, runtimeFactory, page, client, onMutation, b.currentTime)
 	if err := ctx.Err(); err != nil {
 		page.Animations.Clear()
 		page.Transitions.Clear()
@@ -849,7 +849,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	return page, nil
 }
 
-func startRuntime(ctx context.Context, factory runtimemodel.Factory, page *Page, onMutation func(), now func() time.Time) runtimemodel.Runtime {
+func startRuntime(ctx context.Context, factory runtimemodel.Factory, page *Page, client ResourceLoader, onMutation func(), now func() time.Time) runtimemodel.Runtime {
 	if factory == nil || page == nil || len(page.Scripts) == 0 {
 		return nil
 	}
@@ -888,6 +888,9 @@ func startRuntime(ctx context.Context, factory runtimemodel.Factory, page *Page,
 				onMutation()
 			}
 		},
+	}
+	if loader, ok := client.(requestLoader); ok {
+		environment.Fetch = loader.Do
 	}
 	if err := pageRuntime.Load(ctx, page.Scripts, environment); err != nil {
 		page.RuntimeError = fmt.Sprintf("load Go runtime: %v", err)

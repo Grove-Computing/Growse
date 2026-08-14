@@ -3,13 +3,17 @@ package yaegi
 import (
 	"context"
 	"io"
+	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	dommodel "github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/events"
 	"github.com/Grove-Computing/Growse/internal/forms"
+	"github.com/Grove-Computing/Growse/internal/network"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 )
 
@@ -79,6 +83,215 @@ func main() { console.Log("Hello from Go", 42) }`}}
 	if got, want := messages[0], "[WebGo] Hello from Go42"; got != want {
 		t.Fatalf("console message = %q, want %q", got, want)
 	}
+}
+
+func TestRuntimeFetchSendsMethodRelativeURLHeadersAndTextBody(t *testing.T) {
+	runtime := New()
+	var captured *network.Request
+	document := dommodel.NewDocument()
+	result := document.CreateElement("p", map[string]string{"id": "result"})
+	if err := document.AppendChild(document.Root, result); err != nil {
+		t.Fatal(err)
+	}
+	mutated := make(chan struct{}, 1)
+	scripts := []runtimemodel.Script{{Source: `package main
+import "growse/fetch"
+import "growse/dom"
+var Status int
+var Failure string
+func main() {
+	fetch.Fetch(fetch.Request{
+		Method: "PATCH",
+		URL: "/items/7",
+		Header: fetch.Header{"X-Test": []string{"one", "two"}},
+		Text: "updated",
+	}, func(response fetch.Response) {
+		Status = response.Status
+		dom.GetElementByID("result").SetText("fetched")
+	}, func(message string) {
+		Failure = message
+	})
+}`}}
+	baseURL, err := url.Parse("https://example.test/app/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	environment := runtimemodel.Environment{
+		BaseURL: baseURL, Document: document, Events: events.NewDispatcher(),
+		OnMutation: func() { mutated <- struct{}{} },
+		Fetch: func(_ context.Context, request *network.Request) (*network.Response, error) {
+			captured = request
+			return &network.Response{StatusCode: http.StatusNoContent}, nil
+		},
+	}
+
+	if err := runtime.Load(context.Background(), scripts, environment); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	select {
+	case <-mutated:
+	case <-time.After(time.Second):
+		t.Fatal("Fetch callback was not delivered through the page queue")
+	}
+	if captured == nil {
+		t.Fatal("WebGo Fetch did not send a request")
+	}
+	if got, want := captured.Method, http.MethodPatch; got != want {
+		t.Fatalf("method = %q, want %q", got, want)
+	}
+	if got, want := captured.URL.String(), "https://example.test/items/7"; got != want {
+		t.Fatalf("URL = %q, want %q", got, want)
+	}
+	if got, want := captured.Header.Values("X-Test"), []string{"one", "two"}; !equalStrings(got, want) {
+		t.Fatalf("X-Test = %v, want %v", got, want)
+	}
+	if got, want := string(captured.Body), "updated"; got != want {
+		t.Fatalf("body = %q, want %q", got, want)
+	}
+	packageSymbols := runtime.interpreter.Symbols("page")["page"]
+	if got := int(packageSymbols["Status"].Int()); got != http.StatusNoContent {
+		t.Fatalf("Status = %d, want %d", got, http.StatusNoContent)
+	}
+	if got := packageSymbols["Failure"].String(); got != "" {
+		t.Fatalf("Failure = %q, want empty", got)
+	}
+	if got, want := result.TextContent(), "fetched"; got != want {
+		t.Fatalf("result text = %q, want %q", got, want)
+	}
+	if err := runtime.Stop(); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+}
+
+func TestRuntimeSerializesPageCallbacksInQueueOrder(t *testing.T) {
+	runtime := New()
+	scripts := []runtimemodel.Script{{Source: "package main\nfunc main() {}"}}
+	if err := runtime.Load(context.Background(), scripts, runtimemodel.Environment{}); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	secondStarted := make(chan struct{})
+	if !runtime.enqueueCallback(func() {
+		close(firstStarted)
+		<-releaseFirst
+	}) || !runtime.enqueueCallback(func() { close(secondStarted) }) {
+		t.Fatal("enqueueCallback() rejected an active page callback")
+	}
+	<-firstStarted
+	select {
+	case <-secondStarted:
+		t.Fatal("second callback ran concurrently with the first callback")
+	default:
+	}
+	close(releaseFirst)
+	select {
+	case <-secondStarted:
+	case <-time.After(time.Second):
+		t.Fatal("second callback was not delivered after the first callback")
+	}
+	if err := runtime.Stop(); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+}
+
+func TestRuntimeStopCancelsInFlightFetch(t *testing.T) {
+	runtime := New()
+	requestStarted := make(chan struct{})
+	requestCanceled := make(chan struct{})
+	scripts := []runtimemodel.Script{{Source: `package main
+import "growse/fetch"
+func main() {
+	fetch.Fetch(fetch.Request{URL: "/slow"}, func(fetch.Response) {}, func(string) {})
+}`}}
+	baseURL, err := url.Parse("https://example.test/page")
+	if err != nil {
+		t.Fatal(err)
+	}
+	environment := runtimemodel.Environment{
+		BaseURL: baseURL,
+		Fetch: func(ctx context.Context, _ *network.Request) (*network.Response, error) {
+			close(requestStarted)
+			<-ctx.Done()
+			close(requestCanceled)
+			return nil, ctx.Err()
+		},
+	}
+	if err := runtime.Load(context.Background(), scripts, environment); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	select {
+	case <-requestStarted:
+	case <-time.After(time.Second):
+		t.Fatal("Fetch request did not start")
+	}
+	if err := runtime.Stop(); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+	select {
+	case <-requestCanceled:
+	case <-time.After(time.Second):
+		t.Fatal("in-flight Fetch did not observe Runtime cancellation")
+	}
+}
+
+func TestRuntimeStopDiscardsQueuedAndFutureCallbacks(t *testing.T) {
+	runtime := New()
+	scripts := []runtimemodel.Script{{Source: "package main\nfunc main() {}"}}
+	if err := runtime.Load(context.Background(), scripts, runtimemodel.Environment{}); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	staleCallback := make(chan struct{}, 1)
+	if !runtime.enqueueCallback(func() {
+		close(firstStarted)
+		<-releaseFirst
+	}) || !runtime.enqueueCallback(func() { staleCallback <- struct{}{} }) {
+		t.Fatal("failed to enqueue active page callbacks")
+	}
+	<-firstStarted
+	stopped := make(chan struct{})
+	go func() {
+		_ = runtime.Stop()
+		close(stopped)
+	}()
+	<-runtime.runtimeCtx.Done()
+	close(releaseFirst)
+	<-stopped
+	select {
+	case <-staleCallback:
+		t.Fatal("queued callback was delivered after Runtime cancellation")
+	default:
+	}
+	if runtime.enqueueCallback(func() { staleCallback <- struct{}{} }) {
+		t.Fatal("stopped Runtime accepted an old Page callback")
+	}
+}
+
+func equalStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func TestRuntimeExposesGrowseDOM(t *testing.T) {

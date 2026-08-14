@@ -3,6 +3,7 @@ package network
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -53,14 +54,19 @@ func TestClientDoSendsMethodHeadersAndBody(t *testing.T) {
 	}
 }
 
-func TestClientRejectsHTTPError(t *testing.T) {
-	server := httptest.NewServer(http.NotFoundHandler())
+func TestClientReturnsHTTPErrorStatusAsResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusNotFound)
+		_, _ = response.Write([]byte("missing"))
+	}))
 	defer server.Close()
 
-	_, err := NewClient().Get(context.Background(), mustParseURL(t, server.URL))
-	var statusError *StatusError
-	if !errors.As(err, &statusError) || statusError.Code != http.StatusNotFound {
-		t.Fatalf("Get() error = %v, want 404 StatusError", err)
+	response, err := NewClient().Get(context.Background(), mustParseURL(t, server.URL))
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if response.StatusCode != http.StatusNotFound || string(response.Body) != "missing" {
+		t.Fatalf("response = status:%d body:%q", response.StatusCode, response.Body)
 	}
 }
 
@@ -88,8 +94,97 @@ func TestClientHonorsContextCancellation(t *testing.T) {
 	defer cancel()
 
 	_, err := NewClient().Get(ctx, mustParseURL(t, server.URL))
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("Get() error = %v, want context deadline exceeded", err)
+	if !errors.Is(err, ErrTimeout) || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Get() error = %v, want ErrTimeout and context deadline exceeded", err)
+	}
+}
+
+func TestClientReportsRedirectLoopAndLimit(t *testing.T) {
+	t.Run("loop", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+			response.Header().Set("Location", "/loop")
+			response.WriteHeader(http.StatusFound)
+		}))
+		defer server.Close()
+		_, err := NewClientWithLimits(server.Client(), 1024).Get(context.Background(), mustParseURL(t, server.URL+"/loop"))
+		if !errors.Is(err, ErrRedirectLoop) {
+			t.Fatalf("Get() error = %v, want ErrRedirectLoop", err)
+		}
+	})
+
+	t.Run("limit", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+			step := 0
+			_, _ = fmt.Sscanf(strings.TrimPrefix(request.URL.Path, "/"), "%d", &step)
+			response.Header().Set("Location", fmt.Sprintf("/%d", step+1))
+			response.WriteHeader(http.StatusFound)
+		}))
+		defer server.Close()
+		_, err := NewClientWithLimits(server.Client(), 1024).Get(context.Background(), mustParseURL(t, server.URL+"/0"))
+		if !errors.Is(err, ErrRedirectLimit) {
+			t.Fatalf("Get() error = %v, want ErrRedirectLimit", err)
+		}
+	})
+}
+
+func TestClientReportsTruncatedResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.Header().Set("Content-Length", "10")
+		_, _ = response.Write([]byte("short"))
+	}))
+	defer server.Close()
+
+	_, err := NewClientWithLimits(server.Client(), 1024).Get(context.Background(), mustParseURL(t, server.URL))
+	if !errors.Is(err, ErrResponseTruncated) {
+		t.Fatalf("Get() error = %v, want ErrResponseTruncated", err)
+	}
+}
+
+func TestClientAppliesRedirectMethodAndBodyRules(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/final" {
+			body, _ := io.ReadAll(request.Body)
+			response.Header().Set("Content-Type", "text/plain")
+			_, _ = response.Write([]byte(request.Method + ":" + string(body)))
+			return
+		}
+		status := http.StatusFound
+		_, _ = fmt.Sscanf(request.URL.Query().Get("status"), "%d", &status)
+		response.Header().Set("Location", "./final")
+		response.WriteHeader(status)
+	}))
+	defer server.Close()
+
+	tests := []struct {
+		status int
+		method string
+		body   string
+		want   string
+	}{
+		{status: http.StatusMovedPermanently, method: http.MethodPost, body: "payload", want: "GET:"},
+		{status: http.StatusFound, method: http.MethodPost, body: "payload", want: "GET:"},
+		{status: http.StatusSeeOther, method: http.MethodPut, body: "payload", want: "GET:"},
+		{status: http.StatusSeeOther, method: http.MethodHead, body: "", want: ""},
+		{status: http.StatusTemporaryRedirect, method: http.MethodPatch, body: "payload", want: "PATCH:payload"},
+		{status: http.StatusPermanentRedirect, method: http.MethodPatch, body: "payload", want: "PATCH:payload"},
+	}
+	for _, test := range tests {
+		t.Run(fmt.Sprintf("%d_%s", test.status, test.method), func(t *testing.T) {
+			startURL := mustParseURL(t, fmt.Sprintf("%s/start?status=%d", server.URL, test.status))
+			response, err := NewClientWithLimits(server.Client(), 1024).Do(context.Background(), &Request{
+				Method: test.method, URL: startURL, Body: []byte(test.body),
+				Header: http.Header{"Content-Type": []string{"text/plain"}},
+			})
+			if err != nil {
+				t.Fatalf("Do() error = %v", err)
+			}
+			if got := string(response.Body); got != test.want {
+				t.Fatalf("final request = %q, want %q", got, test.want)
+			}
+			if response.URL.Path != "/final" || !response.Redirected {
+				t.Fatalf("final URL = %s redirected = %t", response.URL, response.Redirected)
+			}
+		})
 	}
 }
 

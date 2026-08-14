@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"time"
@@ -15,18 +16,28 @@ import (
 const (
 	defaultTimeout      = 15 * time.Second
 	defaultMaxBodyBytes = 4 << 20 // 4 MiB
+	maxRedirects        = 10
 )
 
 // ErrResponseTooLarge is returned when a response exceeds the configured
 // body-size limit.
-var ErrResponseTooLarge = errors.New("response body is too large")
+var (
+	ErrResponseTooLarge  = errors.New("response body is too large")
+	ErrResponseTruncated = errors.New("response body was truncated")
+	ErrRedirectLoop      = errors.New("redirect loop")
+	ErrRedirectLimit     = errors.New("redirect limit exceeded")
+	ErrTimeout           = errors.New("request timed out")
+)
 
 // Response contains the network metadata needed to construct a browser page.
 type Response struct {
 	URL         *url.URL
 	StatusCode  int
+	Status      string
+	Header      http.Header
 	ContentType string
 	Body        []byte
+	Redirected  bool
 }
 
 // Request contains the HTTP request data accepted by the network client.
@@ -35,16 +46,6 @@ type Request struct {
 	URL    *url.URL
 	Header http.Header
 	Body   []byte
-}
-
-// StatusError reports a non-successful HTTP response.
-type StatusError struct {
-	Code   int
-	Status string
-}
-
-func (e *StatusError) Error() string {
-	return fmt.Sprintf("unexpected HTTP status: %s", e.Status)
 }
 
 // Client is a size-limited HTTP resource loader.
@@ -56,7 +57,7 @@ type Client struct {
 // NewClient creates a client with production defaults.
 func NewClient() *Client {
 	return &Client{
-		httpClient:   &http.Client{Timeout: defaultTimeout},
+		httpClient:   configuredHTTPClient(&http.Client{Timeout: defaultTimeout}),
 		maxBodyBytes: defaultMaxBodyBytes,
 	}
 }
@@ -70,7 +71,52 @@ func NewClientWithLimits(httpClient *http.Client, maxBodyBytes int64) *Client {
 	if maxBodyBytes <= 0 {
 		maxBodyBytes = defaultMaxBodyBytes
 	}
-	return &Client{httpClient: httpClient, maxBodyBytes: maxBodyBytes}
+	return &Client{httpClient: configuredHTTPClient(httpClient), maxBodyBytes: maxBodyBytes}
+}
+
+func configuredHTTPClient(source *http.Client) *http.Client {
+	copy := *source
+	if copy.CheckRedirect == nil {
+		copy.CheckRedirect = applyRedirectPolicy
+	}
+	return &copy
+}
+
+func applyRedirectPolicy(request *http.Request, via []*http.Request) error {
+	if request == nil || request.Response == nil || len(via) == 0 {
+		return nil
+	}
+	for _, previous := range via {
+		if previous.URL != nil && request.URL != nil && previous.URL.String() == request.URL.String() {
+			return ErrRedirectLoop
+		}
+	}
+	if len(via) >= maxRedirects {
+		return ErrRedirectLimit
+	}
+	previous := via[len(via)-1]
+	switch request.Response.StatusCode {
+	case http.StatusMovedPermanently, http.StatusFound:
+		if previous.Method == http.MethodPost {
+			makeRedirectGET(request)
+		}
+	case http.StatusSeeOther:
+		if previous.Method != http.MethodHead {
+			makeRedirectGET(request)
+		}
+	case http.StatusTemporaryRedirect, http.StatusPermanentRedirect:
+		// net/http reconstructs the request body through GetBody for 307/308.
+	}
+	return nil
+}
+
+func makeRedirectGET(request *http.Request) {
+	request.Method = http.MethodGet
+	request.Body = nil
+	request.GetBody = nil
+	request.ContentLength = 0
+	request.Header.Del("Content-Length")
+	request.Header.Del("Content-Type")
 }
 
 // Get retrieves one HTTP(S) resource.
@@ -104,19 +150,19 @@ func (c *Client) Do(ctx context.Context, requestData *Request) (*Response, error
 
 	response, err := c.httpClient.Do(request)
 	if err != nil {
-		return nil, fmt.Errorf("send request: %w", err)
+		return nil, classifyRequestError(err)
 	}
 	defer response.Body.Close()
 
-	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return nil, &StatusError{Code: response.StatusCode, Status: response.Status}
-	}
 	if response.ContentLength > c.maxBodyBytes {
 		return nil, fmt.Errorf("%w: limit is %d bytes", ErrResponseTooLarge, c.maxBodyBytes)
 	}
 
 	body, err := io.ReadAll(io.LimitReader(response.Body, c.maxBodyBytes+1))
 	if err != nil {
+		if errors.Is(err, io.ErrUnexpectedEOF) {
+			return nil, fmt.Errorf("%w: %v", ErrResponseTruncated, err)
+		}
 		return nil, fmt.Errorf("read response body: %w", err)
 	}
 	if int64(len(body)) > c.maxBodyBytes {
@@ -131,9 +177,30 @@ func (c *Client) Do(ctx context.Context, requestData *Request) (*Response, error
 	return &Response{
 		URL:         cloneURL(finalURL),
 		StatusCode:  response.StatusCode,
+		Status:      http.StatusText(response.StatusCode),
+		Header:      response.Header.Clone(),
 		ContentType: response.Header.Get("Content-Type"),
 		Body:        body,
+		Redirected:  finalURL.String() != requestData.URL.String(),
 	}, nil
+}
+
+func classifyRequestError(err error) error {
+	switch {
+	case errors.Is(err, ErrRedirectLoop):
+		return fmt.Errorf("send request: %w", ErrRedirectLoop)
+	case errors.Is(err, ErrRedirectLimit):
+		return fmt.Errorf("send request: %w", ErrRedirectLimit)
+	case errors.Is(err, context.Canceled):
+		return fmt.Errorf("send request: %w", context.Canceled)
+	case errors.Is(err, context.DeadlineExceeded):
+		return fmt.Errorf("%w: %w", ErrTimeout, context.DeadlineExceeded)
+	}
+	var networkError net.Error
+	if errors.As(err, &networkError) && networkError.Timeout() {
+		return fmt.Errorf("%w: %v", ErrTimeout, err)
+	}
+	return fmt.Errorf("send request: %w", err)
 }
 
 func cloneURL(source *url.URL) *url.URL {

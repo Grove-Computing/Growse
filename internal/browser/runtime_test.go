@@ -140,6 +140,38 @@ func main() {}</script>`),
 	}
 }
 
+func TestNavigationAndReloadStopPreviousPageRuntime(t *testing.T) {
+	firstURL := mustParseURL(t, "http://localhost/first.html")
+	secondURL := mustParseURL(t, "http://localhost/second.html")
+	body := []byte(`<script type="text/go">package main
+func main() {}</script>`)
+	loader := &routeLoader{responses: map[string]*network.Response{
+		firstURL.String():  {URL: firstURL, StatusCode: 200, ContentType: "text/html", Body: body},
+		secondURL.String(): {URL: secondURL, StatusCode: 200, ContentType: "text/html", Body: body},
+	}}
+	var runtimes []*runtimeStub
+	browser := NewWithRuntimeFactory(loader, func() runtimemodel.Runtime {
+		runtime := &runtimeStub{}
+		runtimes = append(runtimes, runtime)
+		return runtime
+	})
+	if _, err := browser.Navigate(context.Background(), firstURL.String()); err != nil {
+		t.Fatalf("first Navigate() error = %v", err)
+	}
+	if _, err := browser.Navigate(context.Background(), secondURL.String()); err != nil {
+		t.Fatalf("second Navigate() error = %v", err)
+	}
+	if len(runtimes) != 2 || runtimes[0].stopCalls != 1 {
+		t.Fatalf("after navigation runtimes = %d first stops = %d", len(runtimes), runtimes[0].stopCalls)
+	}
+	if _, err := browser.Reload(context.Background()); err != nil {
+		t.Fatalf("Reload() error = %v", err)
+	}
+	if len(runtimes) != 3 || runtimes[1].stopCalls != 1 {
+		t.Fatalf("after reload runtimes = %d second stops = %d", len(runtimes), runtimes[1].stopCalls)
+	}
+}
+
 func TestDispatchClickUsesActivePageDispatcher(t *testing.T) {
 	browser := New(nil)
 	dispatcher := events.NewDispatcher()
