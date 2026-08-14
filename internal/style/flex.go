@@ -36,6 +36,9 @@ func resolveFlexDirectionWinner(current, parent FlexDirection, candidate winner,
 	}
 	if candidate.source == "flex-flow" {
 		value, ok = flexFlowComponent(value, true)
+		if !ok {
+			return current
+		}
 	}
 	if parsed, valid := parseFlexDirection(value); valid {
 		return parsed
@@ -56,6 +59,9 @@ func resolveFlexWrapWinner(current, parent FlexWrap, candidate winner, custom ma
 	}
 	if candidate.source == "flex-flow" {
 		value, ok = flexFlowComponent(value, false)
+		if !ok {
+			return current
+		}
 	}
 	if parsed, valid := parseFlexWrap(value); valid {
 		return parsed
