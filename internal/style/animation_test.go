@@ -178,6 +178,45 @@ func TestAnimationStackExecutesMultipleAnimationsOnOneElement(t *testing.T) {
 	}
 }
 
+func TestAnimationRegistryReconcilesComputedStyleChanges(t *testing.T) {
+	start := time.Unix(100, 0)
+	timing, _ := animationmodel.NewTiming(time.Second, 0, animationmodel.Linear{})
+	nodeID := dom.NodeID(7)
+	registry := NewAnimationRegistry()
+	registry.Reconcile(Map{nodeID: {Animations: []CSSAnimation{{
+		Name: "pulse", Timing: timing, Iterations: math.Inf(1), PlayState: AnimationRunning,
+	}}}}, start)
+
+	registry.Reconcile(Map{nodeID: {Animations: []CSSAnimation{{
+		Name: "pulse", Timing: timing, Iterations: math.Inf(1), PlayState: AnimationPaused,
+	}}}}, start.Add(250*time.Millisecond))
+	paused := registry.Sample(nodeID, start.Add(750*time.Millisecond))
+	if len(paused) != 1 || paused[0].Sample.Progress != 0.25 {
+		t.Fatalf("paused sample = %#v, want pulse at 0.25", paused)
+	}
+
+	registry.Reconcile(Map{nodeID: {Animations: []CSSAnimation{{
+		Name: "pulse", Timing: timing, Iterations: math.Inf(1), PlayState: AnimationRunning,
+	}}}}, start.Add(750*time.Millisecond))
+	resumed := registry.Sample(nodeID, start.Add(time.Second))
+	if len(resumed) != 1 || resumed[0].Sample.Progress != 0.5 {
+		t.Fatalf("resumed sample = %#v, want pulse at 0.5", resumed)
+	}
+
+	registry.Reconcile(Map{nodeID: {Animations: []CSSAnimation{{
+		Name: "spin", Timing: timing, Iterations: math.Inf(1), PlayState: AnimationRunning,
+	}}}}, start.Add(time.Second))
+	restarted := registry.Sample(nodeID, start.Add(1250*time.Millisecond))
+	if len(restarted) != 1 || restarted[0].Name != "spin" || restarted[0].Sample.Progress != 0.25 {
+		t.Fatalf("restarted sample = %#v, want spin at 0.25", restarted)
+	}
+
+	registry.Reconcile(Map{}, start.Add(1250*time.Millisecond))
+	if registry.Count(nodeID) != 0 {
+		t.Fatalf("removed element animation count = %d, want zero", registry.Count(nodeID))
+	}
+}
+
 func animationTestStyle(t *testing.T, declarations string) ComputedStyle {
 	t.Helper()
 	document := dom.NewDocument()

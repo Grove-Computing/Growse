@@ -24,6 +24,7 @@ type Page struct {
 	Events           *events.Dispatcher
 	Stylesheet       *css.Stylesheet
 	ComputedStyles   style.Map
+	Animations       *style.AnimationRegistry
 	BackgroundImages map[string]image.Image
 	BackgroundErrors []string
 	Scripts          []Script

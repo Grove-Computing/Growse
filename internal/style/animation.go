@@ -7,6 +7,7 @@ import (
 	"time"
 
 	animationmodel "github.com/Grove-Computing/Growse/internal/animation"
+	"github.com/Grove-Computing/Growse/internal/dom"
 )
 
 type animationLists struct {
@@ -50,6 +51,60 @@ type AnimationStack struct {
 	items []*RunningAnimation
 }
 
+// AnimationRegistry owns the running animation list for every styled element.
+// Reconcile is called after style recalculation so DOM and interaction changes
+// update animation definitions without restarting an unchanged animation.
+type AnimationRegistry struct {
+	stacks map[dom.NodeID]*AnimationStack
+}
+
+// NewAnimationRegistry creates an empty element animation registry.
+func NewAnimationRegistry() *AnimationRegistry {
+	return &AnimationRegistry{stacks: make(map[dom.NodeID]*AnimationStack)}
+}
+
+// Reconcile updates running animations from newly computed styles.
+func (registry *AnimationRegistry) Reconcile(styles Map, current time.Time) {
+	if registry == nil {
+		return
+	}
+	if registry.stacks == nil {
+		registry.stacks = make(map[dom.NodeID]*AnimationStack)
+	}
+	for nodeID := range registry.stacks {
+		if _, exists := styles[nodeID]; !exists {
+			delete(registry.stacks, nodeID)
+		}
+	}
+	for nodeID, computed := range styles {
+		stack := registry.stacks[nodeID]
+		if stack == nil {
+			stack = &AnimationStack{}
+			registry.stacks[nodeID] = stack
+		}
+		stack.reconcile(computed.Animations, current)
+		if stack.Len() == 0 {
+			delete(registry.stacks, nodeID)
+		}
+	}
+}
+
+// Sample evaluates the animations attached to one element.
+func (registry *AnimationRegistry) Sample(nodeID dom.NodeID, current time.Time) []SampledAnimation {
+	if registry == nil || registry.stacks[nodeID] == nil {
+		return nil
+	}
+	return registry.stacks[nodeID].Sample(current)
+}
+
+// Count reports the executable animation count for one element.
+func (registry *AnimationRegistry) Count(nodeID dom.NodeID) int {
+	if registry == nil || registry.stacks[nodeID] == nil {
+		return 0
+	}
+	return registry.stacks[nodeID].Len()
+}
+
 // NewAnimationStack starts every named animation on one shared timestamp.
 func NewAnimationStack(animations []CSSAnimation, start time.Time) *AnimationStack {
 	stack := &AnimationStack{}
@@ -75,6 +130,38 @@ func (stack *AnimationStack) Sample(current time.Time) []SampledAnimation {
 // Len reports the number of executable named animations.
 func (stack *AnimationStack) Len() int {
 	return len(stack.items)
+}
+
+func (stack *AnimationStack) reconcile(animations []CSSAnimation, current time.Time) {
+	next := make([]*RunningAnimation, 0, len(animations))
+	used := make([]bool, len(stack.items))
+	for _, animation := range animations {
+		if strings.EqualFold(animation.Name, "none") {
+			continue
+		}
+		matched := -1
+		for index := len(stack.items) - 1; index >= 0; index-- {
+			if !used[index] && strings.EqualFold(stack.items[index].Animation.Name, animation.Name) {
+				matched = index
+				break
+			}
+		}
+		if matched < 0 {
+			next = append(next, NewRunningAnimation(animation, current))
+			continue
+		}
+		running := stack.items[matched]
+		used[matched] = true
+		playState := running.Animation.PlayState
+		running.Animation = animation
+		if animation.PlayState == AnimationPaused && playState != AnimationPaused {
+			running.Pause(current)
+		} else if animation.PlayState == AnimationRunning && playState == AnimationPaused {
+			running.Resume(current)
+		}
+		next = append(next, running)
+	}
+	stack.items = next
 }
 
 // NewRunningAnimation creates an animation whose timeline begins at start.

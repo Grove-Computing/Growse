@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/events"
@@ -38,6 +39,7 @@ type Browser struct {
 	onMutation     func()
 	navigationID   uint64
 	history        history
+	now            func() time.Time
 }
 
 // New creates a browser with no page loaded.
@@ -47,7 +49,7 @@ func New(client ResourceLoader) *Browser {
 
 // NewWithRuntimeFactory は信頼済みページのスクリプトを実行するBrowserを生成する。
 func NewWithRuntimeFactory(client ResourceLoader, factory runtimemodel.Factory) *Browser {
-	return &Browser{client: client, runtimeFactory: factory, history: newHistory()}
+	return &Browser{client: client, runtimeFactory: factory, history: newHistory(), now: time.Now}
 }
 
 // SetOnMutation はWebGoによるDOM変更後の通知先を設定する。
@@ -99,7 +101,7 @@ func (b *Browser) SetInputValue(nodeID dom.NodeID, value string) bool {
 	}
 	changed := page.Document.SetAttribute(nodeID, "value", value)
 	if changed {
-		page.ComputedStyles = computePageStyles(page)
+		recomputePageStyles(page, b.currentTime())
 	}
 	dispatcher := page.Events
 	b.mu.Unlock()
@@ -172,7 +174,7 @@ func (b *Browser) UpdateHover(nodeID dom.NodeID, x, y float32) bool {
 		page.HoverTarget = 0
 	}
 	page.HoverPath = path
-	page.ComputedStyles = computePageStyles(page)
+	recomputePageStyles(page, b.currentTime())
 	dispatcher := page.Events
 	b.mu.Unlock()
 	if onMutation != nil {
@@ -202,7 +204,7 @@ func (b *Browser) UpdateFocus(nodeID dom.NodeID) bool {
 		return false
 	}
 	page.FocusTarget = target
-	page.ComputedStyles = computePageStyles(page)
+	recomputePageStyles(page, b.currentTime())
 	b.mu.Unlock()
 	if onMutation != nil {
 		onMutation()
@@ -223,7 +225,7 @@ func (b *Browser) UpdateViewport(width, height float32) bool {
 		return false
 	}
 	page.ViewportWidth, page.ViewportHeight = width, height
-	page.ComputedStyles = computePageStyles(page)
+	recomputePageStyles(page, b.currentTime())
 	b.mu.Unlock()
 	return true
 }
@@ -235,6 +237,15 @@ func (b *Browser) SetPage(page *Page) {
 	activeRuntime := b.activeRuntime
 	b.activeRuntime = nil
 	b.page = page
+	if page != nil {
+		if page.ComputedStyles == nil {
+			page.ComputedStyles = computePageStyles(page)
+		}
+		if page.Animations == nil {
+			page.Animations = style.NewAnimationRegistry()
+		}
+		page.Animations.Reconcile(page.ComputedStyles, b.currentTime())
+	}
 	if page == nil {
 		b.history = newHistory()
 	} else {
@@ -370,12 +381,14 @@ func (b *Browser) load(ctx context.Context, pageURL *url.URL, commit historyComm
 		Events:           events.NewDispatcher(),
 		Stylesheet:       stylesheet,
 		ComputedStyles:   computedStyles,
+		Animations:       style.NewAnimationRegistry(),
 		BackgroundImages: backgroundImages,
 		BackgroundErrors: backgroundErrors,
 		Scripts:          scripts,
 		ScriptErrors:     scriptErrors,
 	}
-	pageRuntime := startRuntime(ctx, runtimeFactory, page, onMutation)
+	page.Animations.Reconcile(computedStyles, b.currentTime())
+	pageRuntime := startRuntime(ctx, runtimeFactory, page, onMutation, b.currentTime)
 	if err := ctx.Err(); err != nil {
 		if pageRuntime != nil {
 			_ = pageRuntime.Stop()
@@ -410,7 +423,7 @@ func (b *Browser) load(ctx context.Context, pageURL *url.URL, commit historyComm
 	return page, nil
 }
 
-func startRuntime(ctx context.Context, factory runtimemodel.Factory, page *Page, onMutation func()) runtimemodel.Runtime {
+func startRuntime(ctx context.Context, factory runtimemodel.Factory, page *Page, onMutation func(), now func() time.Time) runtimemodel.Runtime {
 	if factory == nil || page == nil || len(page.Scripts) == 0 {
 		return nil
 	}
@@ -444,7 +457,7 @@ func startRuntime(ctx context.Context, factory runtimemodel.Factory, page *Page,
 				page.HoverTarget = 0
 			}
 			page.FocusTarget = validFocusTarget(page.Document, page.FocusTarget)
-			page.ComputedStyles = computePageStyles(page)
+			recomputePageStyles(page, now())
 			if onMutation != nil {
 				onMutation()
 			}
@@ -506,6 +519,24 @@ func computePageStyles(page *Page) style.Map {
 		ViewportWidth: page.ViewportWidth, ViewportHeight: page.ViewportHeight, RootFontSize: 16,
 		ResolutionDPI: 96, ColorScheme: "light", Hover: true, Pointer: "fine",
 	})
+}
+
+func recomputePageStyles(page *Page, current time.Time) {
+	if page == nil {
+		return
+	}
+	page.ComputedStyles = computePageStyles(page)
+	if page.Animations == nil {
+		page.Animations = style.NewAnimationRegistry()
+	}
+	page.Animations.Reconcile(page.ComputedStyles, current)
+}
+
+func (b *Browser) currentTime() time.Time {
+	if b.now == nil {
+		return time.Now()
+	}
+	return b.now()
 }
 
 func validFocusTarget(document *dom.Document, nodeID dom.NodeID) dom.NodeID {
