@@ -9,6 +9,7 @@ import (
 	"github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/events"
 	"github.com/Grove-Computing/Growse/internal/network"
+	storagecore "github.com/Grove-Computing/Growse/internal/storage"
 )
 
 // Script は文書内で見つかった1つのGoソースを表す。
@@ -29,6 +30,8 @@ type Environment struct {
 	HistoryReplace  func(string, *url.URL) error
 	HistoryTraverse func(int) error
 	HistoryInfo     func() (int, string)
+	LocalStorage    *storagecore.Area
+	SessionStorage  *storagecore.Area
 	OnMutation      func()
 	RequestFrame    func()
 	FrameScope      func(time.Time, func())
