@@ -963,6 +963,19 @@ func TestComputeGridAutoFillAndAutoFit(t *testing.T) {
 	}
 }
 
+func TestComputePositionAndLogicalInsets(t *testing.T) {
+	document := dom.NewDocument()
+	item := document.CreateElement("div", map[string]string{"style": "position:absolute; inset-block:30px auto; inset-inline:20px auto"})
+	appendNode(t, document, document.Root, item)
+	computed, _ := Compute(document, nil).For(item)
+	if computed.Position != PositionAbsolute || computed.Inset.Top.Value.Pixels != 30 || computed.Inset.Left.Value.Pixels != 20 {
+		t.Fatalf("position/logical insets = %#v", computed)
+	}
+	if computed.Inset.Right.Kind != SizeAuto || computed.Inset.Bottom.Kind != SizeAuto {
+		t.Fatalf("auto logical insets = %#v", computed.Inset)
+	}
+}
+
 func parseTestSelector(t *testing.T, value string) css.Selector {
 	t.Helper()
 	stylesheet, err := css.Parse(strings.NewReader(value + " { color: red }"))

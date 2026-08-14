@@ -440,6 +440,49 @@ func TestBuildIgnoresUnsupportedInputType(t *testing.T) {
 	}
 }
 
+func TestBuildResolvesRelativeAbsoluteFixedAndStickyPositioning(t *testing.T) {
+	document := dom.NewDocument()
+	parent := document.CreateElement("div", map[string]string{"class": "parent"})
+	normal := document.CreateElement("div", map[string]string{"class": "normal"})
+	relative := document.CreateElement("div", map[string]string{"class": "relative"})
+	sticky := document.CreateElement("div", map[string]string{"class": "sticky"})
+	following := document.CreateElement("div", map[string]string{"class": "following"})
+	absolute := document.CreateElement("div", map[string]string{"class": "absolute"})
+	fixed := document.CreateElement("div", map[string]string{"class": "fixed"})
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, parent}, [2]*dom.Node{parent, normal}, [2]*dom.Node{parent, relative},
+		[2]*dom.Node{parent, sticky}, [2]*dom.Node{parent, following}, [2]*dom.Node{parent, absolute}, [2]*dom.Node{parent, fixed},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.parent { position:relative; width:300px; height:200px; background-color:#eee }
+.normal, .relative, .sticky, .following { height:20px; background-color:#ddd }
+.relative { position:relative; left:15px; top:10px }
+.sticky { position:sticky; top:100px }
+.absolute { position:absolute; left:20px; top:30px; width:50px; height:40px; background-color:#ccc }
+.fixed { position:fixed; right:10px; bottom:20px; width:60px; height:30px; background-color:#bbb }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := BuildWithViewport(document, style.Compute(document, stylesheet), 400, 300)
+	parentRect := decorationForNode(t, tree, parent.ID)
+	normalRect, relativeRect := decorationForNode(t, tree, normal.ID), decorationForNode(t, tree, relative.ID)
+	stickyRect, followingRect := decorationForNode(t, tree, sticky.ID), decorationForNode(t, tree, following.ID)
+	absoluteRect, fixedRect := decorationForNode(t, tree, absolute.ID), decorationForNode(t, tree, fixed.ID)
+	if relativeRect.X != normalRect.X+15 || relativeRect.Y != normalRect.Y+30 {
+		t.Fatalf("relative position = normal %#v relative %#v", normalRect.Rect, relativeRect.Rect)
+	}
+	if followingRect.Y != normalRect.Y+60 || stickyRect.Y != 100 {
+		t.Fatalf("sticky flow geometry = sticky %#v following %#v", stickyRect.Rect, followingRect.Rect)
+	}
+	if absoluteRect.X != parentRect.X+20 || absoluteRect.Y != parentRect.Y+30 || absoluteRect.Width != 50 || absoluteRect.Height != 40 {
+		t.Fatalf("absolute containing block = parent %#v child %#v", parentRect.Rect, absoluteRect.Rect)
+	}
+	if fixedRect.X != 330 || fixedRect.Y != 250 || fixedRect.Width != 60 || fixedRect.Height != 30 {
+		t.Fatalf("fixed viewport geometry = %#v", fixedRect.Rect)
+	}
+}
+
 func appendNodes(t *testing.T, document *dom.Document, edges ...[2]*dom.Node) {
 	t.Helper()
 	for _, edge := range edges {

@@ -25,6 +25,8 @@ type blockStyle struct {
 	repeat              stylemodel.BackgroundRepeat
 	position            stylemodel.BackgroundPosition
 	backgroundSize      stylemodel.BackgroundSize
+	layoutPosition      stylemodel.Position
+	inset               stylemodel.Insets
 	radius              stylemodel.BorderRadii
 	decoration          stylemodel.TextDecorationLine
 	decorationColor     uint32
@@ -106,10 +108,12 @@ func build(document *dom.Document, computed stylemodel.Map, viewportWidth, viewp
 
 	tree := &Tree{Width: viewportWidth, Background: 0xffffffff}
 	state := engine{
-		tree:     tree,
-		computed: computed,
-		y:        pagePadding,
-		opacity:  1,
+		tree:           tree,
+		computed:       computed,
+		y:              pagePadding,
+		opacity:        1,
+		viewportWidth:  viewportWidth,
+		viewportHeight: viewportHeight,
 	}
 	if document != nil {
 		if body := findElement(document.Root, "body"); body != nil {
@@ -140,12 +144,14 @@ func build(document *dom.Document, computed stylemodel.Map, viewportWidth, viewp
 }
 
 type engine struct {
-	tree     *Tree
-	computed stylemodel.Map
-	y        float32
-	clip     *Rect
-	order    int
-	opacity  float32
+	tree                          *Tree
+	computed                      stylemodel.Map
+	y                             float32
+	clip                          *Rect
+	order                         int
+	opacity                       float32
+	viewportWidth, viewportHeight float32
+	positionCB                    *Rect
 }
 
 func (e *engine) nextOrder() int {
@@ -241,6 +247,7 @@ func isTextInput(node *dom.Node) bool {
 }
 
 func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containingHeight float32, heightDefinite bool, topMargin *float32) {
+	geometryBoxStart, geometryDecorationStart := len(e.tree.Boxes), len(e.tree.Decorations)
 	previousOpacity := e.opacity
 	e.opacity *= style.opacity
 	if topMargin == nil {
@@ -301,6 +308,14 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 		}
 	}
 	previousClip := e.clip
+	previousPositionCB := e.positionCB
+	if style.layoutPosition != stylemodel.PositionStatic {
+		cbHeight := childContainingHeight
+		if !declaredHeightDefinite {
+			cbHeight = containingHeight
+		}
+		e.positionCB = &Rect{X: x + style.border.Left.Width, Y: boxTop + style.border.Top.Width, Width: outerWidth - horizontalBorder, Height: max(cbHeight, float32(0))}
+	}
 	if (style.overflowX != stylemodel.OverflowVisible || style.overflowY != stylemodel.OverflowVisible) && declaredHeightDefinite {
 		clipHeight := declaredHeight
 		if style.boxSizing == stylemodel.BoxSizingContentBox {
@@ -312,6 +327,7 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 		})
 	}
 
+	var positionedChildren []*dom.Node
 	if style.display == stylemodel.DisplayFlex {
 		e.addFlexChildren(node, style, contentX, contentWidth, childContainingHeight, declaredHeightDefinite)
 	} else if style.display == stylemodel.DisplayGrid {
@@ -332,6 +348,11 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 			if child.Type == dom.NodeElement {
 				childStyle := e.styleFor(child)
 				if childStyle.display == stylemodel.DisplayNone {
+					continue
+				}
+				if childStyle.layoutPosition == stylemodel.PositionAbsolute || childStyle.layoutPosition == stylemodel.PositionFixed {
+					flushInline()
+					positionedChildren = append(positionedChildren, child)
 					continue
 				}
 				if isTextInput(child) {
@@ -379,8 +400,85 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 		e.tree.Decorations[decorationIndex].Height = outerHeight
 		e.tree.Decorations[decorationIndex].Radius = resolveBorderRadii(style.radius, outerWidth, outerHeight)
 	}
+	if e.positionCB != nil && style.layoutPosition != stylemodel.PositionStatic {
+		e.positionCB.Height = max(outerHeight-verticalBorder, float32(0))
+	}
+	for _, child := range positionedChildren {
+		e.renderPositionedChild(child, e.styleFor(child))
+	}
 	e.y = boxTop + outerHeight + style.margin.Bottom
+	if style.layoutPosition == stylemodel.PositionRelative || style.layoutPosition == stylemodel.PositionSticky {
+		dx, dy := float32(0), float32(0)
+		if style.layoutPosition == stylemodel.PositionRelative {
+			dx, dy = relativeOffset(style.inset, outerWidth, outerHeight)
+		} else {
+			if top, ok := resolveSize(style.inset.Top, outerHeight, true); ok {
+				dy = max(top-boxTop, float32(0))
+			}
+		}
+		translateFlexGeometry(e.tree, geometryBoxStart, geometryDecorationStart, dx, dy, nil)
+	}
+	e.positionCB = previousPositionCB
 	e.opacity = previousOpacity
+}
+
+func relativeOffset(inset stylemodel.Insets, width, height float32) (float32, float32) {
+	dx, dy := float32(0), float32(0)
+	if left, ok := resolveSize(inset.Left, width, true); ok {
+		dx = left
+	} else if right, ok := resolveSize(inset.Right, width, true); ok {
+		dx = -right
+	}
+	if top, ok := resolveSize(inset.Top, height, true); ok {
+		dy = top
+	} else if bottom, ok := resolveSize(inset.Bottom, height, true); ok {
+		dy = -bottom
+	}
+	return dx, dy
+}
+
+func (e *engine) renderPositionedChild(node *dom.Node, style blockStyle) {
+	containingBlock := e.positionCB
+	if style.layoutPosition == stylemodel.PositionFixed || containingBlock == nil {
+		containingBlock = &Rect{Width: e.viewportWidth, Height: e.viewportHeight}
+	}
+	left, hasLeft := resolveSize(style.inset.Left, containingBlock.Width, true)
+	right, hasRight := resolveSize(style.inset.Right, containingBlock.Width, true)
+	top, hasTop := resolveSize(style.inset.Top, containingBlock.Height, containingBlock.Height > 0)
+	bottom, hasBottom := resolveSize(style.inset.Bottom, containingBlock.Height, containingBlock.Height > 0)
+	usedWidth, widthDefinite := gridItemOuterSize(style.width, style, containingBlock.Width, true)
+	usedHeight, heightDefinite := gridItemOuterSize(style.height, style, containingBlock.Height, false)
+	if !widthDefinite && hasLeft && hasRight {
+		usedWidth = max(containingBlock.Width-left-right, float32(0))
+	}
+	if !heightDefinite && hasTop && hasBottom {
+		usedHeight = max(containingBlock.Height-top-bottom, float32(0))
+	}
+	if !widthDefinite && !(hasLeft && hasRight) || !heightDefinite && !(hasTop && hasBottom) {
+		intrinsicWidth, intrinsicHeight, _ := e.flexIntrinsicSizes(node, style, flexAxis{horizontal: true}, containingBlock.Width, containingBlock.Width, containingBlock.Height, containingBlock.Height > 0)
+		if !widthDefinite && !(hasLeft && hasRight) {
+			usedWidth = intrinsicWidth
+		}
+		if !heightDefinite && !(hasTop && hasBottom) {
+			usedHeight = intrinsicHeight
+		}
+	}
+	childX, childY := containingBlock.X, containingBlock.Y
+	if hasLeft {
+		childX += left
+	} else if hasRight {
+		childX += containingBlock.Width - right - usedWidth
+	}
+	if hasTop {
+		childY += top
+	} else if hasBottom {
+		childY += containingBlock.Height - bottom - usedHeight
+	}
+	style.layoutPosition = stylemodel.PositionStatic
+	if style.display == stylemodel.DisplayInline || style.display == stylemodel.DisplayInlineBlock || style.display == stylemodel.DisplayInlineFlex || style.display == stylemodel.DisplayInlineGrid {
+		style.display = stylemodel.DisplayBlock
+	}
+	e.renderGridItem(node, style, childX, childY, usedWidth, usedHeight)
 }
 
 func collapseMargins(first, second float32) float32 {
@@ -844,6 +942,7 @@ func applyComputed(block blockStyle, computed stylemodel.ComputedStyle) blockSty
 	block.repeat = computed.BackgroundRepeat
 	block.position = computed.BackgroundPos
 	block.backgroundSize = computed.BackgroundSize
+	block.layoutPosition, block.inset = computed.Position, computed.Inset
 	block.radius = computed.BorderRadius
 	block.decoration = computed.TextDecoration
 	block.decorationColor = computed.DecorationColor

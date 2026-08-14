@@ -398,6 +398,7 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 	computed.BorderRadius = applyBorderRadii(computed.BorderRadius, parent.BorderRadius, winners, computed.CustomProperties, lengthContext)
 	computed = applyFlexProperties(computed, parent, winners, computed.CustomProperties, lengthContext)
 	computed = applyGridProperties(computed, parent, winners, computed.CustomProperties, lengthContext)
+	computed = applyPositionProperties(computed, parent, winners, computed.CustomProperties, lengthContext)
 	return computed
 }
 
@@ -872,6 +873,20 @@ func expandedProperties(property string) []string {
 		return []string{"align-items", "justify-items"}
 	case "place-self":
 		return []string{"align-self", "justify-self"}
+	case "inset":
+		return []string{"top", "right", "bottom", "left"}
+	case "inset-block":
+		return []string{"top", "bottom"}
+	case "inset-inline":
+		return []string{"left", "right"}
+	case "inset-block-start":
+		return []string{"top"}
+	case "inset-block-end":
+		return []string{"bottom"}
+	case "inset-inline-start":
+		return []string{"left"}
+	case "inset-inline-end":
+		return []string{"right"}
 	default:
 		return []string{property}
 	}

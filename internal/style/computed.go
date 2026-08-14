@@ -83,6 +83,22 @@ type AutoEdges struct {
 	Top, Right, Bottom, Left bool
 }
 
+// Position selects normal, offset, out-of-flow, viewport, or sticky positioning.
+type Position uint8
+
+const (
+	PositionStatic Position = iota
+	PositionRelative
+	PositionAbsolute
+	PositionFixed
+	PositionSticky
+)
+
+// Insets stores the four computed inset properties; SizeAuto means auto.
+type Insets struct {
+	Top, Right, Bottom, Left SizeValue
+}
+
 // BoxSizing controls whether declared sizes include padding and border.
 type BoxSizing uint8
 
@@ -336,6 +352,8 @@ type ComputedStyle struct {
 	GridRow             GridPlacement
 	GridAreaName        string
 	GridAutoFlow        GridAutoFlow
+	Position            Position
+	Inset               Insets
 	AspectRatio         float32
 	BoxSizing           BoxSizing
 	Width               SizeValue
