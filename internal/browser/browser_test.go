@@ -239,6 +239,32 @@ func TestDispatchClickSubmitsSubmitButton(t *testing.T) {
 	}
 }
 
+func TestDispatchClickUsesExplicitFormOwnerAndStoresSubmitter(t *testing.T) {
+	document := dom.NewDocument()
+	form := document.CreateElement("form", map[string]string{"id": "search"})
+	button := document.CreateElement("button", map[string]string{"form": "search", "formaction": "/alternate"})
+	if err := document.AppendChild(document.Root, form); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(document.Root, button); err != nil {
+		t.Fatal(err)
+	}
+	dispatcher := events.NewDispatcher()
+	submitted := false
+	dispatcher.AddEventListener(form.ID, events.Submit, func(events.Event) { submitted = true })
+	page := &Page{Document: document, ComputedStyles: style.Compute(document, nil), Events: dispatcher}
+	browser := New(nil)
+	browser.SetPage(page)
+
+	if !browser.DispatchClick(button.ID, 1, 2) || !submitted || page.Submitter != button.ID {
+		t.Fatalf("submitted=%v submitter=%d", submitted, page.Submitter)
+	}
+	config, ok := forms.ResolveSubmission(document, button)
+	if !ok || config.Form != form || config.Action != "/alternate" {
+		t.Fatalf("submission config = %#v, ok=%v", config, ok)
+	}
+}
+
 func TestUpdateHoverTracksAncestorPathAndRecomputesStyles(t *testing.T) {
 	document := dom.NewDocument()
 	button := document.CreateElement("button", map[string]string{"id": "save"})

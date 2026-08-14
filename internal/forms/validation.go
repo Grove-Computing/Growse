@@ -117,13 +117,13 @@ func requiredValueMissing(document *dom.Document, node *dom.Node, value string) 
 			return !state.Checked
 		}
 		name, _ := node.Attribute("name")
-		owner := nearestForm(node)
+		owner := FormOwner(document, node)
 		missing := !state.Checked
 		if document != nil {
 			forEachElement(document.Root, func(candidate *dom.Node) {
 				candidateState, ok := CheckableState(candidate)
 				candidateName, _ := candidate.Attribute("name")
-				if ok && candidateState.Kind == "radio" && candidateName == name && nearestForm(candidate) == owner && candidateState.Checked {
+				if ok && candidateState.Kind == "radio" && candidateName == name && FormOwner(document, candidate) == owner && candidateState.Checked {
 					missing = false
 				}
 			})

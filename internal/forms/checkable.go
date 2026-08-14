@@ -48,9 +48,9 @@ func ActivateCheckable(document *dom.Document, nodeID dom.NodeID) (bool, bool) {
 		return true, false
 	}
 	name, _ := node.Attribute("name")
-	owner := nearestForm(node)
+	owner := FormOwner(document, node)
 	forEachElement(document.Root, func(candidate *dom.Node) {
-		if candidate == node || nearestForm(candidate) != owner {
+		if candidate == node || FormOwner(document, candidate) != owner {
 			return
 		}
 		candidateState, candidateOK := CheckableState(candidate)

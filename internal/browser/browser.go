@@ -109,7 +109,12 @@ func (b *Browser) DispatchClick(nodeID dom.NodeID, x, y float32) bool {
 	submitHandled := false
 	if page.Document != nil {
 		if node, ok := page.Document.NodeByID(nodeID); ok && isSubmitButton(node) {
-			if form := nearestForm(node); form != nil {
+			if form := forms.FormOwner(page.Document, node); form != nil {
+				b.mu.Lock()
+				if b.page == page {
+					page.Submitter = node.ID
+				}
+				b.mu.Unlock()
 				submitHandled = page.Events.Dispatch(events.Event{Type: events.Submit, Target: form.ID})
 			}
 		}
@@ -231,12 +236,17 @@ func (b *Browser) SubmitForm(nodeID dom.NodeID) bool {
 		b.mu.RUnlock()
 		return false
 	}
-	form := nearestForm(node)
+	form := forms.FormOwner(page.Document, node)
 	dispatcher := page.Events
 	b.mu.RUnlock()
 	if form == nil {
 		return false
 	}
+	b.mu.Lock()
+	if b.page == page {
+		page.Submitter = 0
+	}
+	b.mu.Unlock()
 	return dispatcher.Dispatch(events.Event{Type: events.Submit, Target: form.ID})
 }
 
@@ -256,7 +266,7 @@ func (b *Browser) ResetForm(nodeID dom.NodeID) bool {
 	}
 	form := node
 	if form.TagName != "form" {
-		form = nearestForm(node)
+		form = forms.FormOwner(page.Document, node)
 	}
 	if form == nil {
 		b.mu.Unlock()
@@ -293,7 +303,7 @@ func (b *Browser) ValidateForm(nodeID dom.NodeID) bool {
 	}
 	form := node
 	if form.TagName != "form" {
-		form = nearestForm(node)
+		form = forms.FormOwner(page.Document, node)
 	}
 	first, invalid := forms.FirstInvalidControl(page.Document, form)
 	b.mu.RUnlock()
