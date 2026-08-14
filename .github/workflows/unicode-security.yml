@@ -1,0 +1,67 @@
+name: Unicode Security
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: unicode-security-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: 1.26.6
+
+jobs:
+  unicode-security:
+    name: unicode-security
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout trusted scanner
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          path: trusted
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: trusted/go.sum
+
+      - name: Build trusted scanner
+        working-directory: trusted
+        run: go build -trimpath -o "$RUNNER_TEMP/growse-securityscan" ./cmd/securityscan
+
+      - name: Checkout candidate without credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          path: candidate
+          persist-credentials: false
+
+      - name: Scan complete candidate tree with trusted policy
+        working-directory: candidate
+        run: >-
+          "$RUNNER_TEMP/growse-securityscan"
+          -root .
+          -config "$GITHUB_WORKSPACE/trusted/.security/security-policy.json"
+
+      - name: Scan pull request diff with trusted policy
+        if: github.event_name == 'pull_request_target'
+        working-directory: candidate
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: >-
+          "$RUNNER_TEMP/growse-securityscan"
+          -root .
+          -config "$GITHUB_WORKSPACE/trusted/.security/security-policy.json"
+          -diff "$BASE_SHA"

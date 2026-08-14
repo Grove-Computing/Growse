@@ -61,6 +61,8 @@ gh attestation verify "oci://$IMAGE@$DIGEST" --repo Grove-Computing/Growse
 
 Release時は最終imageをdigest指定でscanし、修正の有無にかかわらずHigh/Criticalの既知脆弱性があれば公開を停止します。Supply Chain Securityの例外が必要な場合は、対象、理由、影響評価、代替策、失効日をIssueへ記録し、期限付きの変更としてreviewします。理由や失効日のない恒久的なignoreは追加しません。
 
+Developer workstationからのCredential窃取、不可視Unicode、未承認Binary／Editor Extension、署名、Release cool-down、感染時の対応は[Developer Supply Chain Security](docs/developer-security.md)を参照してください。
+
 ## WebGo Security Boundary
 
 Growse v0.8.0のYaegi Runtimeは、信頼できないGoコードを安全に実行するSandboxではありません。
