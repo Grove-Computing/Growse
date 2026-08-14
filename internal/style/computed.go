@@ -13,6 +13,8 @@ const (
 	DisplayNone
 	DisplayFlex
 	DisplayInlineFlex
+	DisplayGrid
+	DisplayInlineGrid
 )
 
 // FlexDirection defines the main axis and its direction.

@@ -833,6 +833,24 @@ func TestComputeUsesFlexInitialValuesAndLonghands(t *testing.T) {
 	}
 }
 
+func TestComputeGridDisplayValues(t *testing.T) {
+	document := dom.NewDocument()
+	grid := document.CreateElement("div", map[string]string{"class": "grid"})
+	inlineGrid := document.CreateElement("span", map[string]string{"class": "inline-grid"})
+	appendNode(t, document, document.Root, grid)
+	appendNode(t, document, document.Root, inlineGrid)
+	stylesheet, err := css.Parse(strings.NewReader(`.grid { display:grid } .inline-grid { display:inline-grid }`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	computed := Compute(document, stylesheet)
+	gridStyle, _ := computed.For(grid)
+	inlineGridStyle, _ := computed.For(inlineGrid)
+	if gridStyle.Display != DisplayGrid || inlineGridStyle.Display != DisplayInlineGrid {
+		t.Fatalf("grid displays = (%v, %v)", gridStyle.Display, inlineGridStyle.Display)
+	}
+}
+
 func parseTestSelector(t *testing.T, value string) css.Selector {
 	t.Helper()
 	stylesheet, err := css.Parse(strings.NewReader(value + " { color: red }"))

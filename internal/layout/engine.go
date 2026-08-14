@@ -68,6 +68,7 @@ type inlineRun struct {
 	style       blockStyle
 	atomic      bool
 	flex        bool
+	grid        bool
 	width       float32
 	widthOffset float32
 	height      float32
@@ -164,7 +165,7 @@ func (e *engine) walk(node *dom.Node, x, width, containingHeight float32, height
 			e.addInput(node, style, x, width, containingHeight, heightDefinite)
 			return
 		}
-		if style.display == stylemodel.DisplayBlock || style.display == stylemodel.DisplayFlex {
+		if isBlockLevelDisplay(style.display) {
 			e.addBlock(node, style, x, width, containingHeight, heightDefinite, nil)
 			return
 		}
@@ -300,6 +301,8 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 
 	if style.display == stylemodel.DisplayFlex {
 		e.addFlexChildren(node, style, contentX, contentWidth, childContainingHeight, declaredHeightDefinite)
+	} else if style.display == stylemodel.DisplayGrid {
+		e.addGridChildren(node, contentX, contentWidth, childContainingHeight, declaredHeightDefinite)
 	} else {
 		inlineRuns := e.generatedRuns(node, true, style)
 		previousBlock := false
@@ -325,7 +328,7 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 					previousBottomMargin = childStyle.margin.Bottom
 					continue
 				}
-				if childStyle.display == stylemodel.DisplayBlock || childStyle.display == stylemodel.DisplayFlex {
+				if isBlockLevelDisplay(childStyle.display) {
 					flushInline()
 					if previousBlock {
 						e.y -= previousBottomMargin
@@ -420,6 +423,9 @@ func (e *engine) collectInlineRunsWithOpacity(node, owner *dom.Node, opacity flo
 	if style.display == stylemodel.DisplayInlineFlex {
 		return []inlineRun{{nodeID: node.ID, node: node, tag: node.TagName, style: style, atomic: true, flex: true, opacity: opacity}}
 	}
+	if style.display == stylemodel.DisplayInlineGrid {
+		return []inlineRun{{nodeID: node.ID, node: node, tag: node.TagName, style: style, atomic: true, grid: true, opacity: opacity}}
+	}
 	if node.TagName == "br" {
 		return []inlineRun{{nodeID: node.ID, tag: node.TagName, text: "\n", style: style, opacity: opacity}}
 	}
@@ -496,9 +502,14 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 			Baseline: e.y + lineAscent, Clip: cloneRect(e.clip),
 		})
 		for _, placement := range flexPlacements {
-			item := &flexLayoutItem{node: placement.node, style: placement.style, crossSize: placement.height}
-			item.algorithm = &flexItem{target: placement.width}
-			e.renderFlexItem(item, flexAxis{horizontal: true}, x+placement.widthOffset, e.y+lineAscent-placement.baseline, placement.width, placement.height)
+			placementX, placementY := x+placement.widthOffset, e.y+lineAscent-placement.baseline
+			if placement.grid {
+				e.renderInlineGrid(placement, placementX, placementY)
+			} else {
+				item := &flexLayoutItem{node: placement.node, style: placement.style, crossSize: placement.height}
+				item.algorithm = &flexItem{target: placement.width}
+				e.renderFlexItem(item, flexAxis{horizontal: true}, placementX, placementY, placement.width, placement.height)
+			}
 		}
 		e.y += lineHeight
 		lineRuns = lineRuns[:0]
@@ -537,13 +548,15 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 		if token.atomic {
 			if token.flex {
 				token.width, token.height, token.baseline = e.resolveInlineFlexSize(token.node, token.style, width)
+			} else if token.grid {
+				token.width, token.height, token.baseline = e.resolveInlineGridSize(token.node, token.style, width)
 			} else {
 				token.width, token.height = resolveAtomicSize(token, width)
 			}
 			if usedWidth > 0 && usedWidth+token.width > width && wrapsWhitespace(token.style.whiteSpace) {
 				flushLine()
 			}
-			if token.flex {
+			if token.flex || token.grid {
 				token.widthOffset = usedWidth
 				flexPlacements = append(flexPlacements, token)
 				appendPiece(token, "", token.width)
@@ -614,6 +627,10 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 		}
 	}
 	flushLine()
+}
+
+func isBlockLevelDisplay(display stylemodel.Display) bool {
+	return display == stylemodel.DisplayBlock || display == stylemodel.DisplayFlex || display == stylemodel.DisplayGrid
 }
 
 func tokenizeInlineRuns(runs []inlineRun) []inlineRun {

@@ -1147,6 +1147,10 @@ func parseDisplay(value string) (Display, bool) {
 		return DisplayFlex, true
 	case "inline-flex":
 		return DisplayInlineFlex, true
+	case "grid":
+		return DisplayGrid, true
+	case "inline-grid":
+		return DisplayInlineGrid, true
 	case "none":
 		return DisplayNone, true
 	default:
