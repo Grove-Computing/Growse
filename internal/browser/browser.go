@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"mime"
+	"net/http"
 	"net/url"
 	"strings"
 	"sync"
@@ -26,6 +27,10 @@ import (
 // ResourceLoader retrieves a resource for navigation.
 type ResourceLoader interface {
 	Get(ctx context.Context, resourceURL *url.URL) (*network.Response, error)
+}
+
+type requestLoader interface {
+	Do(ctx context.Context, request *network.Request) (*network.Response, error)
 }
 
 // Browser owns the state for one browser window.
@@ -544,6 +549,63 @@ func (b *Browser) SubmitGET(ctx context.Context, formID, submitterID dom.NodeID)
 	return b.load(ctx, target, historyPush, -1)
 }
 
+// SubmitPOST sends URL-encoded entries and navigates to the response document.
+func (b *Browser) SubmitPOST(ctx context.Context, formID, submitterID dom.NodeID) (*Page, error) {
+	b.mu.Lock()
+	page := b.page
+	if page == nil || page.Document == nil || page.URL == nil {
+		b.mu.Unlock()
+		return nil, errors.New("no active page for form submission")
+	}
+	form, ok := page.Document.NodeByID(formID)
+	if !ok {
+		b.mu.Unlock()
+		return nil, errors.New("form was not found")
+	}
+	var submitter *dom.Node
+	if submitterID != 0 {
+		submitter, ok = page.Document.NodeByID(submitterID)
+		if !ok {
+			b.mu.Unlock()
+			return nil, errors.New("submitter was not found")
+		}
+	}
+	config, ok := forms.ResolveFormSubmission(page.Document, form, submitter)
+	if !ok || config.Method != "post" || config.Enctype != forms.URLEncoded || config.Target != "_self" {
+		b.mu.Unlock()
+		return nil, errors.New("unsupported POST form configuration")
+	}
+	entries := forms.CollectEntries(page.Document, form, submitter)
+	target, err := resolveFormAction(page.URL, config.Action)
+	if err != nil {
+		b.mu.Unlock()
+		return nil, err
+	}
+	target.Fragment = ""
+	client := b.client
+	loader, ok := client.(requestLoader)
+	if !ok {
+		b.mu.Unlock()
+		return nil, errors.New("network client does not support POST")
+	}
+	b.navigationID++
+	navigationID := b.navigationID
+	runtimeFactory := b.runtimeFactory
+	onMutation := b.onMutation
+	reducedMotion := b.reducedMotion
+	b.mu.Unlock()
+
+	body := []byte(forms.EncodeURLEncoded(entries))
+	response, err := loader.Do(ctx, &network.Request{
+		Method: http.MethodPost, URL: target, Body: body,
+		Header: http.Header{"Content-Type": []string{forms.URLEncoded}},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("submit form to %s: %w", target.Redacted(), err)
+	}
+	return b.finishLoad(ctx, target, response, historyPush, -1, navigationID, client, runtimeFactory, onMutation, reducedMotion)
+}
+
 func resolveFormAction(baseURL *url.URL, action string) (*url.URL, error) {
 	if baseURL == nil {
 		return nil, errors.New("form action has no base URL")
@@ -632,7 +694,10 @@ func (b *Browser) load(ctx context.Context, pageURL *url.URL, commit historyComm
 	if err != nil {
 		return nil, fmt.Errorf("navigate to %s: %w", pageURL.Redacted(), err)
 	}
+	return b.finishLoad(ctx, pageURL, response, commit, historyIndex, navigationID, client, runtimeFactory, onMutation, reducedMotion)
+}
 
+func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *network.Response, commit historyCommit, historyIndex int, navigationID uint64, client ResourceLoader, runtimeFactory runtimemodel.Factory, onMutation func(), reducedMotion bool) (*Page, error) {
 	mediaType, _, err := mime.ParseMediaType(response.ContentType)
 	if err != nil {
 		return nil, fmt.Errorf("invalid Content-Type %q: %w", response.ContentType, err)

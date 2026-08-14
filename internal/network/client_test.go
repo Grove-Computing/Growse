@@ -3,6 +3,7 @@ package network
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -29,6 +30,26 @@ func TestClientGetHTML(t *testing.T) {
 	}
 	if got, want := result.ContentType, "text/html; charset=utf-8"; got != want {
 		t.Fatalf("content type = %q, want %q", got, want)
+	}
+}
+
+func TestClientDoSendsMethodHeadersAndBody(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		body, _ := io.ReadAll(request.Body)
+		if request.Method != http.MethodPost || request.Header.Get("Content-Type") != "application/x-www-form-urlencoded" || string(body) != "name=growse" {
+			t.Errorf("request method=%s content-type=%q body=%q", request.Method, request.Header.Get("Content-Type"), body)
+		}
+		response.Header().Set("Content-Type", "text/html")
+		_, _ = response.Write([]byte("<title>Saved</title>"))
+	}))
+	defer server.Close()
+
+	result, err := NewClientWithLimits(server.Client(), 1024).Do(context.Background(), &Request{
+		Method: http.MethodPost, URL: mustParseURL(t, server.URL), Body: []byte("name=growse"),
+		Header: http.Header{"Content-Type": []string{"application/x-www-form-urlencoded"}},
+	})
+	if err != nil || string(result.Body) != "<title>Saved</title>" {
+		t.Fatalf("Do result=%#v error=%v", result, err)
 	}
 }
 
