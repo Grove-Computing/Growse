@@ -1,7 +1,10 @@
 // Package style matches CSS rules and computes values for DOM elements.
 package style
 
-import "github.com/Grove-Computing/Growse/internal/dom"
+import (
+	"github.com/Grove-Computing/Growse/internal/animation"
+	"github.com/Grove-Computing/Growse/internal/dom"
+)
 
 // Display controls whether an element participates in block or inline layout.
 type Display uint8
@@ -430,9 +433,16 @@ type ComputedStyle struct {
 	TextDecoration      TextDecorationLine
 	DecorationColor     uint32
 	Opacity             float32
+	Transitions         []Transition
 	BeforeContent       string
 	AfterContent        string
 	CustomProperties    map[string]string
+}
+
+// Transition is one computed CSS transition matched to a property.
+type Transition struct {
+	Property string
+	Timing   animation.Timing
 }
 
 // Bold reports whether the computed weight should use a bold face.

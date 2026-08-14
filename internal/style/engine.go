@@ -110,6 +110,7 @@ func initialStyle() ComputedStyle {
 		Width: SizeValue{Kind: SizeAuto}, Height: SizeValue{Kind: SizeAuto},
 		MinWidth: SizeValue{Kind: SizeAuto}, MinHeight: SizeValue{Kind: SizeAuto},
 		MaxWidth: SizeValue{Kind: SizeNone}, MaxHeight: SizeValue{Kind: SizeNone},
+		Transitions: defaultTransitions(),
 	}
 }
 
@@ -125,6 +126,7 @@ func inheritedStyle(parent ComputedStyle) ComputedStyle {
 		Width: SizeValue{Kind: SizeAuto}, Height: SizeValue{Kind: SizeAuto},
 		MinWidth: SizeValue{Kind: SizeAuto}, MinHeight: SizeValue{Kind: SizeAuto},
 		MaxWidth: SizeValue{Kind: SizeNone}, MaxHeight: SizeValue{Kind: SizeNone},
+		Transitions: defaultTransitions(),
 	}
 	if len(parent.CustomProperties) != 0 {
 		computed.CustomProperties = make(map[string]string, len(parent.CustomProperties))
@@ -421,6 +423,7 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 	computed = applyPositionProperties(computed, parent, winners, computed.CustomProperties, lengthContext)
 	computed = applyShadowAndOutlineProperties(computed, parent, winners, computed.CustomProperties, lengthContext)
 	computed = applyTransformProperties(computed, parent, winners, computed.CustomProperties, lengthContext)
+	computed = applyTransitionProperties(computed, parent, winners, computed.CustomProperties)
 	return computed
 }
 
@@ -911,6 +914,8 @@ func expandedProperties(property string) []string {
 		return []string{"right"}
 	case "outline":
 		return []string{"outline-width", "outline-style", "outline-color"}
+	case "transition":
+		return []string{"transition-property", "transition-duration", "transition-timing-function", "transition-delay"}
 	default:
 		return []string{property}
 	}
