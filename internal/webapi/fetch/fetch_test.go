@@ -96,6 +96,7 @@ func TestFetchRejectsInvalidRequestBeforeSending(t *testing.T) {
 		{name: "invalid header value", request: Request{URL: "/data", Header: Header{"X-Test": []string{"safe\r\ninjected"}}}},
 		{name: "GET body", request: Request{Method: http.MethodGet, URL: "/data", Body: []byte{}}},
 		{name: "HEAD text body", request: Request{Method: http.MethodHead, URL: "/data", Text: "body"}},
+		{name: "invalid credentials", request: Request{URL: "/data", Credentials: "always"}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

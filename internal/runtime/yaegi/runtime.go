@@ -101,10 +101,14 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 			"QuerySelector":  reflect.ValueOf(dom.QuerySelector),
 		},
 		"growse/fetch/fetch": {
-			"Fetch":    reflect.ValueOf(fetch.Fetch),
-			"Header":   reflect.ValueOf((*fetchapi.Header)(nil)),
-			"Request":  reflect.ValueOf((*fetchapi.Request)(nil)),
-			"Response": reflect.ValueOf((*fetchapi.Response)(nil)),
+			"CredentialsInclude":    reflect.ValueOf(fetchapi.CredentialsInclude),
+			"CredentialsMode":       reflect.ValueOf((*fetchapi.CredentialsMode)(nil)),
+			"CredentialsOmit":       reflect.ValueOf(fetchapi.CredentialsOmit),
+			"CredentialsSameOrigin": reflect.ValueOf(fetchapi.CredentialsSameOrigin),
+			"Fetch":                 reflect.ValueOf(fetch.Fetch),
+			"Header":                reflect.ValueOf((*fetchapi.Header)(nil)),
+			"Request":               reflect.ValueOf((*fetchapi.Request)(nil)),
+			"Response":              reflect.ValueOf((*fetchapi.Response)(nil)),
 		},
 		"growse/strconv/strconv": {
 			"Itoa": reflect.ValueOf(strconvapi.Itoa),

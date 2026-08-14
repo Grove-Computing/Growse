@@ -42,12 +42,13 @@ type Response struct {
 
 // Request contains the HTTP request data accepted by the network client.
 type Request struct {
-	Method  string
-	URL     *url.URL
-	Header  http.Header
-	Body    []byte
-	SiteURL *url.URL
-	Kind    RequestKind
+	Method      string
+	URL         *url.URL
+	Header      http.Header
+	Body        []byte
+	SiteURL     *url.URL
+	Kind        RequestKind
+	Credentials CredentialsMode
 }
 
 // RequestKind identifies the browser operation that initiated a request.
@@ -58,6 +59,15 @@ const (
 	RequestSubresource
 	RequestForm
 	RequestFetch
+)
+
+// CredentialsMode controls whether Fetch sends and stores credentials.
+type CredentialsMode string
+
+const (
+	CredentialsOmit       CredentialsMode = "omit"
+	CredentialsSameOrigin CredentialsMode = "same-origin"
+	CredentialsInclude    CredentialsMode = "include"
 )
 
 // Client is a size-limited HTTP resource loader.
@@ -169,7 +179,7 @@ func (c *Client) Do(ctx context.Context, requestData *Request) (*Response, error
 	addRequestCookies(request, jar, requestData)
 	redirectPolicy := operationClient.CheckRedirect
 	operationClient.CheckRedirect = func(redirect *http.Request, via []*http.Request) error {
-		storeResponseCookies(jar, redirect.Response)
+		storeResponseCookies(jar, redirect.Response, requestData)
 		if redirectPolicy != nil {
 			if err := redirectPolicy(redirect, via); err != nil {
 				return err
@@ -187,7 +197,7 @@ func (c *Client) Do(ctx context.Context, requestData *Request) (*Response, error
 		return nil, classifyRequestError(err)
 	}
 	defer response.Body.Close()
-	storeResponseCookies(jar, response)
+	storeResponseCookies(jar, response, requestData)
 
 	if response.ContentLength > c.maxBodyBytes {
 		return nil, fmt.Errorf("%w: limit is %d bytes", ErrResponseTooLarge, c.maxBodyBytes)
@@ -224,6 +234,9 @@ func addRequestCookies(request *http.Request, jar http.CookieJar, requestData *R
 	if request == nil || jar == nil || requestData == nil {
 		return
 	}
+	if !credentialsAllowed(request.URL, requestData) {
+		return
+	}
 	cookies := jar.Cookies(request.URL)
 	if policyJar, ok := jar.(*policyCookieJar); ok {
 		cookies = policyJar.cookiesForRequest(request.URL, requestData.SiteURL, requestData.Kind, request.Method)
@@ -233,11 +246,30 @@ func addRequestCookies(request *http.Request, jar http.CookieJar, requestData *R
 	}
 }
 
-func storeResponseCookies(jar http.CookieJar, response *http.Response) {
+func storeResponseCookies(jar http.CookieJar, response *http.Response, requestData *Request) {
 	if jar == nil || response == nil || response.Request == nil || response.Request.URL == nil {
 		return
 	}
+	if !credentialsAllowed(response.Request.URL, requestData) {
+		return
+	}
 	jar.SetCookies(response.Request.URL, response.Cookies())
+}
+
+func credentialsAllowed(target *url.URL, requestData *Request) bool {
+	if requestData == nil || requestData.Kind != RequestFetch {
+		return true
+	}
+	switch requestData.Credentials {
+	case CredentialsOmit:
+		return false
+	case CredentialsInclude:
+		return true
+	case "", CredentialsSameOrigin:
+		return SameOrigin(requestData.SiteURL, target)
+	default:
+		return false
+	}
 }
 
 func classifyRequestError(err error) error {

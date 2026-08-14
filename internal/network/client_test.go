@@ -274,6 +274,53 @@ func TestCookieJarMatchesHostDomainPathAndLifecycle(t *testing.T) {
 	}
 }
 
+func TestFetchCredentialsModesControlCookieSendAndStore(t *testing.T) {
+	var receivedCookie string
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		receivedCookie = request.Header.Get("Cookie")
+		http.SetCookie(response, &http.Cookie{Name: "received", Value: "yes", Path: "/"})
+		_, _ = response.Write([]byte("ok"))
+	}))
+	defer server.Close()
+	target := mustParseURL(t, server.URL+"/data")
+	crossOriginSite := mustParseURL(t, "http://127.0.0.1:1/page")
+	sameOriginSite := mustParseURL(t, server.URL+"/page")
+
+	tests := []struct {
+		name      string
+		mode      CredentialsMode
+		siteURL   *url.URL
+		wantSend  bool
+		wantStore bool
+	}{
+		{name: "omit", mode: CredentialsOmit, siteURL: sameOriginSite},
+		{name: "default cross origin", siteURL: crossOriginSite},
+		{name: "same-origin cross origin", mode: CredentialsSameOrigin, siteURL: crossOriginSite},
+		{name: "same-origin matching", mode: CredentialsSameOrigin, siteURL: sameOriginSite, wantSend: true, wantStore: true},
+		{name: "include cross origin", mode: CredentialsInclude, siteURL: crossOriginSite, wantSend: true, wantStore: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			receivedCookie = ""
+			client := NewClientWithLimits(server.Client(), 1024)
+			client.httpClient.Jar.SetCookies(target, []*http.Cookie{{Name: "session", Value: "stored", Path: "/"}})
+			_, err := client.Do(context.Background(), &Request{
+				Method: http.MethodGet, URL: target, SiteURL: test.siteURL, Kind: RequestFetch, Credentials: test.mode,
+			})
+			if err != nil {
+				t.Fatalf("Do() error = %v", err)
+			}
+			if sent := strings.Contains(receivedCookie, "session=stored"); sent != test.wantSend {
+				t.Fatalf("Cookie sent = %t (%q), want %t", sent, receivedCookie, test.wantSend)
+			}
+			_, stored := cookieValues(client.httpClient.Jar.Cookies(target))["received"]
+			if stored != test.wantStore {
+				t.Fatalf("Set-Cookie stored = %t, want %t", stored, test.wantStore)
+			}
+		})
+	}
+}
+
 func cookieValues(cookies []*http.Cookie) map[string]string {
 	values := make(map[string]string, len(cookies))
 	for _, cookie := range cookies {
