@@ -377,6 +377,48 @@ func main() {
 	}
 }
 
+func TestRuntimeReceivesFocusBlurAndResetEvents(t *testing.T) {
+	document := dommodel.NewDocument()
+	form := document.CreateElement("form", map[string]string{"id": "form"})
+	input := document.CreateElement("input", map[string]string{"id": "name"})
+	message := document.CreateElement("p", map[string]string{"id": "message"})
+	if err := document.AppendChild(document.Root, form); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(form, input); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(document.Root, message); err != nil {
+		t.Fatal(err)
+	}
+	dispatcher := events.NewDispatcher()
+	runtime := New()
+	scripts := []runtimemodel.Script{{Source: `package main
+import "growse/dom"
+func main() {
+	input := dom.GetElementByID("name")
+	form := dom.GetElementByID("form")
+	message := dom.GetElementByID("message")
+	input.OnFocus(func(event dom.Event) { if event.Type == "focus" { message.SetText("focus") } })
+	input.OnBlur(func(event dom.Event) { if event.Type == "blur" { message.SetText("blur") } })
+	form.OnReset(func(event dom.Event) { if event.Type == "reset" { message.SetText("reset") } })
+}`}}
+	if err := runtime.Load(context.Background(), scripts, runtimemodel.Environment{Document: document, Events: dispatcher}); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range []events.Event{{Type: events.Focus, Target: input.ID}, {Type: events.Blur, Target: input.ID}, {Type: events.Reset, Target: form.ID}} {
+		if !dispatcher.Dispatch(event) {
+			t.Fatalf("%s was not handled", event.Type)
+		}
+	}
+	if got := message.TextContent(); got != "reset" {
+		t.Fatalf("message = %q, want reset", got)
+	}
+}
+
 func TestRuntimeReceivesInputEvent(t *testing.T) {
 	document := dommodel.NewDocument()
 	input := document.CreateElement("input", map[string]string{"id": "query"})

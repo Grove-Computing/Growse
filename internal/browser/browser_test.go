@@ -920,6 +920,34 @@ func TestMoveFormFocusTraversesAndWrapsBothDirections(t *testing.T) {
 	}
 }
 
+func TestUpdateFocusDispatchesBlurBeforeFocus(t *testing.T) {
+	document := dom.NewDocument()
+	first := document.CreateElement("input", nil)
+	second := document.CreateElement("input", nil)
+	if err := document.AppendChild(document.Root, first); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(document.Root, second); err != nil {
+		t.Fatal(err)
+	}
+	dispatcher := events.NewDispatcher()
+	var order []string
+	dispatcher.AddEventListener(first.ID, events.Focus, func(events.Event) { order = append(order, "focus:first") })
+	dispatcher.AddEventListener(first.ID, events.Blur, func(events.Event) { order = append(order, "blur:first") })
+	dispatcher.AddEventListener(second.ID, events.Focus, func(events.Event) { order = append(order, "focus:second") })
+	page := &Page{Document: document, ComputedStyles: style.Compute(document, nil), Events: dispatcher}
+	browser := New(nil)
+	browser.SetPage(page)
+
+	if !browser.UpdateFocus(first.ID) || !browser.UpdateFocus(second.ID) {
+		t.Fatal("focus transition was not applied")
+	}
+	want := []string{"focus:first", "blur:first", "focus:second"}
+	if !reflect.DeepEqual(order, want) {
+		t.Fatalf("event order = %v, want %v", order, want)
+	}
+}
+
 func TestNewPageCopiesURL(t *testing.T) {
 	pageURL := mustParseURL(t, "https://example.com/original")
 	page := NewPage(pageURL)

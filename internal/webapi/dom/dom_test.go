@@ -377,6 +377,32 @@ func TestFormResetRestoresDefaultValue(t *testing.T) {
 	}
 }
 
+func TestFocusBlurAndResetHandlersReceiveWebGoEvents(t *testing.T) {
+	document := dommodel.NewDocument()
+	form := document.CreateElement("form", map[string]string{"id": "form"})
+	input := document.CreateElement("input", map[string]string{"id": "name"})
+	if err := document.AppendChild(document.Root, form); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(form, input); err != nil {
+		t.Fatal(err)
+	}
+	dispatcher := events.NewDispatcher()
+	api := New(document, dispatcher, nil)
+	var received []string
+	api.GetElementByID("name").OnFocus(func(event Event) { received = append(received, event.Type+":"+event.TargetID) })
+	api.GetElementByID("name").OnBlur(func(event Event) { received = append(received, event.Type+":"+event.TargetID) })
+	api.GetElementByID("form").OnReset(func(event Event) { received = append(received, event.Type+":"+event.TargetID) })
+
+	dispatcher.Dispatch(events.Event{Type: events.Focus, Target: input.ID})
+	dispatcher.Dispatch(events.Event{Type: events.Blur, Target: input.ID})
+	dispatcher.Dispatch(events.Event{Type: events.Reset, Target: form.ID})
+	want := []string{"focus:name", "blur:name", "reset:form"}
+	if !reflect.DeepEqual(received, want) {
+		t.Fatalf("events = %v, want %v", received, want)
+	}
+}
+
 func TestOnClickRegistersHandler(t *testing.T) {
 	document := dommodel.NewDocument()
 	button := document.CreateElement("button", map[string]string{"id": "button"})

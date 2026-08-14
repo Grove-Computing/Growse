@@ -327,11 +327,21 @@ func (b *Browser) UpdateFocus(nodeID dom.NodeID) bool {
 		b.mu.Unlock()
 		return false
 	}
+	previous := page.FocusTarget
 	page.FocusTarget = target
 	recomputePageStyles(page, b.currentTime())
+	dispatcher := page.Events
 	b.mu.Unlock()
 	if onMutation != nil {
 		onMutation()
+	}
+	if dispatcher != nil {
+		if previous != 0 {
+			dispatcher.Dispatch(events.Event{Type: events.Blur, Target: previous})
+		}
+		if target != 0 {
+			dispatcher.Dispatch(events.Event{Type: events.Focus, Target: target})
+		}
 	}
 	return true
 }

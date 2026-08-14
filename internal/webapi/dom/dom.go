@@ -124,6 +124,36 @@ func (element *Element) OnSubmit(handler func(Event)) {
 	})
 }
 
+// OnReset はformのresetハンドラーを登録する。
+func (element *Element) OnReset(handler func(Event)) {
+	if handler == nil {
+		return
+	}
+	element.addEventListener(events.Reset, func(event events.Event) {
+		handler(element.publicEvent(event))
+	})
+}
+
+// OnFocus は要素がfocusを得たハンドラーを登録する。
+func (element *Element) OnFocus(handler func(Event)) {
+	if handler == nil {
+		return
+	}
+	element.addEventListener(events.Focus, func(event events.Event) {
+		handler(element.publicEvent(event))
+	})
+}
+
+// OnBlur は要素がfocusを失ったハンドラーを登録する。
+func (element *Element) OnBlur(handler func(Event)) {
+	if handler == nil {
+		return
+	}
+	element.addEventListener(events.Blur, func(event events.Event) {
+		handler(element.publicEvent(event))
+	})
+}
+
 // OnMouseEnter はポインターが要素へ入ったときのハンドラーを登録する。
 func (element *Element) OnMouseEnter(handler func(Event)) {
 	if handler == nil {
