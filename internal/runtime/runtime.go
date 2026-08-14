@@ -4,6 +4,7 @@ package runtime
 import (
 	"context"
 	"net/url"
+	"time"
 
 	"github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/events"
@@ -25,6 +26,7 @@ type Environment struct {
 	Fetch        func(context.Context, *network.Request) (*network.Response, error)
 	OnMutation   func()
 	RequestFrame func()
+	FrameScope   func(time.Time, func())
 	ConsoleLog   func(message string)
 }
 

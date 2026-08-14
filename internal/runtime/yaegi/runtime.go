@@ -96,6 +96,7 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 	fetch := fetchapi.NewPage(r.runtimeCtx, environment.BaseURL, environment.Fetch, r.enqueueCallback)
 	r.fetchAPI = fetch
 	scheduler := schedulerapi.NewPage(r.runtimeCtx, r.enqueueCallback, environment.RequestFrame)
+	scheduler.SetFrameScope(environment.FrameScope)
 	r.schedulerAPI = scheduler
 	if err := r.interpreter.Use(interp.Exports{
 		"growse/console/console": {

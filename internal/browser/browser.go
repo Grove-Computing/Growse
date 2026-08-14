@@ -948,6 +948,18 @@ func startRuntime(ctx context.Context, factory runtimemodel.Factory, page *Page,
 		page.RuntimeError = "Go runtime factory returned nil"
 		return nil
 	}
+	var frameMu sync.RWMutex
+	var frameTime time.Time
+	frameActive := false
+	runtimeNow := func() time.Time {
+		frameMu.RLock()
+		active, current := frameActive, frameTime
+		frameMu.RUnlock()
+		if active {
+			return current
+		}
+		return now()
+	}
 	environment := runtimemodel.Environment{
 		Document: page.Document,
 		Events:   page.Events,
@@ -958,12 +970,25 @@ func startRuntime(ctx context.Context, factory runtimemodel.Factory, page *Page,
 				page.HoverTarget = 0
 			}
 			page.FocusTarget = validFocusTarget(page.Document, page.FocusTarget)
-			recomputePageStyles(page, now())
+			recomputePageStyles(page, runtimeNow())
 			if onMutation != nil {
 				onMutation()
 			}
 		},
 		RequestFrame: onMutation,
+		FrameScope: func(current time.Time, callback func()) {
+			frameMu.Lock()
+			frameTime = current
+			frameActive = true
+			frameMu.Unlock()
+			defer func() {
+				frameMu.Lock()
+				frameActive = false
+				frameTime = time.Time{}
+				frameMu.Unlock()
+			}()
+			callback()
+		},
 	}
 	if loader, ok := client.(requestLoader); ok {
 		environment.Fetch = loader.Do

@@ -104,6 +104,7 @@ type API struct {
 	frameOrder     []FrameID
 	nextFrameID    FrameID
 	requestFrame   func()
+	frameScope     func(time.Time, func())
 
 	wake chan struct{}
 	done chan struct{}
@@ -144,6 +145,16 @@ func newAPI(parent context.Context, clock Clock, enqueue func(func()) bool, requ
 		close(api.done)
 	}
 	return api
+}
+
+// SetFrameScope configures the page-owned scope used while frame callbacks run.
+func (api *API) SetFrameScope(scope func(time.Time, func())) {
+	if api == nil {
+		return
+	}
+	api.mu.Lock()
+	api.frameScope = scope
+	api.mu.Unlock()
 }
 
 // RequestAnimationFrame registers callback for the next rendered frame.
@@ -203,14 +214,22 @@ func (api *API) RunAnimationFrame(current time.Time) bool {
 	}
 	order := api.frameOrder
 	callbacks := api.frameCallbacks
+	frameScope := api.frameScope
 	api.frameOrder = nil
 	api.frameCallbacks = make(map[FrameID]func(Timestamp))
 	api.mu.Unlock()
 
-	for _, id := range order {
-		if callback := callbacks[id]; callback != nil {
-			callback(Timestamp(elapsed))
+	deliver := func() {
+		for _, id := range order {
+			if callback := callbacks[id]; callback != nil {
+				callback(Timestamp(elapsed))
+			}
 		}
+	}
+	if frameScope != nil {
+		frameScope(current, deliver)
+	} else {
+		deliver()
 	}
 	return true
 }
@@ -490,6 +509,7 @@ func (api *API) Close() {
 	api.frameCallbacks = nil
 	api.frameOrder = nil
 	api.requestFrame = nil
+	api.frameScope = nil
 	api.mu.Unlock()
 	api.cancel()
 	api.signal()

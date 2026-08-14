@@ -5,10 +5,12 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Grove-Computing/Growse/internal/events"
 	"github.com/Grove-Computing/Growse/internal/network"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
+	runtimeyaegi "github.com/Grove-Computing/Growse/internal/runtime/yaegi"
 )
 
 type runtimeStub struct {
@@ -19,6 +21,57 @@ type runtimeStub struct {
 	startErr      error
 	environment   runtimemodel.Environment
 	mutateOnStart bool
+}
+
+func TestAnimationFrameMutationUsesSharedFrameTimestamp(t *testing.T) {
+	pageURL := mustParseURL(t, "http://localhost/frame.html")
+	loader := stubLoader{response: &network.Response{
+		URL: pageURL, StatusCode: 200, ContentType: "text/html",
+		Body: []byte(`<style>
+#box { opacity: 0; transition: opacity 1s linear; }
+#box.active { opacity: 1; }
+</style>
+<div id="box"></div>
+<script type="text/go">package main
+import (
+	"growse/dom"
+	"growse/scheduler"
+)
+func main() {
+	_, _ = scheduler.RequestAnimationFrame(func(timestamp scheduler.Timestamp) {
+		_ = timestamp
+		dom.GetElementByID("box").AddClass("active")
+	})
+}</script>`),
+	}}
+	start := time.Date(2026, time.August, 14, 12, 0, 0, 0, time.UTC)
+	clock := &browserFakeClock{current: start}
+	browserState := NewWithRuntimeFactory(loader, func() runtimemodel.Runtime { return runtimeyaegi.New() })
+	browserState.SetAnimationClock(clock)
+
+	page, err := browserState.Navigate(context.Background(), pageURL.String())
+	if err != nil {
+		t.Fatalf("Navigate() error = %v", err)
+	}
+	frameTime := start.Add(100 * time.Millisecond)
+	if !browserState.RunAnimationFrame(frameTime) {
+		t.Fatal("RunAnimationFrame() did not deliver WebGo callback")
+	}
+	box, ok := page.Document.GetElementByID("box")
+	if !ok {
+		t.Fatal("box element was not found")
+	}
+	atFrame, _ := page.AnimatedStyles(frameTime).For(box)
+	if atFrame.Opacity != 0 {
+		t.Fatalf("opacity at frame = %v, want transition start value 0", atFrame.Opacity)
+	}
+	midpoint, _ := page.AnimatedStyles(frameTime.Add(500 * time.Millisecond)).For(box)
+	if midpoint.Opacity != 0.5 {
+		t.Fatalf("opacity at shared timestamp midpoint = %v, want 0.5", midpoint.Opacity)
+	}
+	if err := browserState.Close(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func (runtime *runtimeStub) Load(_ context.Context, _ []runtimemodel.Script, environment runtimemodel.Environment) error {
