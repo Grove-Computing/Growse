@@ -28,6 +28,62 @@ type AnimationSample struct {
 	Applies   bool
 }
 
+// RunningAnimation tracks pause time separately from the CSS timing values.
+type RunningAnimation struct {
+	Animation   CSSAnimation
+	StartTime   time.Time
+	paused      bool
+	pausedAt    time.Time
+	totalPaused time.Duration
+}
+
+// NewRunningAnimation creates an animation whose timeline begins at start.
+func NewRunningAnimation(animation CSSAnimation, start time.Time) *RunningAnimation {
+	running := &RunningAnimation{Animation: animation, StartTime: start}
+	if animation.PlayState == AnimationPaused {
+		running.paused = true
+		running.pausedAt = start
+	}
+	return running
+}
+
+// Sample returns progress without advancing time while paused.
+func (running *RunningAnimation) Sample(current time.Time) AnimationSample {
+	effective := current
+	if running.paused {
+		effective = running.pausedAt
+	}
+	effective = effective.Add(-running.totalPaused)
+	return running.Animation.Sample(running.StartTime, effective)
+}
+
+// Pause holds the current progress. Repeated calls have no effect.
+func (running *RunningAnimation) Pause(current time.Time) {
+	if running.paused {
+		return
+	}
+	running.paused = true
+	running.pausedAt = current
+	running.Animation.PlayState = AnimationPaused
+}
+
+// Resume continues from the held progress. Repeated calls have no effect.
+func (running *RunningAnimation) Resume(current time.Time) {
+	if !running.paused {
+		return
+	}
+	if current.After(running.pausedAt) {
+		running.totalPaused += current.Sub(running.pausedAt)
+	}
+	running.paused = false
+	running.Animation.PlayState = AnimationRunning
+}
+
+// Paused reports whether timeline progress is currently held.
+func (running *RunningAnimation) Paused() bool {
+	return running.paused
+}
+
 // Sample evaluates delay, iteration count, direction, fill mode, and easing.
 func (item CSSAnimation) Sample(start, current time.Time) AnimationSample {
 	elapsed := current.Sub(start) - item.Timing.Delay

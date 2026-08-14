@@ -115,6 +115,47 @@ func TestCSSAnimationReverseFractionalFinalProgress(t *testing.T) {
 	}
 }
 
+func TestRunningAnimationPausesAndResumesFromHeldProgress(t *testing.T) {
+	start := time.Unix(100, 0)
+	timing, _ := animationmodel.NewTiming(time.Second, 0, animationmodel.Linear{})
+	running := NewRunningAnimation(CSSAnimation{
+		Name: "pulse", Timing: timing, Iterations: 1, FillMode: AnimationFillForwards, PlayState: AnimationRunning,
+	}, start)
+
+	running.Pause(start.Add(250 * time.Millisecond))
+	running.Pause(start.Add(400 * time.Millisecond))
+	if !running.Paused() {
+		t.Fatal("animation is not paused")
+	}
+	if got := running.Sample(start.Add(750 * time.Millisecond)).Progress; got != 0.25 {
+		t.Fatalf("progress while paused = %v, want 0.25", got)
+	}
+
+	running.Resume(start.Add(750 * time.Millisecond))
+	running.Resume(start.Add(800 * time.Millisecond))
+	if running.Paused() {
+		t.Fatal("animation remains paused")
+	}
+	if got := running.Sample(start.Add(time.Second)).Progress; got != 0.5 {
+		t.Fatalf("progress after resume = %v, want 0.5", got)
+	}
+}
+
+func TestRunningAnimationCanStartPaused(t *testing.T) {
+	start := time.Unix(100, 0)
+	timing, _ := animationmodel.NewTiming(time.Second, 0, animationmodel.Linear{})
+	running := NewRunningAnimation(CSSAnimation{
+		Name: "pulse", Timing: timing, Iterations: 1, PlayState: AnimationPaused,
+	}, start)
+	if got := running.Sample(start.Add(time.Second)).Progress; got != 0 {
+		t.Fatalf("initially paused progress = %v, want zero", got)
+	}
+	running.Resume(start.Add(time.Second))
+	if got := running.Sample(start.Add(1250 * time.Millisecond)).Progress; got != 0.25 {
+		t.Fatalf("resumed initially paused progress = %v, want 0.25", got)
+	}
+}
+
 func animationTestStyle(t *testing.T, declarations string) ComputedStyle {
 	t.Helper()
 	document := dom.NewDocument()
