@@ -7,6 +7,9 @@ import "math"
 // function kinds differ, the remaining suffixes are resolved and interpolated
 // through decomposed affine matrices.
 func InterpolateTransform(from, to []TransformFunction, progress float64, width, height float32) []TransformFunction {
+	if math.IsNaN(progress) || math.IsInf(progress, 0) {
+		progress = 0
+	}
 	length := max(len(from), len(to))
 	result := make([]TransformFunction, 0, length)
 	for index := 0; index < length; index++ {
@@ -77,7 +80,17 @@ func interpolateLengthPercentage(from, to LengthPercentage, progress float64) Le
 }
 
 func interpolateFloat(from, to float32, progress float64) float32 {
-	return from + (to-from)*float32(progress)
+	value := float64(from) + (float64(to)-float64(from))*progress
+	if math.IsNaN(value) {
+		return from
+	}
+	if value > math.MaxFloat32 {
+		return math.MaxFloat32
+	}
+	if value < -math.MaxFloat32 {
+		return -math.MaxFloat32
+	}
+	return float32(value)
 }
 
 type decomposedMatrix struct {

@@ -116,12 +116,21 @@ func interpolateTransitionValue(from, to TransitionValue, progress float64) Tran
 // values. The used value remains in opacity's valid range even when an easing
 // function produces an overshooting progress value.
 func InterpolateOpacity(from, to float32, progress float64) float32 {
-	value := from + (to-from)*float32(progress)
-	return min(max(value, 0), 1)
+	if math.IsNaN(progress) {
+		progress = 0
+	}
+	value := float64(from) + (float64(to)-float64(from))*progress
+	if math.IsNaN(value) {
+		return min(max(from, 0), 1)
+	}
+	return float32(min(max(value, 0), 1))
 }
 
 // InterpolateColor blends packed RRGGBBAA colors in premultiplied sRGB space.
 func InterpolateColor(from, to uint32, progress float64) uint32 {
+	if math.IsNaN(progress) {
+		progress = 0
+	}
 	progress = min(max(progress, 0), 1)
 	fromChannels := colorChannels(from)
 	toChannels := colorChannels(to)

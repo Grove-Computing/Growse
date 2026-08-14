@@ -21,6 +21,13 @@ type animationLists struct {
 	plays      []AnimationPlayState
 }
 
+const (
+	// MaxAnimationsPerElement bounds comma-list work and retained state.
+	MaxAnimationsPerElement = 32
+	// MaxActiveAnimations bounds running Animation state for one page.
+	MaxActiveAnimations = 4096
+)
+
 // AnimationSample is one CSS animation's directed and eased progress.
 type AnimationSample struct {
 	Phase     animationmodel.Phase
@@ -76,13 +83,22 @@ func (registry *AnimationRegistry) Reconcile(styles Map, current time.Time) {
 			delete(registry.stacks, nodeID)
 		}
 	}
+	remaining := MaxActiveAnimations
 	for nodeID, computed := range styles {
 		stack := registry.stacks[nodeID]
 		if stack == nil {
 			stack = &AnimationStack{}
 			registry.stacks[nodeID] = stack
 		}
-		stack.reconcile(computed.Animations, current)
+		animations := computed.Animations
+		if len(animations) > MaxAnimationsPerElement {
+			animations = animations[:MaxAnimationsPerElement]
+		}
+		if len(animations) > remaining {
+			animations = animations[:remaining]
+		}
+		stack.reconcile(animations, current)
+		remaining -= stack.Len()
 		if stack.Len() == 0 {
 			delete(registry.stacks, nodeID)
 		}
@@ -105,6 +121,18 @@ func (registry *AnimationRegistry) Count(nodeID dom.NodeID) int {
 	return registry.stacks[nodeID].Len()
 }
 
+// Total reports the number of running animations retained for the page.
+func (registry *AnimationRegistry) Total() int {
+	if registry == nil {
+		return 0
+	}
+	total := 0
+	for _, stack := range registry.stacks {
+		total += stack.Len()
+	}
+	return total
+}
+
 // Clear discards every running animation owned by the page.
 func (registry *AnimationRegistry) Clear() {
 	if registry == nil {
@@ -116,6 +144,9 @@ func (registry *AnimationRegistry) Clear() {
 // NewAnimationStack starts every named animation on one shared timestamp.
 func NewAnimationStack(animations []CSSAnimation, start time.Time) *AnimationStack {
 	stack := &AnimationStack{}
+	if len(animations) > MaxAnimationsPerElement {
+		animations = animations[:MaxAnimationsPerElement]
+	}
 	for _, item := range animations {
 		if strings.EqualFold(item.Name, "none") {
 			continue
@@ -323,6 +354,9 @@ func applyAnimationProperties(computed, parent ComputedStyle, winners map[string
 		}
 	}
 
+	if len(lists.names) > MaxAnimationsPerElement {
+		lists.names = lists.names[:MaxAnimationsPerElement]
+	}
 	computed.Animations = make([]CSSAnimation, len(lists.names))
 	for index, name := range lists.names {
 		timing, _ := animationmodel.NewTiming(

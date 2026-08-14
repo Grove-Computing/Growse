@@ -2,6 +2,7 @@ package css
 
 import (
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -27,6 +28,50 @@ body > p { color: red }
 	}
 	if !stylesheet.Rules[1].Declarations[0].Important {
 		t.Fatal("!important was not parsed")
+	}
+}
+
+func TestKeyframesSafetyLimits(t *testing.T) {
+	var source strings.Builder
+	for rule := 0; rule < MaxKeyframesRules+20; rule++ {
+		source.WriteString("@keyframes k")
+		source.WriteString(strconv.Itoa(rule))
+		source.WriteString("{0%{opacity:0}}")
+	}
+	stylesheet, err := Parse(strings.NewReader(source.String()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stylesheet.Keyframes) != MaxKeyframesRules {
+		t.Fatalf("keyframes rules = %d, want cap %d", len(stylesheet.Keyframes), MaxKeyframesRules)
+	}
+
+	source.Reset()
+	source.WriteString("@keyframes frames{")
+	for frame := 0; frame < MaxFramesPerKeyframesRule+20; frame++ {
+		source.WriteString("0%{opacity:0}")
+	}
+	source.WriteString("}")
+	stylesheet, err = Parse(strings.NewReader(source.String()))
+	if err != nil || len(stylesheet.Keyframes[0].Frames) != MaxFramesPerKeyframesRule {
+		t.Fatalf("frame cap result = %d / %v", len(stylesheet.Keyframes[0].Frames), err)
+	}
+
+	source.Reset()
+	source.WriteString("@keyframes declarations{0%{")
+	for declaration := 0; declaration < MaxDeclarationsPerKeyframe+20; declaration++ {
+		source.WriteString("--x")
+		source.WriteString(strconv.Itoa(declaration))
+		source.WriteString(":1;")
+	}
+	source.WriteString("}}")
+	stylesheet, err = Parse(strings.NewReader(source.String()))
+	if err != nil || len(stylesheet.Keyframes[0].Frames[0].Declarations) != MaxDeclarationsPerKeyframe {
+		t.Fatalf("declaration cap result = %d / %v", len(stylesheet.Keyframes[0].Frames[0].Declarations), err)
+	}
+	offsets := strings.Repeat("0%,", MaxOffsetsPerKeyframe) + "100%"
+	if parsed, valid := parseKeyframeSelectors(offsets); valid || parsed != nil {
+		t.Fatal("oversized keyframe selector list was accepted")
 	}
 }
 

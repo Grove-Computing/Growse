@@ -57,6 +57,10 @@ func Parse(reader io.Reader) (*Stylesheet, error) {
 					continue
 				}
 				keyframes := &stylesheet.Keyframes[frame.keyframesIndex]
+				if len(keyframes.Frames) >= MaxFramesPerKeyframesRule {
+					current, currentKeyframe = nil, nil
+					continue
+				}
 				keyframes.Frames = append(keyframes.Frames, Keyframe{Offsets: offsets})
 				current, currentKeyframe = nil, &keyframes.Frames[len(keyframes.Frames)-1]
 				continue
@@ -101,7 +105,9 @@ func Parse(reader io.Reader) (*Stylesheet, error) {
 					Property: property, Value: parseValue(rawValue), Important: important,
 				}
 				if currentKeyframe != nil {
-					currentKeyframe.Declarations = append(currentKeyframe.Declarations, declaration)
+					if len(currentKeyframe.Declarations) < MaxDeclarationsPerKeyframe {
+						currentKeyframe.Declarations = append(currentKeyframe.Declarations, declaration)
+					}
 				} else {
 					current.Declarations = append(current.Declarations, declaration)
 				}
@@ -128,7 +134,7 @@ func Parse(reader io.Reader) (*Stylesheet, error) {
 				frame.active, frame.isMedia = true, true
 				frame.media = parseMediaQueryList(tokenText(p.Values()))
 			} else if len(atRules) == 0 && name == "@keyframes" {
-				if keyframesName, valid := parseKeyframesName(tokenText(p.Values())); valid {
+				if keyframesName, valid := parseKeyframesName(tokenText(p.Values())); valid && len(stylesheet.Keyframes) < MaxKeyframesRules {
 					stylesheet.Keyframes = append(stylesheet.Keyframes, KeyframesRule{Name: keyframesName})
 					frame.active = true
 					frame.keyframesIndex = len(stylesheet.Keyframes) - 1
@@ -158,6 +164,9 @@ func parseKeyframesName(value string) (string, bool) {
 
 func parseKeyframeSelectors(value string) ([]float64, bool) {
 	parts := strings.Split(value, ",")
+	if len(parts) > MaxOffsetsPerKeyframe {
+		return nil, false
+	}
 	offsets := make([]float64, 0, len(parts))
 	for _, part := range parts {
 		part = strings.ToLower(strings.TrimSpace(part))

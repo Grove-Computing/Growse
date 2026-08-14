@@ -1,6 +1,17 @@
 // Package css parses CSS syntax into Growse-owned rules.
 package css
 
+const (
+	// MaxKeyframesRules bounds named keyframe storage per stylesheet.
+	MaxKeyframesRules = 256
+	// MaxFramesPerKeyframesRule bounds selector blocks in one @keyframes rule.
+	MaxFramesPerKeyframesRule = 256
+	// MaxDeclarationsPerKeyframe bounds work performed for one sampled frame.
+	MaxDeclarationsPerKeyframe = 64
+	// MaxOffsetsPerKeyframe bounds comma-separated selectors in one block.
+	MaxOffsetsPerKeyframe = 64
+)
+
 // Stylesheet is an ordered collection of CSS rules.
 type Stylesheet struct {
 	Rules     []Rule
