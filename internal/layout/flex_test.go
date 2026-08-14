@@ -278,6 +278,62 @@ func TestBuildFlexReverseAndWrapReverseKeepHitGeometry(t *testing.T) {
 	}
 }
 
+func TestBuildFlexAppliesAutomaticMinimumSizeAndOverflowException(t *testing.T) {
+	document := dom.NewDocument()
+	container := document.CreateElement("div", map[string]string{"class": "container"})
+	automatic := document.CreateElement("div", map[string]string{"class": "item automatic"})
+	clipped := document.CreateElement("div", map[string]string{"class": "item clipped"})
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, container},
+		[2]*dom.Node{container, automatic}, [2]*dom.Node{automatic, document.CreateText("unbreakable-content")},
+		[2]*dom.Node{container, clipped}, [2]*dom.Node{clipped, document.CreateText("unbreakable-content")},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.container { display:flex; width:100px; }
+.item { flex:1 1 auto; height:20px; background-color:#ddd; }
+.clipped { overflow:hidden; }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, stylemodel.Compute(document, stylesheet), 500)
+	autoBox := decorationForNode(t, tree, automatic.ID)
+	clippedBox := decorationForNode(t, tree, clipped.ID)
+	if autoBox.Width <= clippedBox.Width || autoBox.Width <= 50 {
+		t.Fatalf("automatic min widths = visible %v, clipped %v", autoBox.Width, clippedBox.Width)
+	}
+}
+
+func TestBuildFlexUsesPercentageFallbackAndAspectRatio(t *testing.T) {
+	document := dom.NewDocument()
+	column := document.CreateElement("div", map[string]string{"class": "column"})
+	percentage := document.CreateElement("div", map[string]string{"class": "percentage"})
+	ratioContainer := document.CreateElement("div", map[string]string{"class": "ratio-container"})
+	ratio := document.CreateElement("div", map[string]string{"class": "ratio"})
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, column}, [2]*dom.Node{column, percentage},
+		[2]*dom.Node{document.Root, ratioContainer}, [2]*dom.Node{ratioContainer, ratio},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.column { display:flex; flex-direction:column; width:100px; }
+.percentage { flex:0 0 50%; height:40px; background-color:#ddd; }
+.ratio-container { display:flex; width:200px; }
+.ratio { flex:0 1 auto; height:40px; aspect-ratio:2; background-color:#ddd; }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, stylemodel.Compute(document, stylesheet), 500)
+	percentageBox := decorationForNode(t, tree, percentage.ID)
+	ratioBox := decorationForNode(t, tree, ratio.ID)
+	if percentageBox.Height != 40 {
+		t.Fatalf("indefinite percentage basis height = %v, want 40", percentageBox.Height)
+	}
+	if ratioBox.Width != 80 {
+		t.Fatalf("aspect-ratio width = %v, want 80", ratioBox.Width)
+	}
+}
+
 func decorationForNode(t *testing.T, tree *Tree, nodeID dom.NodeID) Decoration {
 	t.Helper()
 	for _, decoration := range tree.Decorations {

@@ -362,13 +362,22 @@ func (e *engine) collectFlexItems(container *dom.Node, axis flexAxis, availableM
 		if style.display == stylemodel.DisplayNone {
 			continue
 		}
-		base, cross := e.flexIntrinsicSizes(node, style, axis, availableMain, width, height, heightDefinite)
+		base, cross, minContent := e.flexIntrinsicSizes(node, style, axis, availableMain, width, height, heightDefinite)
 		minimum, maximum := float32(0), float32(-1)
 		minValue, maxValue := style.minWidth, style.maxWidth
 		if !axis.horizontal {
 			minValue, maxValue = style.minHeight, style.maxHeight
 		}
-		if resolved, ok := resolveSize(minValue, max(availableMain, float32(0)), availableMain >= 0); ok {
+		if minValue.Kind == stylemodel.SizeAuto && mainOverflow(style, axis) == stylemodel.OverflowVisible {
+			minimum = minContent
+			preferred := style.width
+			if !axis.horizontal {
+				preferred = style.height
+			}
+			if resolved, ok := resolveSize(preferred, max(availableMain, float32(0)), availableMain >= 0); ok {
+				minimum = min(minimum, resolved)
+			}
+		} else if resolved, ok := resolveSize(minValue, max(availableMain, float32(0)), availableMain >= 0); ok {
 			minimum = resolved
 		}
 		if resolved, ok := resolveSize(maxValue, max(availableMain, float32(0)), availableMain >= 0); ok {
@@ -409,14 +418,20 @@ func (e *engine) collectFlexItems(container *dom.Node, axis flexAxis, availableM
 	return items, byAlgorithm
 }
 
-func (e *engine) flexIntrinsicSizes(node *dom.Node, style blockStyle, axis flexAxis, availableMain, width, height float32, heightDefinite bool) (float32, float32) {
+func (e *engine) flexIntrinsicSizes(node *dom.Node, style blockStyle, axis flexAxis, availableMain, width, height float32, heightDefinite bool) (float32, float32, float32) {
 	text := normalizeWhitespace(e.inlineText(node))
 	textWidth, textHeight, _ := measureText(text, style.fontSize, style.bold)
+	minTextWidth := float32(0)
+	for _, word := range strings.Fields(text) {
+		wordWidth, _, _ := measureText(word, style.fontSize, style.bold)
+		minTextWidth = max(minTextWidth, wordWidth)
+	}
 	if textHeight <= 0 {
 		textHeight = style.fontSize * 1.4
 	}
 	if isTextInput(node) {
 		textWidth, textHeight = inputWidth, inputHeight
+		minTextWidth = inputWidth
 	}
 	horizontalExtras := style.padding.Left + style.padding.Right + style.border.Left.Width + style.border.Right.Width
 	verticalExtras := style.padding.Top + style.padding.Bottom + style.border.Top.Width + style.border.Bottom.Width
@@ -454,9 +469,16 @@ func (e *engine) flexIntrinsicSizes(node *dom.Node, style blockStyle, axis flexA
 		}
 	}
 	if axis.horizontal {
-		return max(base, float32(0)), max(intrinsicHeight, float32(1))
+		return max(base, float32(0)), max(intrinsicHeight, float32(1)), max(minTextWidth+horizontalExtras, float32(0))
 	}
-	return max(base, float32(0)), max(intrinsicWidth, float32(1))
+	return max(base, float32(0)), max(intrinsicWidth, float32(1)), max(textHeight+verticalExtras, float32(0))
+}
+
+func mainOverflow(style blockStyle, axis flexAxis) stylemodel.Overflow {
+	if axis.horizontal {
+		return style.overflowX
+	}
+	return style.overflowY
 }
 
 func (e *engine) renderFlexItem(item *flexLayoutItem, axis flexAxis, x, y, mainSize, crossSize float32) {

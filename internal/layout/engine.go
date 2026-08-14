@@ -568,11 +568,14 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 			mWidth, _, _ := measureText("m", token.style.fontSize, token.style.bold)
 			characters := int(available / max(mWidth, float32(1)))
 			if characters < 1 {
-				if wrapsWhitespace(token.style.whiteSpace) {
+				if wrapsWhitespace(token.style.whiteSpace) && usedWidth > 0 {
 					flushLine()
 					continue
 				}
-				characters = len(remaining)
+				characters = 1
+				if !wrapsWhitespace(token.style.whiteSpace) {
+					characters = len(remaining)
+				}
 			}
 			if characters > len(remaining) {
 				characters = len(remaining)

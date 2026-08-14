@@ -828,6 +828,9 @@ func TestComputeUsesFlexInitialValuesAndLonghands(t *testing.T) {
 	if computed.RowGap != (LengthPercentage{}) || computed.ColumnGap.Pixels != 8 || computed.AlignSelf != AlignAuto {
 		t.Fatalf("gap/alignment initial values = %#v", computed)
 	}
+	if computed.MinWidth.Kind != SizeAuto || computed.MinHeight.Kind != SizeAuto {
+		t.Fatalf("automatic minimum sizes = %#v / %#v", computed.MinWidth, computed.MinHeight)
+	}
 }
 
 func parseTestSelector(t *testing.T, value string) css.Selector {

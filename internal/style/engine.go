@@ -107,7 +107,7 @@ func initialStyle() ComputedStyle {
 		DecorationColor:  defaultTextColor, Opacity: 1, FlexShrink: 1,
 		AlignItems: AlignStretch, AlignContent: AlignStretch, AlignSelf: AlignAuto,
 		Width: SizeValue{Kind: SizeAuto}, Height: SizeValue{Kind: SizeAuto},
-		MinWidth: SizeValue{Kind: SizeLength}, MinHeight: SizeValue{Kind: SizeLength},
+		MinWidth: SizeValue{Kind: SizeAuto}, MinHeight: SizeValue{Kind: SizeAuto},
 		MaxWidth: SizeValue{Kind: SizeNone}, MaxHeight: SizeValue{Kind: SizeNone},
 	}
 }
@@ -121,7 +121,7 @@ func inheritedStyle(parent ComputedStyle) ComputedStyle {
 		DecorationColor:  parent.Color, Opacity: 1, FlexShrink: 1,
 		AlignItems: AlignStretch, AlignContent: AlignStretch, AlignSelf: AlignAuto,
 		Width: SizeValue{Kind: SizeAuto}, Height: SizeValue{Kind: SizeAuto},
-		MinWidth: SizeValue{Kind: SizeLength}, MinHeight: SizeValue{Kind: SizeLength},
+		MinWidth: SizeValue{Kind: SizeAuto}, MinHeight: SizeValue{Kind: SizeAuto},
 		MaxWidth: SizeValue{Kind: SizeNone}, MaxHeight: SizeValue{Kind: SizeNone},
 	}
 	if len(parent.CustomProperties) != 0 {
@@ -514,7 +514,7 @@ func resolveSizeWinner(property string, current, parent SizeValue, winners map[s
 		return initialSizeValue(property)
 	}
 	value := strings.ToLower(strings.TrimSpace(resolved))
-	if (property == "width" || property == "height") && value == "auto" {
+	if (property == "width" || property == "height" || property == "min-width" || property == "min-height") && value == "auto" {
 		return SizeValue{Kind: SizeAuto}
 	}
 	if strings.HasPrefix(property, "max-") && value == "none" {
@@ -528,7 +528,7 @@ func resolveSizeWinner(property string, current, parent SizeValue, winners map[s
 }
 
 func initialSizeValue(property string) SizeValue {
-	if property == "width" || property == "height" {
+	if property == "width" || property == "height" || property == "min-width" || property == "min-height" {
 		return SizeValue{Kind: SizeAuto}
 	}
 	if strings.HasPrefix(property, "max-") {
