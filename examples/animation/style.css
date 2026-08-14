@@ -1,0 +1,20 @@
+* { box-sizing: border-box; }
+html, body { min-height: 100%; }
+body { margin: 0; background-color: #08111f; color: #e6f6ff; font-size: 16px; }
+.showcase { width: 880px; margin: 48px auto; padding: 40px; }
+.eyebrow { color: #4de3ff; font-weight: bold; }
+h1 { margin: 8px 0; font-size: 42px; }
+.lead { color: #9fb4c8; }
+.stage { position: relative; height: 360px; margin-top: 36px; overflow: hidden; border: 1px solid #24415c; border-radius: 28px; background-color: #0d1b2e; }
+.card {
+  position: absolute; left: 250px; top: 90px; width: 380px; padding: 32px;
+  border: 1px solid #31516d; border-radius: 20px; background-color: #132942;
+  transition: transform 400ms ease, background-color 400ms linear, opacity 400ms ease;
+}
+.card:hover { transform: translateY(-12px) scale(1.03); background-color: #1a3d5d; opacity: .86; }
+.status { display: inline-block; width: 12px; height: 12px; border-radius: 50%; background-color: #55efc4; animation: pulse 1.4s ease-in-out infinite alternate; }
+.orb { position: absolute; display: block; width: 90px; height: 90px; border-radius: 50%; opacity: .72; }
+.orb.cyan { left: 70px; top: 60px; background-color: #00d8ff; animation: drift 3s ease-in-out infinite alternate; }
+.orb.violet { right: 60px; bottom: 45px; background-color: #8b5cf6; animation: drift 4s ease-in-out -1s infinite alternate-reverse; }
+@keyframes pulse { from { opacity: .35; transform: scale(.8); } to { opacity: 1; transform: scale(1.25); } }
+@keyframes drift { from { transform: translate(0, 0) rotate(0deg); } to { transform: translate(90px, 80px) rotate(160deg); } }

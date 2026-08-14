@@ -11,6 +11,7 @@ require() {
 }
 
 require README.md "examples/dashboard"
+require README.md "examples/animation"
 require README.md "GROWSE_VERSION=v0.6.0"
 require README.md "growse:v0.6.0"
 require SECURITY.md "| 0.6.x | Yes |"

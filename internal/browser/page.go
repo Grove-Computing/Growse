@@ -4,6 +4,7 @@ import (
 	"image"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/Grove-Computing/Growse/internal/css"
 	"github.com/Grove-Computing/Growse/internal/dom"
@@ -37,6 +38,18 @@ type Page struct {
 	ViewportWidth    float32
 	ViewportHeight   float32
 	ReducedMotion    bool
+}
+
+// AnimatedStyles samples this page's CSS Animations at current without
+// changing its underlying computed style map.
+func (p *Page) AnimatedStyles(current time.Time) style.Map {
+	if p == nil {
+		return nil
+	}
+	if p.Animations == nil {
+		return p.ComputedStyles
+	}
+	return p.Animations.AnimatedStyles(p.ComputedStyles, p.Stylesheet, current)
 }
 
 // NewPage creates a page for pageURL. A nil URL is allowed for documents such

@@ -28,9 +28,10 @@ python3 -m http.server 8080 --directory examples/todo
 python3 -m http.server 8080 --directory examples/css3-core
 python3 -m http.server 8080 --directory examples/flexbox
 python3 -m http.server 8080 --directory examples/dashboard
+python3 -m http.server 8080 --directory examples/animation
 ```
 
-Growseで`http://localhost:8080`を開くと、Counterではクリックによるカウント更新を、Todoではテキスト入力、フォーム送信、完了切替、削除を確認できます。CSS3 Core Showcaseでは、Custom Property、`calc()`、Media Query、Gradient、Box Model、角丸、Opacity、Text Decoration、Overflowを確認できます。Flexbox Showcaseでは、grow/shrink、wrap、alignment、gap、auto margin、inline-flex、nested flexを確認できます。Dashboardでは、Grid、named area、Position、複数Background、Gradient、Shadow、Transform、Opacityを組み合わせた画面を確認できます。WebGoソースはGoツールによる通常ビルドの対象外にするため、`_app.go`として配置しています。
+Growseで`http://localhost:8080`を開くと、Counterではクリックによるカウント更新を、Todoではテキスト入力、フォーム送信、完了切替、削除を確認できます。CSS3 Core Showcaseでは、Custom Property、`calc()`、Media Query、Gradient、Box Model、角丸、Opacity、Text Decoration、Overflowを確認できます。Flexbox Showcaseでは、grow/shrink、wrap、alignment、gap、auto margin、inline-flex、nested flexを確認できます。Dashboardでは、Grid、named area、Position、複数Background、Gradient、Shadow、Transform、Opacityを組み合わせた画面を確認できます。Animation Showcaseでは、Transitionのhover反転と、Opacity・Color・2D Transformを使う複数Keyframes Animationを確認できます。WebGoソースはGoツールによる通常ビルドの対象外にするため、`_app.go`として配置しています。
 
 起動すると、戻る・進む・再読込・URL入力欄・Gopherボタン・状態表示を備えたブラウザウィンドウが表示され、ウィンドウ内のマウスカーソルは青いGopherになります。リンクへカーソルを重ねると、認証情報を伏せた解決済み遷移先URLを状態表示で確認できます。リンクのクリック、戻る・進む、履歴を増やさない再読込に対応しています。
 

@@ -467,13 +467,14 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 	if ui.navigator != nil {
 		ui.navigator.UpdateViewport(viewportWidth, viewportHeight)
 	}
-	tree := layoutengine.BuildWithViewport(page.Document, page.ComputedStyles, viewportWidth, viewportHeight)
+	frameStyles := page.AnimatedStyles(gtx.Now)
+	tree := layoutengine.BuildWithViewport(page.Document, frameStyles, viewportWidth, viewportHeight)
 	displayList := paintmodel.Build(tree)
 	if first := ui.pageList.Position.First; first >= 0 && first < len(displayList.Commands) {
 		if firstY, ok := commandDocumentY(displayList.Commands[first]); ok {
 			scrollY := max(firstY+float32(ui.pageList.Position.Offset)/gtx.Metric.PxPerDp, float32(0))
 			if scrollY > 0 {
-				tree = layoutengine.BuildWithScroll(page.Document, page.ComputedStyles, viewportWidth, viewportHeight, 0, scrollY)
+				tree = layoutengine.BuildWithScroll(page.Document, frameStyles, viewportWidth, viewportHeight, 0, scrollY)
 				displayList = paintmodel.Build(tree)
 			}
 		}
@@ -499,6 +500,9 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 	ui.viewportClick.Add(gtx.Ops)
 	pass.Pop()
 	area.Pop()
+	if page.Animations != nil && page.Animations.Active(gtx.Now) && ui.invalidate != nil {
+		ui.invalidate()
+	}
 	return dimensions
 }
 
