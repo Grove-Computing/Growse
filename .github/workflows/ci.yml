@@ -63,7 +63,7 @@ jobs:
       - name: Check module files
         run: go mod tidy -diff
 
-      - name: Test v0.8.0 installer
+      - name: Test v0.9.0 installer
         run: |
           bash tests/install.sh
           bash tests/install-platforms.sh
