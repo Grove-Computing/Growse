@@ -48,6 +48,9 @@ jobs:
       - name: Download modules
         run: go mod download
 
+      - name: Bootstrap source security scan
+        run: go run ./cmd/securityscan
+
       - name: Check formatting
         run: |
           unformatted="$(gofmt -l .)"
@@ -73,6 +76,9 @@ jobs:
 
       - name: Validate supply chain security
         run: bash tests/supply-chain.sh
+
+      - name: Validate developer supply chain security
+        run: bash tests/developer-security.sh
 
       - name: Validate v0.8.0 documentation
         run: bash tests/docs.sh

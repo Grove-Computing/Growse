@@ -19,8 +19,43 @@ env:
   RELEASE_TAG: ${{ github.ref_name }}
 
 jobs:
+  source-security:
+    name: Revalidate release source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go.sum
+
+      - name: Scan source tree for hidden payloads
+        run: go run ./cmd/securityscan
+
+      - name: Install Gio Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            gcc pkg-config libwayland-dev libx11-dev libx11-xcb-dev \
+            libxkbcommon-x11-dev libgles2-mesa-dev libegl1-mesa-dev \
+            libffi-dev libxcursor-dev libvulkan-dev
+
+      - name: Revalidate Go dependencies
+        env:
+          GOVULNCHECK_VERSION: v1.6.0
+        run: go run "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}" ./...
+
   build:
     name: Build ${{ matrix.name }}
+    needs: source-security
     strategy:
       fail-fast: false
       matrix:
@@ -199,9 +234,29 @@ jobs:
           subject-path: dist/growse_${{ env.RELEASE_TAG }}_${{ matrix.artifact }}.${{ matrix.archive_extension }}
           sbom-path: dist/growse_${{ env.RELEASE_TAG }}_${{ matrix.artifact }}.spdx.json
 
+  release-gate:
+    name: Release cool-down
+    needs:
+      - build
+      - source-security
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    environment: release
+    permissions:
+      contents: read
+    steps:
+      - name: Record release source identity
+        shell: bash
+        run: |
+          echo "Release tag: $RELEASE_TAG"
+          echo "Release commit: $GITHUB_SHA"
+          echo "Repository: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
+
   docker:
     name: Build, scan, and publish Docker image
-    needs: build
+    needs:
+      - build
+      - release-gate
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -253,6 +308,7 @@ jobs:
         shell: bash
         run: |
           image_ref="$IMAGE_NAME@${{ steps.build.outputs.digest }}"
+          echo "Container digest: ${{ steps.build.outputs.digest }}"
           test "$(docker buildx imagetools inspect "$image_ref" --format '{{ json .SBOM.SPDX }}')" != "null"
           test "$(docker buildx imagetools inspect "$image_ref" --format '{{ json .Provenance.SLSA }}')" != "null"
 
@@ -325,6 +381,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
+          echo "Release commit: $GITHUB_SHA"
+          cat dist/*.sha256
           gh release create "$RELEASE_TAG" dist/* install.sh \
             --repo "$GITHUB_REPOSITORY" \
             --verify-tag \

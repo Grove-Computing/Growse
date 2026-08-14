@@ -147,6 +147,7 @@ WebGo RuntimeはSandboxではありません。信頼できるローカルペー
 | [Visual Regression Test](docs/visual-regression.md) | 固定Viewport、Font、Scaleによる画像回帰テスト |
 | [Performance Baseline](docs/performance.md) | Layout、Paint、Form、Cookie、FetchのBenchmark基準値 |
 | [WPT由来テスト](docs/wpt.md) | Web Platform Testsから移植したTestと出典 |
+| [Developer Supply Chain Security](docs/developer-security.md) | 不可視Code検査、Extension管理、署名、Credential、Incident Response |
 | [v0.8.0リリース定義](docs/v0.8.0.md) | v0.8.0のTheme、Scope、完了条件 |
 
 ## 品質チェック
@@ -165,6 +166,7 @@ make ci
 - Staticcheck
 - actionlint
 - govulncheck
+- 不可視Unicode、未承認Binary、Editor Extension recommendationの検査
 - Installer、Release成果物、Docker、文書の検証
 
 Go Modules、GitHub Actions、Docker base imageの依存関係は、Dependabotで週次確認します。Pull Requestでは追加されたHigh/Criticalの既知脆弱性をDependency Reviewで遮断します。
