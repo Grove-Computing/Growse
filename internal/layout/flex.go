@@ -429,7 +429,7 @@ func (e *engine) flexIntrinsicSizes(node *dom.Node, style blockStyle, axis flexA
 	if textHeight <= 0 {
 		textHeight = style.fontSize * 1.4
 	}
-	if isTextInput(node) {
+	if isEditableTextControl(node) {
 		textWidth, textHeight = inputWidth, inputHeight
 		minTextWidth = inputWidth
 	}
@@ -502,7 +502,7 @@ func (e *engine) renderFlexItem(item *flexLayoutItem, axis flexAxis, x, y, mainS
 	}
 	if item.node.Type == dom.NodeText {
 		e.addText(item.node.ID, "text", normalizeWhitespace(item.node.Text), style, 0, outerWidth)
-	} else if isTextInput(item.node) {
+	} else if isEditableTextControl(item.node) {
 		e.addInput(item.node, style, 0, outerWidth, outerHeight, true)
 	} else {
 		if style.display == stylemodel.DisplayInlineFlex {

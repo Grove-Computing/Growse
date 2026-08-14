@@ -9,11 +9,12 @@ import (
 )
 
 const (
-	pagePadding = float32(32)
-	textColor   = uint32(0x202124ff)
-	linkColor   = uint32(0x0969daff)
-	inputWidth  = float32(280)
-	inputHeight = float32(40)
+	pagePadding    = float32(32)
+	textColor      = uint32(0x202124ff)
+	linkColor      = uint32(0x0969daff)
+	inputWidth     = float32(280)
+	inputHeight    = float32(40)
+	textareaHeight = float32(96)
 )
 
 type blockStyle struct {
@@ -212,7 +213,7 @@ func (e *engine) walk(node *dom.Node, x, width, containingHeight float32, height
 			e.renderPositionedChild(node, style)
 			return
 		}
-		if isTextInput(node) {
+		if isEditableTextControl(node) {
 			e.addInput(node, style, x, width, containingHeight, heightDefinite)
 			return
 		}
@@ -248,11 +249,18 @@ func (e *engine) addInput(node *dom.Node, style blockStyle, x, width, containing
 		usedWidth = 1
 	}
 	usedHeight := inputHeight
+	multiline := node.TagName == "textarea"
+	if multiline {
+		usedHeight = textareaHeight
+	}
 	if resolved, ok := resolveSize(style.height, containingHeight, heightDefinite); ok {
 		usedHeight = resolved
 	}
 	usedHeight = constrainSize(usedHeight, style.minHeight, style.maxHeight, containingHeight, heightDefinite)
-	value, _ := node.Attribute("value")
+	value, hasValue := node.Attribute("value")
+	if multiline && !hasValue {
+		value = node.TextContent()
+	}
 	e.tree.Boxes = append(e.tree.Boxes, Box{
 		Order:       e.nextOrder(),
 		StackingID:  e.stackingID,
@@ -260,6 +268,7 @@ func (e *engine) addInput(node *dom.Node, style blockStyle, x, width, containing
 		Tag:         node.TagName,
 		Text:        value,
 		Input:       true,
+		Multiline:   multiline,
 		X:           x,
 		Y:           e.y,
 		Width:       usedWidth,
@@ -276,8 +285,14 @@ func (e *engine) addInput(node *dom.Node, style blockStyle, x, width, containing
 	e.y += usedHeight + style.margin.Bottom
 }
 
-func isTextInput(node *dom.Node) bool {
-	if node == nil || node.Type != dom.NodeElement || node.TagName != "input" {
+func isEditableTextControl(node *dom.Node) bool {
+	if node == nil || node.Type != dom.NodeElement {
+		return false
+	}
+	if node.TagName == "textarea" {
+		return true
+	}
+	if node.TagName != "input" {
 		return false
 	}
 	typeValue, ok := node.Attribute("type")
@@ -405,7 +420,7 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 					positionedChildren = append(positionedChildren, child)
 					continue
 				}
-				if isTextInput(child) {
+				if isEditableTextControl(child) {
 					flushInline()
 					e.addInput(child, childStyle, contentX, contentWidth, childContainingHeight, declaredHeightDefinite)
 					previousBlock = true

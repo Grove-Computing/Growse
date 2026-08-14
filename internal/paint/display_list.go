@@ -51,18 +51,19 @@ type DrawText struct {
 
 func (DrawText) paintCommand() {}
 
-// DrawInput は編集可能な1行テキスト入力を描画する。
+// DrawInput は編集可能な単一行または複数行のテキスト入力を描画する。
 type DrawInput struct {
-	NodeID  dom.NodeID
-	Value   string
-	X       float32
-	Y       float32
-	Top     float32
-	Width   float32
-	Height  float32
-	Color   uint32
-	Opacity float32
-	Clip    *layout.Rect
+	NodeID    dom.NodeID
+	Value     string
+	Multiline bool
+	X         float32
+	Y         float32
+	Top       float32
+	Width     float32
+	Height    float32
+	Color     uint32
+	Opacity   float32
+	Clip      *layout.Rect
 }
 
 func (DrawInput) paintCommand() {}
@@ -171,16 +172,17 @@ func Build(tree *layout.Tree) *DisplayList {
 		}
 		if box.Input {
 			list.Commands = append(list.Commands, DrawInput{
-				NodeID:  box.NodeID,
-				Value:   box.Text,
-				X:       box.X,
-				Y:       box.Y,
-				Top:     top,
-				Width:   box.Width,
-				Height:  box.Height,
-				Color:   box.Color,
-				Opacity: box.Opacity,
-				Clip:    cloneLayoutRect(box.Clip),
+				NodeID:    box.NodeID,
+				Value:     box.Text,
+				Multiline: box.Multiline,
+				X:         box.X,
+				Y:         box.Y,
+				Top:       top,
+				Width:     box.Width,
+				Height:    box.Height,
+				Color:     box.Color,
+				Opacity:   box.Opacity,
+				Clip:      cloneLayoutRect(box.Clip),
 			})
 			previousBottom = box.Y + box.Height
 			continue

@@ -205,6 +205,19 @@ func TestBuildCreatesInputCommand(t *testing.T) {
 	}
 }
 
+func TestBuildPreservesMultilineTextareaCommand(t *testing.T) {
+	tree := &layout.Tree{Width: 400, Height: 120, Boxes: []layout.Box{{
+		NodeID: 8, Tag: "textarea", Text: "first\nsecond", Input: true, Multiline: true,
+		X: 20, Y: 30, Width: 280, Height: 96,
+	}}}
+
+	list := Build(tree)
+	input, ok := list.Commands[0].(DrawInput)
+	if !ok || !input.Multiline || input.Value != "first\nsecond" {
+		t.Fatalf("textarea command = %#v", list.Commands[0])
+	}
+}
+
 func TestBuildPaintsBoxBackgroundBeforeContent(t *testing.T) {
 	tree := &layout.Tree{
 		Decorations: []layout.Decoration{{Order: 1, NodeID: 7, Rect: layout.Rect{X: 10, Y: 20, Width: 100, Height: 40}, Background: 0x123456ff}},

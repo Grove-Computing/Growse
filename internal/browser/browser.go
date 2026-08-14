@@ -98,7 +98,7 @@ func (b *Browser) DispatchClick(nodeID dom.NodeID, x, y float32) bool {
 	return clickHandled || submitHandled
 }
 
-// SetInputValue はユーザー入力をアクティブページのテキストinputへ反映する。
+// SetInputValue はユーザー入力をアクティブページの編集可能なText Controlへ反映する。
 func (b *Browser) SetInputValue(nodeID dom.NodeID, value string) bool {
 	b.mu.Lock()
 	page := b.page
@@ -108,7 +108,7 @@ func (b *Browser) SetInputValue(nodeID dom.NodeID, value string) bool {
 		return false
 	}
 	node, ok := page.Document.NodeByID(nodeID)
-	if !ok || !isTextInput(node) || !page.Document.IsConnected(node) {
+	if !ok || !isEditableTextControl(node) || !page.Document.IsConnected(node) {
 		b.mu.Unlock()
 		return false
 	}
@@ -136,7 +136,7 @@ func (b *Browser) CommitInputValue(nodeID dom.NodeID, value string) bool {
 		return false
 	}
 	node, ok := page.Document.NodeByID(nodeID)
-	if !ok || !isTextInput(node) || !page.Document.IsConnected(node) {
+	if !ok || !isEditableTextControl(node) || !page.Document.IsConnected(node) {
 		b.mu.RUnlock()
 		return false
 	}
@@ -665,12 +665,22 @@ func runtimeOrigin(sourceURL *url.URL) string {
 	return sourceURL.Redacted()
 }
 
-func isTextInput(node *dom.Node) bool {
-	if node == nil || node.Type != dom.NodeElement || node.TagName != "input" {
+func isEditableTextControl(node *dom.Node) bool {
+	if node == nil || node.Type != dom.NodeElement {
+		return false
+	}
+	if node.TagName == "textarea" {
+		return true
+	}
+	if node.TagName != "input" {
 		return false
 	}
 	typeValue, ok := node.Attribute("type")
 	return !ok || strings.EqualFold(strings.TrimSpace(typeValue), "text")
+}
+
+func isTextInput(node *dom.Node) bool {
+	return node != nil && node.TagName == "input" && isEditableTextControl(node)
 }
 
 func isSubmitButton(node *dom.Node) bool {

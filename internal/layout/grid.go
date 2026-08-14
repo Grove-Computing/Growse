@@ -418,7 +418,7 @@ func (e *engine) renderGridItem(node *dom.Node, style blockStyle, x, y, width, h
 	e.y, e.clip = 0, nil
 	if node.Type == dom.NodeText {
 		e.addText(node.ID, "text", normalizeWhitespace(node.Text), style, 0, width)
-	} else if isTextInput(node) {
+	} else if isEditableTextControl(node) {
 		e.addInput(node, style, 0, width, height, true)
 	} else {
 		e.addBlock(node, style, 0, width, height, true, nil)

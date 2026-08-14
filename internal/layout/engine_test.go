@@ -41,6 +41,24 @@ func TestBuildCreatesVisibleVerticalBoxes(t *testing.T) {
 	}
 }
 
+func TestBuildCreatesMultilineTextareaFromTextContent(t *testing.T) {
+	document := dom.NewDocument()
+	textarea := document.CreateElement("textarea", nil)
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, textarea},
+		[2]*dom.Node{textarea, document.CreateText("first line\nsecond line")},
+	)
+
+	tree := Build(document, style.Compute(document, nil), 800)
+	if len(tree.Boxes) != 1 {
+		t.Fatalf("textarea box count = %d, want 1", len(tree.Boxes))
+	}
+	box := tree.Boxes[0]
+	if !box.Input || !box.Multiline || box.Text != "first line\nsecond line" || box.Height != textareaHeight {
+		t.Fatalf("textarea layout = %#v", box)
+	}
+}
+
 func TestBuildWrapsLongText(t *testing.T) {
 	document := dom.NewDocument()
 	p := document.CreateElement("p", nil)

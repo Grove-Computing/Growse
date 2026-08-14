@@ -104,6 +104,26 @@ func TestSetInputValueUpdatesActiveTextInput(t *testing.T) {
 	}
 }
 
+func TestSetInputValueUpdatesTextareaWithNewlines(t *testing.T) {
+	document := dom.NewDocument()
+	textarea := document.CreateElement("textarea", nil)
+	if err := document.AppendChild(document.Root, textarea); err != nil {
+		t.Fatal(err)
+	}
+	page := NewPage(mustParseURL(t, "http://localhost"))
+	page.Document = document
+	page.Events = events.NewDispatcher()
+	browserState := New(nil)
+	browserState.SetPage(page)
+
+	if !browserState.SetInputValue(textarea.ID, "first\nsecond") {
+		t.Fatal("SetInputValue(textarea) = false, want true")
+	}
+	if got, ok := textarea.Attribute("value"); !ok || got != "first\nsecond" {
+		t.Fatalf("textarea value = (%q, %v)", got, ok)
+	}
+}
+
 func TestSetInputValueRejectsUnsupportedOrInactiveNode(t *testing.T) {
 	document := dom.NewDocument()
 	checkbox := document.CreateElement("input", map[string]string{"type": "checkbox"})

@@ -131,6 +131,7 @@ type Box struct {
 	Tag        string
 	Text       string
 	Input      bool
+	Multiline  bool
 
 	X        float32
 	Y        float32

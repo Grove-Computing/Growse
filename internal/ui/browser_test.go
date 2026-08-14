@@ -714,6 +714,45 @@ func TestTextInputWritesKeyboardEditsToDOM(t *testing.T) {
 	}
 }
 
+func TestTextareaEditorAcceptsNewlineAndWritesDOMValue(t *testing.T) {
+	document := dom.NewDocument()
+	textarea := document.CreateElement("textarea", nil)
+	if err := document.AppendChild(document.Root, textarea); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(textarea, document.CreateText("first")); err != nil {
+		t.Fatal(err)
+	}
+	page := &browser.Page{Document: document, ComputedStyles: style.Compute(document, nil)}
+	ui := NewBrowserUI(&stubNavigator{page: page}, nil)
+	router := new(input.Router)
+	gtx := layout.Context{
+		Ops: new(op.Ops), Source: router.Source(), Constraints: layout.Exact(image.Pt(800, 600)),
+		Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1},
+	}
+
+	ui.layoutDocument(gtx, page)
+	router.Frame(gtx.Ops)
+	editor := ui.inputEditors[textarea.ID]
+	if editor == nil {
+		t.Fatal("textarea editor was not created")
+	}
+	if editor.SingleLine || editor.Text() != "first" {
+		t.Fatalf("textarea editor singleLine=%v text=%q", editor.SingleLine, editor.Text())
+	}
+	gtx.Execute(key.FocusCmd{Tag: editor})
+	router.Queue(key.EditEvent{Range: key.Range{Start: 5, End: 5}, Text: "\nsecond"})
+	gtx.Reset()
+	ui.layoutDocument(gtx, page)
+
+	if got, ok := textarea.Attribute("value"); !ok || got != "first\nsecond" {
+		t.Fatalf("textarea DOM value = (%q, %v)", got, ok)
+	}
+	if editor.Text() != "first\nsecond" {
+		t.Fatalf("textarea editor text = %q", editor.Text())
+	}
+}
+
 func TestTextInputEnterDispatchesChangeAfterEdit(t *testing.T) {
 	document := dom.NewDocument()
 	form := document.CreateElement("form", map[string]string{"id": "search-form"})

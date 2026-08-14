@@ -998,8 +998,8 @@ func (ui *BrowserUI) layoutDrawInput(gtx layout.Context, command paintmodel.Draw
 		wasFocused := ui.inputFocused[command.NodeID]
 		if editor == nil {
 			editor = new(widget.Editor)
-			editor.SingleLine = true
-			editor.Submit = true
+			editor.SingleLine = !command.Multiline
+			editor.Submit = !command.Multiline
 			editor.SetText(command.Value)
 			ui.inputEditors[command.NodeID] = editor
 			ui.inputCommitted[command.NodeID] = command.Value
