@@ -469,6 +469,15 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 	}
 	tree := layoutengine.BuildWithViewport(page.Document, page.ComputedStyles, viewportWidth, viewportHeight)
 	displayList := paintmodel.Build(tree)
+	if first := ui.pageList.Position.First; first >= 0 && first < len(displayList.Commands) {
+		if firstY, ok := commandDocumentY(displayList.Commands[first]); ok {
+			scrollY := max(firstY+float32(ui.pageList.Position.Offset)/gtx.Metric.PxPerDp, float32(0))
+			if scrollY > 0 {
+				tree = layoutengine.BuildWithScroll(page.Document, page.ComputedStyles, viewportWidth, viewportHeight, 0, scrollY)
+				displayList = paintmodel.Build(tree)
+			}
+		}
+	}
 	paint.Fill(gtx.Ops, rgba(displayList.Background))
 	ui.updateViewportHover(gtx, page, tree, displayList)
 	ui.handleViewportClicks(gtx, page, tree, displayList)

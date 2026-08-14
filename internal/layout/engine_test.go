@@ -573,6 +573,45 @@ func TestBuildCarriesNestedRoundedClipsAndOpacityLayer(t *testing.T) {
 	}
 }
 
+func TestBuildWithScrollKeepsFixedStickyGridAndTransformHitGeometryAligned(t *testing.T) {
+	document := dom.NewDocument()
+	spacer := document.CreateElement("div", map[string]string{"class": "spacer"})
+	sticky := document.CreateElement("div", map[string]string{"class": "sticky"})
+	grid := document.CreateElement("div", map[string]string{"class": "grid"})
+	gridItem := document.CreateElement("div", map[string]string{"class": "grid-item"})
+	host := document.CreateElement("div", map[string]string{"class": "host"})
+	fixed := document.CreateElement("div", map[string]string{"class": "fixed"})
+	appendNodes(t, document, [2]*dom.Node{document.Root, spacer}, [2]*dom.Node{document.Root, sticky}, [2]*dom.Node{document.Root, grid}, [2]*dom.Node{grid, gridItem}, [2]*dom.Node{document.Root, host}, [2]*dom.Node{host, fixed})
+	stylesheet, err := css.Parse(strings.NewReader(`
+.spacer { height:200px }
+.sticky { position:sticky; top:10px; height:20px; background-color:#ddd }
+.grid { display:grid; width:100px; grid-template-columns:100px; grid-template-rows:50px; transform:translateX(40px) }
+.grid-item { background-color:#ccc }
+.host { position:relative; height:100px }
+.fixed { position:fixed; left:10px; top:20px; width:60px; height:30px; background-color:#bbb }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	computed := style.Compute(document, stylesheet)
+	tree := BuildWithScroll(document, computed, 400, 300, 0, 300)
+	stickyRect, fixedRect := decorationForNode(t, tree, sticky.ID), decorationForNode(t, tree, fixed.ID)
+	gridRect := decorationForNode(t, tree, gridItem.ID)
+	if stickyRect.Y != 310 || fixedRect.X != 10 || fixedRect.Y != 320 {
+		t.Fatalf("scroll positions = sticky %#v fixed %#v", stickyRect.Rect, fixedRect.Rect)
+	}
+	if hit, ok := HitTest(tree, stickyRect.X+1, stickyRect.Y+1); !ok || hit != sticky.ID {
+		t.Fatalf("sticky scroll hit = (%d, %v)", hit, ok)
+	}
+	if hit, ok := HitTest(tree, fixedRect.X+1, fixedRect.Y+1); !ok || hit != fixed.ID {
+		t.Fatalf("fixed scroll hit = (%d, %v)", hit, ok)
+	}
+	transformedX, transformedY := gridRect.Transform.TransformPoint(gridRect.X+1, gridRect.Y+1)
+	if hit, ok := HitTest(tree, transformedX, transformedY); !ok || hit != gridItem.ID {
+		t.Fatalf("transformed grid scroll hit = (%d, %v) at (%v,%v)", hit, ok, transformedX, transformedY)
+	}
+}
+
 func appendNodes(t *testing.T, document *dom.Document, edges ...[2]*dom.Node) {
 	t.Helper()
 	for _, edge := range edges {

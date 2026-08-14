@@ -103,15 +103,20 @@ type inlineRun struct {
 
 // Build creates a vertical block layout with a minimal inline text flow.
 func Build(document *dom.Document, computed stylemodel.Map, viewportWidth float32) *Tree {
-	return build(document, computed, viewportWidth, 0)
+	return build(document, computed, viewportWidth, 0, 0, 0)
 }
 
 // BuildWithViewport lays out a document with definite viewport dimensions.
 func BuildWithViewport(document *dom.Document, computed stylemodel.Map, viewportWidth, viewportHeight float32) *Tree {
-	return build(document, computed, viewportWidth, viewportHeight)
+	return build(document, computed, viewportWidth, viewportHeight, 0, 0)
 }
 
-func build(document *dom.Document, computed stylemodel.Map, viewportWidth, viewportHeight float32) *Tree {
+// BuildWithScroll lays out viewport-attached and sticky elements at a scroll offset.
+func BuildWithScroll(document *dom.Document, computed stylemodel.Map, viewportWidth, viewportHeight, scrollX, scrollY float32) *Tree {
+	return build(document, computed, viewportWidth, viewportHeight, max(scrollX, float32(0)), max(scrollY, float32(0)))
+}
+
+func build(document *dom.Document, computed stylemodel.Map, viewportWidth, viewportHeight, scrollX, scrollY float32) *Tree {
 	if viewportWidth < pagePadding*2+1 {
 		viewportWidth = pagePadding*2 + 1
 	}
@@ -124,6 +129,8 @@ func build(document *dom.Document, computed stylemodel.Map, viewportWidth, viewp
 		opacity:        1,
 		viewportWidth:  viewportWidth,
 		viewportHeight: viewportHeight,
+		scrollX:        scrollX,
+		scrollY:        scrollY,
 	}
 	if document != nil {
 		if body := findElement(document.Root, "body"); body != nil {
@@ -162,6 +169,7 @@ type engine struct {
 	order                         int
 	opacity                       float32
 	viewportWidth, viewportHeight float32
+	scrollX, scrollY              float32
 	positionCB                    *Rect
 	stackingID                    int
 }
@@ -443,7 +451,7 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 			dx, dy = relativeOffset(style.inset, outerWidth, outerHeight)
 		} else {
 			if top, ok := resolveSize(style.inset.Top, outerHeight, true); ok {
-				dy = max(top-boxTop, float32(0))
+				dy = max(e.scrollY+top-boxTop, float32(0))
 			}
 		}
 		translateFlexGeometry(e.tree, geometryBoxStart, geometryDecorationStart, dx, dy, nil)
@@ -490,7 +498,7 @@ func relativeOffset(inset stylemodel.Insets, width, height float32) (float32, fl
 func (e *engine) renderPositionedChild(node *dom.Node, style blockStyle) {
 	containingBlock := e.positionCB
 	if style.layoutPosition == stylemodel.PositionFixed || containingBlock == nil {
-		containingBlock = &Rect{Width: e.viewportWidth, Height: e.viewportHeight}
+		containingBlock = &Rect{X: e.scrollX, Y: e.scrollY, Width: e.viewportWidth, Height: e.viewportHeight}
 	}
 	left, hasLeft := resolveSize(style.inset.Left, containingBlock.Width, true)
 	right, hasRight := resolveSize(style.inset.Right, containingBlock.Width, true)
