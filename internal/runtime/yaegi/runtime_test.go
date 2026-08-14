@@ -3,6 +3,8 @@ package yaegi
 import (
 	"context"
 	"io"
+	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -10,6 +12,7 @@ import (
 	dommodel "github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/events"
 	"github.com/Grove-Computing/Growse/internal/forms"
+	"github.com/Grove-Computing/Growse/internal/network"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 )
 
@@ -79,6 +82,79 @@ func main() { console.Log("Hello from Go", 42) }`}}
 	if got, want := messages[0], "[WebGo] Hello from Go42"; got != want {
 		t.Fatalf("console message = %q, want %q", got, want)
 	}
+}
+
+func TestRuntimeFetchSendsMethodRelativeURLHeadersAndTextBody(t *testing.T) {
+	runtime := New()
+	var captured *network.Request
+	scripts := []runtimemodel.Script{{Source: `package main
+import "growse/fetch"
+var Status int
+var Failure string
+func main() {
+	fetch.Fetch(fetch.Request{
+		Method: "PATCH",
+		URL: "/items/7",
+		Header: fetch.Header{"X-Test": []string{"one", "two"}},
+		Text: "updated",
+	}, func(response fetch.Response) {
+		Status = response.Status
+	}, func(message string) {
+		Failure = message
+	})
+}`}}
+	baseURL, err := url.Parse("https://example.test/app/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	environment := runtimemodel.Environment{
+		BaseURL: baseURL,
+		Fetch: func(_ context.Context, request *network.Request) (*network.Response, error) {
+			captured = request
+			return &network.Response{StatusCode: http.StatusNoContent}, nil
+		},
+	}
+
+	if err := runtime.Load(context.Background(), scripts, environment); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if captured == nil {
+		t.Fatal("WebGo Fetch did not send a request")
+	}
+	if got, want := captured.Method, http.MethodPatch; got != want {
+		t.Fatalf("method = %q, want %q", got, want)
+	}
+	if got, want := captured.URL.String(), "https://example.test/items/7"; got != want {
+		t.Fatalf("URL = %q, want %q", got, want)
+	}
+	if got, want := captured.Header.Values("X-Test"), []string{"one", "two"}; !equalStrings(got, want) {
+		t.Fatalf("X-Test = %v, want %v", got, want)
+	}
+	if got, want := string(captured.Body), "updated"; got != want {
+		t.Fatalf("body = %q, want %q", got, want)
+	}
+	packageSymbols := runtime.interpreter.Symbols("page")["page"]
+	if got := int(packageSymbols["Status"].Int()); got != http.StatusNoContent {
+		t.Fatalf("Status = %d, want %d", got, http.StatusNoContent)
+	}
+	if got := packageSymbols["Failure"].String(); got != "" {
+		t.Fatalf("Failure = %q, want empty", got)
+	}
+}
+
+func equalStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func TestRuntimeExposesGrowseDOM(t *testing.T) {

@@ -17,6 +17,7 @@ import (
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 	consoleapi "github.com/Grove-Computing/Growse/internal/webapi/console"
 	domapi "github.com/Grove-Computing/Growse/internal/webapi/dom"
+	fetchapi "github.com/Grove-Computing/Growse/internal/webapi/fetch"
 	strconvapi "github.com/Grove-Computing/Growse/internal/webapi/strconv"
 	"github.com/traefik/yaegi/interp"
 )
@@ -79,6 +80,7 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 	r.interpreter = interp.New(interp.Options{GoPath: ".", SourcecodeFilesystem: portableFS{FS: files}})
 	console := consoleapi.New(environment.ConsoleLog)
 	dom := domapi.New(environment.Document, environment.Events, environment.OnMutation)
+	fetch := fetchapi.New(environment.BaseURL, environment.Fetch)
 	if err := r.interpreter.Use(interp.Exports{
 		"growse/console/console": {
 			"Log": reflect.ValueOf(console.Log),
@@ -89,6 +91,12 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 			"Event":          reflect.ValueOf((*domapi.Event)(nil)),
 			"GetElementByID": reflect.ValueOf(dom.GetElementByID),
 			"QuerySelector":  reflect.ValueOf(dom.QuerySelector),
+		},
+		"growse/fetch/fetch": {
+			"Fetch":    reflect.ValueOf(fetch.Fetch),
+			"Header":   reflect.ValueOf((*fetchapi.Header)(nil)),
+			"Request":  reflect.ValueOf((*fetchapi.Request)(nil)),
+			"Response": reflect.ValueOf((*fetchapi.Response)(nil)),
 		},
 		"growse/strconv/strconv": {
 			"Itoa": reflect.ValueOf(strconvapi.Itoa),

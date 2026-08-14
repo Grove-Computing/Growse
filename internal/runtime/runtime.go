@@ -7,6 +7,7 @@ import (
 
 	"github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/events"
+	"github.com/Grove-Computing/Growse/internal/network"
 )
 
 // Script は文書内で見つかった1つのGoソースを表す。
@@ -21,6 +22,7 @@ type Environment struct {
 	Document   *dom.Document
 	Events     *events.Dispatcher
 	BaseURL    *url.URL
+	Fetch      func(context.Context, *network.Request) (*network.Response, error)
 	OnMutation func()
 	ConsoleLog func(message string)
 }
