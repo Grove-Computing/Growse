@@ -29,7 +29,7 @@ func main() {
 	}
 	renderNote()
 	if currentNote != "" {
-		setStatus("restored")
+		setStatus("cache-revalidating")
 	}
 	if input != nil {
 		input.SetValue(currentNote)

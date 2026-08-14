@@ -2,6 +2,10 @@ package persistentapp
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,11 +17,27 @@ import (
 
 	"github.com/Grove-Computing/Growse/internal/browser"
 	"github.com/Grove-Computing/Growse/internal/dom"
+	"github.com/Grove-Computing/Growse/internal/layout"
 	"github.com/Grove-Computing/Growse/internal/network"
+	paintmodel "github.com/Grove-Computing/Growse/internal/paint"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 	"github.com/Grove-Computing/Growse/internal/runtime/yaegi"
 	storagecore "github.com/Grove-Computing/Growse/internal/storage"
 )
+
+var visualTime = time.Date(2026, time.August, 15, 12, 0, 0, 0, time.UTC)
+
+type fixedClock struct{ current time.Time }
+
+func (clock fixedClock) Now() time.Time { return clock.current }
+
+type lifecycleGolden struct {
+	FramePaintSHA   string `json:"frame_paint_sha256"`
+	BackPaintSHA    string `json:"back_paint_sha256"`
+	ForwardPaintSHA string `json:"forward_paint_sha256"`
+	BackScroll      string `json:"back_scroll"`
+	ForwardScroll   string `json:"forward_scroll"`
+}
 
 func TestPersistentAppRestoresNotesRoutesAndReusesHTTPCache(t *testing.T) {
 	index := readFixture(t, "index.html")
@@ -65,21 +85,44 @@ func TestPersistentAppRestoresNotesRoutesAndReusesHTTPCache(t *testing.T) {
 		t.Fatal("SetInputValue() did not dispatch WebGo input")
 	}
 	waitForText(t, first, "status", "saved", firstMutations)
-	if !first.HasAnimationFrameCallbacks() || !first.RunAnimationFrame(time.Date(2026, time.August, 15, 12, 0, 0, 0, time.UTC)) {
+	if !first.HasAnimationFrameCallbacks() || !first.RunAnimationFrame(visualTime) {
 		t.Fatal("save did not request a deterministic paint frame")
 	}
+	framePaint := paintSHA(t, first)
+	first.UpdateHistoryScroll(2, -10)
 	if !first.DispatchClick(elementID(t, first, "all-notes"), 0, 0) || !strings.Contains(pageURL(t, first), "filter=all#notes") {
 		t.Fatalf("PushState route = %s", pageURL(t, first))
 	}
 	if route := elementText(t, first, "route"); !strings.Contains(route, "#notes") {
 		t.Fatalf("fragment route = %q", route)
 	}
+	first.UpdateHistoryScroll(5, -24)
+	forwardPaint := paintSHA(t, first)
 	if _, err := first.Back(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if current := pageURL(t, first); strings.Contains(current, "#notes") {
 		t.Fatalf("Back route = %s", current)
 	}
+	backScroll := scrollSnapshot(t, first)
+	if backScroll != "first=2 offset=-10" {
+		t.Fatalf("Back scroll = %s", backScroll)
+	}
+	backPaint := paintSHA(t, first)
+	if _, err := first.Forward(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	forwardScroll := scrollSnapshot(t, first)
+	if forwardScroll != "first=5 offset=-24" {
+		t.Fatalf("Forward scroll = %s", forwardScroll)
+	}
+	if got := paintSHA(t, first); got != forwardPaint {
+		t.Fatalf("Forward paint = %s, want restored %s", got, forwardPaint)
+	}
+	assertLifecycleGolden(t, lifecycleGolden{
+		FramePaintSHA: framePaint, BackPaintSHA: backPaint, ForwardPaintSHA: forwardPaint,
+		BackScroll: backScroll, ForwardScroll: forwardScroll,
+	})
 	if err := first.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +153,64 @@ func newPersistentBrowser(t *testing.T, server *httptest.Server, dataRoot, cache
 	if err != nil {
 		t.Fatal(err)
 	}
-	return browser.NewWithRuntimeFactoryAndStorage(client, func() runtimemodel.Runtime { return yaegi.New() }, manager)
+	engine := browser.NewWithRuntimeFactoryAndStorage(client, func() runtimemodel.Runtime { return yaegi.New() }, manager)
+	engine.SetAnimationClock(fixedClock{current: visualTime})
+	return engine
+}
+
+func paintSHA(t *testing.T, engine *browser.Browser) string {
+	t.Helper()
+	var lines []string
+	if !engine.InspectPage(func(page *browser.Page) bool {
+		tree := layout.BuildWithViewport(page.Document, page.AnimatedStyles(visualTime), 480, 600)
+		list := paintmodel.Build(tree)
+		for _, command := range list.Commands {
+			switch value := command.(type) {
+			case paintmodel.DrawBox:
+				lines = append(lines, fmt.Sprintf("box:%d:%.1f:%.1f:%.1f:%.1f:%08x:%.2f", value.NodeID, value.X, value.Y, value.Width, value.Height, value.Color, value.Opacity))
+			case paintmodel.DrawText:
+				lines = append(lines, fmt.Sprintf("text:%d:%.1f:%.1f:%.1f:%.1f:%08x:%s", value.NodeID, value.X, value.Y, value.Width, value.Height, value.Color, value.Text))
+			case paintmodel.DrawInput:
+				lines = append(lines, fmt.Sprintf("input:%d:%.1f:%.1f:%.1f:%.1f:%s", value.NodeID, value.X, value.Y, value.Width, value.Height, value.Value))
+			case paintmodel.DrawButton:
+				lines = append(lines, fmt.Sprintf("button:%d:%.1f:%.1f:%.1f:%.1f:%s", value.NodeID, value.X, value.Y, value.Width, value.Height, value.Label))
+			}
+		}
+		return true
+	}) {
+		t.Fatal("InspectPage() failed while painting")
+	}
+	digest := sha256.Sum256([]byte(strings.Join(lines, "\n")))
+	return hex.EncodeToString(digest[:])
+}
+
+func scrollSnapshot(t *testing.T, engine *browser.Browser) string {
+	t.Helper()
+	var result string
+	if !engine.InspectPage(func(page *browser.Page) bool {
+		result = fmt.Sprintf("first=%d offset=%d", page.ScrollFirst, page.ScrollOffset)
+		return true
+	}) {
+		t.Fatal("InspectPage() failed while reading scroll")
+	}
+	return result
+}
+
+func assertLifecycleGolden(t *testing.T, actual lifecycleGolden) {
+	t.Helper()
+	content, err := os.ReadFile(filepath.Join("testdata", "lifecycle.golden.json"))
+	if err != nil {
+		encoded, _ := json.MarshalIndent(actual, "", "  ")
+		t.Fatalf("read lifecycle golden: %v\n--- actual ---\n%s", err, encoded)
+	}
+	var expected lifecycleGolden
+	if err := json.Unmarshal(content, &expected); err != nil {
+		t.Fatal(err)
+	}
+	if actual != expected {
+		encoded, _ := json.MarshalIndent(actual, "", "  ")
+		t.Fatalf("Persistent App lifecycle visual changed\n--- actual ---\n%s", encoded)
+	}
 }
 
 func waitForText(t *testing.T, engine *browser.Browser, id, want string, mutations <-chan struct{}) {

@@ -23,6 +23,7 @@ input { width: 320px; padding: 8px; }
 .status.loading, .status.saving { animation: 700ms ease-in-out infinite alternate status-pulse; }
 .status.saving { background-color: #d97706; }
 .status.saved, .status.synced { background-color: #15803d; transition: background-color 180ms ease-out; }
+.status.cache-revalidating { background-color: #2563eb; animation: 700ms ease-in-out infinite alternate status-pulse; }
 .status.offline { background-color: #475569; }
 .status.conflict { background-color: #7c3aed; }
 .status.network-error { background-color: #b91c1c; }

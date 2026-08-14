@@ -10,12 +10,15 @@ import (
 	"image/color"
 	"image/draw"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/Grove-Computing/Growse/internal/css"
 	"github.com/Grove-Computing/Growse/internal/dom"
+	"github.com/Grove-Computing/Growse/internal/forms"
+	htmlparser "github.com/Grove-Computing/Growse/internal/html"
 	"github.com/Grove-Computing/Growse/internal/layout"
 	"github.com/Grove-Computing/Growse/internal/style"
 	"golang.org/x/image/font"
@@ -39,6 +42,21 @@ type visualSnapshot struct {
 	Display    []string `json:"display_list"`
 	HitTesting []string `json:"hit_testing"`
 	Timestamp  string   `json:"timestamp,omitempty"`
+}
+
+type persistentStateSnapshot struct {
+	Name        string `json:"name"`
+	PixelSHA    string `json:"pixel_sha256"`
+	GeometrySHA string `json:"geometry_sha256"`
+	DisplaySHA  string `json:"display_sha256"`
+}
+
+type persistentVisualSnapshot struct {
+	Viewport  string                    `json:"viewport"`
+	Scale     int                       `json:"scale"`
+	Font      string                    `json:"font"`
+	Timestamp string                    `json:"timestamp"`
+	States    []persistentStateSnapshot `json:"states"`
 }
 
 // TestDashboardVisualRegression protects pixels, layout geometry, display-list
@@ -229,6 +247,127 @@ func TestV08FormControlsAndDataAppStatesVisualRegression(t *testing.T) {
 	if !reflect.DeepEqual(snapshot, wantSnapshot) {
 		t.Fatalf("v0.8.0 Form/Data App visual snapshot changed\n--- actual ---\n%s", actual)
 	}
+}
+
+func TestPersistentAppStatesVisualRegression(t *testing.T) {
+	const width, height = 480, 600
+	index, err := os.ReadFile(filepath.Join("..", "..", "examples", "persistent-app", "index.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stylesheetSource, err := os.ReadFile(filepath.Join("..", "..", "examples", "persistent-app", "style.css"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	states := []struct {
+		name, note, route, status string
+		frame                     bool
+	}{
+		{name: "initial", route: "route: all", status: "loading"},
+		{name: "restored", note: "Local edited note", route: "route: filter=all", status: "restored"},
+		{name: "routing", note: "Local edited note", route: "route: filter=all #notes", status: "synced"},
+		{name: "saving", note: "Draft note", route: "route: filter=all #notes", status: "saving"},
+		{name: "saved", note: "Draft note", route: "route: filter=all #notes", status: "saved", frame: true},
+		{name: "cache-revalidating", note: "Local edited note", route: "route: filter=all", status: "cache-revalidating"},
+		{name: "error", route: "route: all", status: "network-error"},
+	}
+	snapshot := persistentVisualSnapshot{
+		Viewport: fmt.Sprintf("%dx%d", width, height), Scale: visualScale,
+		Font: "gofont/goregular@72dpi-hinting-none", Timestamp: "2026-08-15T12:00:00Z",
+	}
+	for _, state := range states {
+		document, err := htmlparser.Parse(bytes.NewReader(index))
+		if err != nil {
+			t.Fatal(err)
+		}
+		stylesheet, err := css.Parse(bytes.NewReader(stylesheetSource))
+		if err != nil {
+			t.Fatal(err)
+		}
+		setPersistentVisualState(t, document, state.note, state.route, state.status, state.frame)
+		tree := layout.BuildWithViewport(document, style.Compute(document, stylesheet), width, height)
+		list := Build(tree)
+		imageValue := rasterVisualFixture(t, list, width, height, visualScale)
+		pixelHash := sha256.Sum256(imageValue.Pix)
+		snapshot.States = append(snapshot.States, persistentStateSnapshot{
+			Name: state.name, PixelSHA: hex.EncodeToString(pixelHash[:]),
+			GeometrySHA: snapshotLinesSHA(geometrySnapshot(tree)), DisplaySHA: snapshotLinesSHA(displaySnapshot(list)),
+		})
+	}
+	actual, err := json.MarshalIndent(snapshot, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	actual = append(actual, '\n')
+	want, err := os.ReadFile("testdata/persistent-app.golden.json")
+	if err != nil {
+		t.Fatalf("read Persistent App visual golden: %v\n--- actual ---\n%s", err, actual)
+	}
+	var expected persistentVisualSnapshot
+	if err := json.Unmarshal(want, &expected); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(snapshot, expected) {
+		t.Fatalf("Persistent App visual snapshot changed\n--- actual ---\n%s", actual)
+	}
+}
+
+func setPersistentVisualState(t *testing.T, document *dom.Document, noteText, routeText, statusMode string, frame bool) {
+	t.Helper()
+	setText := func(id, value string) *dom.Node {
+		node, ok := document.GetElementByID(id)
+		if !ok {
+			t.Fatalf("set text for %s", id)
+		}
+		document.SetTextContent(node.ID, value)
+		if node.TextContent() != value {
+			t.Fatalf("text for %s = %q, want %q", id, node.TextContent(), value)
+		}
+		return node
+	}
+	setText("route", routeText)
+	status := setText("status", statusMode)
+	document.SetAttribute(status.ID, "class", "status "+statusMode)
+	if class, _ := status.Attribute("class"); class != "status "+statusMode {
+		t.Fatalf("set status class %s", statusMode)
+	}
+	note := documentNode(t, document, "note")
+	input := documentNode(t, document, "note-input")
+	if noteText == "" {
+		document.SetTextContent(note.ID, "No notes yet")
+		document.SetAttribute(note.ID, "class", "note empty")
+		if class, _ := note.Attribute("class"); note.TextContent() != "No notes yet" || class != "note empty" {
+			t.Fatal("set empty note")
+		}
+	} else {
+		document.SetTextContent(note.ID, noteText)
+		document.SetAttribute(note.ID, "class", "note")
+		forms.SetCurrentValue(input, noteText)
+		if class, _ := note.Attribute("class"); note.TextContent() != noteText || class != "note" || forms.CurrentValue(input) != noteText {
+			t.Fatal("set restored note")
+		}
+	}
+	if frame {
+		app := documentNode(t, document, "app")
+		document.SetAttribute(app.ID, "class", "app frame-committed")
+		if class, _ := app.Attribute("class"); class != "app frame-committed" {
+			t.Fatal("set frame state")
+		}
+	}
+}
+
+func documentNode(t *testing.T, document *dom.Document, id string) *dom.Node {
+	t.Helper()
+	node, ok := document.GetElementByID(id)
+	if !ok {
+		t.Fatalf("missing node %s", id)
+	}
+	return node
+}
+
+func snapshotLinesSHA(lines []string) string {
+	digest := sha256.Sum256([]byte(strings.Join(lines, "\n")))
+	return hex.EncodeToString(digest[:])
 }
 
 func animationHitSnapshot(tree *layout.Tree, x, y float32) string {
