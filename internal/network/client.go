@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 )
@@ -275,6 +276,7 @@ func (c *Client) Do(ctx context.Context, requestData *Request) (*Response, error
 		Body:        body,
 		Redirected:  finalURL.String() != requestData.URL.String(),
 	}
+	c.invalidateAfterStateChange(&cacheRequest, result.StatusCode, response.Header, finalURL)
 	if result.StatusCode == http.StatusNotModified {
 		merged, ok := c.cache.MergeNotModified(&cacheRequest, result.Header)
 		if !ok {
@@ -284,6 +286,39 @@ func (c *Client) Do(ctx context.Context, requestData *Request) (*Response, error
 	}
 	c.cache.Store(&cacheRequest, result)
 	return result, nil
+}
+
+func (c *Client) invalidateAfterStateChange(request *Request, statusCode int, header http.Header, finalURL *url.URL) {
+	if c == nil || c.cache == nil || request == nil || !isUnsafeMethod(requestMethod(request)) || statusCode < 200 || statusCode >= 400 {
+		return
+	}
+	c.cache.InvalidateURL(request, request.URL)
+	if finalURL != nil && SameOrigin(request.URL, finalURL) {
+		c.cache.InvalidateURL(request, finalURL)
+	}
+	for _, name := range []string{"Location", "Content-Location"} {
+		raw := strings.TrimSpace(header.Get(name))
+		if raw == "" || finalURL == nil {
+			continue
+		}
+		reference, err := url.Parse(raw)
+		if err != nil {
+			continue
+		}
+		target := finalURL.ResolveReference(reference)
+		if SameOrigin(finalURL, target) {
+			c.cache.InvalidateURL(request, target)
+		}
+	}
+}
+
+func isUnsafeMethod(method string) bool {
+	switch strings.ToUpper(method) {
+	case http.MethodGet, http.MethodHead, http.MethodOptions, http.MethodTrace:
+		return false
+	default:
+		return true
+	}
 }
 
 func headersWithinLimits(header http.Header) bool {

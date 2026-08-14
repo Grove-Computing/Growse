@@ -277,6 +277,27 @@ func (cache *HTTPCache) MergeNotModified(request *Request, notModified http.Head
 	return nil, false
 }
 
+// InvalidateURL はRequestと同じpartitionにあるURLのGET / HEAD variantをすべて削除する。
+func (cache *HTTPCache) InvalidateURL(request *Request, target *url.URL) {
+	if cache == nil || request == nil || target == nil {
+		return
+	}
+	keys := make([]string, 0, 2)
+	for _, method := range []string{http.MethodGet, http.MethodHead} {
+		copy := *request
+		copy.Method = method
+		copy.URL = target
+		if key, ok := baseCacheKey(&copy); ok {
+			keys = append(keys, key)
+		}
+	}
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	for _, key := range keys {
+		delete(cache.entries, key)
+	}
+}
+
 func hopByHopHeader(name string) bool {
 	switch strings.ToLower(name) {
 	case "connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade":
