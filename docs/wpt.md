@@ -5,8 +5,8 @@ GrowseはWeb Platform Tests（WPT）をブラウザで直接実行せず、対�
 - Upstream: `web-platform-tests/wpt`
 - Revision: `816bbf3ebae17dc6866deb65b2286b1a1c162819`
 - License: WPTリポジトリの`LICENSE.md`（3-Clause BSD）
-- 配置: `internal/style/wpt_test.go`、`internal/layout/wpt_test.go`、`internal/forms/wpt_test.go`、`internal/network/wpt_test.go`
-- v0.8.0対象: HTML Forms、URL、Cookies、Fetch/CORS
+- 配置: `internal/style/wpt_test.go`、`internal/layout/wpt_test.go`、`internal/forms/wpt_test.go`、`internal/browser/wpt_v09_test.go`、`internal/network/wpt_test.go`、`internal/storage/wpt_test.go`、`internal/webapi/scheduler/wpt_test.go`
+- v0.9.0対象: v0.8.0までの範囲に加え、Timers、Session History、Web Storage、HTTP Cache
 
 ## 対応表
 
@@ -28,6 +28,11 @@ GrowseはWeb Platform Tests（WPT）をブラウザで直接実行せず、対�
 | `TestWPTURLOriginNormalizesDefaultPorts` | `url/url-origin.any.js` | HTTPSの省略portと443を同じOriginとして比較 | opaque originと非HTTP schemeはv0.8.0対象外 |
 | `TestWPTCookiePathDoesNotMatchPrefixLookalike` | `cookies/attributes/resources/path-redirect-shared.js` | Cookie Path直後がslashでないprefix lookalikeを非一致として比較 | redirect harnessをJar lookupへ縮約 |
 | `TestWPTCORSSafelistedContentTypes` | `cors/cors-safelisted-request-header.any.js` | safelisted Content-Type 3種のsimple request判定を比較 | byte-level unsafe value全組合せは未移植 |
+| `TestWPTNegativeTimeoutRunsBeforePositiveTimeout` | `html/webappapis/timers/negative-settimeout.any.js` | 負delayを0として扱い、正のdelayより先に実行されることをfake clockで比較 | WPTの実時間10ms待機を手動deadline配送へ変換 |
+| `TestWPTHistoryPushStateSetsURLAndBackRestoresIt` | `html/browsers/history/the-history-interface/history_pushstate_url.html` | fragmentをpushStateした後、Backで元URLへ復元することを比較 | Windowとtestharnessを単一Page History modelへ縮約 |
+| `TestWPTStorageKeyOrderSurvivesValueReplacement` | `webstorage/storage_key.window.js` | value更新でkey順が変わらず、範囲外indexが空になることを比較 | JavaScriptのunsigned long変換はv0.9.0のGo API対象外 |
+| `TestWPTHTTPCacheMaxAgeOverridesExpiresAndAgeCanMakeItStale` | `fetch/http-cache/freshness.any.js` | max-ageのExpires優先とAge超過によるstale判定をfake timestampで比較 | WPT HTTP server protocolをCache modelの直接入力へ縮約 |
+| `TestWPTFailedUnsafeRequestDoesNotInvalidateFreshEntry` | `fetch/http-cache/invalidate.any.js` | 失敗したPOSTがfresh GET entryを無効化しないことを比較 | WPT harnessを`httptest.Server`へ置換 |
 
 Upstreamのファイル全体はコピーせず、assertionの意味と最小入力だけを移植する。ケースを追加または更新するときは、Revision、Source、適応内容、および意図的な差分をこの表へ記録する。
 
@@ -50,3 +55,11 @@ Upstreamのファイル全体はコピーせず、assertionの意味と最小入
 - URLはHTTP(S) Originとpercent-encodingを選定し、opaque origin、IDNA全fixture、URL API全体は対象外とする。
 - CookiesはDomain、Path、Secure、HttpOnly、SameSite、expirationを選定し、partitioned Cookieは対象外とする。
 - Fetch/CORSはsimple request、preflight、credentials、公開Response Headerを選定し、JavaScript Promise/Stream APIは対象外とする。
+
+## v0.9.0の選定範囲
+
+- Timersは負delay、同一deadline順序、nested clamp、解除を選定し、Worker/Window realm差と文字列Callbackは対象外とする。
+- Session HistoryはpushState / replaceState、同一Document traversal、state / URL復元を選定し、iframe joint session historyとBFCacheは対象外とする。
+- Web Storageはkey順、更新、削除、quota、Origin分離を選定し、複数Window間Storage Eventは対象外とする。
+- HTTP CacheはFreshness、Age、Vary、Validation、304 merge、unsafe MethodによるInvalidationを選定し、Range、shared cache、`stale-if-error`は対象外とする。
+- RFC 9111 §4.2.1（Freshness Lifetime）、§4.2.3（Age Calculations）、§4.3.4（304 merge）、§4.4（Invalidation）の例は`internal/network/rfc9111_test.go`およびHTTP Cache testへtable-drivenで縮約し、WPTと同じfake timestamp / fake serverで実行する。
