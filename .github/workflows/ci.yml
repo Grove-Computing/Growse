@@ -63,6 +63,9 @@ jobs:
       - name: Test v0.5.0 installer
         run: bash tests/install.sh
 
+      - name: Validate release artifact matrix
+        run: bash tests/release.sh
+
       - name: Run race tests with coverage
         run: go test -race -covermode=atomic -coverprofile=coverage.out ./...
 
