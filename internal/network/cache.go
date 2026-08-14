@@ -199,7 +199,7 @@ func (cache *HTTPCache) Match(request *Request) (*Response, bool) {
 
 func (cache *HTTPCache) MatchFresh(request *Request) (*Response, bool) {
 	entry, ok := cache.matchEntry(request)
-	if !ok || entry.policy.noCache || !entry.freshness.fresh(cache.now()) {
+	if !ok || requestRequiresRevalidation(request) || entry.policy.noCache || !entry.freshness.fresh(cache.now()) {
 		return nil, false
 	}
 	return cloneResponse(entry.response), true
@@ -208,7 +208,7 @@ func (cache *HTTPCache) MatchFresh(request *Request) (*Response, bool) {
 // RevalidationHeaders はstale/no-cache variantの条件付きRequest Headerを返す。
 func (cache *HTTPCache) RevalidationHeaders(request *Request) (http.Header, bool) {
 	entry, ok := cache.matchEntry(request)
-	if !ok || !entry.policy.noCache && entry.freshness.fresh(cache.now()) {
+	if !ok || !requestRequiresRevalidation(request) && !entry.policy.noCache && entry.freshness.fresh(cache.now()) {
 		return nil, false
 	}
 	header := make(http.Header)
@@ -221,6 +221,28 @@ func (cache *HTTPCache) RevalidationHeaders(request *Request) (http.Header, bool
 		return header, true
 	}
 	return nil, false
+}
+
+func requestRequiresRevalidation(request *Request) bool {
+	if request == nil {
+		return false
+	}
+	for _, value := range request.Header.Values("Cache-Control") {
+		for _, directive := range strings.Split(value, ",") {
+			name, _, _ := strings.Cut(strings.TrimSpace(directive), "=")
+			if strings.EqualFold(name, "no-cache") {
+				return true
+			}
+		}
+	}
+	for _, value := range request.Header.Values("Pragma") {
+		for _, directive := range strings.Split(value, ",") {
+			if strings.EqualFold(strings.TrimSpace(directive), "no-cache") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // MergeNotModified は304 Headerを保存済みentryへmergeしてBody付きResponseを返す。

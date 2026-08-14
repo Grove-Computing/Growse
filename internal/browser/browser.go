@@ -795,7 +795,7 @@ func (b *Browser) reload(ctx context.Context, ignoreCache bool) (*Page, error) {
 	if ignoreCache {
 		return b.loadIgnoringCache(ctx, pageURL, historyReplace, index)
 	}
-	return b.load(ctx, pageURL, historyReplace, index)
+	return b.loadReloadingDocument(ctx, pageURL, historyReplace, index)
 }
 
 // CanBack reports whether Back has a target entry.
@@ -874,14 +874,18 @@ const (
 )
 
 func (b *Browser) load(ctx context.Context, pageURL *url.URL, commit historyCommit, historyIndex int) (*Page, error) {
-	return b.loadWithClient(ctx, pageURL, commit, historyIndex, false)
+	return b.loadWithClient(ctx, pageURL, commit, historyIndex, false, false)
+}
+
+func (b *Browser) loadReloadingDocument(ctx context.Context, pageURL *url.URL, commit historyCommit, historyIndex int) (*Page, error) {
+	return b.loadWithClient(ctx, pageURL, commit, historyIndex, true, false)
 }
 
 func (b *Browser) loadIgnoringCache(ctx context.Context, pageURL *url.URL, commit historyCommit, historyIndex int) (*Page, error) {
-	return b.loadWithClient(ctx, pageURL, commit, historyIndex, true)
+	return b.loadWithClient(ctx, pageURL, commit, historyIndex, true, true)
 }
 
-func (b *Browser) loadWithClient(ctx context.Context, pageURL *url.URL, commit historyCommit, historyIndex int, ignoreCache bool) (*Page, error) {
+func (b *Browser) loadWithClient(ctx context.Context, pageURL *url.URL, commit historyCommit, historyIndex int, revalidateDocument, revalidateResources bool) (*Page, error) {
 	b.mu.Lock()
 	b.navigationID++
 	navigationID := b.navigationID
@@ -895,12 +899,16 @@ func (b *Browser) loadWithClient(ctx context.Context, pageURL *url.URL, commit h
 	if client == nil {
 		return nil, errors.New("network client is not configured")
 	}
+	documentClient := client
+	if revalidateDocument {
+		documentClient = cacheRevalidatingLoader{ResourceLoader: client}
+	}
 	resourceClient := client
-	if ignoreCache {
+	if revalidateResources {
 		resourceClient = cacheRevalidatingLoader{ResourceLoader: client}
 	}
 
-	response, err := resourceClient.Get(ctx, pageURL)
+	response, err := documentClient.Get(ctx, pageURL)
 	if err != nil {
 		return nil, fmt.Errorf("navigate to %s: %w", network.RedactedURL(pageURL), err)
 	}

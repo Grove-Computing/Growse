@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"reflect"
 	"strings"
@@ -789,6 +790,49 @@ func TestReloadIgnoringCacheRevalidatesDocumentAndSubresources(t *testing.T) {
 	}
 	if got, want := len(browser.history.entries), 1; got != want {
 		t.Fatalf("history entries after ReloadIgnoringCache = %d, want %d", got, want)
+	}
+}
+
+func TestNavigationReloadAndForcedReloadUseDistinctCacheModes(t *testing.T) {
+	documentRequests := 0
+	stylesheetRequests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Cache-Control", "max-age=60")
+		switch request.URL.Path {
+		case "/page":
+			documentRequests++
+			response.Header().Set("Content-Type", "text/html")
+			_, _ = response.Write([]byte(`<link rel="stylesheet" href="/app.css"><p>Page</p>`))
+		case "/app.css":
+			stylesheetRequests++
+			response.Header().Set("Content-Type", "text/css")
+			_, _ = response.Write([]byte(`p { color: blue; }`))
+		default:
+			http.NotFound(response, request)
+		}
+	}))
+	defer server.Close()
+
+	browser := New(network.NewClientWithLimits(server.Client(), 1<<20))
+	for range 2 {
+		if _, err := browser.Navigate(context.Background(), server.URL+"/page"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if documentRequests != 1 || stylesheetRequests != 1 {
+		t.Fatalf("normal Navigation requests = document:%d stylesheet:%d, want 1:1", documentRequests, stylesheetRequests)
+	}
+	if _, err := browser.Reload(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if documentRequests != 2 || stylesheetRequests != 1 {
+		t.Fatalf("Reload requests = document:%d stylesheet:%d, want 2:1", documentRequests, stylesheetRequests)
+	}
+	if _, err := browser.ReloadIgnoringCache(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if documentRequests != 3 || stylesheetRequests != 2 {
+		t.Fatalf("forced Reload requests = document:%d stylesheet:%d, want 3:2", documentRequests, stylesheetRequests)
 	}
 }
 

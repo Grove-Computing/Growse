@@ -57,6 +57,31 @@ func TestClientReusesFreshResponseWithoutNetworkRequest(t *testing.T) {
 	}
 }
 
+func TestClientRequestNoCacheBypassesFreshResponse(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		requests++
+		response.Header().Set("Cache-Control", "max-age=60")
+		_, _ = response.Write([]byte("version"))
+	}))
+	defer server.Close()
+	client := NewClientWithLimits(server.Client(), 1024)
+	target := mustParseURL(t, server.URL+"/resource")
+	if _, err := client.Get(context.Background(), target); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Do(context.Background(), &Request{
+		Method: http.MethodGet,
+		URL:    target,
+		Header: http.Header{"Cache-Control": []string{"no-cache"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if requests != 2 {
+		t.Fatalf("Network requests = %d, want 2", requests)
+	}
+}
+
 func TestClientConditionallyRevalidatesStaleResponse(t *testing.T) {
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
