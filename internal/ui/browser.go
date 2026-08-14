@@ -103,6 +103,7 @@ type Navigator interface {
 	Back(ctx context.Context) (*browser.Page, error)
 	Forward(ctx context.Context) (*browser.Page, error)
 	Reload(ctx context.Context) (*browser.Page, error)
+	ReloadIgnoringCache(ctx context.Context) (*browser.Page, error)
 	CanBack() bool
 	CanForward() bool
 	Page() *browser.Page
@@ -172,6 +173,7 @@ func NewBrowserUI(navigator Navigator, invalidate func()) *BrowserUI {
 // Layout draws the browser toolbar and page viewport.
 func (ui *BrowserUI) Layout(gtx layout.Context) layout.Dimensions {
 	ui.handlePointerEvents(gtx)
+	ui.handleKeyboardShortcuts(gtx)
 	ui.handleActions(gtx)
 
 	viewport := layout.Inset{Top: toolbarHeight}.Layout(gtx, ui.layoutViewport)
@@ -179,6 +181,24 @@ func (ui *BrowserUI) Layout(gtx layout.Context) layout.Dimensions {
 	ui.layoutGopherCursor(gtx)
 	ui.registerPointerTracker(gtx)
 	return viewport
+}
+
+func (ui *BrowserUI) handleKeyboardShortcuts(gtx layout.Context) {
+	for {
+		event, ok := gtx.Event(key.Filter{Name: "R", Required: key.ModShortcut, Optional: key.ModShift})
+		if !ok {
+			return
+		}
+		keyEvent, ok := event.(key.Event)
+		if !ok || keyEvent.State != key.Press || ui.navigator == nil || ui.navigator.Page() == nil {
+			continue
+		}
+		if keyEvent.Modifiers.Contain(key.ModShift) {
+			ui.startPageLoad("キャッシュを無視して再読み込み中", ui.navigator.ReloadIgnoringCache)
+			continue
+		}
+		ui.startPageLoad("ページを再読み込み中", ui.navigator.Reload)
+	}
 }
 
 func (ui *BrowserUI) handleActions(gtx layout.Context) {

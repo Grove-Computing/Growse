@@ -30,7 +30,8 @@ type routeLoader struct {
 
 type requestRouteLoader struct {
 	routeLoader
-	request *network.Request
+	request  *network.Request
+	requests []*network.Request
 }
 
 func (loader *requestRouteLoader) Do(_ context.Context, request *network.Request) (*network.Response, error) {
@@ -38,6 +39,7 @@ func (loader *requestRouteLoader) Do(_ context.Context, request *network.Request
 	copy.Body = append([]byte(nil), request.Body...)
 	copy.Header = request.Header.Clone()
 	loader.request = &copy
+	loader.requests = append(loader.requests, &copy)
 	response, ok := loader.responses[request.URL.String()]
 	if !ok {
 		return nil, errors.New("missing response")
@@ -630,6 +632,40 @@ func TestReloadDoesNotAddHistoryEntry(t *testing.T) {
 	}
 	if got, want := len(browser.history.entries), 1; got != want {
 		t.Fatalf("history entries after Reload = %d, want %d", got, want)
+	}
+}
+
+func TestReloadIgnoringCacheRevalidatesDocumentAndSubresources(t *testing.T) {
+	pageURL := mustParseURL(t, "https://example.com/page")
+	stylesheetURL := mustParseURL(t, "https://example.com/app.css")
+	scriptURL := mustParseURL(t, "https://example.com/app.go")
+	loader := &requestRouteLoader{routeLoader: routeLoader{responses: map[string]*network.Response{
+		pageURL.String(): {
+			URL: pageURL, StatusCode: 200, ContentType: "text/html",
+			Body: []byte(`<link rel="stylesheet" href="/app.css"><script type="text/go" src="/app.go"></script><p>Page</p>`),
+		},
+		stylesheetURL.String(): {URL: stylesheetURL, StatusCode: 200, ContentType: "text/css", Body: []byte(`p { color: blue; }`)},
+		scriptURL.String():     {URL: scriptURL, StatusCode: 200, ContentType: "text/go", Body: []byte(`package main; func main() {}`)},
+	}}}
+	browser := New(loader)
+	if _, err := browser.Navigate(context.Background(), pageURL.String()); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := browser.ReloadIgnoringCache(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	if got, want := len(loader.requests), 3; got != want {
+		t.Fatalf("cache-revalidating requests = %d, want %d", got, want)
+	}
+	for _, request := range loader.requests {
+		if request.Header.Get("Cache-Control") != "no-cache" || request.Header.Get("Pragma") != "no-cache" {
+			t.Errorf("request headers for %s = %v, want cache revalidation", request.URL, request.Header)
+		}
+	}
+	if got, want := len(browser.history.entries), 1; got != want {
+		t.Fatalf("history entries after ReloadIgnoringCache = %d, want %d", got, want)
 	}
 }
 

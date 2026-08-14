@@ -123,6 +123,7 @@ Animation中のPaintとHit Testingは、同じFrameの値を参照します。DO
 
 - URL入力欄でEnterを押すか、Gopherボタンを押すと移動します。
 - リンクのclick、戻る、進む、履歴を増やさない再読込に対応しています。
+- `Ctrl+R`（macOSでは`Command+R`）で通常の再読込、`Ctrl+Shift+R`（macOSでは`Command+Shift+R`）でHTTP Cacheへ再検証を要求する強制再読込を実行します。
 - リンクへカーソルを重ねると、認証情報を除去した遷移先URLを状態表示に示します。
 - ウィンドウ内では、青いGopherをマウスカーソルとして表示します。
 

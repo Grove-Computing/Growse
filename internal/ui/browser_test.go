@@ -118,6 +118,10 @@ func (navigator *stubNavigator) Reload(context.Context) (*browser.Page, error) {
 	return navigator.page, navigator.err
 }
 
+func (navigator *stubNavigator) ReloadIgnoringCache(context.Context) (*browser.Page, error) {
+	return navigator.page, navigator.err
+}
+
 func (navigator *stubNavigator) CanBack() bool    { return true }
 func (navigator *stubNavigator) CanForward() bool { return true }
 func (navigator *stubNavigator) DispatchClick(nodeID dom.NodeID, x, y float32) bool {
@@ -371,6 +375,71 @@ type recordingNavigator struct {
 func (navigator *recordingNavigator) Navigate(_ context.Context, rawURL string) (*browser.Page, error) {
 	navigator.navigated <- rawURL
 	return navigator.page, navigator.err
+}
+
+type reloadRecordingNavigator struct {
+	stubNavigator
+	reloads chan bool
+}
+
+func (navigator *reloadRecordingNavigator) Reload(context.Context) (*browser.Page, error) {
+	navigator.reloads <- false
+	return navigator.page, navigator.err
+}
+
+func (navigator *reloadRecordingNavigator) ReloadIgnoringCache(context.Context) (*browser.Page, error) {
+	navigator.reloads <- true
+	return navigator.page, navigator.err
+}
+
+func TestKeyboardReloadShortcuts(t *testing.T) {
+	tests := []struct {
+		name        string
+		modifiers   key.Modifiers
+		ignoreCache bool
+		status      string
+	}{
+		{name: "Ctrl+R", modifiers: key.ModShortcut, status: "ページを再読み込み中"},
+		{name: "Ctrl+Shift+R", modifiers: key.ModShortcut | key.ModShift, ignoreCache: true, status: "キャッシュを無視して再読み込み中"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			pageURL, err := url.Parse("https://example.com/page")
+			if err != nil {
+				t.Fatal(err)
+			}
+			navigator := &reloadRecordingNavigator{
+				stubNavigator: stubNavigator{page: &browser.Page{URL: pageURL}},
+				reloads:       make(chan bool, 1),
+			}
+			ui := NewBrowserUI(navigator, nil)
+			defer ui.Close()
+			router := new(input.Router)
+			gtx := layout.Context{
+				Ops:         new(op.Ops),
+				Source:      router.Source(),
+				Constraints: layout.Exact(image.Pt(1280, 800)),
+				Metric:      unit.Metric{PxPerDp: 1, PxPerSp: 1},
+			}
+			ui.Layout(gtx)
+			router.Frame(gtx.Ops)
+			router.Queue(key.Event{Name: "R", Modifiers: test.modifiers, State: key.Press})
+
+			gtx.Reset()
+			ui.Layout(gtx)
+			select {
+			case got := <-navigator.reloads:
+				if got != test.ignoreCache {
+					t.Fatalf("ignore cache = %t, want %t", got, test.ignoreCache)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("reload shortcut did not start navigation")
+			}
+			if ui.status != test.status {
+				t.Fatalf("status = %q, want %q", ui.status, test.status)
+			}
+		})
+	}
 }
 
 func TestAddressEnterStartsNavigation(t *testing.T) {

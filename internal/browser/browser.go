@@ -617,7 +617,7 @@ func (b *Browser) SubmitPOST(ctx context.Context, formID, submitterID dom.NodeID
 	if err != nil {
 		return nil, fmt.Errorf("submit form to %s: %w", network.RedactedURL(target), err)
 	}
-	return b.finishLoad(ctx, target, response, historyPush, -1, navigationID, client, runtimeFactory, onMutation, reducedMotion)
+	return b.finishLoad(ctx, target, response, historyPush, -1, navigationID, client, client, runtimeFactory, onMutation, reducedMotion)
 }
 
 // Submit validates and dispatches a cancelable submit event before navigation.
@@ -706,6 +706,16 @@ func (b *Browser) Forward(ctx context.Context) (*Page, error) {
 
 // Reload refreshes the active page without adding a history entry.
 func (b *Browser) Reload(ctx context.Context) (*Page, error) {
+	return b.reload(ctx, false)
+}
+
+// ReloadIgnoringCache refreshes the active page and its subresources while
+// asking HTTP caches to revalidate them. It does not add a history entry.
+func (b *Browser) ReloadIgnoringCache(ctx context.Context) (*Page, error) {
+	return b.reload(ctx, true)
+}
+
+func (b *Browser) reload(ctx context.Context, ignoreCache bool) (*Page, error) {
 	b.mu.RLock()
 	if b.page == nil || b.page.URL == nil {
 		b.mu.RUnlock()
@@ -714,6 +724,9 @@ func (b *Browser) Reload(ctx context.Context) (*Page, error) {
 	pageURL := cloneURL(b.page.URL)
 	index := b.history.index
 	b.mu.RUnlock()
+	if ignoreCache {
+		return b.loadIgnoringCache(ctx, pageURL, historyReplace, index)
+	}
 	return b.load(ctx, pageURL, historyReplace, index)
 }
 
@@ -750,6 +763,14 @@ const (
 )
 
 func (b *Browser) load(ctx context.Context, pageURL *url.URL, commit historyCommit, historyIndex int) (*Page, error) {
+	return b.loadWithClient(ctx, pageURL, commit, historyIndex, false)
+}
+
+func (b *Browser) loadIgnoringCache(ctx context.Context, pageURL *url.URL, commit historyCommit, historyIndex int) (*Page, error) {
+	return b.loadWithClient(ctx, pageURL, commit, historyIndex, true)
+}
+
+func (b *Browser) loadWithClient(ctx context.Context, pageURL *url.URL, commit historyCommit, historyIndex int, ignoreCache bool) (*Page, error) {
 	b.mu.Lock()
 	b.navigationID++
 	navigationID := b.navigationID
@@ -762,15 +783,37 @@ func (b *Browser) load(ctx context.Context, pageURL *url.URL, commit historyComm
 	if client == nil {
 		return nil, errors.New("network client is not configured")
 	}
+	resourceClient := client
+	if ignoreCache {
+		resourceClient = cacheRevalidatingLoader{ResourceLoader: client}
+	}
 
-	response, err := client.Get(ctx, pageURL)
+	response, err := resourceClient.Get(ctx, pageURL)
 	if err != nil {
 		return nil, fmt.Errorf("navigate to %s: %w", network.RedactedURL(pageURL), err)
 	}
-	return b.finishLoad(ctx, pageURL, response, commit, historyIndex, navigationID, client, runtimeFactory, onMutation, reducedMotion)
+	return b.finishLoad(ctx, pageURL, response, commit, historyIndex, navigationID, resourceClient, client, runtimeFactory, onMutation, reducedMotion)
 }
 
-func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *network.Response, commit historyCommit, historyIndex int, navigationID uint64, client ResourceLoader, runtimeFactory runtimemodel.Factory, onMutation func(), reducedMotion bool) (*Page, error) {
+type cacheRevalidatingLoader struct {
+	ResourceLoader
+}
+
+func (loader cacheRevalidatingLoader) Get(ctx context.Context, resourceURL *url.URL) (*network.Response, error) {
+	if requestClient, ok := loader.ResourceLoader.(requestLoader); ok {
+		return requestClient.Do(ctx, &network.Request{
+			Method: http.MethodGet,
+			URL:    resourceURL,
+			Header: http.Header{
+				"Cache-Control": []string{"no-cache"},
+				"Pragma":        []string{"no-cache"},
+			},
+		})
+	}
+	return loader.ResourceLoader.Get(ctx, resourceURL)
+}
+
+func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *network.Response, commit historyCommit, historyIndex int, navigationID uint64, resourceClient ResourceLoader, runtimeClient ResourceLoader, runtimeFactory runtimemodel.Factory, onMutation func(), reducedMotion bool) (*Page, error) {
 	mediaType, _, err := mime.ParseMediaType(response.ContentType)
 	if err != nil {
 		return nil, fmt.Errorf("invalid Content-Type %q: %w", response.ContentType, err)
@@ -782,7 +825,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	if err != nil {
 		return nil, fmt.Errorf("build DOM for %s: %w", network.RedactedURL(pageURL), err)
 	}
-	stylesheet, err := b.loadStyles(ctx, client, response.URL, document)
+	stylesheet, err := b.loadStyles(ctx, resourceClient, response.URL, document)
 	if err != nil {
 		return nil, fmt.Errorf("load styles for %s: %w", network.RedactedURL(pageURL), err)
 	}
@@ -790,8 +833,8 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 		ViewportWidth: 1280, ViewportHeight: 720, RootFontSize: 16, ResolutionDPI: 96,
 		ColorScheme: "light", Hover: true, Pointer: "fine", ReducedMotion: reducedMotion,
 	})
-	backgroundImages, backgroundErrors := loadBackgroundImages(ctx, client, computedStyles)
-	scripts, scriptErrors := loadScripts(ctx, client, response.URL, document)
+	backgroundImages, backgroundErrors := loadBackgroundImages(ctx, resourceClient, computedStyles)
+	scripts, scriptErrors := loadScripts(ctx, resourceClient, response.URL, document)
 
 	page := &Page{
 		URL:              cloneURL(response.URL),
@@ -812,7 +855,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 		ScriptErrors:     scriptErrors,
 	}
 	page.Animations.Reconcile(computedStyles, b.currentTime())
-	pageRuntime := startRuntime(ctx, runtimeFactory, page, client, onMutation, b.currentTime)
+	pageRuntime := startRuntime(ctx, runtimeFactory, page, runtimeClient, onMutation, b.currentTime)
 	if err := ctx.Err(); err != nil {
 		page.Animations.Clear()
 		page.Transitions.Clear()
