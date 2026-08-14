@@ -348,6 +348,10 @@ func parseFlexShorthand(value string, context LengthContext) (flexShorthand, boo
 	numbers := 0
 	for _, part := range parts {
 		if number, err := strconv.ParseFloat(part, 32); err == nil && number >= 0 && !math.IsInf(number, 0) && !math.IsNaN(number) {
+			if numbers == 2 && number == 0 {
+				result.basis = FlexBasis{Kind: FlexBasisLength}
+				continue
+			}
 			if numbers == 0 {
 				result.grow = float32(number)
 			} else if numbers == 1 {

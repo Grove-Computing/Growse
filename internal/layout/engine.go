@@ -44,6 +44,20 @@ type blockStyle struct {
 	whiteSpace      stylemodel.WhiteSpace
 	overflowX       stylemodel.Overflow
 	overflowY       stylemodel.Overflow
+	flexDirection   stylemodel.FlexDirection
+	flexWrap        stylemodel.FlexWrap
+	justifyContent  stylemodel.JustifyContent
+	alignItems      stylemodel.Align
+	alignContent    stylemodel.Align
+	order           int
+	flexGrow        float32
+	flexShrink      float32
+	flexBasis       stylemodel.FlexBasis
+	alignSelf       stylemodel.Align
+	rowGap          stylemodel.LengthPercentage
+	columnGap       stylemodel.LengthPercentage
+	marginAuto      stylemodel.AutoEdges
+	aspectRatio     float32
 }
 
 type inlineRun struct {
@@ -146,7 +160,7 @@ func (e *engine) walk(node *dom.Node, x, width, containingHeight float32, height
 			e.addInput(node, style, x, width, containingHeight, heightDefinite)
 			return
 		}
-		if style.display == stylemodel.DisplayBlock {
+		if style.display == stylemodel.DisplayBlock || style.display == stylemodel.DisplayFlex {
 			e.addBlock(node, style, x, width, containingHeight, heightDefinite, nil)
 			return
 		}
@@ -280,48 +294,52 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 		})
 	}
 
-	inlineRuns := e.generatedRuns(node, true, style)
-	previousBlock := false
-	previousBottomMargin := float32(0)
-	flushInline := func() {
-		if len(inlineRuns) != 0 {
-			e.addInlineRuns(node.ID, node.TagName, inlineRuns, style, contentX, contentWidth)
-			previousBlock = false
+	if style.display == stylemodel.DisplayFlex {
+		e.addFlexChildren(node, style, contentX, contentWidth, childContainingHeight, declaredHeightDefinite)
+	} else {
+		inlineRuns := e.generatedRuns(node, true, style)
+		previousBlock := false
+		previousBottomMargin := float32(0)
+		flushInline := func() {
+			if len(inlineRuns) != 0 {
+				e.addInlineRuns(node.ID, node.TagName, inlineRuns, style, contentX, contentWidth)
+				previousBlock = false
+			}
+			inlineRuns = inlineRuns[:0]
 		}
-		inlineRuns = inlineRuns[:0]
-	}
 
-	for _, child := range node.Children {
-		if child.Type == dom.NodeElement {
-			childStyle := e.styleFor(child)
-			if childStyle.display == stylemodel.DisplayNone {
-				continue
-			}
-			if isTextInput(child) {
-				flushInline()
-				e.addInput(child, childStyle, contentX, contentWidth, childContainingHeight, declaredHeightDefinite)
-				previousBlock = true
-				previousBottomMargin = childStyle.margin.Bottom
-				continue
-			}
-			if childStyle.display == stylemodel.DisplayBlock {
-				flushInline()
-				if previousBlock {
-					e.y -= previousBottomMargin
-					collapsed := collapseMargins(previousBottomMargin, childStyle.margin.Top)
-					e.addBlock(child, childStyle, contentX, contentWidth, childContainingHeight, declaredHeightDefinite, &collapsed)
-				} else {
-					e.addBlock(child, childStyle, contentX, contentWidth, childContainingHeight, declaredHeightDefinite, nil)
+		for _, child := range node.Children {
+			if child.Type == dom.NodeElement {
+				childStyle := e.styleFor(child)
+				if childStyle.display == stylemodel.DisplayNone {
+					continue
 				}
-				previousBlock = true
-				previousBottomMargin = childStyle.margin.Bottom
-				continue
+				if isTextInput(child) {
+					flushInline()
+					e.addInput(child, childStyle, contentX, contentWidth, childContainingHeight, declaredHeightDefinite)
+					previousBlock = true
+					previousBottomMargin = childStyle.margin.Bottom
+					continue
+				}
+				if childStyle.display == stylemodel.DisplayBlock || childStyle.display == stylemodel.DisplayFlex {
+					flushInline()
+					if previousBlock {
+						e.y -= previousBottomMargin
+						collapsed := collapseMargins(previousBottomMargin, childStyle.margin.Top)
+						e.addBlock(child, childStyle, contentX, contentWidth, childContainingHeight, declaredHeightDefinite, &collapsed)
+					} else {
+						e.addBlock(child, childStyle, contentX, contentWidth, childContainingHeight, declaredHeightDefinite, nil)
+					}
+					previousBlock = true
+					previousBottomMargin = childStyle.margin.Bottom
+					continue
+				}
 			}
+			inlineRuns = append(inlineRuns, e.collectInlineRuns(child, node)...)
 		}
-		inlineRuns = append(inlineRuns, e.collectInlineRuns(child, node)...)
+		inlineRuns = append(inlineRuns, e.generatedRuns(node, false, style)...)
+		flushInline()
 	}
-	inlineRuns = append(inlineRuns, e.generatedRuns(node, false, style)...)
-	flushInline()
 	e.clip = previousClip
 
 	contentHeight := e.y - contentTop
@@ -392,7 +410,7 @@ func (e *engine) collectInlineRunsWithOpacity(node, owner *dom.Node, opacity flo
 	if style.display == stylemodel.DisplayNone {
 		return nil
 	}
-	if style.display == stylemodel.DisplayInlineBlock {
+	if style.display == stylemodel.DisplayInlineBlock || style.display == stylemodel.DisplayInlineFlex {
 		return []inlineRun{{nodeID: node.ID, tag: node.TagName, text: e.inlineText(node), style: style, atomic: true, opacity: opacity}}
 	}
 	if node.TagName == "br" {
@@ -783,6 +801,12 @@ func applyComputed(block blockStyle, computed stylemodel.ComputedStyle) blockSty
 	block.maxWidth, block.maxHeight = computed.MaxWidth, computed.MaxHeight
 	block.lineHeight, block.whiteSpace = computed.LineHeight, computed.WhiteSpace
 	block.overflowX, block.overflowY = computed.OverflowX, computed.OverflowY
+	block.flexDirection, block.flexWrap = computed.FlexDirection, computed.FlexWrap
+	block.justifyContent, block.alignItems, block.alignContent = computed.JustifyContent, computed.AlignItems, computed.AlignContent
+	block.order, block.flexGrow, block.flexShrink = computed.Order, computed.FlexGrow, computed.FlexShrink
+	block.flexBasis, block.alignSelf = computed.FlexBasis, computed.AlignSelf
+	block.rowGap, block.columnGap = computed.RowGap, computed.ColumnGap
+	block.marginAuto, block.aspectRatio = computed.MarginAuto, computed.AspectRatio
 	return block
 }
 

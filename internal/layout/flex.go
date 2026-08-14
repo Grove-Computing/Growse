@@ -2,7 +2,9 @@ package layout
 
 import (
 	"sort"
+	"strings"
 
+	"github.com/saku0512/growse/internal/dom"
 	stylemodel "github.com/saku0512/growse/internal/style"
 )
 
@@ -28,6 +30,8 @@ type flexItem struct {
 	maximum      float32
 	grow         float32
 	shrink       float32
+	marginStart  float32
+	marginEnd    float32
 	target       float32
 	frozen       bool
 }
@@ -55,14 +59,14 @@ func formFlexLines(items []*flexItem, available, gap float32, wrap stylemodel.Fl
 	lines := []flexLine{{}}
 	used := float32(0)
 	for _, item := range items {
-		required := item.hypothetical
+		required := item.hypothetical + item.marginStart + item.marginEnd
 		if len(lines[len(lines)-1].items) != 0 {
 			required += gap
 		}
 		if len(lines[len(lines)-1].items) != 0 && used+required > available {
 			lines = append(lines, flexLine{})
 			used = 0
-			required = item.hypothetical
+			required = item.hypothetical + item.marginStart + item.marginEnd
 		}
 		lines[len(lines)-1].items = append(lines[len(lines)-1].items, item)
 		used += required
@@ -80,6 +84,7 @@ func resolveFlexibleLengths(line *flexLine, available, gap float32) {
 	itemSpace := available - gap*float32(len(line.items)-1)
 	sumHypothetical := float32(0)
 	for _, item := range line.items {
+		itemSpace -= item.marginStart + item.marginEnd
 		item.target = item.base
 		item.frozen = false
 		sumHypothetical += item.hypothetical
@@ -148,5 +153,276 @@ func resolveFlexibleLengths(line *flexLine, available, gap float32) {
 			}
 			break
 		}
+	}
+}
+
+type flexLayoutItem struct {
+	algorithm  *flexItem
+	node       *dom.Node
+	style      blockStyle
+	crossSize  float32
+	crossStart float32
+	crossEnd   float32
+}
+
+func (e *engine) addFlexChildren(container *dom.Node, containerStyle blockStyle, x, width, containingHeight float32, heightDefinite bool) {
+	axis := axisFor(containerStyle.flexDirection, containerStyle.flexWrap)
+	availableMain := width
+	if !axis.horizontal {
+		availableMain = -1
+		if heightDefinite {
+			availableMain = containingHeight
+		}
+	}
+	mainGap := containerStyle.columnGap.Resolve(width)
+	crossGap := containerStyle.rowGap.Resolve(containingHeight)
+	if !axis.horizontal {
+		mainGap, crossGap = containerStyle.rowGap.Resolve(containingHeight), containerStyle.columnGap.Resolve(width)
+	}
+
+	items, byAlgorithm := e.collectFlexItems(container, axis, availableMain, width, containingHeight, heightDefinite)
+	if len(items) == 0 {
+		return
+	}
+	algorithms := make([]*flexItem, 0, len(items))
+	for _, item := range items {
+		algorithms = append(algorithms, item.algorithm)
+	}
+	orderFlexItems(algorithms)
+	if availableMain < 0 {
+		availableMain = mainGap * float32(max(len(algorithms)-1, 0))
+		for _, item := range algorithms {
+			availableMain += item.hypothetical + item.marginStart + item.marginEnd
+		}
+	}
+	lines := formFlexLines(algorithms, availableMain, mainGap, containerStyle.flexWrap)
+	lineCrossSizes := make([]float32, len(lines))
+	for lineIndex := range lines {
+		resolveFlexibleLengths(&lines[lineIndex], availableMain, mainGap)
+		for _, algorithm := range lines[lineIndex].items {
+			item := byAlgorithm[algorithm]
+			lineCrossSizes[lineIndex] = max(lineCrossSizes[lineIndex], item.crossSize+item.crossStart+item.crossEnd)
+		}
+	}
+	totalCross := crossGap * float32(max(len(lines)-1, 0))
+	for _, size := range lineCrossSizes {
+		totalCross += size
+	}
+	if axis.horizontal && heightDefinite {
+		totalCross = max(totalCross, containingHeight)
+	}
+
+	crossCursor := float32(0)
+	lineIndices := make([]int, len(lines))
+	for index := range lineIndices {
+		lineIndices[index] = index
+	}
+	if axis.crossFlip {
+		for left, right := 0, len(lineIndices)-1; left < right; left, right = left+1, right-1 {
+			lineIndices[left], lineIndices[right] = lineIndices[right], lineIndices[left]
+		}
+	}
+	for _, lineIndex := range lineIndices {
+		line := &lines[lineIndex]
+		mainCursor := float32(0)
+		if axis.reverse {
+			mainCursor = availableMain
+		}
+		for _, algorithm := range line.items {
+			item := byAlgorithm[algorithm]
+			var itemX, itemY float32
+			if axis.horizontal {
+				if axis.reverse {
+					mainCursor -= algorithm.marginEnd + algorithm.target
+					itemX = x + mainCursor
+					mainCursor -= algorithm.marginStart + mainGap
+				} else {
+					mainCursor += algorithm.marginStart
+					itemX = x + mainCursor
+					mainCursor += algorithm.target + algorithm.marginEnd + mainGap
+				}
+				itemY = e.y + crossCursor + item.crossStart
+			} else {
+				if axis.reverse {
+					mainCursor -= algorithm.marginEnd + algorithm.target
+					itemY = e.y + mainCursor
+					mainCursor -= algorithm.marginStart + mainGap
+				} else {
+					mainCursor += algorithm.marginStart
+					itemY = e.y + mainCursor
+					mainCursor += algorithm.target + algorithm.marginEnd + mainGap
+				}
+				itemX = x + crossCursor + item.crossStart
+			}
+			e.renderFlexItem(item, axis, itemX, itemY, algorithm.target, item.crossSize)
+		}
+		crossCursor += lineCrossSizes[lineIndex] + crossGap
+	}
+	if axis.horizontal {
+		e.y += totalCross
+	} else {
+		e.y += availableMain
+	}
+}
+
+func (e *engine) collectFlexItems(container *dom.Node, axis flexAxis, availableMain, width, height float32, heightDefinite bool) ([]*flexLayoutItem, map[*flexItem]*flexLayoutItem) {
+	var items []*flexLayoutItem
+	byAlgorithm := make(map[*flexItem]*flexLayoutItem)
+	for index, node := range container.Children {
+		if node.Type != dom.NodeElement && (node.Type != dom.NodeText || strings.TrimSpace(node.Text) == "") {
+			continue
+		}
+		style := e.styleFor(node)
+		if style.display == stylemodel.DisplayNone {
+			continue
+		}
+		base, cross := e.flexIntrinsicSizes(node, style, axis, availableMain, width, height, heightDefinite)
+		minimum, maximum := float32(0), float32(-1)
+		minValue, maxValue := style.minWidth, style.maxWidth
+		if !axis.horizontal {
+			minValue, maxValue = style.minHeight, style.maxHeight
+		}
+		if resolved, ok := resolveSize(minValue, max(availableMain, float32(0)), availableMain >= 0); ok {
+			minimum = resolved
+		}
+		if resolved, ok := resolveSize(maxValue, max(availableMain, float32(0)), availableMain >= 0); ok {
+			maximum = resolved
+		}
+		hypothetical := max(base, minimum)
+		if maximum >= 0 {
+			hypothetical = min(hypothetical, maximum)
+		}
+		mainStart, mainEnd := style.margin.Left, style.margin.Right
+		crossStart, crossEnd := style.margin.Top, style.margin.Bottom
+		if !axis.horizontal {
+			mainStart, mainEnd = style.margin.Top, style.margin.Bottom
+			crossStart, crossEnd = style.margin.Left, style.margin.Right
+		}
+		algorithm := &flexItem{
+			index: index, order: style.order, base: base, hypothetical: hypothetical,
+			minimum: minimum, maximum: maximum, grow: style.flexGrow, shrink: style.flexShrink,
+			marginStart: mainStart, marginEnd: mainEnd,
+		}
+		item := &flexLayoutItem{algorithm: algorithm, node: node, style: style, crossSize: cross, crossStart: crossStart, crossEnd: crossEnd}
+		items = append(items, item)
+		byAlgorithm[algorithm] = item
+	}
+	return items, byAlgorithm
+}
+
+func (e *engine) flexIntrinsicSizes(node *dom.Node, style blockStyle, axis flexAxis, availableMain, width, height float32, heightDefinite bool) (float32, float32) {
+	text := normalizeWhitespace(e.inlineText(node))
+	textWidth, textHeight, _ := measureText(text, style.fontSize, style.bold)
+	if textHeight <= 0 {
+		textHeight = style.fontSize * 1.4
+	}
+	if isTextInput(node) {
+		textWidth, textHeight = inputWidth, inputHeight
+	}
+	horizontalExtras := style.padding.Left + style.padding.Right + style.border.Left.Width + style.border.Right.Width
+	verticalExtras := style.padding.Top + style.padding.Bottom + style.border.Top.Width + style.border.Bottom.Width
+	intrinsicWidth, intrinsicHeight := textWidth+horizontalExtras, textHeight+verticalExtras
+	if resolved, ok := resolveSize(style.width, width, true); ok {
+		intrinsicWidth = resolved
+		if style.boxSizing == stylemodel.BoxSizingContentBox {
+			intrinsicWidth += horizontalExtras
+		}
+	}
+	if resolved, ok := resolveSize(style.height, height, heightDefinite); ok {
+		intrinsicHeight = resolved
+		if style.boxSizing == stylemodel.BoxSizingContentBox {
+			intrinsicHeight += verticalExtras
+		}
+	}
+	base := intrinsicWidth
+	if !axis.horizontal {
+		base = intrinsicHeight
+	}
+	if style.flexBasis.Kind == stylemodel.FlexBasisLength && (style.flexBasis.Value.Percentage == 0 || availableMain >= 0) {
+		base = style.flexBasis.Value.Resolve(max(availableMain, float32(0)))
+	} else if style.flexBasis.Kind == stylemodel.FlexBasisContent {
+		if axis.horizontal {
+			base = textWidth + horizontalExtras
+		} else {
+			base = textHeight + verticalExtras
+		}
+	}
+	if style.aspectRatio > 0 {
+		if axis.horizontal && style.width.Kind == stylemodel.SizeAuto && style.height.Kind == stylemodel.SizeLength {
+			base = intrinsicHeight * style.aspectRatio
+		} else if !axis.horizontal && style.height.Kind == stylemodel.SizeAuto && style.width.Kind == stylemodel.SizeLength {
+			base = intrinsicWidth / style.aspectRatio
+		}
+	}
+	if axis.horizontal {
+		return max(base, float32(0)), max(intrinsicHeight, float32(1))
+	}
+	return max(base, float32(0)), max(intrinsicWidth, float32(1))
+}
+
+func (e *engine) renderFlexItem(item *flexLayoutItem, axis flexAxis, x, y, mainSize, crossSize float32) {
+	style := item.style
+	style.margin = stylemodel.Edges{}
+	style.marginAuto = stylemodel.AutoEdges{}
+	style.boxSizing = stylemodel.BoxSizingBorderBox
+	if axis.horizontal {
+		style.width = pixelSize(mainSize)
+		style.height = pixelSize(crossSize)
+	} else {
+		style.width = pixelSize(crossSize)
+		style.height = pixelSize(mainSize)
+	}
+	startBoxes, startDecorations := len(e.tree.Boxes), len(e.tree.Decorations)
+	savedY, savedClip := e.y, e.clip
+	e.y, e.clip = 0, nil
+	outerWidth, outerHeight := crossSize, mainSize
+	if axis.horizontal {
+		outerWidth, outerHeight = mainSize, crossSize
+	}
+	if item.node.Type == dom.NodeText {
+		e.addText(item.node.ID, "text", normalizeWhitespace(item.node.Text), style, 0, outerWidth)
+	} else if isTextInput(item.node) {
+		e.addInput(item.node, style, 0, outerWidth, outerHeight, true)
+	} else {
+		if style.display != stylemodel.DisplayFlex {
+			style.display = stylemodel.DisplayBlock
+		}
+		e.addBlock(item.node, style, 0, outerWidth, outerHeight, true, nil)
+	}
+	e.y, e.clip = savedY, savedClip
+	translateFlexGeometry(e.tree, startBoxes, startDecorations, x, y, savedClip)
+}
+
+func pixelSize(value float32) stylemodel.SizeValue {
+	return stylemodel.SizeValue{Kind: stylemodel.SizeLength, Value: stylemodel.LengthPercentage{Pixels: max(value, float32(0))}}
+}
+
+func translateFlexGeometry(tree *Tree, boxStart, decorationStart int, x, y float32, parentClip *Rect) {
+	translateClip := func(clip *Rect) *Rect {
+		if clip != nil {
+			clip.X += x
+			clip.Y += y
+		}
+		if parentClip == nil {
+			return clip
+		}
+		if clip == nil {
+			return cloneRect(parentClip)
+		}
+		return intersectClip(parentClip, *clip)
+	}
+	for index := boxStart; index < len(tree.Boxes); index++ {
+		tree.Boxes[index].X += x
+		tree.Boxes[index].Y += y
+		tree.Boxes[index].Baseline += y
+		for runIndex := range tree.Boxes[index].Runs {
+			tree.Boxes[index].Runs[runIndex].Baseline += y
+		}
+		tree.Boxes[index].Clip = translateClip(tree.Boxes[index].Clip)
+	}
+	for index := decorationStart; index < len(tree.Decorations); index++ {
+		tree.Decorations[index].X += x
+		tree.Decorations[index].Y += y
+		tree.Decorations[index].Clip = translateClip(tree.Decorations[index].Clip)
 	}
 }

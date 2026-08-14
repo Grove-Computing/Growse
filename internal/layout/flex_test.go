@@ -1,8 +1,11 @@
 package layout
 
 import (
+	"strings"
 	"testing"
 
+	"github.com/saku0512/growse/internal/css"
+	"github.com/saku0512/growse/internal/dom"
 	stylemodel "github.com/saku0512/growse/internal/style"
 )
 
@@ -79,4 +82,87 @@ func TestResolveFlexibleLengthsFreezesMinMaxViolations(t *testing.T) {
 	if line.items[0].target != 45 || line.items[1].target != 55 {
 		t.Fatalf("constrained targets = %v, %v", line.items[0].target, line.items[1].target)
 	}
+}
+
+func TestBuildFlexRowGrowsItemsAndUsesOrderModifiedVisualOrder(t *testing.T) {
+	document := dom.NewDocument()
+	container := document.CreateElement("div", map[string]string{"class": "container"})
+	first := document.CreateElement("div", map[string]string{"class": "item first"})
+	second := document.CreateElement("div", map[string]string{"class": "item second"})
+	third := document.CreateElement("div", map[string]string{"class": "item third"})
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, container},
+		[2]*dom.Node{container, first},
+		[2]*dom.Node{first, document.CreateText("first")},
+		[2]*dom.Node{container, second},
+		[2]*dom.Node{second, document.CreateText("second")},
+		[2]*dom.Node{container, third},
+		[2]*dom.Node{third, document.CreateText("third")},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.container { display:flex; width:300px; }
+.item { flex:1 1 0; height:30px; background-color:#ddd; }
+.second { order:-1; }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	computed := stylemodel.Compute(document, stylesheet)
+	if containerStyle, _ := computed.For(container); containerStyle.Display != stylemodel.DisplayFlex {
+		t.Fatalf("container display = %v", containerStyle.Display)
+	}
+	if itemStyle, _ := computed.For(first); itemStyle.BackgroundColor == 0 {
+		t.Fatalf("item style = %#v", itemStyle)
+	}
+	tree := Build(document, computed, 500)
+	secondBox := decorationForNode(t, tree, second.ID)
+	firstBox := decorationForNode(t, tree, first.ID)
+	thirdBox := decorationForNode(t, tree, third.ID)
+	if secondBox.Width != 100 || firstBox.Width != 100 || thirdBox.Width != 100 {
+		t.Fatalf("flex widths = %v, %v, %v", secondBox.Width, firstBox.Width, thirdBox.Width)
+	}
+	if !(secondBox.X < firstBox.X && firstBox.X < thirdBox.X) {
+		t.Fatalf("visual order x = second %v, first %v, third %v", secondBox.X, firstBox.X, thirdBox.X)
+	}
+	if container.Children[0] != first || container.Children[1] != second || container.Children[2] != third {
+		t.Fatal("flex order changed DOM order")
+	}
+}
+
+func TestBuildFlexColumnShrinksItems(t *testing.T) {
+	document := dom.NewDocument()
+	container := document.CreateElement("section", map[string]string{"class": "container"})
+	first := document.CreateElement("div", map[string]string{"class": "item"})
+	second := document.CreateElement("div", map[string]string{"class": "item"})
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, container},
+		[2]*dom.Node{container, first},
+		[2]*dom.Node{first, document.CreateText("one")},
+		[2]*dom.Node{container, second},
+		[2]*dom.Node{second, document.CreateText("two")},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.container { display:flex; flex-direction:column; width:120px; height:120px; }
+.item { flex:0 1 80px; background-color:#ddd; }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, stylemodel.Compute(document, stylesheet), 500)
+	firstBox := decorationForNode(t, tree, first.ID)
+	secondBox := decorationForNode(t, tree, second.ID)
+	if firstBox.Height != 60 || secondBox.Height != 60 || secondBox.Y != firstBox.Y+60 {
+		t.Fatalf("column geometry = first %#v, second %#v", firstBox.Rect, secondBox.Rect)
+	}
+}
+
+func decorationForNode(t *testing.T, tree *Tree, nodeID dom.NodeID) Decoration {
+	t.Helper()
+	for _, decoration := range tree.Decorations {
+		if decoration.NodeID == nodeID {
+			return decoration
+		}
+	}
+	t.Fatalf("decoration for node %d was not created: %#v", nodeID, tree.Decorations)
+	return Decoration{}
 }
