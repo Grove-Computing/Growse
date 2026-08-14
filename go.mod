@@ -1,4 +1,4 @@
-module github.com/saku0512/growse
+module github.com/Grove-Computing/Growse
 
 go 1.26.6
 

@@ -4,8 +4,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/saku0512/growse/internal/dom"
-	stylemodel "github.com/saku0512/growse/internal/style"
+	"github.com/Grove-Computing/Growse/internal/dom"
+	stylemodel "github.com/Grove-Computing/Growse/internal/style"
 )
 
 type flexAxis struct {

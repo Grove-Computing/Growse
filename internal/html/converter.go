@@ -3,7 +3,7 @@ package html
 import (
 	"fmt"
 
-	"github.com/saku0512/growse/internal/dom"
+	"github.com/Grove-Computing/Growse/internal/dom"
 	xhtml "golang.org/x/net/html"
 )
 

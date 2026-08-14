@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/saku0512/growse/internal/css"
+	"github.com/Grove-Computing/Growse/internal/css"
 )
 
 func parseBackgroundImage(value string, currentColor uint32) (BackgroundImage, bool) {

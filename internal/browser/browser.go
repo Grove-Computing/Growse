@@ -12,12 +12,12 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/saku0512/growse/internal/dom"
-	"github.com/saku0512/growse/internal/events"
-	htmlparser "github.com/saku0512/growse/internal/html"
-	"github.com/saku0512/growse/internal/network"
-	runtimemodel "github.com/saku0512/growse/internal/runtime"
-	"github.com/saku0512/growse/internal/style"
+	"github.com/Grove-Computing/Growse/internal/dom"
+	"github.com/Grove-Computing/Growse/internal/events"
+	htmlparser "github.com/Grove-Computing/Growse/internal/html"
+	"github.com/Grove-Computing/Growse/internal/network"
+	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
+	"github.com/Grove-Computing/Growse/internal/style"
 )
 
 // ResourceLoader retrieves a resource for navigation.

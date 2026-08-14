@@ -5,7 +5,7 @@ import (
 	"log/slog"
 	"sync"
 
-	"github.com/saku0512/growse/internal/dom"
+	"github.com/Grove-Computing/Growse/internal/dom"
 )
 
 // Type はDOMイベントの種類を表す。

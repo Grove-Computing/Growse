@@ -8,11 +8,11 @@ import (
 	"gioui.org/op"
 	"gioui.org/unit"
 
-	"github.com/saku0512/growse/internal/browser"
-	"github.com/saku0512/growse/internal/network"
-	runtimemodel "github.com/saku0512/growse/internal/runtime"
-	"github.com/saku0512/growse/internal/runtime/yaegi"
-	"github.com/saku0512/growse/internal/ui"
+	"github.com/Grove-Computing/Growse/internal/browser"
+	"github.com/Grove-Computing/Growse/internal/network"
+	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
+	"github.com/Grove-Computing/Growse/internal/runtime/yaegi"
+	"github.com/Grove-Computing/Growse/internal/ui"
 )
 
 // Run opens the Growse browser window and starts its event loop.

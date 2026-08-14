@@ -2,9 +2,9 @@
 package paint
 
 import (
-	"github.com/saku0512/growse/internal/dom"
-	"github.com/saku0512/growse/internal/layout"
-	stylemodel "github.com/saku0512/growse/internal/style"
+	"github.com/Grove-Computing/Growse/internal/dom"
+	"github.com/Grove-Computing/Growse/internal/layout"
+	stylemodel "github.com/Grove-Computing/Growse/internal/style"
 )
 
 // DisplayList is an ordered collection of page painting commands.

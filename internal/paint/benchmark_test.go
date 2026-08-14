@@ -5,10 +5,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/saku0512/growse/internal/css"
-	"github.com/saku0512/growse/internal/dom"
-	"github.com/saku0512/growse/internal/layout"
-	"github.com/saku0512/growse/internal/style"
+	"github.com/Grove-Computing/Growse/internal/css"
+	"github.com/Grove-Computing/Growse/internal/dom"
+	"github.com/Grove-Computing/Growse/internal/layout"
+	"github.com/Grove-Computing/Growse/internal/style"
 )
 
 // BenchmarkDashboardPaint measures renderer-independent Display List creation

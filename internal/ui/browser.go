@@ -27,11 +27,11 @@ import (
 	"golang.org/x/exp/shiny/materialdesign/icons"
 	xdraw "golang.org/x/image/draw"
 
-	"github.com/saku0512/growse/internal/browser"
-	"github.com/saku0512/growse/internal/dom"
-	layoutengine "github.com/saku0512/growse/internal/layout"
-	paintmodel "github.com/saku0512/growse/internal/paint"
-	stylemodel "github.com/saku0512/growse/internal/style"
+	"github.com/Grove-Computing/Growse/internal/browser"
+	"github.com/Grove-Computing/Growse/internal/dom"
+	layoutengine "github.com/Grove-Computing/Growse/internal/layout"
+	paintmodel "github.com/Grove-Computing/Growse/internal/paint"
+	stylemodel "github.com/Grove-Computing/Growse/internal/style"
 )
 
 //go:embed assets/gopher-blue.png

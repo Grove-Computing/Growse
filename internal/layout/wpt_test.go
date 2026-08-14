@@ -4,9 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/saku0512/growse/internal/css"
-	"github.com/saku0512/growse/internal/dom"
-	stylemodel "github.com/saku0512/growse/internal/style"
+	"github.com/Grove-Computing/Growse/internal/css"
+	"github.com/Grove-Computing/Growse/internal/dom"
+	stylemodel "github.com/Grove-Computing/Growse/internal/style"
 )
 
 // Adapted from css/css-flexbox/flex-grow-001.xht at the revision recorded in

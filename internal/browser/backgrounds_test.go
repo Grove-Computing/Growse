@@ -9,9 +9,9 @@ import (
 	"net/url"
 	"testing"
 
-	"github.com/saku0512/growse/internal/dom"
-	"github.com/saku0512/growse/internal/network"
-	"github.com/saku0512/growse/internal/style"
+	"github.com/Grove-Computing/Growse/internal/dom"
+	"github.com/Grove-Computing/Growse/internal/network"
+	"github.com/Grove-Computing/Growse/internal/style"
 )
 
 func TestLoadBackgroundImagesDecodesSafeImage(t *testing.T) {

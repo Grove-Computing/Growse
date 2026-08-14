@@ -1,7 +1,7 @@
 // Package style matches CSS rules and computes values for DOM elements.
 package style
 
-import "github.com/saku0512/growse/internal/dom"
+import "github.com/Grove-Computing/Growse/internal/dom"
 
 // Display controls whether an element participates in block or inline layout.
 type Display uint8

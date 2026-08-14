@@ -8,12 +8,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/saku0512/growse/internal/browser"
-	"github.com/saku0512/growse/internal/dom"
-	layoutmodel "github.com/saku0512/growse/internal/layout"
-	"github.com/saku0512/growse/internal/network"
-	paintmodel "github.com/saku0512/growse/internal/paint"
-	"github.com/saku0512/growse/internal/style"
+	"github.com/Grove-Computing/Growse/internal/browser"
+	"github.com/Grove-Computing/Growse/internal/dom"
+	layoutmodel "github.com/Grove-Computing/Growse/internal/layout"
+	"github.com/Grove-Computing/Growse/internal/network"
+	paintmodel "github.com/Grove-Computing/Growse/internal/paint"
+	"github.com/Grove-Computing/Growse/internal/style"
 )
 
 func TestDashboardDemoExercisesGridAndAdvancedPaint(t *testing.T) {

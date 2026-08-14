@@ -5,10 +5,10 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/saku0512/growse/internal/css"
-	"github.com/saku0512/growse/internal/dom"
-	"github.com/saku0512/growse/internal/events"
-	"github.com/saku0512/growse/internal/style"
+	"github.com/Grove-Computing/Growse/internal/css"
+	"github.com/Grove-Computing/Growse/internal/dom"
+	"github.com/Grove-Computing/Growse/internal/events"
+	"github.com/Grove-Computing/Growse/internal/style"
 )
 
 // Page holds the state of one loaded document.

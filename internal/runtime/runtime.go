@@ -5,8 +5,8 @@ import (
 	"context"
 	"net/url"
 
-	"github.com/saku0512/growse/internal/dom"
-	"github.com/saku0512/growse/internal/events"
+	"github.com/Grove-Computing/Growse/internal/dom"
+	"github.com/Grove-Computing/Growse/internal/events"
 )
 
 // Script は文書内で見つかった1つのGoソースを表す。

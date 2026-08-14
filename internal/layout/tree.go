@@ -4,8 +4,8 @@ package layout
 import (
 	"sort"
 
-	"github.com/saku0512/growse/internal/dom"
-	stylemodel "github.com/saku0512/growse/internal/style"
+	"github.com/Grove-Computing/Growse/internal/dom"
+	stylemodel "github.com/Grove-Computing/Growse/internal/style"
 )
 
 // Tree is the result of laying out one document at a specific viewport width.
