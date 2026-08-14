@@ -891,8 +891,17 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 		ScriptErrors:     scriptErrors,
 	}
 	page.Animations.Reconcile(computedStyles, b.currentTime())
-	pageRuntime := startRuntime(ctx, runtimeFactory, page, runtimeClient, onMutation, b.currentTime)
+	navigationReady := make(chan struct{})
+	pageRuntime := startRuntime(ctx, runtimeFactory, page, runtimeClient, onMutation, b.currentTime, func(target *url.URL) error {
+		resolved := cloneURL(target)
+		go func() {
+			<-navigationReady
+			b.navigateFromRuntime(page, resolved)
+		}()
+		return nil
+	})
 	if err := ctx.Err(); err != nil {
+		close(navigationReady)
 		page.Animations.Clear()
 		page.Transitions.Clear()
 		if pageRuntime != nil {
@@ -903,6 +912,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	b.mu.Lock()
 	if navigationID != b.navigationID {
 		b.mu.Unlock()
+		close(navigationReady)
 		page.Animations.Clear()
 		page.Transitions.Clear()
 		if pageRuntime != nil {
@@ -931,13 +941,37 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 		b.history.replace(page.URL)
 	}
 	b.mu.Unlock()
+	close(navigationReady)
 	if previousRuntime != nil {
 		_ = previousRuntime.Stop()
 	}
 	return page, nil
 }
 
-func startRuntime(ctx context.Context, factory runtimemodel.Factory, page *Page, client ResourceLoader, onMutation func(), now func() time.Time) runtimemodel.Runtime {
+func (b *Browser) navigateFromRuntime(source *Page, target *url.URL) {
+	b.mu.RLock()
+	active := b.page == source
+	b.mu.RUnlock()
+	if !active {
+		return
+	}
+	_, err := b.load(context.Background(), target, historyPush, -1)
+	if err != nil {
+		b.mu.Lock()
+		if b.page == source {
+			source.RuntimeError = fmt.Sprintf("navigation failed: %v", err)
+		}
+		b.mu.Unlock()
+	}
+	b.mu.RLock()
+	onMutation := b.onMutation
+	b.mu.RUnlock()
+	if onMutation != nil {
+		onMutation()
+	}
+}
+
+func startRuntime(ctx context.Context, factory runtimemodel.Factory, page *Page, client ResourceLoader, onMutation func(), now func() time.Time, navigate func(*url.URL) error) runtimemodel.Runtime {
 	if factory == nil || page == nil || len(page.Scripts) == 0 {
 		return nil
 	}
@@ -977,6 +1011,7 @@ func startRuntime(ctx context.Context, factory runtimemodel.Factory, page *Page,
 		Document: page.Document,
 		Events:   page.Events,
 		BaseURL:  cloneURL(page.URL),
+		Navigate: navigate,
 		OnMutation: func() {
 			page.HoverPath = hoverPath(page.Document, page.HoverTarget)
 			if len(page.HoverPath) == 0 {

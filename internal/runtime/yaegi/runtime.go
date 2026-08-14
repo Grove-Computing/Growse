@@ -95,7 +95,7 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 	console := consoleapi.New(environment.ConsoleLog)
 	dom := domapi.New(environment.Document, environment.Events, environment.OnMutation)
 	fetch := fetchapi.NewPage(r.runtimeCtx, environment.BaseURL, environment.Fetch, r.enqueueCallback)
-	navigation := navigationapi.New(environment.BaseURL)
+	navigation := navigationapi.NewPage(environment.BaseURL, environment.Navigate)
 	r.fetchAPI = fetch
 	scheduler := schedulerapi.NewPage(r.runtimeCtx, r.enqueueCallback, environment.RequestFrame)
 	scheduler.SetFrameScope(environment.FrameScope)
@@ -124,6 +124,8 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 		"growse/navigation/navigation": {
 			"Current":  reflect.ValueOf(navigation.Current),
 			"Location": reflect.ValueOf((*navigationapi.Location)(nil)),
+			"Navigate": reflect.ValueOf(navigation.Navigate),
+			"Resolve":  reflect.ValueOf(navigation.Resolve),
 		},
 		"growse/scheduler/scheduler": {
 			"CancelAnimationFrame":  reflect.ValueOf(scheduler.CancelAnimationFrame),

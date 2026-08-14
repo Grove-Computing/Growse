@@ -24,6 +24,7 @@ type Environment struct {
 	Events       *events.Dispatcher
 	BaseURL      *url.URL
 	Fetch        func(context.Context, *network.Request) (*network.Response, error)
+	Navigate     func(*url.URL) error
 	OnMutation   func()
 	RequestFrame func()
 	FrameScope   func(time.Time, func())

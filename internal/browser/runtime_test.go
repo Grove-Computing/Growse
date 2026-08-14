@@ -3,6 +3,7 @@ package browser
 import (
 	"context"
 	"errors"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -14,13 +15,14 @@ import (
 )
 
 type runtimeStub struct {
-	loadCalls     int
-	startCalls    int
-	stopCalls     int
-	loadErr       error
-	startErr      error
-	environment   runtimemodel.Environment
-	mutateOnStart bool
+	loadCalls       int
+	startCalls      int
+	stopCalls       int
+	loadErr         error
+	startErr        error
+	environment     runtimemodel.Environment
+	mutateOnStart   bool
+	navigateOnStart string
 }
 
 func TestAnimationFrameMutationUsesSharedFrameTimestamp(t *testing.T) {
@@ -85,12 +87,48 @@ func (runtime *runtimeStub) Start(context.Context) error {
 	if runtime.mutateOnStart && runtime.environment.OnMutation != nil {
 		runtime.environment.OnMutation()
 	}
+	if runtime.navigateOnStart != "" && runtime.environment.Navigate != nil {
+		target, err := url.Parse(runtime.navigateOnStart)
+		if err != nil {
+			return err
+		}
+		if err := runtime.environment.Navigate(target); err != nil {
+			return err
+		}
+	}
 	return runtime.startErr
 }
 
 func (runtime *runtimeStub) Stop() error {
 	runtime.stopCalls++
 	return nil
+}
+
+func TestWebGoNavigationUsesBrowserLifecycleAfterPageActivation(t *testing.T) {
+	firstURL := mustParseURL(t, "http://localhost/app/index.html")
+	secondURL := mustParseURL(t, "http://localhost/next")
+	loader := &routeLoader{responses: map[string]*network.Response{
+		firstURL.String():  {URL: firstURL, StatusCode: 200, ContentType: "text/html", Body: []byte(`<script type="text/go">package main; func main() {}</script><p>First</p>`)},
+		secondURL.String(): {URL: secondURL, StatusCode: 200, ContentType: "text/html", Body: []byte(`<p>Second</p>`)},
+	}}
+	runtime := &runtimeStub{navigateOnStart: secondURL.String()}
+	browser := NewWithRuntimeFactory(loader, func() runtimemodel.Runtime { return runtime })
+	if _, err := browser.Navigate(context.Background(), firstURL.String()); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for browser.Page().URL.String() != secondURL.String() && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if got := browser.Page().URL.String(); got != secondURL.String() {
+		t.Fatalf("active URL = %q, want %q", got, secondURL)
+	}
+	if got, want := len(browser.history.entries), 2; got != want {
+		t.Fatalf("history entries = %d, want %d", got, want)
+	}
+	if runtime.stopCalls != 1 {
+		t.Fatalf("previous Runtime Stop() calls = %d, want 1", runtime.stopCalls)
+	}
 }
 
 func TestNavigateStartsRuntimeForTrustedOrigin(t *testing.T) {

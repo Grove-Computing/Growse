@@ -267,6 +267,43 @@ func main() {
 	}
 }
 
+func TestRuntimeResolvesAndRequestsWebGoNavigation(t *testing.T) {
+	runtime := New()
+	scripts := []runtimemodel.Script{{Source: `package main
+import "growse/navigation"
+var Resolved string
+var Failure string
+func main() {
+	location, err := navigation.Resolve("../next?from=webgo")
+	if err != nil { Failure = err.Error(); return }
+	Resolved = location.Href
+	if err := navigation.Navigate("../next?from=webgo"); err != nil { Failure = err.Error() }
+}`}}
+	baseURL, _ := url.Parse("http://localhost/app/index.html")
+	var requested *url.URL
+	environment := runtimemodel.Environment{BaseURL: baseURL, Navigate: func(target *url.URL) error {
+		requested = target
+		return nil
+	}}
+	if err := runtime.Load(context.Background(), scripts, environment); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	symbols := runtime.interpreter.Symbols("page")["page"]
+	if got := symbols["Failure"].String(); got != "" {
+		t.Fatalf("Failure = %q", got)
+	}
+	const want = "http://localhost/next?from=webgo"
+	if got := symbols["Resolved"].String(); got != want {
+		t.Fatalf("Resolved = %q, want %q", got, want)
+	}
+	if requested == nil || requested.String() != want {
+		t.Fatalf("requested URL = %v, want %q", requested, want)
+	}
+}
+
 func TestRuntimeFetchSendsMethodRelativeURLHeadersAndTextBody(t *testing.T) {
 	runtime := New()
 	var captured *network.Request
