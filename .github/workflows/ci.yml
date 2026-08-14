@@ -66,6 +66,9 @@ jobs:
       - name: Validate release artifact matrix
         run: bash tests/release.sh
 
+      - name: Validate Docker release
+        run: bash tests/docker.sh
+
       - name: Run race tests with coverage
         run: go test -race -covermode=atomic -coverprofile=coverage.out ./...
 
