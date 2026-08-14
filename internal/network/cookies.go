@@ -11,6 +11,12 @@ import (
 	"golang.org/x/net/publicsuffix"
 )
 
+const (
+	defaultMaxCookies          = 3000
+	defaultMaxCookiesPerDomain = 180
+	defaultMaxCookieBytes      = 4096
+)
+
 type cookieKey struct {
 	domain string
 	path   string
@@ -31,11 +37,24 @@ type policyCookieJar struct {
 	jar      http.CookieJar
 	mu       sync.Mutex
 	policies map[cookieKey]cookiePolicy
+	limits   cookieLimits
+}
+
+type cookieLimits struct {
+	maxCookies          int
+	maxCookiesPerDomain int
+	maxCookieBytes      int
 }
 
 func newPolicyCookieJar() *policyCookieJar {
+	return newPolicyCookieJarWithLimits(cookieLimits{
+		maxCookies: defaultMaxCookies, maxCookiesPerDomain: defaultMaxCookiesPerDomain, maxCookieBytes: defaultMaxCookieBytes,
+	})
+}
+
+func newPolicyCookieJarWithLimits(limits cookieLimits) *policyCookieJar {
 	jar, _ := cookiejar.New(&cookiejar.Options{PublicSuffixList: publicsuffix.List})
-	return &policyCookieJar{jar: jar, policies: make(map[cookieKey]cookiePolicy)}
+	return &policyCookieJar{jar: jar, policies: make(map[cookieKey]cookiePolicy), limits: limits}
 }
 
 func (jar *policyCookieJar) Cookies(target *url.URL) []*http.Cookie {
@@ -51,6 +70,7 @@ func (jar *policyCookieJar) SetCookies(target *url.URL, cookies []*http.Cookie) 
 	}
 	accepted := make([]*http.Cookie, 0, len(cookies))
 	jar.mu.Lock()
+	jar.removeExpiredLocked(time.Now())
 	for _, cookie := range cookies {
 		if cookie == nil || cookie.Name == "" || cookie.SameSite == http.SameSiteNoneMode && !cookie.Secure {
 			continue
@@ -68,6 +88,15 @@ func (jar *policyCookieJar) SetCookies(target *url.URL, cookies []*http.Cookie) 
 		if cookie.MaxAge < 0 || !cookie.Expires.IsZero() && cookie.Expires.Before(time.Now()) {
 			delete(jar.policies, key)
 		} else {
+			if jar.limits.maxCookieBytes > 0 && len(cookie.Name)+len(cookie.Value) > jar.limits.maxCookieBytes {
+				continue
+			}
+			if _, exists := jar.policies[key]; !exists {
+				if jar.limits.maxCookies > 0 && len(jar.policies) >= jar.limits.maxCookies ||
+					jar.limits.maxCookiesPerDomain > 0 && jar.domainCountLocked(domain) >= jar.limits.maxCookiesPerDomain {
+					continue
+				}
+			}
 			jar.policies[key] = cookiePolicy{
 				key: key, value: cookie.Value, hostOnly: hostOnly, secure: cookie.Secure,
 				httpOnly: cookie.HttpOnly, sameSite: cookie.SameSite, expires: cookie.Expires,
@@ -77,6 +106,24 @@ func (jar *policyCookieJar) SetCookies(target *url.URL, cookies []*http.Cookie) 
 	}
 	jar.mu.Unlock()
 	jar.jar.SetCookies(target, accepted)
+}
+
+func (jar *policyCookieJar) domainCountLocked(domain string) int {
+	count := 0
+	for key := range jar.policies {
+		if key.domain == domain {
+			count++
+		}
+	}
+	return count
+}
+
+func (jar *policyCookieJar) removeExpiredLocked(now time.Time) {
+	for key, policy := range jar.policies {
+		if !policy.expires.IsZero() && policy.expires.Before(now) {
+			delete(jar.policies, key)
+		}
+	}
 }
 
 func (jar *policyCookieJar) cookiesForRequest(target, siteURL *url.URL, kind RequestKind, method string) []*http.Cookie {

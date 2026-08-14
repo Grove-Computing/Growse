@@ -43,6 +43,35 @@ func TestCookiePolicyAppliesSecureHTTPOnlyAndSameSite(t *testing.T) {
 	}
 }
 
+func TestCookieJarEnforcesSizeTotalAndPerDomainLimits(t *testing.T) {
+	jar := newPolicyCookieJarWithLimits(cookieLimits{maxCookies: 2, maxCookiesPerDomain: 1, maxCookieBytes: 8})
+	first := parseCookieURL(t, "https://first.example/path")
+	second := parseCookieURL(t, "https://second.test/path")
+	third := parseCookieURL(t, "https://third.invalid/path")
+	jar.SetCookies(first, []*http.Cookie{
+		{Name: "oversized", Value: "value", Path: "/"},
+		{Name: "one", Value: "1", Path: "/"},
+		{Name: "two", Value: "2", Path: "/"},
+	})
+	if got := cookieValueMap(jar.Cookies(first)); !reflect.DeepEqual(got, map[string]string{"one": "1"}) {
+		t.Fatalf("first domain Cookies = %v", got)
+	}
+	jar.SetCookies(first, []*http.Cookie{{Name: "one", Value: "new", Path: "/"}})
+	if got := cookieValueMap(jar.Cookies(first))["one"]; got != "new" {
+		t.Fatalf("overwrite at per-domain limit = %q", got)
+	}
+	jar.SetCookies(second, []*http.Cookie{{Name: "two", Value: "2", Path: "/"}})
+	jar.SetCookies(third, []*http.Cookie{{Name: "three", Value: "3", Path: "/"}})
+	if got := cookieValueMap(jar.Cookies(third)); len(got) != 0 {
+		t.Fatalf("Cookies beyond total limit = %v", got)
+	}
+	jar.SetCookies(first, []*http.Cookie{{Name: "one", Path: "/", MaxAge: -1}})
+	jar.SetCookies(third, []*http.Cookie{{Name: "three", Value: "3", Path: "/"}})
+	if got := cookieValueMap(jar.Cookies(third))["three"]; got != "3" {
+		t.Fatalf("Cookie after deletion freed capacity = %q", got)
+	}
+}
+
 func parseCookieURL(t *testing.T, rawURL string) *url.URL {
 	t.Helper()
 	parsed, err := url.Parse(rawURL)
