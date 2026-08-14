@@ -20,6 +20,12 @@ const (
 	Change Type = "change"
 	// Submit はformの送信操作を表す。
 	Submit Type = "submit"
+	// Reset はformがdefault stateへ戻ったイベントを表す。
+	Reset Type = "reset"
+	// Focus はControlがfocusを得たイベントを表す。
+	Focus Type = "focus"
+	// Blur はControlがfocusを失ったイベントを表す。
+	Blur Type = "blur"
 	// MouseEnter はポインターが要素のhover経路へ入ったことを表す。
 	MouseEnter Type = "mouseenter"
 	// MouseLeave はポインターが要素のhover経路から外れたことを表す。

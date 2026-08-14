@@ -429,9 +429,15 @@ func (e *engine) flexIntrinsicSizes(node *dom.Node, style blockStyle, axis flexA
 	if textHeight <= 0 {
 		textHeight = style.fontSize * 1.4
 	}
-	if isTextInput(node) {
+	if isEditableTextControl(node) || isSelectControl(node) {
 		textWidth, textHeight = inputWidth, inputHeight
 		minTextWidth = inputWidth
+	} else if isCheckableControl(node) {
+		textWidth, textHeight = checkableSize, checkableSize
+		minTextWidth = checkableSize
+	} else if isSubmitButtonControl(node) {
+		textWidth, textHeight = buttonWidth, inputHeight
+		minTextWidth = buttonWidth
 	}
 	horizontalExtras := style.padding.Left + style.padding.Right + style.border.Left.Width + style.border.Right.Width
 	verticalExtras := style.padding.Top + style.padding.Bottom + style.border.Top.Width + style.border.Bottom.Width
@@ -502,8 +508,14 @@ func (e *engine) renderFlexItem(item *flexLayoutItem, axis flexAxis, x, y, mainS
 	}
 	if item.node.Type == dom.NodeText {
 		e.addText(item.node.ID, "text", normalizeWhitespace(item.node.Text), style, 0, outerWidth)
-	} else if isTextInput(item.node) {
+	} else if isEditableTextControl(item.node) {
 		e.addInput(item.node, style, 0, outerWidth, outerHeight, true)
+	} else if isSelectControl(item.node) {
+		e.addSelect(item.node, style, 0, outerWidth, outerHeight, true)
+	} else if isCheckableControl(item.node) {
+		e.addCheckable(item.node, style, 0, outerWidth, outerHeight, true)
+	} else if isSubmitButtonControl(item.node) {
+		e.addSubmitButton(item.node, style, 0, outerWidth, outerHeight, true)
 	} else {
 		if style.display == stylemodel.DisplayInlineFlex {
 			style.display = stylemodel.DisplayFlex

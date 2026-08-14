@@ -16,6 +16,7 @@ import (
 	animationmodel "github.com/Grove-Computing/Growse/internal/animation"
 	"github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/events"
+	"github.com/Grove-Computing/Growse/internal/forms"
 	htmlparser "github.com/Grove-Computing/Growse/internal/html"
 	"github.com/Grove-Computing/Growse/internal/network"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
@@ -88,17 +89,35 @@ func (b *Browser) DispatchClick(nodeID dom.NodeID, x, y float32) bool {
 	if page == nil || page.Events == nil {
 		return false
 	}
-	clickHandled := page.Events.Dispatch(events.Event{Type: events.Click, Target: nodeID, X: x, Y: y})
-	submitHandled := false
-	if node, ok := page.Document.NodeByID(nodeID); ok && isSubmitButton(node) {
-		if form := nearestForm(node); form != nil {
-			submitHandled = page.Events.Dispatch(events.Event{Type: events.Submit, Target: form.ID})
+	if page.Document != nil {
+		if clickedNode, exists := page.Document.NodeByID(nodeID); exists && forms.Disabled(clickedNode) {
+			return false
 		}
 	}
-	return clickHandled || submitHandled
+	clickHandled := page.Events.Dispatch(events.Event{Type: events.Click, Target: nodeID, X: x, Y: y})
+	labelHandled := false
+	if page.Document != nil {
+		if node, ok := page.Document.NodeByID(nodeID); ok {
+			if control := forms.LabeledControl(page.Document, node); control != nil && !forms.Disabled(control) {
+				b.UpdateFocus(control.ID)
+				if _, checkable := forms.CheckableState(control); checkable {
+					labelHandled = b.ActivateCheckable(control.ID)
+				}
+			}
+		}
+	}
+	submitHandled := false
+	if page.Document != nil {
+		if node, ok := page.Document.NodeByID(nodeID); ok && isSubmitButton(node) {
+			if form := nearestForm(node); form != nil {
+				submitHandled = page.Events.Dispatch(events.Event{Type: events.Submit, Target: form.ID})
+			}
+		}
+	}
+	return clickHandled || submitHandled || labelHandled
 }
 
-// SetInputValue はユーザー入力をアクティブページのテキストinputへ反映する。
+// SetInputValue はユーザー入力をアクティブページの編集可能なText Controlへ反映する。
 func (b *Browser) SetInputValue(nodeID dom.NodeID, value string) bool {
 	b.mu.Lock()
 	page := b.page
@@ -108,11 +127,11 @@ func (b *Browser) SetInputValue(nodeID dom.NodeID, value string) bool {
 		return false
 	}
 	node, ok := page.Document.NodeByID(nodeID)
-	if !ok || !isTextInput(node) || !page.Document.IsConnected(node) {
+	if !ok || !isEditableTextControl(node) || !page.Document.IsConnected(node) || forms.Disabled(node) || forms.ReadOnly(node) {
 		b.mu.Unlock()
 		return false
 	}
-	changed := page.Document.SetAttribute(nodeID, "value", value)
+	changed := forms.SetCurrentValue(node, value)
 	if changed {
 		recomputePageStyles(page, b.currentTime())
 	}
@@ -127,6 +146,60 @@ func (b *Browser) SetInputValue(nodeID dom.NodeID, value string) bool {
 	return changed
 }
 
+// SetSelectValue changes a select to an enabled option and dispatches the
+// input/change pair produced by a committed user selection.
+func (b *Browser) SetSelectValue(nodeID dom.NodeID, value string) bool {
+	b.mu.Lock()
+	page := b.page
+	onMutation := b.onMutation
+	if page == nil || page.Document == nil || !forms.SetSelectedValue(page.Document, nodeID, value) {
+		b.mu.Unlock()
+		return false
+	}
+	recomputePageStyles(page, b.currentTime())
+	dispatcher := page.Events
+	b.mu.Unlock()
+	if onMutation != nil {
+		onMutation()
+	}
+	if dispatcher != nil {
+		dispatcher.Dispatch(events.Event{Type: events.Input, Target: nodeID, Value: value})
+		dispatcher.Dispatch(events.Event{Type: events.Change, Target: nodeID, Value: value})
+	}
+	return true
+}
+
+// ActivateCheckable toggles a checkbox or selects one radio in its group.
+func (b *Browser) ActivateCheckable(nodeID dom.NodeID) bool {
+	b.mu.Lock()
+	page := b.page
+	onMutation := b.onMutation
+	if page == nil || page.Document == nil {
+		b.mu.Unlock()
+		return false
+	}
+	checked, changed := forms.ActivateCheckable(page.Document, nodeID)
+	if !changed {
+		b.mu.Unlock()
+		return false
+	}
+	recomputePageStyles(page, b.currentTime())
+	dispatcher := page.Events
+	b.mu.Unlock()
+	if onMutation != nil {
+		onMutation()
+	}
+	value := "false"
+	if checked {
+		value = "true"
+	}
+	if dispatcher != nil {
+		dispatcher.Dispatch(events.Event{Type: events.Input, Target: nodeID, Value: value})
+		dispatcher.Dispatch(events.Event{Type: events.Change, Target: nodeID, Value: value})
+	}
+	return true
+}
+
 // CommitInputValue はテキストinputの編集確定をchangeイベントとして配信する。
 func (b *Browser) CommitInputValue(nodeID dom.NodeID, value string) bool {
 	b.mu.RLock()
@@ -136,7 +209,7 @@ func (b *Browser) CommitInputValue(nodeID dom.NodeID, value string) bool {
 		return false
 	}
 	node, ok := page.Document.NodeByID(nodeID)
-	if !ok || !isTextInput(node) || !page.Document.IsConnected(node) {
+	if !ok || !isEditableTextControl(node) || !page.Document.IsConnected(node) {
 		b.mu.RUnlock()
 		return false
 	}
@@ -165,6 +238,44 @@ func (b *Browser) SubmitForm(nodeID dom.NodeID) bool {
 		return false
 	}
 	return dispatcher.Dispatch(events.Event{Type: events.Submit, Target: form.ID})
+}
+
+// ResetForm restores a form's controls to their HTML attribute defaults.
+func (b *Browser) ResetForm(nodeID dom.NodeID) bool {
+	b.mu.Lock()
+	page := b.page
+	onMutation := b.onMutation
+	if page == nil || page.Document == nil {
+		b.mu.Unlock()
+		return false
+	}
+	node, ok := page.Document.NodeByID(nodeID)
+	if !ok || !page.Document.IsConnected(node) {
+		b.mu.Unlock()
+		return false
+	}
+	form := node
+	if form.TagName != "form" {
+		form = nearestForm(node)
+	}
+	if form == nil {
+		b.mu.Unlock()
+		return false
+	}
+	changed := forms.Reset(form)
+	if changed {
+		recomputePageStyles(page, b.currentTime())
+	}
+	dispatcher := page.Events
+	b.mu.Unlock()
+	if changed && onMutation != nil {
+		onMutation()
+	}
+	handled := false
+	if dispatcher != nil {
+		handled = dispatcher.Dispatch(events.Event{Type: events.Reset, Target: form.ID})
+	}
+	return changed || handled
 }
 
 // UpdateHover updates the active page's hovered element path.
@@ -216,13 +327,36 @@ func (b *Browser) UpdateFocus(nodeID dom.NodeID) bool {
 		b.mu.Unlock()
 		return false
 	}
+	previous := page.FocusTarget
 	page.FocusTarget = target
 	recomputePageStyles(page, b.currentTime())
+	dispatcher := page.Events
 	b.mu.Unlock()
 	if onMutation != nil {
 		onMutation()
 	}
+	if dispatcher != nil {
+		if previous != 0 {
+			dispatcher.Dispatch(events.Event{Type: events.Blur, Target: previous})
+		}
+		if target != 0 {
+			dispatcher.Dispatch(events.Event{Type: events.Focus, Target: target})
+		}
+	}
 	return true
+}
+
+// MoveFormFocus advances focus through enabled controls in DOM order.
+func (b *Browser) MoveFormFocus(reverse bool) bool {
+	b.mu.RLock()
+	page := b.page
+	if page == nil || page.Document == nil {
+		b.mu.RUnlock()
+		return false
+	}
+	target := forms.NextFocusable(page.Document, page.FocusTarget, reverse)
+	b.mu.RUnlock()
+	return b.UpdateFocus(target)
 }
 
 // UpdateViewport recomputes viewport-relative values when the content area changes.
@@ -665,20 +799,16 @@ func runtimeOrigin(sourceURL *url.URL) string {
 	return sourceURL.Redacted()
 }
 
+func isEditableTextControl(node *dom.Node) bool {
+	return forms.IsEditableTextControl(node)
+}
+
 func isTextInput(node *dom.Node) bool {
-	if node == nil || node.Type != dom.NodeElement || node.TagName != "input" {
-		return false
-	}
-	typeValue, ok := node.Attribute("type")
-	return !ok || strings.EqualFold(strings.TrimSpace(typeValue), "text")
+	return node != nil && node.TagName == "input" && isEditableTextControl(node)
 }
 
 func isSubmitButton(node *dom.Node) bool {
-	if node == nil || node.Type != dom.NodeElement || node.TagName != "button" {
-		return false
-	}
-	typeValue, ok := node.Attribute("type")
-	return !ok || strings.EqualFold(strings.TrimSpace(typeValue), "submit")
+	return forms.IsSubmitButton(node)
 }
 
 func nearestForm(node *dom.Node) *dom.Node {

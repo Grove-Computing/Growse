@@ -147,6 +147,25 @@ func (d *Document) SetAttribute(id NodeID, name, value string) bool {
 	return true
 }
 
+// RemoveAttribute removes an element attribute and reports whether it existed.
+func (d *Document) RemoveAttribute(id NodeID, name string) bool {
+	if d == nil || name == "" {
+		return false
+	}
+	node, ok := d.nodes[id]
+	if !ok || node.Type != NodeElement || node.Attributes == nil {
+		return false
+	}
+	if _, exists := node.Attributes[name]; !exists {
+		return false
+	}
+	delete(node.Attributes, name)
+	if name == "id" {
+		d.rebuildIDIndex()
+	}
+	return true
+}
+
 // SetTextContent は指定したノードの子を1つのテキストノードへ置き換える。
 func (d *Document) SetTextContent(id NodeID, value string) bool {
 	if d == nil {

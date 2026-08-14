@@ -21,6 +21,7 @@ import (
 	"github.com/Grove-Computing/Growse/internal/css"
 	"github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/events"
+	"github.com/Grove-Computing/Growse/internal/forms"
 	layoutengine "github.com/Grove-Computing/Growse/internal/layout"
 	paintmodel "github.com/Grove-Computing/Growse/internal/paint"
 	"github.com/Grove-Computing/Growse/internal/style"
@@ -119,14 +120,53 @@ func (navigator *stubNavigator) Reload(context.Context) (*browser.Page, error) {
 
 func (navigator *stubNavigator) CanBack() bool    { return true }
 func (navigator *stubNavigator) CanForward() bool { return true }
-func (navigator *stubNavigator) DispatchClick(dom.NodeID, float32, float32) bool {
-	return false
+func (navigator *stubNavigator) DispatchClick(nodeID dom.NodeID, x, y float32) bool {
+	if navigator.page == nil || navigator.page.Document == nil || navigator.page.Events == nil {
+		return false
+	}
+	node, ok := navigator.page.Document.NodeByID(nodeID)
+	if !ok || forms.Disabled(node) {
+		return false
+	}
+	handled := navigator.page.Events.Dispatch(events.Event{Type: events.Click, Target: nodeID, X: x, Y: y})
+	if forms.IsSubmitButton(node) {
+		for current := node.Parent; current != nil; current = current.Parent {
+			if current.Type == dom.NodeElement && current.TagName == "form" {
+				return navigator.page.Events.Dispatch(events.Event{Type: events.Submit, Target: current.ID}) || handled
+			}
+		}
+	}
+	return handled
 }
 func (navigator *stubNavigator) SetInputValue(nodeID dom.NodeID, value string) bool {
 	if navigator.page == nil || navigator.page.Document == nil {
 		return false
 	}
-	changed := navigator.page.Document.SetAttribute(nodeID, "value", value)
+	node, ok := navigator.page.Document.NodeByID(nodeID)
+	if !ok || forms.Disabled(node) || forms.ReadOnly(node) {
+		return false
+	}
+	changed := forms.SetCurrentValue(node, value)
+	if changed {
+		navigator.recomputeHoverStyles()
+	}
+	return changed
+}
+func (navigator *stubNavigator) SetSelectValue(nodeID dom.NodeID, value string) bool {
+	if navigator.page == nil || navigator.page.Document == nil {
+		return false
+	}
+	changed := forms.SetSelectedValue(navigator.page.Document, nodeID, value)
+	if changed {
+		navigator.recomputeHoverStyles()
+	}
+	return changed
+}
+func (navigator *stubNavigator) ActivateCheckable(nodeID dom.NodeID) bool {
+	if navigator.page == nil || navigator.page.Document == nil {
+		return false
+	}
+	_, changed := forms.ActivateCheckable(navigator.page.Document, nodeID)
 	if changed {
 		navigator.recomputeHoverStyles()
 	}
@@ -204,6 +244,13 @@ func (navigator *stubNavigator) UpdateFocus(nodeID dom.NodeID) bool {
 	navigator.page.FocusTarget = nodeID
 	navigator.recomputeHoverStyles()
 	return true
+}
+func (navigator *stubNavigator) MoveFormFocus(reverse bool) bool {
+	if navigator.page == nil || navigator.page.Document == nil {
+		return false
+	}
+	target := forms.NextFocusable(navigator.page.Document, navigator.page.FocusTarget, reverse)
+	return navigator.UpdateFocus(target)
 }
 func (navigator *stubNavigator) UpdateViewport(width, height float32) bool {
 	if navigator.page == nil || navigator.page.Document == nil || width <= 0 || height <= 0 {
@@ -706,11 +753,90 @@ func TestTextInputWritesKeyboardEditsToDOM(t *testing.T) {
 	gtx.Reset()
 	ui.layoutDocument(gtx, page)
 
-	if got, ok := inputNode.Attribute("value"); !ok || got != "hello" {
-		t.Fatalf("DOM input value = (%q, %v), want (hello, true)", got, ok)
+	if got := forms.CurrentValue(inputNode); got != "hello" {
+		t.Fatalf("DOM input value = %q, want hello", got)
 	}
 	if got, want := editor.Text(), "hello"; got != want {
 		t.Fatalf("editor text = %q, want %q", got, want)
+	}
+}
+
+func TestTextareaEditorAcceptsNewlineAndWritesDOMValue(t *testing.T) {
+	document := dom.NewDocument()
+	textarea := document.CreateElement("textarea", nil)
+	if err := document.AppendChild(document.Root, textarea); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(textarea, document.CreateText("first")); err != nil {
+		t.Fatal(err)
+	}
+	page := &browser.Page{Document: document, ComputedStyles: style.Compute(document, nil)}
+	ui := NewBrowserUI(&stubNavigator{page: page}, nil)
+	router := new(input.Router)
+	gtx := layout.Context{
+		Ops: new(op.Ops), Source: router.Source(), Constraints: layout.Exact(image.Pt(800, 600)),
+		Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1},
+	}
+
+	ui.layoutDocument(gtx, page)
+	router.Frame(gtx.Ops)
+	editor := ui.inputEditors[textarea.ID]
+	if editor == nil {
+		t.Fatal("textarea editor was not created")
+	}
+	if editor.SingleLine || editor.Text() != "first" {
+		t.Fatalf("textarea editor singleLine=%v text=%q", editor.SingleLine, editor.Text())
+	}
+	gtx.Execute(key.FocusCmd{Tag: editor})
+	router.Queue(key.EditEvent{Range: key.Range{Start: 5, End: 5}, Text: "\nsecond"})
+	gtx.Reset()
+	ui.layoutDocument(gtx, page)
+
+	if got := forms.CurrentValue(textarea); got != "first\nsecond" {
+		t.Fatalf("textarea DOM value = %q", got)
+	}
+	if editor.Text() != "first\nsecond" {
+		t.Fatalf("textarea editor text = %q", editor.Text())
+	}
+}
+
+func TestPasswordEditorMasksDisplayWithoutChangingValue(t *testing.T) {
+	document := dom.NewDocument()
+	password := document.CreateElement("input", map[string]string{"type": "password", "value": "secret"})
+	if err := document.AppendChild(document.Root, password); err != nil {
+		t.Fatal(err)
+	}
+	page := &browser.Page{Document: document, ComputedStyles: style.Compute(document, nil)}
+	ui := NewBrowserUI(&stubNavigator{page: page}, nil)
+	gtx := layout.Context{Ops: new(op.Ops), Constraints: layout.Exact(image.Pt(800, 600)), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}}
+
+	ui.layoutDocument(gtx, page)
+	editor := ui.inputEditors[password.ID]
+	if editor == nil {
+		t.Fatal("password editor was not created")
+	}
+	if editor.Mask != '•' || editor.Text() != "secret" {
+		t.Fatalf("password mask=%q text=%q", editor.Mask, editor.Text())
+	}
+}
+
+func TestReadonlyAndDisabledEditorsRejectEditing(t *testing.T) {
+	document := dom.NewDocument()
+	readonly := document.CreateElement("input", map[string]string{"value": "fixed", "readonly": ""})
+	disabled := document.CreateElement("input", map[string]string{"value": "disabled", "disabled": ""})
+	if err := document.AppendChild(document.Root, readonly); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(document.Root, disabled); err != nil {
+		t.Fatal(err)
+	}
+	page := &browser.Page{Document: document, ComputedStyles: style.Compute(document, nil)}
+	ui := NewBrowserUI(&stubNavigator{page: page}, nil)
+	gtx := layout.Context{Ops: new(op.Ops), Constraints: layout.Exact(image.Pt(800, 600)), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}}
+
+	ui.layoutDocument(gtx, page)
+	if !ui.inputEditors[readonly.ID].ReadOnly || !ui.inputEditors[disabled.ID].ReadOnly {
+		t.Fatal("readonly or disabled editor remained editable")
 	}
 }
 
@@ -770,6 +896,153 @@ func TestTextInputEnterDispatchesChangeAfterEdit(t *testing.T) {
 	}
 	if submissions[0].Target != form.ID {
 		t.Fatalf("submit target = %d, want %d", submissions[0].Target, form.ID)
+	}
+}
+
+func TestSelectButtonDisplaysAndChangesSelectedOption(t *testing.T) {
+	document := dom.NewDocument()
+	selectNode := document.CreateElement("select", nil)
+	first := document.CreateElement("option", map[string]string{"value": "one", "selected": ""})
+	second := document.CreateElement("option", map[string]string{"value": "two"})
+	for _, edge := range [][2]*dom.Node{{document.Root, selectNode}, {selectNode, first}, {first, document.CreateText("One")}, {selectNode, second}, {second, document.CreateText("Two")}} {
+		if err := document.AppendChild(edge[0], edge[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	page := &browser.Page{Document: document, ComputedStyles: style.Compute(document, nil), Events: events.NewDispatcher()}
+	ui := NewBrowserUI(&stubNavigator{page: page}, nil)
+	gtx := layout.Context{Ops: new(op.Ops), Constraints: layout.Exact(image.Pt(800, 600)), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}}
+
+	ui.layoutDocument(gtx, page)
+	button := ui.selectButtons[selectNode.ID]
+	if button == nil {
+		t.Fatal("select button was not created")
+	}
+	button.Click()
+	gtx.Reset()
+	ui.layoutDocument(gtx, page)
+	if got := forms.CurrentValue(selectNode); got != "two" {
+		t.Fatalf("selected value = %q, want two", got)
+	}
+}
+
+func TestCheckableButtonUsesSharedActivationPath(t *testing.T) {
+	document := dom.NewDocument()
+	checkbox := document.CreateElement("input", map[string]string{"type": "checkbox"})
+	if err := document.AppendChild(document.Root, checkbox); err != nil {
+		t.Fatal(err)
+	}
+	page := &browser.Page{Document: document, ComputedStyles: style.Compute(document, nil), Events: events.NewDispatcher()}
+	ui := NewBrowserUI(&stubNavigator{page: page}, nil)
+	gtx := layout.Context{Ops: new(op.Ops), Constraints: layout.Exact(image.Pt(800, 600)), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}}
+
+	ui.layoutDocument(gtx, page)
+	button := ui.checkableButtons[checkbox.ID]
+	if button == nil {
+		t.Fatal("checkable button was not created")
+	}
+	button.Click()
+	gtx.Reset()
+	ui.layoutDocument(gtx, page)
+	if !forms.CurrentChecked(checkbox) {
+		t.Fatal("checkbox was not activated")
+	}
+}
+
+func TestCheckableButtonActivatesWithSpaceKey(t *testing.T) {
+	document := dom.NewDocument()
+	checkbox := document.CreateElement("input", map[string]string{"type": "checkbox"})
+	if err := document.AppendChild(document.Root, checkbox); err != nil {
+		t.Fatal(err)
+	}
+	page := &browser.Page{Document: document, ComputedStyles: style.Compute(document, nil), Events: events.NewDispatcher()}
+	ui := NewBrowserUI(&stubNavigator{page: page}, nil)
+	router := new(input.Router)
+	gtx := layout.Context{Ops: new(op.Ops), Source: router.Source(), Constraints: layout.Exact(image.Pt(800, 600)), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}}
+
+	ui.layoutDocument(gtx, page)
+	router.Frame(gtx.Ops)
+	button := ui.checkableButtons[checkbox.ID]
+	gtx.Execute(key.FocusCmd{Tag: button})
+	gtx.Reset()
+	ui.layoutDocument(gtx, page)
+	router.Frame(gtx.Ops)
+	router.Queue(
+		key.Event{Name: key.NameSpace, State: key.Press},
+		key.Event{Name: key.NameSpace, State: key.Release},
+	)
+	gtx.Reset()
+	ui.layoutDocument(gtx, page)
+
+	if !forms.CurrentChecked(checkbox) {
+		t.Fatal("Space did not activate checkbox")
+	}
+}
+
+func TestTabAndShiftTabMoveFormFocusInDOMOrder(t *testing.T) {
+	document := dom.NewDocument()
+	first := document.CreateElement("input", nil)
+	last := document.CreateElement("input", map[string]string{"type": "checkbox"})
+	if err := document.AppendChild(document.Root, first); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(document.Root, last); err != nil {
+		t.Fatal(err)
+	}
+	page := &browser.Page{Document: document, ComputedStyles: style.Compute(document, nil), Events: events.NewDispatcher()}
+	ui := NewBrowserUI(&stubNavigator{page: page}, nil)
+	router := new(input.Router)
+	gtx := layout.Context{Ops: new(op.Ops), Source: router.Source(), Constraints: layout.Exact(image.Pt(800, 600)), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}}
+
+	ui.layoutDocument(gtx, page)
+	router.Frame(gtx.Ops)
+	router.Queue(key.Event{Name: key.NameTab, State: key.Press})
+	gtx.Reset()
+	ui.layoutDocument(gtx, page)
+	if page.FocusTarget != first.ID {
+		t.Fatalf("Tab focus = %d, want %d", page.FocusTarget, first.ID)
+	}
+	router.Frame(gtx.Ops)
+	router.Queue(key.Event{Name: key.NameTab, Modifiers: key.ModShift, State: key.Press})
+	gtx.Reset()
+	ui.layoutDocument(gtx, page)
+	if page.FocusTarget != last.ID {
+		t.Fatalf("Shift+Tab focus = %d, want %d", page.FocusTarget, last.ID)
+	}
+}
+
+func TestSubmitButtonActivatesWithSpaceKey(t *testing.T) {
+	document := dom.NewDocument()
+	form := document.CreateElement("form", nil)
+	buttonNode := document.CreateElement("button", nil)
+	if err := document.AppendChild(document.Root, form); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(form, buttonNode); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(buttonNode, document.CreateText("Send")); err != nil {
+		t.Fatal(err)
+	}
+	page := &browser.Page{Document: document, ComputedStyles: style.Compute(document, nil), Events: events.NewDispatcher()}
+	submissions := 0
+	page.Events.AddEventListener(form.ID, events.Submit, func(events.Event) { submissions++ })
+	ui := NewBrowserUI(&stubNavigator{page: page}, nil)
+	router := new(input.Router)
+	gtx := layout.Context{Ops: new(op.Ops), Source: router.Source(), Constraints: layout.Exact(image.Pt(800, 600)), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}}
+
+	ui.layoutDocument(gtx, page)
+	router.Frame(gtx.Ops)
+	button := ui.formButtons[buttonNode.ID]
+	gtx.Execute(key.FocusCmd{Tag: button})
+	gtx.Reset()
+	ui.layoutDocument(gtx, page)
+	router.Frame(gtx.Ops)
+	router.Queue(key.Event{Name: key.NameSpace, State: key.Press}, key.Event{Name: key.NameSpace, State: key.Release})
+	gtx.Reset()
+	ui.layoutDocument(gtx, page)
+	if submissions != 1 {
+		t.Fatalf("submissions = %d, want 1", submissions)
 	}
 }
 

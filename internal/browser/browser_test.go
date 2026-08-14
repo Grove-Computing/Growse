@@ -12,6 +12,7 @@ import (
 	"github.com/Grove-Computing/Growse/internal/css"
 	"github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/events"
+	"github.com/Grove-Computing/Growse/internal/forms"
 	"github.com/Grove-Computing/Growse/internal/network"
 	"github.com/Grove-Computing/Growse/internal/style"
 )
@@ -90,8 +91,8 @@ func TestSetInputValueUpdatesActiveTextInput(t *testing.T) {
 	if !browser.SetInputValue(input.ID, "hello") {
 		t.Fatal("SetInputValue() = false, want true")
 	}
-	if got, ok := input.Attribute("value"); !ok || got != "hello" {
-		t.Fatalf("input value = (%q, %v), want (hello, true)", got, ok)
+	if got := forms.CurrentValue(input); got != "hello" {
+		t.Fatalf("input value = %q, want hello", got)
 	}
 	if browser.SetInputValue(input.ID, "hello") {
 		t.Fatal("SetInputValue() = true for unchanged value")
@@ -101,6 +102,47 @@ func TestSetInputValueUpdatesActiveTextInput(t *testing.T) {
 	}
 	if inputEvent.Type != events.Input || inputEvent.Target != input.ID || inputEvent.Value != "hello" {
 		t.Fatalf("input event = %#v, want updated value", inputEvent)
+	}
+}
+
+func TestSetInputValueUpdatesTextareaWithNewlines(t *testing.T) {
+	document := dom.NewDocument()
+	textarea := document.CreateElement("textarea", nil)
+	if err := document.AppendChild(document.Root, textarea); err != nil {
+		t.Fatal(err)
+	}
+	page := NewPage(mustParseURL(t, "http://localhost"))
+	page.Document = document
+	page.Events = events.NewDispatcher()
+	browserState := New(nil)
+	browserState.SetPage(page)
+
+	if !browserState.SetInputValue(textarea.ID, "first\nsecond") {
+		t.Fatal("SetInputValue(textarea) = false, want true")
+	}
+	if got := forms.CurrentValue(textarea); got != "first\nsecond" {
+		t.Fatalf("textarea value = %q", got)
+	}
+}
+
+func TestSetInputValueUpdatesSupportedTextInputTypes(t *testing.T) {
+	for _, inputType := range []string{"password", "email", "url", "number", "unknown-control"} {
+		t.Run(inputType, func(t *testing.T) {
+			document := dom.NewDocument()
+			input := document.CreateElement("input", map[string]string{"type": inputType})
+			if err := document.AppendChild(document.Root, input); err != nil {
+				t.Fatal(err)
+			}
+			page := &Page{Document: document, ComputedStyles: style.Compute(document, nil), Events: events.NewDispatcher()}
+			browser := New(nil)
+			browser.SetPage(page)
+			if !browser.SetInputValue(input.ID, "edited") {
+				t.Fatalf("SetInputValue(%s) = false", inputType)
+			}
+			if value := forms.CurrentValue(input); value != "edited" {
+				t.Fatalf("value = %q", value)
+			}
+		})
 	}
 }
 
@@ -761,6 +803,148 @@ func TestNormalizeURL(t *testing.T) {
 				t.Fatalf("normalizeURL(%q) = %q, want %q", test.rawURL, got, test.want)
 			}
 		})
+	}
+}
+
+func TestSetSelectValueChangesEnabledOptionAndDispatchesEvents(t *testing.T) {
+	document := dom.NewDocument()
+	selectNode := document.CreateElement("select", nil)
+	first := document.CreateElement("option", map[string]string{"value": "one"})
+	second := document.CreateElement("option", map[string]string{"value": "two"})
+	for _, edge := range [][2]*dom.Node{{document.Root, selectNode}, {selectNode, first}, {first, document.CreateText("One")}, {selectNode, second}, {second, document.CreateText("Two")}} {
+		if err := document.AppendChild(edge[0], edge[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	page := &Page{Document: document, ComputedStyles: style.Compute(document, nil), Events: events.NewDispatcher()}
+	var received []events.Type
+	page.Events.AddEventListener(selectNode.ID, events.Input, func(event events.Event) { received = append(received, event.Type) })
+	page.Events.AddEventListener(selectNode.ID, events.Change, func(event events.Event) { received = append(received, event.Type) })
+	browser := New(nil)
+	browser.SetPage(page)
+
+	if !browser.SetSelectValue(selectNode.ID, "two") {
+		t.Fatal("SetSelectValue returned false")
+	}
+	if got := forms.CurrentValue(selectNode); got != "two" {
+		t.Fatalf("select value = %q", got)
+	}
+	if !reflect.DeepEqual(received, []events.Type{events.Input, events.Change}) {
+		t.Fatalf("events = %#v", received)
+	}
+}
+
+func TestActivateCheckableUpdatesRadioGroupAndDispatchesEvents(t *testing.T) {
+	document := dom.NewDocument()
+	form := document.CreateElement("form", nil)
+	first := document.CreateElement("input", map[string]string{"type": "radio", "name": "plan", "checked": ""})
+	second := document.CreateElement("input", map[string]string{"type": "radio", "name": "plan"})
+	for _, edge := range [][2]*dom.Node{{document.Root, form}, {form, first}, {form, second}} {
+		if err := document.AppendChild(edge[0], edge[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	page := &Page{Document: document, ComputedStyles: style.Compute(document, nil), Events: events.NewDispatcher()}
+	var received []events.Type
+	page.Events.AddEventListener(second.ID, events.Input, func(event events.Event) { received = append(received, event.Type) })
+	page.Events.AddEventListener(second.ID, events.Change, func(event events.Event) { received = append(received, event.Type) })
+	browser := New(nil)
+	browser.SetPage(page)
+
+	if !browser.ActivateCheckable(second.ID) {
+		t.Fatal("ActivateCheckable returned false")
+	}
+	if forms.CurrentChecked(first) {
+		t.Fatal("first radio remained checked")
+	}
+	if !forms.CurrentChecked(second) {
+		t.Fatal("second radio was not checked")
+	}
+	if !reflect.DeepEqual(received, []events.Type{events.Input, events.Change}) {
+		t.Fatalf("events = %#v", received)
+	}
+}
+
+func TestDisabledReadonlyLabelAndResetBehavior(t *testing.T) {
+	document := dom.NewDocument()
+	form := document.CreateElement("form", nil)
+	readonly := document.CreateElement("input", map[string]string{"id": "readonly", "value": "default", "readonly": ""})
+	disabled := document.CreateElement("input", map[string]string{"id": "disabled", "disabled": ""})
+	checkbox := document.CreateElement("input", map[string]string{"id": "accept", "type": "checkbox"})
+	label := document.CreateElement("label", map[string]string{"for": "accept"})
+	labelText := document.CreateText("Accept")
+	for _, edge := range [][2]*dom.Node{{document.Root, form}, {form, readonly}, {form, disabled}, {form, checkbox}, {form, label}, {label, labelText}} {
+		if err := document.AppendChild(edge[0], edge[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	page := &Page{Document: document, ComputedStyles: style.Compute(document, nil), Events: events.NewDispatcher()}
+	resetEvents := 0
+	page.Events.AddEventListener(form.ID, events.Reset, func(events.Event) { resetEvents++ })
+	browser := New(nil)
+	browser.SetPage(page)
+
+	if browser.SetInputValue(readonly.ID, "changed") || browser.SetInputValue(disabled.ID, "changed") {
+		t.Fatal("readonly or disabled input accepted editing")
+	}
+	if !browser.DispatchClick(labelText.ID, 10, 10) || !forms.CurrentChecked(checkbox) || page.FocusTarget != checkbox.ID {
+		t.Fatalf("label activation: checked=%v focus=%d", forms.CurrentChecked(checkbox), page.FocusTarget)
+	}
+	if !browser.ResetForm(form.ID) || forms.CurrentChecked(checkbox) || forms.CurrentValue(readonly) != "default" || resetEvents != 1 {
+		t.Fatalf("reset: checked=%v value=%q events=%d", forms.CurrentChecked(checkbox), forms.CurrentValue(readonly), resetEvents)
+	}
+}
+
+func TestMoveFormFocusTraversesAndWrapsBothDirections(t *testing.T) {
+	document := dom.NewDocument()
+	first := document.CreateElement("input", nil)
+	disabled := document.CreateElement("input", map[string]string{"disabled": ""})
+	last := document.CreateElement("button", nil)
+	for _, node := range []*dom.Node{first, disabled, last} {
+		if err := document.AppendChild(document.Root, node); err != nil {
+			t.Fatal(err)
+		}
+	}
+	page := &Page{Document: document, ComputedStyles: style.Compute(document, nil)}
+	browser := New(nil)
+	browser.SetPage(page)
+
+	if !browser.MoveFormFocus(false) || page.FocusTarget != first.ID {
+		t.Fatalf("first forward focus = %d", page.FocusTarget)
+	}
+	if !browser.MoveFormFocus(false) || page.FocusTarget != last.ID {
+		t.Fatalf("second forward focus = %d", page.FocusTarget)
+	}
+	if !browser.MoveFormFocus(true) || page.FocusTarget != first.ID {
+		t.Fatalf("reverse focus = %d", page.FocusTarget)
+	}
+}
+
+func TestUpdateFocusDispatchesBlurBeforeFocus(t *testing.T) {
+	document := dom.NewDocument()
+	first := document.CreateElement("input", nil)
+	second := document.CreateElement("input", nil)
+	if err := document.AppendChild(document.Root, first); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(document.Root, second); err != nil {
+		t.Fatal(err)
+	}
+	dispatcher := events.NewDispatcher()
+	var order []string
+	dispatcher.AddEventListener(first.ID, events.Focus, func(events.Event) { order = append(order, "focus:first") })
+	dispatcher.AddEventListener(first.ID, events.Blur, func(events.Event) { order = append(order, "blur:first") })
+	dispatcher.AddEventListener(second.ID, events.Focus, func(events.Event) { order = append(order, "focus:second") })
+	page := &Page{Document: document, ComputedStyles: style.Compute(document, nil), Events: dispatcher}
+	browser := New(nil)
+	browser.SetPage(page)
+
+	if !browser.UpdateFocus(first.ID) || !browser.UpdateFocus(second.ID) {
+		t.Fatal("focus transition was not applied")
+	}
+	want := []string{"focus:first", "blur:first", "focus:second"}
+	if !reflect.DeepEqual(order, want) {
+		t.Fatalf("event order = %v, want %v", order, want)
 	}
 }
 

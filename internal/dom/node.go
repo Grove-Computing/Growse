@@ -24,6 +24,13 @@ type Node struct {
 
 	Attributes map[string]string
 
+	// ControlValue and ControlChecked hold browser-owned live form state. The
+	// corresponding HTML attributes remain the reset defaults.
+	ControlValue        string
+	ControlValueDirty   bool
+	ControlChecked      bool
+	ControlCheckedDirty bool
+
 	Parent   *Node
 	Children []*Node
 

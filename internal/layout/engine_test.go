@@ -41,6 +41,24 @@ func TestBuildCreatesVisibleVerticalBoxes(t *testing.T) {
 	}
 }
 
+func TestBuildCreatesMultilineTextareaFromTextContent(t *testing.T) {
+	document := dom.NewDocument()
+	textarea := document.CreateElement("textarea", nil)
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, textarea},
+		[2]*dom.Node{textarea, document.CreateText("first line\nsecond line")},
+	)
+
+	tree := Build(document, style.Compute(document, nil), 800)
+	if len(tree.Boxes) != 1 {
+		t.Fatalf("textarea box count = %d, want 1", len(tree.Boxes))
+	}
+	box := tree.Boxes[0]
+	if !box.Input || !box.Multiline || box.Text != "first line\nsecond line" || box.Height != textareaHeight {
+		t.Fatalf("textarea layout = %#v", box)
+	}
+}
+
 func TestBuildWrapsLongText(t *testing.T) {
 	document := dom.NewDocument()
 	p := document.CreateElement("p", nil)
@@ -430,13 +448,73 @@ func TestBuildCreatesTextInputBox(t *testing.T) {
 	}
 }
 
-func TestBuildIgnoresUnsupportedInputType(t *testing.T) {
+func TestBuildCreatesEditableBoxesForSupportedAndUnknownTextTypes(t *testing.T) {
 	document := dom.NewDocument()
-	input := document.CreateElement("input", map[string]string{"type": "checkbox"})
+	types := []string{"password", "email", "url", "number", "unknown-control"}
+	for _, inputType := range types {
+		input := document.CreateElement("input", map[string]string{"type": inputType, "value": inputType + "-value"})
+		appendNodes(t, document, [2]*dom.Node{document.Root, input})
+	}
+
+	boxes := Build(document, style.Compute(document, nil), 800).Boxes
+	if len(boxes) != len(types) {
+		t.Fatalf("boxes = %#v", boxes)
+	}
+	for index, box := range boxes {
+		wantType := types[index]
+		if wantType == "unknown-control" {
+			wantType = "text"
+		}
+		if !box.Input || box.InputType != wantType || box.Text != types[index]+"-value" {
+			t.Errorf("box %d = %#v", index, box)
+		}
+	}
+}
+
+func TestBuildCarriesDisabledAndReadonlyControlState(t *testing.T) {
+	document := dom.NewDocument()
+	readonly := document.CreateElement("input", map[string]string{"readonly": ""})
+	disabled := document.CreateElement("select", map[string]string{"disabled": ""})
+	appendNodes(t, document, [2]*dom.Node{document.Root, readonly}, [2]*dom.Node{document.Root, disabled})
+
+	boxes := Build(document, style.Compute(document, nil), 800).Boxes
+	if len(boxes) != 2 || !boxes[0].ReadOnly || boxes[0].Disabled || !boxes[1].Disabled {
+		t.Fatalf("control states = %#v", boxes)
+	}
+}
+
+func TestBuildCreatesSubmitButtonControls(t *testing.T) {
+	document := dom.NewDocument()
+	button := document.CreateElement("button", nil)
+	input := document.CreateElement("input", map[string]string{"type": "submit", "value": "Save"})
+	appendNodes(t, document, [2]*dom.Node{document.Root, button}, [2]*dom.Node{button, document.CreateText("Send")}, [2]*dom.Node{document.Root, input})
+
+	boxes := Build(document, style.Compute(document, nil), 800).Boxes
+	if len(boxes) != 2 || !boxes[0].Button || boxes[0].Text != "Send" || !boxes[1].Button || boxes[1].Text != "Save" {
+		t.Fatalf("submit buttons = %#v", boxes)
+	}
+}
+
+func TestBuildIgnoresHiddenInputType(t *testing.T) {
+	document := dom.NewDocument()
+	input := document.CreateElement("input", map[string]string{"type": "hidden"})
 	appendNodes(t, document, [2]*dom.Node{document.Root, input})
 
 	if boxes := Build(document, style.Compute(document, nil), 800).Boxes; len(boxes) != 0 {
-		t.Fatalf("boxes = %#v, want unsupported input omitted", boxes)
+		t.Fatalf("boxes = %#v, want hidden input omitted", boxes)
+	}
+}
+
+func TestBuildCreatesCheckboxAndRadioBoxesWithCurrentState(t *testing.T) {
+	document := dom.NewDocument()
+	checkbox := document.CreateElement("input", map[string]string{"type": "checkbox", "checked": ""})
+	radio := document.CreateElement("input", map[string]string{"type": "radio"})
+	appendNodes(t, document, [2]*dom.Node{document.Root, checkbox}, [2]*dom.Node{document.Root, radio})
+
+	boxes := Build(document, style.Compute(document, nil), 800).Boxes
+	if len(boxes) != 2 || !boxes[0].Checkable || !boxes[0].Checked || boxes[0].InputType != "checkbox" ||
+		!boxes[1].Checkable || boxes[1].Checked || boxes[1].InputType != "radio" {
+		t.Fatalf("checkable boxes = %#v", boxes)
 	}
 }
 
@@ -538,6 +616,29 @@ func TestBuildAppliesTransformOriginToDisplayGeometry(t *testing.T) {
 	}
 	if len(tree.StackingContexts) != 2 {
 		t.Fatalf("transform stacking context = %#v", tree.StackingContexts)
+	}
+}
+
+func TestBuildCreatesSelectWithSelectedOption(t *testing.T) {
+	document := dom.NewDocument()
+	selectNode := document.CreateElement("select", nil)
+	first := document.CreateElement("option", map[string]string{"value": "one"})
+	second := document.CreateElement("option", map[string]string{"value": "two", "selected": ""})
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, selectNode},
+		[2]*dom.Node{selectNode, first},
+		[2]*dom.Node{first, document.CreateText("One")},
+		[2]*dom.Node{selectNode, second},
+		[2]*dom.Node{second, document.CreateText("Two")},
+	)
+
+	tree := Build(document, style.Compute(document, nil), 800)
+	if len(tree.Boxes) != 1 {
+		t.Fatalf("boxes = %#v", tree.Boxes)
+	}
+	box := tree.Boxes[0]
+	if !box.Select || box.Selected != 1 || box.Text != "Two" || len(box.Options) != 2 {
+		t.Fatalf("select box = %#v", box)
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 
 	"github.com/Grove-Computing/Growse/internal/css"
 	"github.com/Grove-Computing/Growse/internal/dom"
+	"github.com/Grove-Computing/Growse/internal/forms"
 	"github.com/Grove-Computing/Growse/internal/layout"
 	"github.com/Grove-Computing/Growse/internal/style"
 )
@@ -191,7 +192,7 @@ func TestBuildUsesExactLayoutDecorationGeometry(t *testing.T) {
 
 func TestBuildCreatesInputCommand(t *testing.T) {
 	tree := &layout.Tree{Width: 400, Height: 100, Boxes: []layout.Box{{
-		NodeID: 7, Tag: "input", Text: "hello", Input: true,
+		NodeID: 7, Tag: "input", Text: "hello", Input: true, InputType: "email",
 		X: 20, Y: 30, Width: 280, Height: 40,
 	}}}
 
@@ -200,8 +201,54 @@ func TestBuildCreatesInputCommand(t *testing.T) {
 		t.Fatalf("command count = %d, want %d", got, want)
 	}
 	input, ok := list.Commands[0].(DrawInput)
-	if !ok || input.NodeID != 7 || input.Value != "hello" || input.Width != 280 || input.Height != 40 {
+	if !ok || input.NodeID != 7 || input.Value != "hello" || input.InputType != "email" || input.Width != 280 || input.Height != 40 {
 		t.Fatalf("input command = %#v, want node 7 with value and geometry", list.Commands[0])
+	}
+}
+
+func TestBuildPreservesMultilineTextareaCommand(t *testing.T) {
+	tree := &layout.Tree{Width: 400, Height: 120, Boxes: []layout.Box{{
+		NodeID: 8, Tag: "textarea", Text: "first\nsecond", Input: true, Multiline: true,
+		X: 20, Y: 30, Width: 280, Height: 96,
+	}}}
+
+	list := Build(tree)
+	input, ok := list.Commands[0].(DrawInput)
+	if !ok || !input.Multiline || input.Value != "first\nsecond" {
+		t.Fatalf("textarea command = %#v", list.Commands[0])
+	}
+}
+
+func TestBuildCreatesSelectCommand(t *testing.T) {
+	tree := &layout.Tree{Width: 400, Height: 100, Boxes: []layout.Box{{
+		NodeID: 9, Tag: "select", Text: "Two", Select: true, Selected: 1,
+		Options: []forms.Option{{Value: "one", Label: "One"}, {Value: "two", Label: "Two"}},
+		X:       20, Y: 30, Width: 280, Height: 40,
+	}}}
+
+	command, ok := Build(tree).Commands[0].(DrawSelect)
+	if !ok || command.NodeID != 9 || command.Selected != 1 || command.Options[command.Selected].Value != "two" || command.Label != "Two" || len(command.Options) != 2 {
+		t.Fatalf("select command = %#v", Build(tree).Commands[0])
+	}
+}
+
+func TestBuildCreatesCheckableCommand(t *testing.T) {
+	tree := &layout.Tree{Width: 100, Height: 50, Boxes: []layout.Box{{
+		NodeID: 10, Tag: "input", Checkable: true, Checked: true, InputType: "checkbox",
+		X: 20, Y: 10, Width: 32, Height: 32,
+	}}}
+
+	command, ok := Build(tree).Commands[0].(DrawCheckable)
+	if !ok || command.NodeID != 10 || !command.Checked || command.InputType != "checkbox" || command.Width != 32 {
+		t.Fatalf("checkable command = %#v", Build(tree).Commands[0])
+	}
+}
+
+func TestBuildCreatesSubmitButtonCommand(t *testing.T) {
+	tree := &layout.Tree{Boxes: []layout.Box{{NodeID: 11, Button: true, Text: "Send", Width: 120, Height: 40}}}
+	command, ok := Build(tree).Commands[0].(DrawButton)
+	if !ok || command.NodeID != 11 || command.Label != "Send" || command.Width != 120 {
+		t.Fatalf("button command = %#v", Build(tree).Commands[0])
 	}
 }
 

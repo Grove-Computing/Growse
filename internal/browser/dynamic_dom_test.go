@@ -238,16 +238,16 @@ button:hover { color: red; font-size: 24px; padding: 8px; }
 	if normalTree.Boxes[0].Height == hoverTree.Boxes[0].Height {
 		t.Fatalf("layout height stayed %v after hover font and padding change", hoverTree.Boxes[0].Height)
 	}
-	draw, ok := hoverList.Commands[0].(paintmodel.DrawText)
-	if !ok || len(draw.Runs) != 1 || draw.Runs[0].Color != 0xff0000ff || draw.Runs[0].FontSize != 24 {
-		t.Fatalf("hover display command = %#v, want red 24px text", hoverList.Commands[0])
+	draw, ok := hoverList.Commands[0].(paintmodel.DrawButton)
+	if !ok || draw.Color != 0xff0000ff {
+		t.Fatalf("hover display command = %#v, want red button", hoverList.Commands[0])
 	}
 	if !browserState.ClearHover() {
 		t.Fatal("ClearHover() = false, want true")
 	}
 	restoredList := paintmodel.Build(layoutengine.Build(page.Document, page.ComputedStyles, 800))
-	restored, ok := restoredList.Commands[0].(paintmodel.DrawText)
-	if !ok || len(restored.Runs) != 1 || restored.Runs[0].Color == 0xff0000ff || restored.Runs[0].FontSize != 16 {
+	restored, ok := restoredList.Commands[0].(paintmodel.DrawButton)
+	if !ok || restored.Color == 0xff0000ff {
 		t.Fatalf("restored display command = %#v, want normal 16px text", restoredList.Commands[0])
 	}
 }
