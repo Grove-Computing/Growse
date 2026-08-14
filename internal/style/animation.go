@@ -105,6 +105,14 @@ func (registry *AnimationRegistry) Count(nodeID dom.NodeID) int {
 	return registry.stacks[nodeID].Len()
 }
 
+// Clear discards every running animation owned by the page.
+func (registry *AnimationRegistry) Clear() {
+	if registry == nil {
+		return
+	}
+	registry.stacks = make(map[dom.NodeID]*AnimationStack)
+}
+
 // NewAnimationStack starts every named animation on one shared timestamp.
 func NewAnimationStack(animations []CSSAnimation, start time.Time) *AnimationStack {
 	stack := &AnimationStack{}

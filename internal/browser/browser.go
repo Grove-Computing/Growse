@@ -235,8 +235,12 @@ func (b *Browser) SetPage(page *Page) {
 	b.mu.Lock()
 	b.navigationID++
 	activeRuntime := b.activeRuntime
+	previousPage := b.page
 	b.activeRuntime = nil
 	b.page = page
+	if previousPage != nil && previousPage != page && previousPage.Animations != nil {
+		previousPage.Animations.Clear()
+	}
 	if page != nil {
 		if page.ComputedStyles == nil {
 			page.ComputedStyles = computePageStyles(page)
@@ -262,7 +266,11 @@ func (b *Browser) Close() error {
 	b.mu.Lock()
 	b.navigationID++
 	activeRuntime := b.activeRuntime
+	page := b.page
 	b.activeRuntime = nil
+	if page != nil && page.Animations != nil {
+		page.Animations.Clear()
+	}
 	b.mu.Unlock()
 	if activeRuntime != nil {
 		return activeRuntime.Stop()
@@ -390,6 +398,7 @@ func (b *Browser) load(ctx context.Context, pageURL *url.URL, commit historyComm
 	page.Animations.Reconcile(computedStyles, b.currentTime())
 	pageRuntime := startRuntime(ctx, runtimeFactory, page, onMutation, b.currentTime)
 	if err := ctx.Err(); err != nil {
+		page.Animations.Clear()
 		if pageRuntime != nil {
 			_ = pageRuntime.Stop()
 		}
@@ -398,14 +407,19 @@ func (b *Browser) load(ctx context.Context, pageURL *url.URL, commit historyComm
 	b.mu.Lock()
 	if navigationID != b.navigationID {
 		b.mu.Unlock()
+		page.Animations.Clear()
 		if pageRuntime != nil {
 			_ = pageRuntime.Stop()
 		}
 		return nil, context.Canceled
 	}
 	previousRuntime := b.activeRuntime
+	previousPage := b.page
 	b.activeRuntime = pageRuntime
 	b.page = page
+	if previousPage != nil && previousPage != page && previousPage.Animations != nil {
+		previousPage.Animations.Clear()
+	}
 	switch commit {
 	case historyPush:
 		b.history.push(page.URL)

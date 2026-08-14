@@ -44,7 +44,8 @@ func TestNavigateStartsRuntimeForTrustedOrigin(t *testing.T) {
 	pageURL := mustParseURL(t, "http://localhost/index.html")
 	loader := stubLoader{response: &network.Response{
 		URL: pageURL, StatusCode: 200, ContentType: "text/html",
-		Body: []byte(`<script type="text/go">package main
+		Body: []byte(`<style>#running { animation: 1s linear infinite pulse; }</style>
+<div id="running"></div><script type="text/go">package main
 func main() {}</script>`),
 	}}
 	runtime := &runtimeStub{}
@@ -60,11 +61,18 @@ func main() {}</script>`),
 	if runtime.loadCalls != 1 || runtime.startCalls != 1 {
 		t.Fatalf("runtime calls = load:%d start:%d, want 1 each", runtime.loadCalls, runtime.startCalls)
 	}
+	running, ok := page.Document.GetElementByID("running")
+	if !ok || page.Animations.Count(running.ID) != 1 {
+		t.Fatal("running CSS animation was not registered")
+	}
 	if err := browser.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
 	if runtime.stopCalls != 1 {
 		t.Fatalf("Stop() calls = %d, want 1", runtime.stopCalls)
+	}
+	if page.Animations.Count(running.ID) != 0 {
+		t.Fatalf("animation count after Runtime stop = %d, want zero", page.Animations.Count(running.ID))
 	}
 }
 

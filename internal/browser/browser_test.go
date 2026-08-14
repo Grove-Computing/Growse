@@ -502,6 +502,49 @@ func TestReloadDoesNotAddHistoryEntry(t *testing.T) {
 	}
 }
 
+func TestNavigationAndReloadDiscardPreviousPageAnimations(t *testing.T) {
+	firstURL := mustParseURL(t, "https://example.com/first")
+	secondURL := mustParseURL(t, "https://example.com/second")
+	body := []byte(`<style>.running { animation: 1s linear infinite pulse; }</style><div class="running"></div>`)
+	loader := &routeLoader{responses: map[string]*network.Response{
+		firstURL.String():  {URL: firstURL, StatusCode: 200, ContentType: "text/html", Body: body},
+		secondURL.String(): {URL: secondURL, StatusCode: 200, ContentType: "text/html", Body: body},
+	}}
+	browser := New(loader)
+	first, err := browser.Navigate(context.Background(), firstURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstNode, _ := first.Document.QuerySelector(".running")
+	if first.Animations.Count(firstNode.ID) != 1 {
+		t.Fatal("first page animation was not registered")
+	}
+
+	second, err := browser.Navigate(context.Background(), secondURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Animations.Count(firstNode.ID) != 0 {
+		t.Fatalf("first page animation survived navigation: %d", first.Animations.Count(firstNode.ID))
+	}
+	secondNode, _ := second.Document.QuerySelector(".running")
+	if second.Animations.Count(secondNode.ID) != 1 {
+		t.Fatal("second page animation was not registered")
+	}
+
+	reloaded, err := browser.Reload(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Animations.Count(secondNode.ID) != 0 {
+		t.Fatalf("second page animation survived reload: %d", second.Animations.Count(secondNode.ID))
+	}
+	reloadedNode, _ := reloaded.Document.QuerySelector(".running")
+	if reloaded.Animations.Count(reloadedNode.ID) != 1 {
+		t.Fatal("reloaded page animation was not registered")
+	}
+}
+
 func TestNavigateRejectsUnsupportedContentType(t *testing.T) {
 	browser := New(stubLoader{response: &network.Response{
 		URL:         mustParseURL(t, "https://example.com/image.png"),

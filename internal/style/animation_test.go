@@ -215,6 +215,13 @@ func TestAnimationRegistryReconcilesComputedStyleChanges(t *testing.T) {
 	if registry.Count(nodeID) != 0 {
 		t.Fatalf("removed element animation count = %d, want zero", registry.Count(nodeID))
 	}
+	registry.Reconcile(Map{nodeID: {Animations: []CSSAnimation{{
+		Name: "pulse", Timing: timing, Iterations: math.Inf(1), PlayState: AnimationRunning,
+	}}}}, start.Add(2*time.Second))
+	registry.Clear()
+	if registry.Count(nodeID) != 0 {
+		t.Fatalf("cleared animation count = %d, want zero", registry.Count(nodeID))
+	}
 }
 
 func animationTestStyle(t *testing.T, declarations string) ComputedStyle {

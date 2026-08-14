@@ -93,7 +93,7 @@ func TestWebGoMutationRecomputesStyles(t *testing.T) {
 		URL: pageURL, StatusCode: 200, ContentType: "text/html",
 		Body: []byte(`<!doctype html><html><head><style>
 .completed { color: #ff0000; }
-li.todo { font-size: 24px; }
+li.todo { font-size: 24px; animation: 1s linear infinite pulse; }
 </style></head><body>
 <ul id="list"><li id="existing">Existing</li></ul>
 <script type="text/go">package main
@@ -133,6 +133,9 @@ func main() {
 	if !ok || dynamicStyle.FontSize != 24 {
 		t.Fatalf("dynamic style = (%#v, %v), want 24px", dynamicStyle, ok)
 	}
+	if page.Animations.Count(dynamic.ID) != 1 {
+		t.Fatalf("dynamic animation count = %d, want 1", page.Animations.Count(dynamic.ID))
+	}
 
 	tree := layoutengine.Build(page.Document, page.ComputedStyles, 800)
 	displayList := paintmodel.Build(tree)
@@ -144,6 +147,9 @@ func main() {
 	}
 	if _, ok := page.Document.QuerySelector("li.todo"); ok {
 		t.Fatal("dynamic element remains after WebGo removal")
+	}
+	if page.Animations.Count(dynamic.ID) != 0 {
+		t.Fatalf("removed element animation count = %d, want zero", page.Animations.Count(dynamic.ID))
 	}
 	updatedTree := layoutengine.Build(page.Document, page.ComputedStyles, 800)
 	updatedDisplayList := paintmodel.Build(updatedTree)
