@@ -30,11 +30,60 @@ tar -czf "${release_dir}/${archive}" -C "$package_dir" .
   sha256sum "$archive" > "${archive}.sha256"
 )
 
-GROWSE_VERSION="$version" \
-GROWSE_INSTALL_DIR="$install_dir" \
-GROWSE_DATA_HOME="$data_home" \
-GROWSE_RELEASE_BASE_URL="file://${test_root}/releases" \
-bash "${repository_root}/install.sh"
+installer_output=$(
+  GROWSE_COLOR=never \
+  GROWSE_VERSION="$version" \
+  GROWSE_INSTALL_DIR="$install_dir" \
+  GROWSE_DATA_HOME="$data_home" \
+  GROWSE_RELEASE_BASE_URL="file://${test_root}/releases" \
+  bash "${repository_root}/install.sh" 2>&1
+)
+printf '%s\n' "$installer_output"
+
+for expected_output in \
+  "Growse Installer" \
+  "[1/4] リリースを確認" \
+  "[2/4] 実行環境を判定" \
+  "[3/4] パッケージを取得して検証" \
+  "[4/4] Growseをインストール" \
+  "✓ Growse ${version}のインストールが完了しました" \
+  "Command  ${install_dir}/growse"
+do
+  if [[ "$installer_output" != *"$expected_output"* ]]; then
+    echo "Installer出力に必須メッセージがありません: $expected_output" >&2
+    exit 1
+  fi
+done
+
+if [[ "$installer_output" == *$'\033['* ]]; then
+  echo "GROWSE_COLOR=neverでもANSI Colorが出力されています。" >&2
+  exit 1
+fi
+
+color_install_dir="${test_root}/color install/bin"
+color_data_home="${test_root}/color data home"
+color_output=$(
+  GROWSE_COLOR=always \
+  GROWSE_VERSION="$version" \
+  GROWSE_INSTALL_DIR="$color_install_dir" \
+  GROWSE_DATA_HOME="$color_data_home" \
+  GROWSE_RELEASE_BASE_URL="file://${test_root}/releases" \
+  bash "${repository_root}/install.sh" 2>&1
+)
+if [[ "$color_output" != *$'\033['* ]]; then
+  echo "GROWSE_COLOR=alwaysでANSI Colorが出力されていません。" >&2
+  exit 1
+fi
+
+invalid_color_output="${test_root}/invalid-color-output"
+if GROWSE_COLOR=rainbow bash "${repository_root}/install.sh" >"$invalid_color_output" 2>&1; then
+  echo "不正なGROWSE_COLORが受理されました。" >&2
+  exit 1
+fi
+if ! grep -Fq "無効なGROWSE_COLORです" "$invalid_color_output"; then
+  echo "不正なGROWSE_COLORのErrorが表示されていません。" >&2
+  exit 1
+fi
 
 if [[ ! -x "${install_dir}/growse" ]]; then
   echo "growseがインストールされていません。" >&2
