@@ -87,6 +87,23 @@ type DrawSelect struct {
 
 func (DrawSelect) paintCommand() {}
 
+// DrawCheckable paints a checkbox or radio control.
+type DrawCheckable struct {
+	NodeID    dom.NodeID
+	InputType string
+	Checked   bool
+	X         float32
+	Y         float32
+	Top       float32
+	Width     float32
+	Height    float32
+	Color     uint32
+	Opacity   float32
+	Clip      *layout.Rect
+}
+
+func (DrawCheckable) paintCommand() {}
+
 // DrawBox paints an element background without advancing by its painted height.
 // Its Top value only moves the list cursor to the element's document position.
 type DrawBox struct {
@@ -215,6 +232,15 @@ func Build(tree *layout.Tree) *DisplayList {
 			previousBottom = box.Y + box.Height
 			continue
 		}
+		if box.Checkable {
+			list.Commands = append(list.Commands, DrawCheckable{
+				NodeID: box.NodeID, InputType: box.InputType, Checked: box.Checked,
+				X: box.X, Y: box.Y, Top: top, Width: box.Width, Height: box.Height,
+				Color: box.Color, Opacity: box.Opacity, Clip: cloneLayoutRect(box.Clip),
+			})
+			previousBottom = box.Y + box.Height
+			continue
+		}
 		command := DrawText{
 			NodeID:     box.NodeID,
 			Text:       box.Text,
@@ -300,6 +326,14 @@ func ApplyAnimatedStyles(list *DisplayList, styles stylemodel.Map) {
 			command.Opacity = computed.Opacity
 			list.Commands[index] = command
 		case DrawSelect:
+			computed, ok := styles[command.NodeID]
+			if !ok {
+				continue
+			}
+			command.Color = computed.Color
+			command.Opacity = computed.Opacity
+			list.Commands[index] = command
+		case DrawCheckable:
 			computed, ok := styles[command.NodeID]
 			if !ok {
 				continue

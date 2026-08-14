@@ -143,6 +143,16 @@ func (navigator *stubNavigator) SetSelectValue(nodeID dom.NodeID, value string) 
 	}
 	return changed
 }
+func (navigator *stubNavigator) ActivateCheckable(nodeID dom.NodeID) bool {
+	if navigator.page == nil || navigator.page.Document == nil {
+		return false
+	}
+	_, changed := forms.ActivateCheckable(navigator.page.Document, nodeID)
+	if changed {
+		navigator.recomputeHoverStyles()
+	}
+	return changed
+}
 func (navigator *stubNavigator) CommitInputValue(nodeID dom.NodeID, value string) bool {
 	if navigator.page == nil || navigator.page.Events == nil {
 		return false
@@ -847,6 +857,59 @@ func TestSelectButtonDisplaysAndChangesSelectedOption(t *testing.T) {
 	ui.layoutDocument(gtx, page)
 	if got, ok := selectNode.Attribute("value"); !ok || got != "two" {
 		t.Fatalf("selected value = (%q, %v), want (two, true)", got, ok)
+	}
+}
+
+func TestCheckableButtonUsesSharedActivationPath(t *testing.T) {
+	document := dom.NewDocument()
+	checkbox := document.CreateElement("input", map[string]string{"type": "checkbox"})
+	if err := document.AppendChild(document.Root, checkbox); err != nil {
+		t.Fatal(err)
+	}
+	page := &browser.Page{Document: document, ComputedStyles: style.Compute(document, nil), Events: events.NewDispatcher()}
+	ui := NewBrowserUI(&stubNavigator{page: page}, nil)
+	gtx := layout.Context{Ops: new(op.Ops), Constraints: layout.Exact(image.Pt(800, 600)), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}}
+
+	ui.layoutDocument(gtx, page)
+	button := ui.checkableButtons[checkbox.ID]
+	if button == nil {
+		t.Fatal("checkable button was not created")
+	}
+	button.Click()
+	gtx.Reset()
+	ui.layoutDocument(gtx, page)
+	if _, checked := checkbox.Attribute("checked"); !checked {
+		t.Fatal("checkbox was not activated")
+	}
+}
+
+func TestCheckableButtonActivatesWithSpaceKey(t *testing.T) {
+	document := dom.NewDocument()
+	checkbox := document.CreateElement("input", map[string]string{"type": "checkbox"})
+	if err := document.AppendChild(document.Root, checkbox); err != nil {
+		t.Fatal(err)
+	}
+	page := &browser.Page{Document: document, ComputedStyles: style.Compute(document, nil), Events: events.NewDispatcher()}
+	ui := NewBrowserUI(&stubNavigator{page: page}, nil)
+	router := new(input.Router)
+	gtx := layout.Context{Ops: new(op.Ops), Source: router.Source(), Constraints: layout.Exact(image.Pt(800, 600)), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}}
+
+	ui.layoutDocument(gtx, page)
+	router.Frame(gtx.Ops)
+	button := ui.checkableButtons[checkbox.ID]
+	gtx.Execute(key.FocusCmd{Tag: button})
+	gtx.Reset()
+	ui.layoutDocument(gtx, page)
+	router.Frame(gtx.Ops)
+	router.Queue(
+		key.Event{Name: key.NameSpace, State: key.Press},
+		key.Event{Name: key.NameSpace, State: key.Release},
+	)
+	gtx.Reset()
+	ui.layoutDocument(gtx, page)
+
+	if _, checked := checkbox.Attribute("checked"); !checked {
+		t.Fatal("Space did not activate checkbox")
 	}
 }
 

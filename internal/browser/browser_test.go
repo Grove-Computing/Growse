@@ -812,6 +812,37 @@ func TestSetSelectValueChangesEnabledOptionAndDispatchesEvents(t *testing.T) {
 	}
 }
 
+func TestActivateCheckableUpdatesRadioGroupAndDispatchesEvents(t *testing.T) {
+	document := dom.NewDocument()
+	form := document.CreateElement("form", nil)
+	first := document.CreateElement("input", map[string]string{"type": "radio", "name": "plan", "checked": ""})
+	second := document.CreateElement("input", map[string]string{"type": "radio", "name": "plan"})
+	for _, edge := range [][2]*dom.Node{{document.Root, form}, {form, first}, {form, second}} {
+		if err := document.AppendChild(edge[0], edge[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	page := &Page{Document: document, ComputedStyles: style.Compute(document, nil), Events: events.NewDispatcher()}
+	var received []events.Type
+	page.Events.AddEventListener(second.ID, events.Input, func(event events.Event) { received = append(received, event.Type) })
+	page.Events.AddEventListener(second.ID, events.Change, func(event events.Event) { received = append(received, event.Type) })
+	browser := New(nil)
+	browser.SetPage(page)
+
+	if !browser.ActivateCheckable(second.ID) {
+		t.Fatal("ActivateCheckable returned false")
+	}
+	if _, checked := first.Attribute("checked"); checked {
+		t.Fatal("first radio remained checked")
+	}
+	if _, checked := second.Attribute("checked"); !checked {
+		t.Fatal("second radio was not checked")
+	}
+	if !reflect.DeepEqual(received, []events.Type{events.Input, events.Change}) {
+		t.Fatalf("events = %#v", received)
+	}
+}
+
 func TestNewPageCopiesURL(t *testing.T) {
 	pageURL := mustParseURL(t, "https://example.com/original")
 	page := NewPage(pageURL)

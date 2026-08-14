@@ -80,6 +80,7 @@ type BrowserUI struct {
 	inputFocused      map[dom.NodeID]bool
 	inputCommitted    map[dom.NodeID]string
 	selectButtons     map[dom.NodeID]*widget.Clickable
+	checkableButtons  map[dom.NodeID]*widget.Clickable
 	layoutBuild       func(*dom.Document, stylemodel.Map, float32, float32, float32, float32) *layoutengine.Tree
 	layoutCache       documentLayoutCache
 }
@@ -105,6 +106,7 @@ type Navigator interface {
 	DispatchClick(nodeID dom.NodeID, x, y float32) bool
 	SetInputValue(nodeID dom.NodeID, value string) bool
 	SetSelectValue(nodeID dom.NodeID, value string) bool
+	ActivateCheckable(nodeID dom.NodeID) bool
 	CommitInputValue(nodeID dom.NodeID, value string) bool
 	SubmitForm(nodeID dom.NodeID) bool
 	UpdateHover(nodeID dom.NodeID, x, y float32) bool
@@ -128,22 +130,23 @@ func NewBrowserUI(navigator Navigator, invalidate func()) *BrowserUI {
 
 	cursorImage, cursorErr := loadGopherCursor()
 	ui := &BrowserUI{
-		theme:          material.NewTheme(),
-		navigator:      navigator,
-		invalidate:     invalidate,
-		results:        make(chan navigationResult, 1),
-		gopher:         paint.NewImageOp(gopherImage),
-		backIcon:       mustIcon(widget.NewIcon(icons.NavigationArrowBack)),
-		forwardIcon:    mustIcon(widget.NewIcon(icons.NavigationArrowForward)),
-		reloadIcon:     mustIcon(widget.NewIcon(icons.NavigationRefresh)),
-		pageTitle:      "新しい Web を Go で開く",
-		status:         "URLを入力して Gopher ボタンを押してください",
-		pageStatus:     "URLを入力して Gopher ボタンを押してください",
-		inputEditors:   make(map[dom.NodeID]*widget.Editor),
-		inputFocused:   make(map[dom.NodeID]bool),
-		inputCommitted: make(map[dom.NodeID]string),
-		selectButtons:  make(map[dom.NodeID]*widget.Clickable),
-		layoutBuild:    layoutengine.BuildWithScroll,
+		theme:            material.NewTheme(),
+		navigator:        navigator,
+		invalidate:       invalidate,
+		results:          make(chan navigationResult, 1),
+		gopher:           paint.NewImageOp(gopherImage),
+		backIcon:         mustIcon(widget.NewIcon(icons.NavigationArrowBack)),
+		forwardIcon:      mustIcon(widget.NewIcon(icons.NavigationArrowForward)),
+		reloadIcon:       mustIcon(widget.NewIcon(icons.NavigationRefresh)),
+		pageTitle:        "新しい Web を Go で開く",
+		status:           "URLを入力して Gopher ボタンを押してください",
+		pageStatus:       "URLを入力して Gopher ボタンを押してください",
+		inputEditors:     make(map[dom.NodeID]*widget.Editor),
+		inputFocused:     make(map[dom.NodeID]bool),
+		inputCommitted:   make(map[dom.NodeID]string),
+		selectButtons:    make(map[dom.NodeID]*widget.Clickable),
+		checkableButtons: make(map[dom.NodeID]*widget.Clickable),
+		layoutBuild:      layoutengine.BuildWithScroll,
 	}
 	if cursorErr != nil {
 		slog.Error("Gopherカーソルを初期化できませんでした", "component", "ui", "error", cursorErr)
@@ -252,6 +255,7 @@ func (ui *BrowserUI) consumeNavigationResult() {
 			ui.inputFocused = make(map[dom.NodeID]bool)
 			ui.inputCommitted = make(map[dom.NodeID]string)
 			ui.selectButtons = make(map[dom.NodeID]*widget.Clickable)
+			ui.checkableButtons = make(map[dom.NodeID]*widget.Clickable)
 			if result.err != nil {
 				ui.status = "読み込みエラー: " + result.err.Error()
 				ui.pageStatus = ui.status
@@ -501,6 +505,8 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 			return ui.layoutDrawInput(gtx, command)
 		case paintmodel.DrawSelect:
 			return ui.layoutDrawSelect(gtx, command)
+		case paintmodel.DrawCheckable:
+			return ui.layoutDrawCheckable(gtx, command)
 		case paintmodel.DrawBox:
 			return layoutDrawBox(gtx, command, page.BackgroundImages)
 		default:
@@ -665,6 +671,8 @@ func commandDocumentY(command paintmodel.Command) (float32, bool) {
 	case paintmodel.DrawInput:
 		return command.Y - command.Top, true
 	case paintmodel.DrawSelect:
+		return command.Y - command.Top, true
+	case paintmodel.DrawCheckable:
 		return command.Y - command.Top, true
 	case paintmodel.DrawBox:
 		return command.Y - command.Top, true
@@ -1084,6 +1092,45 @@ func (ui *BrowserUI) layoutDrawSelect(gtx layout.Context, command paintmodel.Dra
 			label = "選択してください"
 		}
 		style := material.Button(ui.theme, button, label+" ▾")
+		style.Color = rgba(command.Color)
+		return style.Layout(gtx)
+	})
+}
+
+func (ui *BrowserUI) layoutDrawCheckable(gtx layout.Context, command paintmodel.DrawCheckable) layout.Dimensions {
+	left := unit.Dp(command.X)
+	viewportWidth := float32(gtx.Constraints.Max.X) / gtx.Metric.PxPerDp
+	right := unit.Dp(max(viewportWidth-command.X-command.Width, float32(0)))
+	return layout.Inset{Top: unit.Dp(command.Top), Left: left, Right: right}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		if command.Clip != nil {
+			defer commandClip(gtx, command.Clip, command.X, command.Y).Push(gtx.Ops).Pop()
+		}
+		if command.Opacity < 1 {
+			defer paint.PushOpacity(gtx.Ops, max(command.Opacity, 0)).Pop()
+		}
+		button := ui.checkableButtons[command.NodeID]
+		if button == nil {
+			button = new(widget.Clickable)
+			ui.checkableButtons[command.NodeID] = button
+		}
+		for button.Clicked(gtx) {
+			if ui.navigator != nil {
+				ui.navigator.ActivateCheckable(command.NodeID)
+			}
+		}
+		gtx.Constraints.Min.Y = gtx.Dp(unit.Dp(command.Height))
+		gtx.Constraints.Max.Y = gtx.Constraints.Min.Y
+		label := "☐"
+		if command.InputType == "radio" {
+			label = "○"
+		}
+		if command.Checked {
+			label = "☑"
+			if command.InputType == "radio" {
+				label = "●"
+			}
+		}
+		style := material.Button(ui.theme, button, label)
 		style.Color = rgba(command.Color)
 		return style.Layout(gtx)
 	})

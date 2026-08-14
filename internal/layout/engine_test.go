@@ -448,13 +448,26 @@ func TestBuildCreatesTextInputBox(t *testing.T) {
 	}
 }
 
-func TestBuildIgnoresUnsupportedInputType(t *testing.T) {
+func TestBuildIgnoresHiddenInputType(t *testing.T) {
 	document := dom.NewDocument()
-	input := document.CreateElement("input", map[string]string{"type": "checkbox"})
+	input := document.CreateElement("input", map[string]string{"type": "hidden"})
 	appendNodes(t, document, [2]*dom.Node{document.Root, input})
 
 	if boxes := Build(document, style.Compute(document, nil), 800).Boxes; len(boxes) != 0 {
-		t.Fatalf("boxes = %#v, want unsupported input omitted", boxes)
+		t.Fatalf("boxes = %#v, want hidden input omitted", boxes)
+	}
+}
+
+func TestBuildCreatesCheckboxAndRadioBoxesWithCurrentState(t *testing.T) {
+	document := dom.NewDocument()
+	checkbox := document.CreateElement("input", map[string]string{"type": "checkbox", "checked": ""})
+	radio := document.CreateElement("input", map[string]string{"type": "radio"})
+	appendNodes(t, document, [2]*dom.Node{document.Root, checkbox}, [2]*dom.Node{document.Root, radio})
+
+	boxes := Build(document, style.Compute(document, nil), 800).Boxes
+	if len(boxes) != 2 || !boxes[0].Checkable || !boxes[0].Checked || boxes[0].InputType != "checkbox" ||
+		!boxes[1].Checkable || boxes[1].Checked || boxes[1].InputType != "radio" {
+		t.Fatalf("checkable boxes = %#v", boxes)
 	}
 }
 

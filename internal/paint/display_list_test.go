@@ -232,6 +232,18 @@ func TestBuildCreatesSelectCommand(t *testing.T) {
 	}
 }
 
+func TestBuildCreatesCheckableCommand(t *testing.T) {
+	tree := &layout.Tree{Width: 100, Height: 50, Boxes: []layout.Box{{
+		NodeID: 10, Tag: "input", Checkable: true, Checked: true, InputType: "checkbox",
+		X: 20, Y: 10, Width: 32, Height: 32,
+	}}}
+
+	command, ok := Build(tree).Commands[0].(DrawCheckable)
+	if !ok || command.NodeID != 10 || !command.Checked || command.InputType != "checkbox" || command.Width != 32 {
+		t.Fatalf("checkable command = %#v", Build(tree).Commands[0])
+	}
+}
+
 func TestBuildPaintsBoxBackgroundBeforeContent(t *testing.T) {
 	tree := &layout.Tree{
 		Decorations: []layout.Decoration{{Order: 1, NodeID: 7, Rect: layout.Rect{X: 10, Y: 20, Width: 100, Height: 40}, Background: 0x123456ff}},

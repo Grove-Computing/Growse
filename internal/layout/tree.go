@@ -136,6 +136,9 @@ type Box struct {
 	Select     bool
 	Options    []forms.Option
 	Selected   int
+	Checkable  bool
+	Checked    bool
+	InputType  string
 
 	X        float32
 	Y        float32

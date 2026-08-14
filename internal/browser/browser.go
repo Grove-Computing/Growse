@@ -151,6 +151,37 @@ func (b *Browser) SetSelectValue(nodeID dom.NodeID, value string) bool {
 	return true
 }
 
+// ActivateCheckable toggles a checkbox or selects one radio in its group.
+func (b *Browser) ActivateCheckable(nodeID dom.NodeID) bool {
+	b.mu.Lock()
+	page := b.page
+	onMutation := b.onMutation
+	if page == nil || page.Document == nil {
+		b.mu.Unlock()
+		return false
+	}
+	checked, changed := forms.ActivateCheckable(page.Document, nodeID)
+	if !changed {
+		b.mu.Unlock()
+		return false
+	}
+	recomputePageStyles(page, b.currentTime())
+	dispatcher := page.Events
+	b.mu.Unlock()
+	if onMutation != nil {
+		onMutation()
+	}
+	value := "false"
+	if checked {
+		value = "true"
+	}
+	if dispatcher != nil {
+		dispatcher.Dispatch(events.Event{Type: events.Input, Target: nodeID, Value: value})
+		dispatcher.Dispatch(events.Event{Type: events.Change, Target: nodeID, Value: value})
+	}
+	return true
+}
+
 // CommitInputValue はテキストinputの編集確定をchangeイベントとして配信する。
 func (b *Browser) CommitInputValue(nodeID dom.NodeID, value string) bool {
 	b.mu.RLock()
