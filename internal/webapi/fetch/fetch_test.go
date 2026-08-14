@@ -96,6 +96,7 @@ func TestFetchRejectsInvalidRequestBeforeSending(t *testing.T) {
 		{name: "invalid header value", request: Request{URL: "/data", Header: Header{"X-Test": []string{"safe\r\ninjected"}}}},
 		{name: "GET body", request: Request{Method: http.MethodGet, URL: "/data", Body: []byte{}}},
 		{name: "HEAD text body", request: Request{Method: http.MethodHead, URL: "/data", Text: "body"}},
+		{name: "invalid credentials", request: Request{URL: "/data", Credentials: "always"}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -214,6 +215,29 @@ func TestConcurrentFetchesDeliverCallbacksInCompletionOrder(t *testing.T) {
 	}
 	cancel()
 	<-workerDone
+}
+
+func TestCloseWaitsForCanceledFetchOperation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	started := make(chan struct{})
+	finished := make(chan struct{})
+	baseURL, _ := url.Parse("https://example.test/page")
+	api := NewPage(ctx, baseURL, func(ctx context.Context, _ *network.Request) (*network.Response, error) {
+		close(started)
+		<-ctx.Done()
+		close(finished)
+		return nil, ctx.Err()
+	}, func(func()) bool { return false })
+	api.Fetch(Request{URL: "/slow"}, nil, nil)
+	<-started
+	cancel()
+	api.Close()
+	select {
+	case <-finished:
+	default:
+		t.Fatal("Close returned before Fetch goroutine released its references")
+	}
+	api.Fetch(Request{URL: "/ignored"}, nil, nil)
 }
 
 func equalStrings(left, right []string) bool {

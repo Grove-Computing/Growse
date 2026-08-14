@@ -1,0 +1,21 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Growse Data App</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main class="app">
+    <h1>Data App</h1>
+    <p id="status" class="loading">loading</p>
+    <form id="item-form" action="/api/items" method="post">
+      <label>Item <input id="item-name" name="name" required></label>
+      <label><input id="item-done" type="checkbox" name="done"> Done</label>
+      <button type="submit">Add</button>
+    </form>
+    <section id="items" class="empty">empty</section>
+  </main>
+  <script type="text/go" src="/_app.go"></script>
+</body>
+</html>

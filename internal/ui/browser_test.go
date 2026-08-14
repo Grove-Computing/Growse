@@ -546,7 +546,7 @@ func TestLinkPreviewRedactsCredentialsAndIgnoresInvalidURL(t *testing.T) {
 	ui.status = ui.pageStatus
 
 	ui.updateLinkPreview(page, secret.ID)
-	if strings.Contains(ui.status, "secret") || ui.status != "https://alice:xxxxx@example.com/private" {
+	if strings.Contains(ui.status, "secret") || strings.Contains(ui.status, "alice") || ui.status != "https://example.com/private" {
 		t.Fatalf("credential link status = %q, want redacted URL", ui.status)
 	}
 	ui.updateLinkPreview(page, invalid.ID)

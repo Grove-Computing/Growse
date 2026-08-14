@@ -1,13 +1,20 @@
 package forms
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/Grove-Computing/Growse/internal/dom"
 )
 
-const URLEncoded = "application/x-www-form-urlencoded"
+const (
+	URLEncoded          = "application/x-www-form-urlencoded"
+	MaxFormEntries      = 1000
+	MaxEncodedFormBytes = 1 << 20
+)
+
+var ErrFormDataTooLarge = errors.New("form data exceeds safety limit")
 
 // SubmissionConfig is the form configuration after submitter overrides.
 type SubmissionConfig struct {
@@ -41,6 +48,9 @@ func CollectEntries(document *dom.Document, form, submitter *dom.Node) []Entry {
 			return
 		}
 		if entry, successful := successfulEntry(node, submitter); successful {
+			if len(entries) >= MaxFormEntries {
+				return
+			}
 			entry.Name = name
 			entries = append(entries, entry)
 		}
@@ -103,6 +113,15 @@ func normalizeCRLF(value string) string {
 
 // EncodeURLEncoded serializes entries as UTF-8 application/x-www-form-urlencoded.
 func EncodeURLEncoded(entries []Entry) string {
+	encoded, _ := EncodeURLEncodedLimited(entries)
+	return encoded
+}
+
+// EncodeURLEncodedLimited serializes entries while enforcing release safety limits.
+func EncodeURLEncodedLimited(entries []Entry) (string, error) {
+	if len(entries) > MaxFormEntries {
+		return "", ErrFormDataTooLarge
+	}
 	var encoded strings.Builder
 	for index, entry := range entries {
 		if index != 0 {
@@ -111,8 +130,11 @@ func EncodeURLEncoded(entries []Entry) string {
 		encoded.WriteString(encodeFormComponent(entry.Name))
 		encoded.WriteByte('=')
 		encoded.WriteString(encodeFormComponent(entry.Value))
+		if encoded.Len() > MaxEncodedFormBytes {
+			return "", ErrFormDataTooLarge
+		}
 	}
-	return encoded.String()
+	return encoded.String(), nil
 }
 
 func encodeFormComponent(value string) string {

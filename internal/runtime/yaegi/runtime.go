@@ -14,6 +14,7 @@ import (
 	"sync"
 	"testing/fstest"
 
+	"github.com/Grove-Computing/Growse/internal/network"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 	consoleapi "github.com/Grove-Computing/Growse/internal/webapi/console"
 	domapi "github.com/Grove-Computing/Growse/internal/webapi/dom"
@@ -31,6 +32,7 @@ type Runtime struct {
 	runtimeCtx    context.Context
 	callbackQueue chan func()
 	callbackDone  chan struct{}
+	fetchAPI      *fetchapi.API
 	loaded        bool
 	started       bool
 	stopped       bool
@@ -89,6 +91,7 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 	console := consoleapi.New(environment.ConsoleLog)
 	dom := domapi.New(environment.Document, environment.Events, environment.OnMutation)
 	fetch := fetchapi.NewPage(r.runtimeCtx, environment.BaseURL, environment.Fetch, r.enqueueCallback)
+	r.fetchAPI = fetch
 	if err := r.interpreter.Use(interp.Exports{
 		"growse/console/console": {
 			"Log": reflect.ValueOf(console.Log),
@@ -101,10 +104,14 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 			"QuerySelector":  reflect.ValueOf(dom.QuerySelector),
 		},
 		"growse/fetch/fetch": {
-			"Fetch":    reflect.ValueOf(fetch.Fetch),
-			"Header":   reflect.ValueOf((*fetchapi.Header)(nil)),
-			"Request":  reflect.ValueOf((*fetchapi.Request)(nil)),
-			"Response": reflect.ValueOf((*fetchapi.Response)(nil)),
+			"CredentialsInclude":    reflect.ValueOf(fetchapi.CredentialsInclude),
+			"CredentialsMode":       reflect.ValueOf((*fetchapi.CredentialsMode)(nil)),
+			"CredentialsOmit":       reflect.ValueOf(fetchapi.CredentialsOmit),
+			"CredentialsSameOrigin": reflect.ValueOf(fetchapi.CredentialsSameOrigin),
+			"Fetch":                 reflect.ValueOf(fetch.Fetch),
+			"Header":                reflect.ValueOf((*fetchapi.Header)(nil)),
+			"Request":               reflect.ValueOf((*fetchapi.Request)(nil)),
+			"Response":              reflect.ValueOf((*fetchapi.Response)(nil)),
 		},
 		"growse/strconv/strconv": {
 			"Itoa": reflect.ValueOf(strconvapi.Itoa),
@@ -164,9 +171,13 @@ func (r *Runtime) Stop() error {
 	r.cancel = nil
 	r.stopped = true
 	done := r.callbackDone
+	fetch := r.fetchAPI
 	r.mu.Unlock()
 	if cancel != nil {
 		cancel()
+	}
+	if fetch != nil {
+		fetch.Close()
 	}
 	if done != nil {
 		<-done
@@ -233,5 +244,5 @@ func scriptName(script runtimemodel.Script, fallback string) string {
 	if script.SourceURL == nil {
 		return fallback
 	}
-	return script.SourceURL.Redacted()
+	return network.RedactedURL(script.SourceURL)
 }

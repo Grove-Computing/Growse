@@ -1,6 +1,8 @@
 package forms
 
 import (
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/Grove-Computing/Growse/internal/dom"
@@ -92,5 +94,15 @@ func TestEncodeURLEncodedUsesUTF8AndPreservesEntryOrder(t *testing.T) {
 	want := "tag=one&%E6%97%A5%E6%9C%AC+%E8%AA%9E=%E6%9D%B1%E4%BA%AC%2F%E5%A4%A7%E9%98%AA%7E&tag="
 	if got := EncodeURLEncoded(entries); got != want {
 		t.Fatalf("encoded = %q, want %q", got, want)
+	}
+}
+
+func TestEncodeURLEncodedRejectsPathologicalEntryCountAndSize(t *testing.T) {
+	tooMany := make([]Entry, MaxFormEntries+1)
+	if _, err := EncodeURLEncodedLimited(tooMany); !errors.Is(err, ErrFormDataTooLarge) {
+		t.Fatalf("entry count error = %v", err)
+	}
+	if _, err := EncodeURLEncodedLimited([]Entry{{Name: "value", Value: strings.Repeat("x", MaxEncodedFormBytes)}}); !errors.Is(err, ErrFormDataTooLarge) {
+		t.Fatalf("encoded size error = %v", err)
 	}
 }

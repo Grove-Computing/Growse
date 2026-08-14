@@ -21,6 +21,7 @@ for value in \
     "artifact: windows_amd64" \
     "examples/dashboard" \
     "examples/animation" \
+    "examples/data-app" \
     'tar -czf "dist/$archive_name"' \
     "Compress-Archive" \
     ".sha256" \

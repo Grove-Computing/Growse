@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/Grove-Computing/Growse/internal/dom"
+	"github.com/Grove-Computing/Growse/internal/network"
 )
 
 const maxScriptBytes = 2 << 20
@@ -41,15 +42,15 @@ func loadScripts(ctx context.Context, client ResourceLoader, pageURL *url.URL, d
 		}
 		response, err := client.Get(ctx, scriptURL)
 		if err != nil {
-			loadErrors = append(loadErrors, fmt.Sprintf("load Go script %s: %v", scriptURL.Redacted(), err))
+			loadErrors = append(loadErrors, fmt.Sprintf("load Go script %s: %v", network.RedactedURL(scriptURL), err))
 			continue
 		}
 		if len(response.Body) > maxScriptBytes {
-			loadErrors = append(loadErrors, fmt.Sprintf("Go script %s exceeds %d bytes", scriptURL.Redacted(), maxScriptBytes))
+			loadErrors = append(loadErrors, fmt.Sprintf("Go script %s exceeds %d bytes", network.RedactedURL(scriptURL), maxScriptBytes))
 			continue
 		}
 		if !isGoContentType(response.ContentType) {
-			loadErrors = append(loadErrors, fmt.Sprintf("Go script %s has unsupported Content-Type %q", scriptURL.Redacted(), response.ContentType))
+			loadErrors = append(loadErrors, fmt.Sprintf("Go script %s has unsupported Content-Type %q", network.RedactedURL(scriptURL), response.ContentType))
 			continue
 		}
 		finalURL := response.URL

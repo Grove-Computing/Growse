@@ -549,7 +549,11 @@ func (b *Browser) SubmitGET(ctx context.Context, formID, submitterID dom.NodeID)
 	if err != nil {
 		return nil, err
 	}
-	target.RawQuery = forms.EncodeURLEncoded(entries)
+	encoded, err := forms.EncodeURLEncodedLimited(entries)
+	if err != nil {
+		return nil, err
+	}
+	target.RawQuery = encoded
 	target.Fragment = ""
 	return b.load(ctx, target, historyPush, -1)
 }
@@ -600,13 +604,18 @@ func (b *Browser) SubmitPOST(ctx context.Context, formID, submitterID dom.NodeID
 	reducedMotion := b.reducedMotion
 	b.mu.Unlock()
 
-	body := []byte(forms.EncodeURLEncoded(entries))
+	encoded, err := forms.EncodeURLEncodedLimited(entries)
+	if err != nil {
+		return nil, err
+	}
+	body := []byte(encoded)
 	response, err := loader.Do(ctx, &network.Request{
 		Method: http.MethodPost, URL: target, Body: body,
-		Header: http.Header{"Content-Type": []string{forms.URLEncoded}},
+		Header:  http.Header{"Content-Type": []string{forms.URLEncoded}},
+		SiteURL: cloneURL(page.URL), Kind: network.RequestForm,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("submit form to %s: %w", target.Redacted(), err)
+		return nil, fmt.Errorf("submit form to %s: %w", network.RedactedURL(target), err)
 	}
 	return b.finishLoad(ctx, target, response, historyPush, -1, navigationID, client, runtimeFactory, onMutation, reducedMotion)
 }
@@ -756,7 +765,7 @@ func (b *Browser) load(ctx context.Context, pageURL *url.URL, commit historyComm
 
 	response, err := client.Get(ctx, pageURL)
 	if err != nil {
-		return nil, fmt.Errorf("navigate to %s: %w", pageURL.Redacted(), err)
+		return nil, fmt.Errorf("navigate to %s: %w", network.RedactedURL(pageURL), err)
 	}
 	return b.finishLoad(ctx, pageURL, response, commit, historyIndex, navigationID, client, runtimeFactory, onMutation, reducedMotion)
 }
@@ -771,11 +780,11 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	}
 	document, err := htmlparser.Parse(bytes.NewReader(response.Body))
 	if err != nil {
-		return nil, fmt.Errorf("build DOM for %s: %w", pageURL.Redacted(), err)
+		return nil, fmt.Errorf("build DOM for %s: %w", network.RedactedURL(pageURL), err)
 	}
 	stylesheet, err := b.loadStyles(ctx, client, response.URL, document)
 	if err != nil {
-		return nil, fmt.Errorf("load styles for %s: %w", pageURL.Redacted(), err)
+		return nil, fmt.Errorf("load styles for %s: %w", network.RedactedURL(pageURL), err)
 	}
 	computedStyles := style.ComputeWithEnvironment(document, stylesheet, style.InteractionState{}, style.Environment{
 		ViewportWidth: 1280, ViewportHeight: 720, RootFontSize: 16, ResolutionDPI: 96,
@@ -854,7 +863,7 @@ func startRuntime(ctx context.Context, factory runtimemodel.Factory, page *Page,
 		return nil
 	}
 	if !IsTrustedOrigin(page.URL) {
-		page.RuntimeError = fmt.Sprintf("blocked Go script execution from untrusted origin: %s", page.URL.Redacted())
+		page.RuntimeError = fmt.Sprintf("blocked Go script execution from untrusted origin: %s", network.RedactedURL(page.URL))
 		return nil
 	}
 	for _, script := range page.Scripts {
@@ -1018,7 +1027,7 @@ func runtimeOrigin(sourceURL *url.URL) string {
 	if sourceURL == nil {
 		return "unknown"
 	}
-	return sourceURL.Redacted()
+	return network.RedactedURL(sourceURL)
 }
 
 func isEditableTextControl(node *dom.Node) bool {

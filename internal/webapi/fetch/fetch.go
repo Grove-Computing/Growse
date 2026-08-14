@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 
 	"github.com/Grove-Computing/Growse/internal/network"
 )
@@ -15,14 +16,24 @@ import (
 // Header preserves every value associated with an HTTP header name.
 type Header map[string][]string
 
+// CredentialsMode controls Cookie and HTTP authentication handling.
+type CredentialsMode string
+
+const (
+	CredentialsOmit       CredentialsMode = "omit"
+	CredentialsSameOrigin CredentialsMode = "same-origin"
+	CredentialsInclude    CredentialsMode = "include"
+)
+
 // Request describes an HTTP request issued by a WebGo program.
 // Body takes precedence over Text when both are set.
 type Request struct {
-	Method string
-	URL    string
-	Header Header
-	Body   []byte
-	Text   string
+	Method      string
+	URL         string
+	Header      Header
+	Body        []byte
+	Text        string
+	Credentials CredentialsMode
 }
 
 // Response is delivered to a successful Fetch callback. Additional response
@@ -88,6 +99,9 @@ type API struct {
 	baseURL *url.URL
 	do      func(context.Context, *network.Request) (*network.Response, error)
 	enqueue func(func()) bool
+	mu      sync.Mutex
+	closed  bool
+	active  sync.WaitGroup
 }
 
 // New creates a page-scoped Fetch API.
@@ -108,6 +122,12 @@ func NewPage(ctx context.Context, baseURL *url.URL, do func(context.Context, *ne
 
 // Fetch starts request asynchronously and delivers exactly one callback.
 func (api *API) Fetch(request Request, success func(Response), failure func(string)) {
+	api.mu.Lock()
+	closed := api.closed
+	api.mu.Unlock()
+	if closed {
+		return
+	}
 	networkRequest, err := api.prepare(request)
 	if err != nil {
 		api.deliver(func() {
@@ -117,7 +137,15 @@ func (api *API) Fetch(request Request, success func(Response), failure func(stri
 		})
 		return
 	}
+	api.mu.Lock()
+	if api.closed {
+		api.mu.Unlock()
+		return
+	}
+	api.active.Add(1)
+	api.mu.Unlock()
 	go func() {
+		defer api.active.Done()
 		response, fetchError := api.do(api.ctx, networkRequest)
 		api.deliver(func() {
 			if fetchError != nil {
@@ -131,6 +159,17 @@ func (api *API) Fetch(request Request, success func(Response), failure func(stri
 			}
 		})
 	}()
+}
+
+// Close rejects new Fetches and waits for all request goroutines to release references.
+func (api *API) Close() {
+	if api == nil {
+		return
+	}
+	api.mu.Lock()
+	api.closed = true
+	api.mu.Unlock()
+	api.active.Wait()
 }
 
 func (api *API) deliver(callback func()) {
@@ -204,6 +243,13 @@ func (api *API) prepare(request Request) (*network.Request, error) {
 	if (method == http.MethodGet || method == http.MethodHead) && hasBody {
 		return nil, errors.New("GET and HEAD Fetch requests cannot have a body")
 	}
+	credentials := network.CredentialsMode(request.Credentials)
+	if credentials == "" {
+		credentials = network.CredentialsSameOrigin
+	}
+	if credentials != network.CredentialsOmit && credentials != network.CredentialsSameOrigin && credentials != network.CredentialsInclude {
+		return nil, errors.New("invalid Fetch credentials mode")
+	}
 	header := make(http.Header, len(request.Header))
 	for name, values := range request.Header {
 		if !validToken(name) {
@@ -220,10 +266,13 @@ func (api *API) prepare(request Request) (*network.Request, error) {
 		header[name] = append([]string(nil), values...)
 	}
 	return &network.Request{
-		Method: method,
-		URL:    resolved,
-		Header: header,
-		Body:   body,
+		Method:      method,
+		URL:         resolved,
+		Header:      header,
+		Body:        body,
+		SiteURL:     cloneURL(api.baseURL),
+		Kind:        network.RequestFetch,
+		Credentials: credentials,
 	}, nil
 }
 
