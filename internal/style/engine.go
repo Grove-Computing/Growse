@@ -104,7 +104,8 @@ func initialStyle() ComputedStyle {
 	return ComputedStyle{
 		Color: defaultTextColor, BackgroundColor: transparent, FontSize: 16, FontWeight: 400,
 		BackgroundRepeat: BackgroundRepeat{X: true, Y: true},
-		DecorationColor:  defaultTextColor, Opacity: 1,
+		DecorationColor:  defaultTextColor, Opacity: 1, FlexShrink: 1,
+		AlignItems: AlignStretch, AlignContent: AlignStretch, AlignSelf: AlignAuto,
 		Width: SizeValue{Kind: SizeAuto}, Height: SizeValue{Kind: SizeAuto},
 		MinWidth: SizeValue{Kind: SizeLength}, MinHeight: SizeValue{Kind: SizeLength},
 		MaxWidth: SizeValue{Kind: SizeNone}, MaxHeight: SizeValue{Kind: SizeNone},
@@ -117,7 +118,8 @@ func inheritedStyle(parent ComputedStyle) ComputedStyle {
 		LineHeight: parent.LineHeight, WhiteSpace: parent.WhiteSpace,
 		BackgroundColor: transparent, Display: DisplayInline,
 		BackgroundRepeat: BackgroundRepeat{X: true, Y: true},
-		DecorationColor:  parent.Color, Opacity: 1,
+		DecorationColor:  parent.Color, Opacity: 1, FlexShrink: 1,
+		AlignItems: AlignStretch, AlignContent: AlignStretch, AlignSelf: AlignAuto,
 		Width: SizeValue{Kind: SizeAuto}, Height: SizeValue{Kind: SizeAuto},
 		MinWidth: SizeValue{Kind: SizeLength}, MinHeight: SizeValue{Kind: SizeLength},
 		MaxWidth: SizeValue{Kind: SizeNone}, MaxHeight: SizeValue{Kind: SizeNone},
@@ -390,10 +392,11 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 	computed.MinHeight = resolveSizeWinner("min-height", computed.MinHeight, parent.MinHeight, winners, computed.CustomProperties, lengthContext)
 	computed.MaxWidth = resolveSizeWinner("max-width", computed.MaxWidth, parent.MaxWidth, winners, computed.CustomProperties, lengthContext)
 	computed.MaxHeight = resolveSizeWinner("max-height", computed.MaxHeight, parent.MaxHeight, winners, computed.CustomProperties, lengthContext)
-	computed.Margin = applyEdges(computed.Margin, parent.Margin, "margin", winners, computed.CustomProperties, lengthContext)
+	computed.Margin, computed.MarginAuto = applyMargins(computed.Margin, computed.MarginAuto, parent.Margin, parent.MarginAuto, winners, computed.CustomProperties, lengthContext)
 	computed.Padding = applyEdges(computed.Padding, parent.Padding, "padding", winners, computed.CustomProperties, lengthContext)
 	computed.Border = applyBorders(computed.Border, parent.Border, winners, computed.CustomProperties, lengthContext, computed.Color)
 	computed.BorderRadius = applyBorderRadii(computed.BorderRadius, parent.BorderRadius, winners, computed.CustomProperties, lengthContext)
+	computed = applyFlexProperties(computed, parent, winners, computed.CustomProperties, lengthContext)
 	return computed
 }
 
@@ -856,6 +859,12 @@ func expandedProperties(property string) []string {
 		return []string{"overflow-x", "overflow-y"}
 	case "border-radius":
 		return []string{"border-top-left-radius", "border-top-right-radius", "border-bottom-right-radius", "border-bottom-left-radius"}
+	case "flex-flow":
+		return []string{"flex-direction", "flex-wrap"}
+	case "flex":
+		return []string{"flex-grow", "flex-shrink", "flex-basis"}
+	case "gap":
+		return []string{"row-gap", "column-gap"}
 	default:
 		return []string{property}
 	}
@@ -1134,6 +1143,10 @@ func parseDisplay(value string) (Display, bool) {
 		return DisplayBlock, true
 	case "inline-block":
 		return DisplayInlineBlock, true
+	case "flex":
+		return DisplayFlex, true
+	case "inline-flex":
+		return DisplayInlineFlex, true
 	case "none":
 		return DisplayNone, true
 	default:

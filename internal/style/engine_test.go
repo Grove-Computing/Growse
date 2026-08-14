@@ -766,6 +766,70 @@ div {
 	}
 }
 
+func TestComputeResolvesFlexContainerAndItemProperties(t *testing.T) {
+	document := dom.NewDocument()
+	container := document.CreateElement("section", nil)
+	item := document.CreateElement("article", nil)
+	appendNode(t, document, document.Root, container)
+	appendNode(t, document, container, item)
+	stylesheet, err := css.Parse(strings.NewReader(`
+section {
+  display: inline-flex;
+  flex-flow: column-reverse wrap-reverse;
+  justify-content: space-evenly;
+  align-items: baseline;
+  align-content: space-around;
+  gap: 12px 5%;
+}
+article {
+  order: -2;
+  flex: 2 3 content;
+  align-self: center;
+  margin: auto 4px 6px auto;
+  aspect-ratio: 16 / 9;
+}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	computed := Compute(document, stylesheet)
+	containerStyle, _ := computed.For(container)
+	if containerStyle.Display != DisplayInlineFlex || containerStyle.FlexDirection != FlexDirectionColumnReverse || containerStyle.FlexWrap != FlexWrapReverse {
+		t.Fatalf("flex container model = %#v", containerStyle)
+	}
+	if containerStyle.JustifyContent != JustifySpaceEvenly || containerStyle.AlignItems != AlignBaseline || containerStyle.AlignContent != AlignSpaceAround {
+		t.Fatalf("flex alignment = %v / %v / %v", containerStyle.JustifyContent, containerStyle.AlignItems, containerStyle.AlignContent)
+	}
+	if containerStyle.RowGap.Pixels != 12 || containerStyle.ColumnGap.Percentage != 5 {
+		t.Fatalf("flex gap = %#v / %#v", containerStyle.RowGap, containerStyle.ColumnGap)
+	}
+	itemStyle, _ := computed.For(item)
+	if itemStyle.Order != -2 || itemStyle.FlexGrow != 2 || itemStyle.FlexShrink != 3 || itemStyle.FlexBasis.Kind != FlexBasisContent {
+		t.Fatalf("flex item sizing = %#v", itemStyle)
+	}
+	if itemStyle.AlignSelf != AlignCenter || !itemStyle.MarginAuto.Top || !itemStyle.MarginAuto.Left || itemStyle.Margin.Right != 4 || itemStyle.Margin.Bottom != 6 {
+		t.Fatalf("flex item alignment/margin = %#v", itemStyle)
+	}
+	if itemStyle.AspectRatio != float32(16.0/9.0) {
+		t.Fatalf("aspect ratio = %v", itemStyle.AspectRatio)
+	}
+}
+
+func TestComputeUsesFlexInitialValuesAndLonghands(t *testing.T) {
+	document := dom.NewDocument()
+	item := document.CreateElement("div", map[string]string{"style": `display:flex; flex-grow:1.5; flex-shrink:0; flex-basis:25%; row-gap:normal; column-gap:8px`})
+	appendNode(t, document, document.Root, item)
+	computed, _ := Compute(document, nil).For(item)
+	if computed.Display != DisplayFlex || computed.FlexDirection != FlexDirectionRow || computed.FlexWrap != FlexNoWrap {
+		t.Fatalf("flex initial container values = %#v", computed)
+	}
+	if computed.FlexGrow != 1.5 || computed.FlexShrink != 0 || computed.FlexBasis.Kind != FlexBasisLength || computed.FlexBasis.Value.Percentage != 25 {
+		t.Fatalf("flex longhands = %#v", computed)
+	}
+	if computed.RowGap != (LengthPercentage{}) || computed.ColumnGap.Pixels != 8 || computed.AlignSelf != AlignAuto {
+		t.Fatalf("gap/alignment initial values = %#v", computed)
+	}
+}
+
 func parseTestSelector(t *testing.T, value string) css.Selector {
 	t.Helper()
 	stylesheet, err := css.Parse(strings.NewReader(value + " { color: red }"))

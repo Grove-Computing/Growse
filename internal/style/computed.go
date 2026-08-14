@@ -11,7 +11,75 @@ const (
 	DisplayBlock
 	DisplayInlineBlock
 	DisplayNone
+	DisplayFlex
+	DisplayInlineFlex
 )
+
+// FlexDirection defines the main axis and its direction.
+type FlexDirection uint8
+
+const (
+	FlexDirectionRow FlexDirection = iota
+	FlexDirectionRowReverse
+	FlexDirectionColumn
+	FlexDirectionColumnReverse
+)
+
+// FlexWrap controls whether flex items form multiple lines.
+type FlexWrap uint8
+
+const (
+	FlexNoWrap FlexWrap = iota
+	FlexWrapLines
+	FlexWrapReverse
+)
+
+// JustifyContent distributes free space on the main axis.
+type JustifyContent uint8
+
+const (
+	JustifyFlexStart JustifyContent = iota
+	JustifyFlexEnd
+	JustifyCenter
+	JustifySpaceBetween
+	JustifySpaceAround
+	JustifySpaceEvenly
+)
+
+// Align controls cross-axis alignment. AlignAuto is only valid for align-self.
+type Align uint8
+
+const (
+	AlignStretch Align = iota
+	AlignFlexStart
+	AlignFlexEnd
+	AlignCenter
+	AlignBaseline
+	AlignSpaceBetween
+	AlignSpaceAround
+	AlignSpaceEvenly
+	AlignAuto
+)
+
+// FlexBasisKind identifies an automatic, content-based, or sized flex basis.
+type FlexBasisKind uint8
+
+const (
+	FlexBasisAuto FlexBasisKind = iota
+	FlexBasisContent
+	FlexBasisLength
+)
+
+// FlexBasis retains percentages until the flex container size is known.
+type FlexBasis struct {
+	Kind  FlexBasisKind
+	Value LengthPercentage
+}
+
+// AutoEdges records which margins have the auto keyword.
+type AutoEdges struct {
+	Top, Right, Bottom, Left bool
+}
 
 // BoxSizing controls whether declared sizes include padding and border.
 type BoxSizing uint8
@@ -183,6 +251,19 @@ type ComputedStyle struct {
 	OverflowX        Overflow
 	OverflowY        Overflow
 	Display          Display
+	FlexDirection    FlexDirection
+	FlexWrap         FlexWrap
+	JustifyContent   JustifyContent
+	AlignItems       Align
+	AlignContent     Align
+	Order            int
+	FlexGrow         float32
+	FlexShrink       float32
+	FlexBasis        FlexBasis
+	AlignSelf        Align
+	RowGap           LengthPercentage
+	ColumnGap        LengthPercentage
+	AspectRatio      float32
 	BoxSizing        BoxSizing
 	Width            SizeValue
 	Height           SizeValue
@@ -191,6 +272,7 @@ type ComputedStyle struct {
 	MaxWidth         SizeValue
 	MaxHeight        SizeValue
 	Margin           Edges
+	MarginAuto       AutoEdges
 	Padding          Edges
 	Border           Borders
 	BorderRadius     BorderRadii
