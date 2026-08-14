@@ -35,3 +35,16 @@ func TestUnavailableStorageReturnsError(t *testing.T) {
 		t.Fatalf("Set() error = %v", err)
 	}
 }
+
+func TestGetDistinguishesEmptyValueFromMissingKey(t *testing.T) {
+	storage := New(storagecore.NewArea(), storagecore.NewArea()).Local()
+	if err := storage.Set("empty", ""); err != nil {
+		t.Fatal(err)
+	}
+	if value, found, err := storage.Get("empty"); err != nil || !found || value != "" {
+		t.Fatalf("Get(empty) = (%q, %v, %v)", value, found, err)
+	}
+	if value, found, err := storage.Get("missing"); err != nil || found || value != "" {
+		t.Fatalf("Get(missing) = (%q, %v, %v)", value, found, err)
+	}
+}
