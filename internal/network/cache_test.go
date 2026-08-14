@@ -90,6 +90,33 @@ func TestCalculateFreshnessBoundsHugeAgeAndMaxAge(t *testing.T) {
 	}
 }
 
+func TestParseCacheControlPolicyAndNoStore(t *testing.T) {
+	policy := parseCachePolicy([]string{"private, no-cache, must-revalidate", "public, immutable, future-extension=1"})
+	if !policy.private || !policy.public || !policy.noCache || !policy.mustRevalidate || !policy.immutable || policy.noStore {
+		t.Fatalf("policy = %#v", policy)
+	}
+	cache := NewHTTPCache()
+	request := &Request{Method: http.MethodGet, URL: mustParseURL(t, "https://example.test/data")}
+	response := &Response{StatusCode: http.StatusOK, Header: http.Header{"Cache-Control": []string{"no-store, max-age=3600"}}}
+	if cache.Store(request, response) {
+		t.Fatal("no-store Response was cached")
+	}
+	if _, ok := cache.Match(request); ok {
+		t.Fatal("no-store Response was reusable")
+	}
+}
+
+func TestPrivateAndPublicResponsesCanBeStoredInPrivateCache(t *testing.T) {
+	for _, directive := range []string{"private, max-age=60", "public, max-age=60", "no-cache"} {
+		cache := NewHTTPCache()
+		request := &Request{Method: http.MethodGet, URL: mustParseURL(t, "https://example.test/"+directive[:2])}
+		response := &Response{StatusCode: http.StatusOK, Header: http.Header{"Cache-Control": []string{directive}}}
+		if !cache.Store(request, response) {
+			t.Fatalf("Store() rejected %q in private cache", directive)
+		}
+	}
+}
+
 func TestHTTPCacheRejectsUnsafeOrUnusableKeys(t *testing.T) {
 	cache := NewHTTPCache()
 	response := &Response{StatusCode: http.StatusOK, Header: make(http.Header)}

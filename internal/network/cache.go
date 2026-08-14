@@ -24,6 +24,16 @@ type cacheEntry struct {
 	varyValues []string
 	response   *Response
 	freshness  freshness
+	policy     cachePolicy
+}
+
+type cachePolicy struct {
+	noCache        bool
+	noStore        bool
+	private        bool
+	public         bool
+	mustRevalidate bool
+	immutable      bool
 }
 
 type freshness struct {
@@ -60,6 +70,10 @@ func (cache *HTTPCache) Store(request *Request, response *Response) bool {
 	if cache == nil || !ok || response == nil || response.StatusCode != http.StatusOK {
 		return false
 	}
+	policy := parseCachePolicy(response.Header.Values("Cache-Control"))
+	if policy.noStore {
+		return false
+	}
 	vary, reusable := parseVary(response.Header.Values("Vary"))
 	if !reusable {
 		return false
@@ -68,6 +82,7 @@ func (cache *HTTPCache) Store(request *Request, response *Response) bool {
 		method: requestMethod(request), url: cacheURL(request.URL), partition: cachePartition(request),
 		vary: vary, varyValues: requestHeaderValues(request.Header, vary), response: cloneResponse(response),
 		freshness: calculateFreshness(response.Header, cache.now()),
+		policy:    policy,
 	}
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
@@ -81,6 +96,30 @@ func (cache *HTTPCache) Store(request *Request, response *Response) bool {
 	}
 	cache.entries[key] = append(variants, entry)
 	return true
+}
+
+func parseCachePolicy(values []string) cachePolicy {
+	var policy cachePolicy
+	for _, value := range values {
+		for _, directive := range strings.Split(value, ",") {
+			name, _, _ := strings.Cut(strings.TrimSpace(directive), "=")
+			switch strings.ToLower(name) {
+			case "no-cache":
+				policy.noCache = true
+			case "no-store":
+				policy.noStore = true
+			case "private":
+				policy.private = true
+			case "public":
+				policy.public = true
+			case "must-revalidate":
+				policy.mustRevalidate = true
+			case "immutable":
+				policy.immutable = true
+			}
+		}
+	}
+	return policy
 }
 
 func calculateFreshness(header http.Header, storedAt time.Time) freshness {
@@ -259,7 +298,9 @@ func cloneResponse(source *Response) *Response {
 		return nil
 	}
 	copy := *source
-	copy.URL = cloneURL(source.URL)
+	if source.URL != nil {
+		copy.URL = cloneURL(source.URL)
+	}
 	copy.Header = source.Header.Clone()
 	copy.Body = append([]byte(nil), source.Body...)
 	return &copy
