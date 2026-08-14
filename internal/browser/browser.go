@@ -1030,15 +1030,6 @@ func isSubmitButton(node *dom.Node) bool {
 	return forms.IsSubmitButton(node)
 }
 
-func nearestForm(node *dom.Node) *dom.Node {
-	for current := node; current != nil; current = current.Parent {
-		if current.Type == dom.NodeElement && current.TagName == "form" {
-			return current
-		}
-	}
-	return nil
-}
-
 func normalizeURL(rawURL string) (*url.URL, error) {
 	rawURL = strings.TrimSpace(rawURL)
 	if rawURL == "" {
