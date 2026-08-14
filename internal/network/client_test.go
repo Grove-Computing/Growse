@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -233,6 +234,52 @@ func TestClientSharesInMemoryCookieJarAcrossNavigationFormAndFetch(t *testing.T)
 	if cookies := isolated.httpClient.Jar.Cookies(mustParseURL(t, server.URL)); len(cookies) != 0 {
 		t.Fatalf("new Browser client inherited Cookies: %v", cookies)
 	}
+}
+
+func TestCookieJarMatchesHostDomainPathAndLifecycle(t *testing.T) {
+	client := NewClient()
+	jar := client.httpClient.Jar
+	origin := mustParseURL(t, "https://www.example.com/app/index")
+	jar.SetCookies(origin, []*http.Cookie{
+		{Name: "host", Value: "only", Path: "/"},
+		{Name: "domain", Value: "shared", Domain: ".example.com", Path: "/"},
+		{Name: "path", Value: "app", Path: "/app"},
+		{Name: "expired", Value: "old", Path: "/", Expires: time.Unix(1, 0)},
+		{Name: "foreign", Value: "blocked", Domain: "unrelated.test", Path: "/"},
+	})
+
+	if got := cookieValues(jar.Cookies(mustParseURL(t, "https://www.example.com/app/data"))); !reflect.DeepEqual(got, map[string]string{
+		"host": "only", "domain": "shared", "path": "app",
+	}) {
+		t.Fatalf("same host /app Cookies = %v", got)
+	}
+	if got := cookieValues(jar.Cookies(mustParseURL(t, "https://sub.example.com/app/data"))); !reflect.DeepEqual(got, map[string]string{
+		"domain": "shared",
+	}) {
+		t.Fatalf("subdomain Cookies = %v", got)
+	}
+	if got := cookieValues(jar.Cookies(mustParseURL(t, "https://www.example.com/other"))); !reflect.DeepEqual(got, map[string]string{
+		"host": "only", "domain": "shared",
+	}) {
+		t.Fatalf("other path Cookies = %v", got)
+	}
+
+	jar.SetCookies(origin, []*http.Cookie{{Name: "host", Value: "updated", Path: "/"}})
+	if got := cookieValues(jar.Cookies(origin))["host"]; got != "updated" {
+		t.Fatalf("overwritten host Cookie = %q", got)
+	}
+	jar.SetCookies(origin, []*http.Cookie{{Name: "host", Value: "", Path: "/", MaxAge: -1}})
+	if _, exists := cookieValues(jar.Cookies(origin))["host"]; exists {
+		t.Fatal("deleted host Cookie is still present")
+	}
+}
+
+func cookieValues(cookies []*http.Cookie) map[string]string {
+	values := make(map[string]string, len(cookies))
+	for _, cookie := range cookies {
+		values[cookie.Name] = cookie.Value
+	}
+	return values
 }
 
 func mustParseURL(t *testing.T, rawURL string) *url.URL {
