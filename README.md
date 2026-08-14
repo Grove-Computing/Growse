@@ -19,6 +19,32 @@ HTMLとCSSで画面を構築し、`<script type="text/go">`に書いたWebGoか�
 
 詳しい対応範囲と制限は、[CSS対応表](docs/css-support.md)と[Form / Fetch / Cookie対応表](docs/form-fetch-cookie-support.md)を参照してください。
 
+## インストール
+
+### Installerを使う
+
+Linux、macOS、Git Bashを利用できるWindowsでは、最新版を`~/.local/bin`へインストールできます。InstallerはダウンロードしたArchiveのSHA-256 checksumを検証します。
+
+```sh
+wget -qO- https://github.com/Grove-Computing/Growse/releases/latest/download/install.sh | bash
+```
+
+Versionとインストール先を指定する場合は、環境変数を利用します。
+
+```sh
+wget -qO- https://github.com/Grove-Computing/Growse/releases/latest/download/install.sh | GROWSE_VERSION=v0.8.0 GROWSE_INSTALL_DIR=/usr/local/bin bash
+```
+
+### Docker imageを使う
+
+Linux amd64のDocker imageを、GitHub Container Registryから取得できます。
+
+```sh
+docker pull ghcr.io/grove-computing/growse:v0.8.0
+```
+
+GrowseはGUI applicationのため、Containerから起動する場合はホストのDisplay ServerとGPU deviceを接続する必要があります。
+
 ## クイックスタート
 
 ### 必要なもの
@@ -138,33 +164,7 @@ GrowseとWebGo Runtimeは、信頼できないGoコードを安全に実行す�
 
 脆弱性の非公開報告方法、サポート対象、通信とResource LoadingのSecurity Boundaryは[SECURITY.md](SECURITY.md)を参照してください。
 
-## インストールとリリース
-
-### Installer
-
-Linux、macOS、Git Bashを利用できるWindowsでは、最新版を`~/.local/bin`へインストールできます。InstallerはダウンロードしたArchiveのSHA-256 checksumを検証します。
-
-```sh
-wget -qO- https://github.com/Grove-Computing/Growse/releases/latest/download/install.sh | bash
-```
-
-Versionとインストール先を指定する場合は、環境変数を利用します。
-
-```sh
-wget -qO- https://github.com/Grove-Computing/Growse/releases/latest/download/install.sh | GROWSE_VERSION=v0.8.0 GROWSE_INSTALL_DIR=/usr/local/bin bash
-```
-
-### Docker
-
-Linux amd64のDocker imageを、GitHub Container Registryから取得できます。
-
-```sh
-docker pull ghcr.io/grove-computing/growse:v0.8.0
-```
-
-GrowseはGUI applicationのため、Containerから起動する場合はホストのDisplay ServerとGPU deviceを接続する必要があります。
-
-### Release成果物
+## リリース成果物
 
 `v0.8.0`のようなVersion tagをpushすると、GitHub Actionsが次の成果物とSHA-256 checksumをGitHub Releaseへ公開します。
 
