@@ -85,6 +85,57 @@ func main() { console.Log("Hello from Go", 42) }`}}
 	}
 }
 
+func TestRuntimeExposesWebGoTimeoutAndInterval(t *testing.T) {
+	runtime := New()
+	mutated := make(chan struct{}, 4)
+	document := dommodel.NewDocument()
+	result := document.CreateElement("p", map[string]string{"id": "result"})
+	if err := document.AppendChild(document.Root, result); err != nil {
+		t.Fatal(err)
+	}
+	scripts := []runtimemodel.Script{{Source: `package main
+import (
+	"growse/dom"
+	"growse/scheduler"
+)
+var TimeoutID scheduler.TimerID
+var IntervalID scheduler.TimerID
+func main() {
+	TimeoutID, _ = scheduler.SetTimeout(0, func() {
+		dom.GetElementByID("result").SetText("timeout")
+	})
+	IntervalID, _ = scheduler.SetInterval(scheduler.Millisecond, func() {
+		dom.GetElementByID("result").SetText("interval")
+	})
+}`}}
+	environment := runtimemodel.Environment{
+		Document: document,
+		Events:   events.NewDispatcher(),
+		OnMutation: func() {
+			mutated <- struct{}{}
+		},
+	}
+
+	if err := runtime.Load(context.Background(), scripts, environment); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	select {
+	case <-mutated:
+	case <-time.After(time.Second):
+		t.Fatal("Scheduler callback was not delivered through the page queue")
+	}
+	symbols := runtime.interpreter.Symbols("page")["page"]
+	if symbols["TimeoutID"].Uint() == 0 || symbols["IntervalID"].Uint() == 0 {
+		t.Fatalf("timer IDs = timeout:%d interval:%d, want non-zero", symbols["TimeoutID"].Uint(), symbols["IntervalID"].Uint())
+	}
+	if err := runtime.Stop(); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+}
+
 func TestRuntimeFetchSendsMethodRelativeURLHeadersAndTextBody(t *testing.T) {
 	runtime := New()
 	var captured *network.Request

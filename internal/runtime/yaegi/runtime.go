@@ -19,6 +19,7 @@ import (
 	consoleapi "github.com/Grove-Computing/Growse/internal/webapi/console"
 	domapi "github.com/Grove-Computing/Growse/internal/webapi/dom"
 	fetchapi "github.com/Grove-Computing/Growse/internal/webapi/fetch"
+	schedulerapi "github.com/Grove-Computing/Growse/internal/webapi/scheduler"
 	strconvapi "github.com/Grove-Computing/Growse/internal/webapi/strconv"
 	"github.com/traefik/yaegi/interp"
 )
@@ -33,6 +34,7 @@ type Runtime struct {
 	callbackQueue chan func()
 	callbackDone  chan struct{}
 	fetchAPI      *fetchapi.API
+	schedulerAPI  *schedulerapi.API
 	loaded        bool
 	started       bool
 	stopped       bool
@@ -92,6 +94,8 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 	dom := domapi.New(environment.Document, environment.Events, environment.OnMutation)
 	fetch := fetchapi.NewPage(r.runtimeCtx, environment.BaseURL, environment.Fetch, r.enqueueCallback)
 	r.fetchAPI = fetch
+	scheduler := schedulerapi.NewPage(r.runtimeCtx, r.enqueueCallback)
+	r.schedulerAPI = scheduler
 	if err := r.interpreter.Use(interp.Exports{
 		"growse/console/console": {
 			"Log": reflect.ValueOf(console.Log),
@@ -112,6 +116,13 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 			"Header":                reflect.ValueOf((*fetchapi.Header)(nil)),
 			"Request":               reflect.ValueOf((*fetchapi.Request)(nil)),
 			"Response":              reflect.ValueOf((*fetchapi.Response)(nil)),
+		},
+		"growse/scheduler/scheduler": {
+			"Millisecond": reflect.ValueOf(schedulerapi.Millisecond),
+			"Second":      reflect.ValueOf(schedulerapi.Second),
+			"SetInterval": reflect.ValueOf(scheduler.SetInterval),
+			"SetTimeout":  reflect.ValueOf(scheduler.SetTimeout),
+			"TimerID":     reflect.ValueOf((*schedulerapi.TimerID)(nil)),
 		},
 		"growse/strconv/strconv": {
 			"Itoa": reflect.ValueOf(strconvapi.Itoa),
@@ -172,12 +183,16 @@ func (r *Runtime) Stop() error {
 	r.stopped = true
 	done := r.callbackDone
 	fetch := r.fetchAPI
+	scheduler := r.schedulerAPI
 	r.mu.Unlock()
 	if cancel != nil {
 		cancel()
 	}
 	if fetch != nil {
 		fetch.Close()
+	}
+	if scheduler != nil {
+		scheduler.Close()
 	}
 	if done != nil {
 		<-done
