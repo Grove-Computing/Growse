@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/Grove-Computing/Growse/internal/network"
@@ -146,6 +147,73 @@ func TestFetchDistinguishesHTTPErrorStatusFromNetworkError(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestConcurrentFetchesDeliverCallbacksInCompletionOrder(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	queue := make(chan func(), 2)
+	workerDone := make(chan struct{})
+	go func() {
+		defer close(workerDone)
+		for {
+			select {
+			case callback := <-queue:
+				callback()
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	baseURL, err := url.Parse("https://example.test/page")
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstStarted := make(chan struct{})
+	secondStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	releaseSecond := make(chan struct{})
+	api := NewPage(ctx, baseURL, func(_ context.Context, request *network.Request) (*network.Response, error) {
+		switch request.URL.Path {
+		case "/first":
+			close(firstStarted)
+			<-releaseFirst
+		case "/second":
+			close(secondStarted)
+			<-releaseSecond
+		}
+		return &network.Response{URL: request.URL, StatusCode: http.StatusOK}, nil
+	}, func(callback func()) bool {
+		select {
+		case queue <- callback:
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	})
+
+	completed := make(chan struct{}, 2)
+	order := make([]string, 0, 2)
+	failure := func(message string) { t.Errorf("Fetch failure = %q", message) }
+	api.Fetch(Request{URL: "/first"}, func(Response) {
+		order = append(order, "first")
+		completed <- struct{}{}
+	}, failure)
+	api.Fetch(Request{URL: "/second"}, func(Response) {
+		order = append(order, "second")
+		completed <- struct{}{}
+	}, failure)
+	<-firstStarted
+	<-secondStarted
+	close(releaseSecond)
+	<-completed
+	close(releaseFirst)
+	<-completed
+	if got, want := strings.Join(order, ","), "second,first"; got != want {
+		t.Fatalf("callback order = %q, want %q", got, want)
+	}
+	cancel()
+	<-workerDone
 }
 
 func equalStrings(left, right []string) bool {
