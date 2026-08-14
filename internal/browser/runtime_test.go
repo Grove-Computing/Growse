@@ -13,6 +13,7 @@ import (
 	"github.com/Grove-Computing/Growse/internal/network"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 	runtimeyaegi "github.com/Grove-Computing/Growse/internal/runtime/yaegi"
+	storagecore "github.com/Grove-Computing/Growse/internal/storage"
 )
 
 type runtimeStub struct {
@@ -398,6 +399,49 @@ func TestSessionStorageSurvivesSameDocumentNavigationAndReload(t *testing.T) {
 	}
 	if runtimes[0].environment.SessionStorage != runtimes[1].environment.SessionStorage {
 		t.Fatal("reload switched Session Storage Area")
+	}
+}
+
+func TestNewBrowserSessionDoesNotInheritSessionStorage(t *testing.T) {
+	pageURL := mustParseURL(t, "http://localhost/new-session")
+	script := `<script type="text/go">package main; func main() {}</script>`
+	loader := &routeLoader{responses: map[string]*network.Response{
+		pageURL.String(): {URL: pageURL, StatusCode: 200, ContentType: "text/html", Body: []byte(script)},
+	}}
+	root := t.TempDir()
+	firstManager, err := storagecore.NewPersistentManager(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstRuntime := &runtimeStub{}
+	firstBrowser := NewWithRuntimeFactoryAndStorage(loader, func() runtimemodel.Runtime { return firstRuntime }, firstManager)
+	if _, err := firstBrowser.Navigate(context.Background(), pageURL.String()); err != nil {
+		t.Fatal(err)
+	}
+	if err := firstRuntime.environment.LocalStorage.Set("local", "persisted"); err != nil {
+		t.Fatal(err)
+	}
+	if err := firstRuntime.environment.SessionStorage.Set("session", "temporary"); err != nil {
+		t.Fatal(err)
+	}
+	if err := firstBrowser.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	secondManager, err := storagecore.NewPersistentManager(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondRuntime := &runtimeStub{}
+	secondBrowser := NewWithRuntimeFactoryAndStorage(loader, func() runtimemodel.Runtime { return secondRuntime }, secondManager)
+	if _, err := secondBrowser.Navigate(context.Background(), pageURL.String()); err != nil {
+		t.Fatal(err)
+	}
+	if got, found := secondRuntime.environment.LocalStorage.Get("local"); !found || got != "persisted" {
+		t.Fatalf("new Browser Local Storage = (%q, %v)", got, found)
+	}
+	if got, found := secondRuntime.environment.SessionStorage.Get("session"); found || got != "" {
+		t.Fatalf("new Browser inherited Session Storage = (%q, %v)", got, found)
 	}
 }
 
