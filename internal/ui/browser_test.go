@@ -49,6 +49,18 @@ func TestRasterLinearGradientInterpolatesAllColorStops(t *testing.T) {
 	}
 }
 
+func TestRasterRadialGradientUsesCenterAndStops(t *testing.T) {
+	gradient := style.BackgroundImage{
+		Kind:           style.BackgroundImageRadialGradient,
+		GradientCenter: style.BackgroundPosition{X: style.LengthPercentage{Percentage: 50}, Y: style.LengthPercentage{Percentage: 50}},
+		GradientStops:  []style.GradientStop{{Color: 0xff0000ff}, {Color: 0x0000ffff, Position: 1}},
+	}
+	image := rasterRadialGradient(5, 5, gradient)
+	if center, edge := image.NRGBAAt(2, 2), image.NRGBAAt(0, 0); center.R <= center.B || edge.B <= edge.R {
+		t.Fatalf("radial colors = center %#v edge %#v", center, edge)
+	}
+}
+
 func TestRasterBackgroundImageRepeatsAndSizesImage(t *testing.T) {
 	source := image.NewNRGBA(image.Rect(0, 0, 2, 1))
 	source.SetNRGBA(0, 0, color.NRGBA{R: 255, A: 255})

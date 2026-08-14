@@ -5,6 +5,120 @@ import (
 	"strings"
 )
 
+func applyShadowAndOutlineProperties(computed, parent ComputedStyle, winners map[string]winner, custom map[string]string, context LengthContext) ComputedStyle {
+	computed.BoxShadows = resolveShadowWinner(computed.BoxShadows, parent.BoxShadows, winners["box-shadow"], custom, context, false, computed.Color)
+	computed.TextShadows = resolveShadowWinner(computed.TextShadows, parent.TextShadows, winners["text-shadow"], custom, context, true, computed.Color)
+	outlineCandidates := []struct {
+		name  string
+		apply func(string) bool
+	}{
+		{"outline-width", func(value string) bool {
+			parsed, ok := parseBorderWidth(value, context)
+			computed.Outline.Width = parsed
+			return ok
+		}},
+		{"outline-style", func(value string) bool {
+			parsed, ok := parseBorderStyle(value)
+			computed.Outline.Style = parsed
+			return ok
+		}},
+		{"outline-color", func(value string) bool {
+			parsed, ok := parseColor(value, computed.Color)
+			computed.Outline.Color = parsed
+			return ok
+		}},
+	}
+	for _, entry := range outlineCandidates {
+		if candidate, ok := winners[entry.name]; ok {
+			if value, valid := winnerValue(candidate, custom); valid {
+				if candidate.source == "outline" {
+					component := strings.TrimPrefix(entry.name, "outline-")
+					if extracted, ok := borderComponentValue("border", component, 0, value); ok {
+						value = extracted
+					}
+				}
+				entry.apply(value)
+			}
+		}
+	}
+	if computed.Outline.Color == 0 {
+		computed.Outline.Color = computed.Color
+	}
+	if candidate, ok := winners["outline-offset"]; ok {
+		if value, valid := winnerValue(candidate, custom); valid {
+			if length, ok := ResolveLength(value, context); ok && length.Percentage == 0 {
+				computed.OutlineOffset = length.Pixels
+			}
+		}
+	}
+	return computed
+}
+
+func resolveShadowWinner(current, parent []Shadow, candidate winner, custom map[string]string, context LengthContext, textOnly bool, currentColor uint32) []Shadow {
+	value, ok := winnerValue(candidate, custom)
+	if !ok {
+		return current
+	}
+	switch parseGlobalKeyword(value) {
+	case globalInherit:
+		return append([]Shadow(nil), parent...)
+	case globalInitial, globalUnset:
+		return nil
+	}
+	if strings.EqualFold(strings.TrimSpace(value), "none") {
+		return nil
+	}
+	parts := splitBackgroundArguments(value)
+	result := make([]Shadow, 0, len(parts))
+	for _, part := range parts {
+		shadow, valid := parseShadow(part, context, textOnly, currentColor)
+		if !valid {
+			return current
+		}
+		result = append(result, shadow)
+	}
+	return result
+}
+
+func parseShadow(value string, context LengthContext, textOnly bool, currentColor uint32) (Shadow, bool) {
+	parts, valid := splitCSSSpaceSeparated(value)
+	if !valid {
+		return Shadow{}, false
+	}
+	shadow := Shadow{Color: currentColor}
+	var lengths []float32
+	for _, part := range parts {
+		if strings.EqualFold(part, "inset") && !textOnly {
+			shadow.Inset = true
+			continue
+		}
+		if color, ok := parseColor(part, currentColor); ok {
+			shadow.Color = color
+			continue
+		}
+		length, ok := ResolveLength(part, context)
+		if !ok || length.Percentage != 0 {
+			return Shadow{}, false
+		}
+		lengths = append(lengths, length.Pixels)
+	}
+	maximum := 4
+	if textOnly {
+		maximum = 3
+	}
+	if len(lengths) < 2 || len(lengths) > maximum || len(lengths) >= 3 && lengths[2] < 0 {
+		return Shadow{}, false
+	}
+	shadow.OffsetX, shadow.OffsetY = lengths[0], lengths[1]
+	if len(lengths) >= 3 {
+		shadow.Blur = lengths[2]
+	}
+	if len(lengths) == 4 {
+		shadow.Spread = lengths[3]
+	}
+	return shadow, true
+}
+
 func applyBorderRadii(current, parent BorderRadii, winners map[string]winner, customProperties map[string]string, context LengthContext) BorderRadii {
 	properties := []string{"border-top-left-radius", "border-top-right-radius", "border-bottom-right-radius", "border-bottom-left-radius"}
 	values := []*RadiusValue{&current.TopLeft, &current.TopRight, &current.BottomRight, &current.BottomLeft}

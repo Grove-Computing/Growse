@@ -83,6 +83,23 @@ func TestBuildPreservesLinearGradientStops(t *testing.T) {
 	}
 }
 
+func TestBuildPreservesIndependentBackgroundLayers(t *testing.T) {
+	tree := &layout.Tree{Decorations: []layout.Decoration{{
+		Layers: []style.BackgroundLayer{
+			{Image: style.BackgroundImage{Kind: style.BackgroundImageLinearGradient, GradientStops: []style.GradientStop{{Color: 0xff0000ff}, {Color: 0x0000ffff}}}, Repeat: style.BackgroundRepeat{}},
+			{Image: style.BackgroundImage{Kind: style.BackgroundImageRadialGradient, GradientStops: []style.GradientStop{{Color: 0xffffffff}, {Color: 0x000000ff}}}, Repeat: style.BackgroundRepeat{X: true}},
+		},
+	}}}
+	command := Build(tree).Commands[0].(DrawBox)
+	if len(command.Layers) != 2 || command.Layers[1].Image.Kind != style.BackgroundImageRadialGradient || !command.Layers[1].Repeat.X {
+		t.Fatalf("display-list layers = %#v", command.Layers)
+	}
+	tree.Decorations[0].Layers[1].Image.GradientStops[0].Color = 0
+	if command.Layers[1].Image.GradientStops[0].Color != 0xffffffff {
+		t.Fatal("display list shares mutable background layers")
+	}
+}
+
 func TestBuildPreservesBackgroundImagePlacement(t *testing.T) {
 	tree := &layout.Tree{Decorations: []layout.Decoration{{
 		Image:  style.BackgroundImage{Kind: style.BackgroundImageURL, URL: "https://example.com/card.png"},
@@ -113,6 +130,49 @@ func TestBuildPreservesBorderRadiusDecorationAndOpacity(t *testing.T) {
 	}
 	if text.Runs[0].Decoration != style.TextDecorationLineThrough || text.Runs[0].DecorationColor != 0x0000ffff || text.Runs[0].Opacity != .25 {
 		t.Fatalf("text effect = %#v", text.Runs[0])
+	}
+}
+
+func TestBuildPreservesShadowsAndOutline(t *testing.T) {
+	shadow := style.Shadow{OffsetX: 2, OffsetY: 3, Blur: 4, Spread: 1, Color: 0x123456ff}
+	tree := &layout.Tree{
+		Decorations: []layout.Decoration{{BoxShadows: []style.Shadow{shadow}, Outline: style.BorderSide{Width: 2, Style: style.BorderDotted, Color: 0xff0000ff}, OutlineOffset: 3}},
+		Boxes:       []layout.Box{{Order: 1, TextShadows: []style.Shadow{shadow}}},
+	}
+	list := Build(tree)
+	box := list.Commands[0].(DrawBox)
+	text := list.Commands[1].(DrawText)
+	if len(box.BoxShadows) != 1 || box.BoxShadows[0] != shadow || box.Outline.Style != style.BorderDotted || box.OutlineOffset != 3 {
+		t.Fatalf("box effects = %#v", box)
+	}
+	if len(text.TextShadows) != 1 || text.TextShadows[0] != shadow {
+		t.Fatalf("text shadows = %#v", text.TextShadows)
+	}
+}
+
+func TestBuildPreservesTransformMatrix(t *testing.T) {
+	matrix := style.Matrix{A: 2, B: 1, C: .5, D: 3, E: 10, F: 20}
+	tree := &layout.Tree{Decorations: []layout.Decoration{{Transform: matrix}}, Boxes: []layout.Box{{Order: 1, Transform: matrix}}}
+	list := Build(tree)
+	if list.Commands[0].(DrawBox).Transform != matrix || list.Commands[1].(DrawText).Transform != matrix {
+		t.Fatalf("display-list transforms = %#v", list.Commands)
+	}
+}
+
+func TestBuildPreservesNestedClipsAndCompositingLayers(t *testing.T) {
+	clips := []layout.ClipRegion{{Rect: layout.Rect{Width: 100, Height: 100}, Radius: layout.BorderRadii{TopLeft: layout.CornerRadius{X: 20, Y: 20}}}, {Rect: layout.Rect{Width: 80, Height: 80}, Radius: layout.BorderRadii{TopLeft: layout.CornerRadius{X: 10, Y: 10}}}}
+	tree := &layout.Tree{
+		StackingContexts: []layout.StackingContext{{Parent: -1}, {Parent: 0, NodeID: 7, Opacity: .5, Offscreen: true}},
+		Decorations:      []layout.Decoration{{Clips: clips}},
+	}
+	list := Build(tree)
+	command := list.Commands[0].(DrawBox)
+	if len(command.Clips) != 2 || len(list.CompositingLayers) != 2 || !list.CompositingLayers[1].Offscreen {
+		t.Fatalf("clip/layer display data = %#v / %#v", command.Clips, list.CompositingLayers)
+	}
+	tree.Decorations[0].Clips[0].Width = 1
+	if command.Clips[0].Width != 100 {
+		t.Fatal("display list shares clip regions")
 	}
 }
 

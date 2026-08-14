@@ -1,40 +1,75 @@
 package layout
 
-import "github.com/saku0512/growse/internal/dom"
+import (
+	"github.com/saku0512/growse/internal/dom"
+	stylemodel "github.com/saku0512/growse/internal/style"
+)
 
 // HitTest returns the deepest visible DOM node at document coordinates.
 func HitTest(tree *Tree, x, y float32) (dom.NodeID, bool) {
 	if tree == nil {
 		return 0, false
 	}
-	for boxIndex := len(tree.Boxes) - 1; boxIndex >= 0; boxIndex-- {
-		box := tree.Boxes[boxIndex]
-		if box.Clip != nil && !containsPoint(box.Clip.X, box.Clip.Y, box.Clip.Width, box.Clip.Height, x, y) {
+	entries := tree.OrderedPaintEntries()
+	for entryIndex := len(entries) - 1; entryIndex >= 0; entryIndex-- {
+		entry := entries[entryIndex]
+		if entry.BoxIndex < 0 {
+			decoration := tree.Decorations[entry.DecorationIndex]
+			if decoration.Hidden {
+				continue
+			}
+			localX, localY, valid := inversePoint(decoration.Transform, x, y)
+			if !valid || !insideVisualClips(decoration.Clip, decoration.Clips, localX, localY) {
+				continue
+			}
+			if containsRoundedRect(decoration.Rect, decoration.Radius, localX, localY) {
+				return decoration.NodeID, true
+			}
 			continue
 		}
-		if !containsPoint(box.X, box.Y, box.Width, box.Height, x, y) {
+		box := tree.Boxes[entry.BoxIndex]
+		if box.Hidden {
+			continue
+		}
+		localX, localY, valid := inversePoint(box.Transform, x, y)
+		if !valid || !insideVisualClips(box.Clip, box.Clips, localX, localY) || !containsPoint(box.X, box.Y, box.Width, box.Height, localX, localY) {
 			continue
 		}
 
 		runX := box.X
 		for _, run := range box.Runs {
-			if containsPoint(runX, box.Y, run.Width, box.Height, x, y) {
+			if containsPoint(runX, box.Y, run.Width, box.Height, localX, localY) {
 				return run.NodeID, true
 			}
 			runX += run.Width
 		}
 		return box.NodeID, true
 	}
-	for decorationIndex := len(tree.Decorations) - 1; decorationIndex >= 0; decorationIndex-- {
-		decoration := tree.Decorations[decorationIndex]
-		if decoration.Clip != nil && !containsPoint(decoration.Clip.X, decoration.Clip.Y, decoration.Clip.Width, decoration.Clip.Height, x, y) {
-			continue
-		}
-		if containsRoundedRect(decoration.Rect, decoration.Radius, x, y) {
-			return decoration.NodeID, true
+	return 0, false
+}
+
+func inversePoint(matrix stylemodel.Matrix, x, y float32) (float32, float32, bool) {
+	if matrix == (stylemodel.Matrix{}) {
+		matrix = stylemodel.IdentityMatrix()
+	}
+	inverse, valid := matrix.Inverse()
+	if !valid {
+		return 0, 0, false
+	}
+	localX, localY := inverse.TransformPoint(x, y)
+	return localX, localY, true
+}
+
+func insideVisualClips(clip *Rect, clips []ClipRegion, x, y float32) bool {
+	if clip != nil && !containsPoint(clip.X, clip.Y, clip.Width, clip.Height, x, y) {
+		return false
+	}
+	for _, region := range clips {
+		if !containsRoundedRect(region.Rect, region.Radius, x, y) {
+			return false
 		}
 	}
-	return 0, false
+	return true
 }
 
 func containsRoundedRect(rectangle Rect, radius BorderRadii, x, y float32) bool {

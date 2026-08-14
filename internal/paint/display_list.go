@@ -2,8 +2,6 @@
 package paint
 
 import (
-	"sort"
-
 	"github.com/saku0512/growse/internal/dom"
 	"github.com/saku0512/growse/internal/layout"
 	stylemodel "github.com/saku0512/growse/internal/style"
@@ -11,12 +9,13 @@ import (
 
 // DisplayList is an ordered collection of page painting commands.
 type DisplayList struct {
-	Width        float32
-	Height       float32
-	ScrollWidth  float32
-	ScrollHeight float32
-	Background   uint32
-	Commands     []Command
+	Width             float32
+	Height            float32
+	ScrollWidth       float32
+	ScrollHeight      float32
+	Background        uint32
+	Commands          []Command
+	CompositingLayers []layout.StackingContext
 }
 
 // Command is implemented by every display-list operation.
@@ -35,6 +34,7 @@ type DrawText struct {
 	Height   float32
 	Baseline float32
 	Clip     *layout.Rect
+	Clips    []layout.ClipRegion
 
 	FontSize        float32
 	Bold            bool
@@ -44,6 +44,8 @@ type DrawText struct {
 	DecorationColor uint32
 	Opacity         float32
 	Runs            []TextRun
+	TextShadows     []stylemodel.Shadow
+	Transform       stylemodel.Matrix
 }
 
 func (DrawText) paintCommand() {}
@@ -67,21 +69,27 @@ func (DrawInput) paintCommand() {}
 // DrawBox paints an element background without advancing by its painted height.
 // Its Top value only moves the list cursor to the element's document position.
 type DrawBox struct {
-	NodeID   dom.NodeID
-	X        float32
-	Y        float32
-	Top      float32
-	Width    float32
-	Height   float32
-	Color    uint32
-	Image    stylemodel.BackgroundImage
-	Repeat   stylemodel.BackgroundRepeat
-	Position stylemodel.BackgroundPosition
-	Size     stylemodel.BackgroundSize
-	Border   stylemodel.Borders
-	Radius   layout.BorderRadii
-	Opacity  float32
-	Clip     *layout.Rect
+	NodeID        dom.NodeID
+	X             float32
+	Y             float32
+	Top           float32
+	Width         float32
+	Height        float32
+	Color         uint32
+	Image         stylemodel.BackgroundImage
+	Layers        []stylemodel.BackgroundLayer
+	Repeat        stylemodel.BackgroundRepeat
+	Position      stylemodel.BackgroundPosition
+	Size          stylemodel.BackgroundSize
+	Border        stylemodel.Borders
+	Radius        layout.BorderRadii
+	Opacity       float32
+	Clip          *layout.Rect
+	Clips         []layout.ClipRegion
+	BoxShadows    []stylemodel.Shadow
+	Outline       stylemodel.BorderSide
+	OutlineOffset float32
+	Transform     stylemodel.Matrix
 }
 
 func (DrawBox) paintCommand() {}
@@ -101,6 +109,7 @@ type TextRun struct {
 	Decoration      stylemodel.TextDecorationLine
 	DecorationColor uint32
 	Opacity         float32
+	TextShadows     []stylemodel.Shadow
 }
 
 // Build creates a display list from a layout tree.
@@ -112,20 +121,28 @@ func Build(tree *layout.Tree) *DisplayList {
 	list := &DisplayList{
 		Width: tree.Width, Height: tree.Height, ScrollWidth: tree.ScrollWidth,
 		ScrollHeight: tree.ScrollHeight, Background: tree.Background,
+		CompositingLayers: append([]layout.StackingContext(nil), tree.StackingContexts...),
 	}
 	type orderedItem struct {
 		order      int
 		decoration *layout.Decoration
 		box        *layout.Box
 	}
-	items := make([]orderedItem, 0, len(tree.Decorations)+len(tree.Boxes))
-	for index := range tree.Decorations {
-		items = append(items, orderedItem{order: tree.Decorations[index].Order, decoration: &tree.Decorations[index]})
+	entries := tree.OrderedPaintEntries()
+	items := make([]orderedItem, 0, len(entries))
+	for _, entry := range entries {
+		if entry.DecorationIndex >= 0 {
+			if tree.Decorations[entry.DecorationIndex].Hidden {
+				continue
+			}
+			items = append(items, orderedItem{order: entry.Order, decoration: &tree.Decorations[entry.DecorationIndex]})
+		} else {
+			if tree.Boxes[entry.BoxIndex].Hidden {
+				continue
+			}
+			items = append(items, orderedItem{order: entry.Order, box: &tree.Boxes[entry.BoxIndex]})
+		}
 	}
-	for index := range tree.Boxes {
-		items = append(items, orderedItem{order: tree.Boxes[index].Order, box: &tree.Boxes[index]})
-	}
-	sort.SliceStable(items, func(left, right int) bool { return items[left].order < items[right].order })
 
 	list.Commands = make([]Command, 0, len(items))
 	previousBottom := float32(0)
@@ -136,9 +153,12 @@ func Build(tree *layout.Tree) *DisplayList {
 			list.Commands = append(list.Commands, DrawBox{
 				NodeID: decoration.NodeID, X: decoration.X, Y: decoration.Y, Top: top,
 				Width: decoration.Width, Height: decoration.Height, Color: decoration.Background,
-				Image: cloneBackgroundImage(decoration.Image), Repeat: decoration.Repeat,
+				Image: cloneBackgroundImage(decoration.Image), Layers: cloneBackgroundLayers(decoration.Layers), Repeat: decoration.Repeat,
 				Position: decoration.Position, Size: decoration.Size, Clip: cloneLayoutRect(decoration.Clip),
 				Border: decoration.Border, Radius: decoration.Radius, Opacity: decoration.Opacity,
+				BoxShadows: append([]stylemodel.Shadow(nil), decoration.BoxShadows...), Outline: decoration.Outline, OutlineOffset: decoration.OutlineOffset,
+				Transform: decoration.Transform,
+				Clips:     cloneClipRegions(decoration.Clips),
 			})
 			previousBottom += top
 			continue
@@ -176,8 +196,11 @@ func Build(tree *layout.Tree) *DisplayList {
 			Color:      box.Color,
 			Background: box.Background,
 			Decoration: box.Decoration, DecorationColor: box.DecorationColor, Opacity: box.Opacity,
-			Baseline: box.Baseline - box.Y,
-			Clip:     cloneLayoutRect(box.Clip),
+			Baseline:    box.Baseline - box.Y,
+			Clip:        cloneLayoutRect(box.Clip),
+			TextShadows: append([]stylemodel.Shadow(nil), box.TextShadows...),
+			Transform:   box.Transform,
+			Clips:       cloneClipRegions(box.Clips),
 		}
 		command.Runs = make([]TextRun, 0, len(box.Runs))
 		for _, run := range box.Runs {
@@ -186,6 +209,7 @@ func Build(tree *layout.Tree) *DisplayList {
 				FontSize: run.FontSize, Bold: run.Bold, Color: run.Color, Background: run.Background,
 				Baseline: run.Baseline - box.Y, Decoration: run.Decoration,
 				DecorationColor: run.DecorationColor, Opacity: run.Opacity,
+				TextShadows: append([]stylemodel.Shadow(nil), run.TextShadows...),
 			})
 		}
 		list.Commands = append(list.Commands, command)
@@ -202,8 +226,20 @@ func cloneLayoutRect(source *layout.Rect) *layout.Rect {
 	return &copy
 }
 
+func cloneClipRegions(source []layout.ClipRegion) []layout.ClipRegion {
+	return append([]layout.ClipRegion(nil), source...)
+}
+
 func cloneBackgroundImage(source stylemodel.BackgroundImage) stylemodel.BackgroundImage {
 	result := source
 	result.GradientStops = append([]stylemodel.GradientStop(nil), source.GradientStops...)
+	return result
+}
+
+func cloneBackgroundLayers(source []stylemodel.BackgroundLayer) []stylemodel.BackgroundLayer {
+	result := append([]stylemodel.BackgroundLayer(nil), source...)
+	for index := range result {
+		result[index].Image = cloneBackgroundImage(result[index].Image)
+	}
 	return result
 }

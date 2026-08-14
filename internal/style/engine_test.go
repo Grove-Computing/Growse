@@ -833,6 +833,233 @@ func TestComputeUsesFlexInitialValuesAndLonghands(t *testing.T) {
 	}
 }
 
+func TestComputeGridDisplayValues(t *testing.T) {
+	document := dom.NewDocument()
+	grid := document.CreateElement("div", map[string]string{"class": "grid"})
+	inlineGrid := document.CreateElement("span", map[string]string{"class": "inline-grid"})
+	appendNode(t, document, document.Root, grid)
+	appendNode(t, document, document.Root, inlineGrid)
+	stylesheet, err := css.Parse(strings.NewReader(`.grid { display:grid } .inline-grid { display:inline-grid }`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	computed := Compute(document, stylesheet)
+	gridStyle, _ := computed.For(grid)
+	inlineGridStyle, _ := computed.For(inlineGrid)
+	if gridStyle.Display != DisplayGrid || inlineGridStyle.Display != DisplayInlineGrid {
+		t.Fatalf("grid displays = (%v, %v)", gridStyle.Display, inlineGridStyle.Display)
+	}
+}
+
+func TestComputeGridExplicitAndImplicitTracks(t *testing.T) {
+	document := dom.NewDocument()
+	grid := document.CreateElement("div", map[string]string{"style": "display:grid; grid-template-columns:100px 25%; grid-template-rows:30px; grid-auto-columns:12px; grid-auto-rows:40px 50px"})
+	appendNode(t, document, document.Root, grid)
+	computed, _ := Compute(document, nil).For(grid)
+	if len(computed.GridTemplateColumns) != 2 || computed.GridTemplateColumns[0].Value.Pixels != 100 || computed.GridTemplateColumns[1].Value.Percentage != 25 {
+		t.Fatalf("explicit columns = %#v", computed.GridTemplateColumns)
+	}
+	if len(computed.GridTemplateRows) != 1 || computed.GridTemplateRows[0].Value.Pixels != 30 {
+		t.Fatalf("explicit rows = %#v", computed.GridTemplateRows)
+	}
+	if len(computed.GridAutoColumns) != 1 || len(computed.GridAutoRows) != 2 || computed.GridAutoRows[1].Value.Pixels != 50 {
+		t.Fatalf("implicit track patterns = columns %#v rows %#v", computed.GridAutoColumns, computed.GridAutoRows)
+	}
+}
+
+func TestComputeGridIntrinsicAndFlexibleTracks(t *testing.T) {
+	document := dom.NewDocument()
+	grid := document.CreateElement("div", map[string]string{"style": "display:grid; grid-template-columns:min-content max-content 2fr"})
+	appendNode(t, document, document.Root, grid)
+	computed, _ := Compute(document, nil).For(grid)
+	tracks := computed.GridTemplateColumns
+	if len(tracks) != 3 || tracks[0].Kind != GridTrackMinContent || tracks[1].Kind != GridTrackMaxContent || tracks[2].Kind != GridTrackFraction || tracks[2].Flex != 2 {
+		t.Fatalf("intrinsic/flexible tracks = %#v", tracks)
+	}
+}
+
+func TestComputeGridMinmaxFitContentAndRepeat(t *testing.T) {
+	document := dom.NewDocument()
+	grid := document.CreateElement("div", map[string]string{"style": "display:grid; grid-template-columns:repeat(2, 40px) minmax(60px, 1fr) fit-content(80px)"})
+	appendNode(t, document, document.Root, grid)
+	computed, _ := Compute(document, nil).For(grid)
+	tracks := computed.GridTemplateColumns
+	if len(tracks) != 4 || tracks[0].Value.Pixels != 40 || tracks[1].Value.Pixels != 40 {
+		t.Fatalf("fixed repeat expansion = %#v", tracks)
+	}
+	if tracks[2].Kind != GridTrackFraction || tracks[2].Flex != 1 || !tracks[2].MinSet || tracks[2].MinKind != GridTrackLength || tracks[2].MinValue.Pixels != 60 {
+		t.Fatalf("minmax track = %#v", tracks[2])
+	}
+	if tracks[3].Kind != GridTrackMaxContent || tracks[3].FitLimit == nil || tracks[3].FitLimit.Pixels != 80 {
+		t.Fatalf("fit-content track = %#v", tracks[3])
+	}
+}
+
+func TestComputeGridNamedLinesSpanAndAreas(t *testing.T) {
+	document := dom.NewDocument()
+	grid := document.CreateElement("div", map[string]string{"style": `display:grid; grid-template-columns:[left] 100px [middle] 100px [right]; grid-template-areas:"hero hero" "side main"`})
+	item := document.CreateElement("div", map[string]string{"style": "grid-column:left / span 2; grid-row:1 / 2; grid-area:hero"})
+	appendNode(t, document, document.Root, grid)
+	appendNode(t, document, grid, item)
+	computed := Compute(document, nil)
+	containerStyle, _ := computed.For(grid)
+	itemStyle, _ := computed.For(item)
+	if len(containerStyle.GridColumnLines["left"]) != 1 || containerStyle.GridColumnLines["left"][0] != 0 || containerStyle.GridColumnLines["right"][0] != 2 {
+		t.Fatalf("named lines = %#v", containerStyle.GridColumnLines)
+	}
+	if area := containerStyle.GridTemplateAreas["main"]; area != (GridArea{RowStart: 1, RowEnd: 2, ColumnStart: 1, ColumnEnd: 2}) {
+		t.Fatalf("template area = %#v", area)
+	}
+	if itemStyle.GridColumn.Start.Name != "left" || itemStyle.GridColumn.End.Span != 2 || itemStyle.GridAreaName != "hero" {
+		t.Fatalf("item placement = %#v / %q", itemStyle.GridColumn, itemStyle.GridAreaName)
+	}
+}
+
+func TestComputeGridAutoFlowModes(t *testing.T) {
+	document := dom.NewDocument()
+	row := document.CreateElement("div", map[string]string{"style": "display:grid; grid-auto-flow:row"})
+	columnDense := document.CreateElement("div", map[string]string{"style": "display:grid; grid-auto-flow:column dense"})
+	appendNode(t, document, document.Root, row)
+	appendNode(t, document, document.Root, columnDense)
+	computed := Compute(document, nil)
+	rowStyle, _ := computed.For(row)
+	columnStyle, _ := computed.For(columnDense)
+	if rowStyle.GridAutoFlow.Column || rowStyle.GridAutoFlow.Dense || !columnStyle.GridAutoFlow.Column || !columnStyle.GridAutoFlow.Dense {
+		t.Fatalf("auto-flow modes = %#v / %#v", rowStyle.GridAutoFlow, columnStyle.GridAutoFlow)
+	}
+}
+
+func TestComputeGridPlaceShorthands(t *testing.T) {
+	document := dom.NewDocument()
+	container := document.CreateElement("div", map[string]string{"style": "display:grid; place-content:flex-end center; place-items:center flex-end"})
+	item := document.CreateElement("div", map[string]string{"style": "place-self:flex-start center"})
+	appendNode(t, document, document.Root, container)
+	appendNode(t, document, container, item)
+	computed := Compute(document, nil)
+	containerStyle, _ := computed.For(container)
+	itemStyle, _ := computed.For(item)
+	if containerStyle.AlignContent != AlignFlexEnd || containerStyle.JustifyContent != JustifyCenter || containerStyle.AlignItems != AlignCenter || containerStyle.JustifyItems != AlignFlexEnd {
+		t.Fatalf("container place shorthands = %#v", containerStyle)
+	}
+	if itemStyle.AlignSelf != AlignFlexStart || itemStyle.JustifySelf != AlignCenter {
+		t.Fatalf("item place-self = %#v", itemStyle)
+	}
+}
+
+func TestComputeGridAutoFillAndAutoFit(t *testing.T) {
+	document := dom.NewDocument()
+	fill := document.CreateElement("div", map[string]string{"style": "display:grid; grid-template-columns:repeat(auto-fill, minmax(100px, 1fr))"})
+	fit := document.CreateElement("div", map[string]string{"style": "display:grid; grid-template-columns:repeat(auto-fit, 80px)"})
+	appendNode(t, document, document.Root, fill)
+	appendNode(t, document, document.Root, fit)
+	computed := Compute(document, nil)
+	fillStyle, _ := computed.For(fill)
+	fitStyle, _ := computed.For(fit)
+	if len(fillStyle.GridTemplateColumns) != 1 || fillStyle.GridTemplateColumns[0].AutoRepeat != GridAutoRepeatFill || len(fillStyle.GridTemplateColumns[0].RepeatPattern) != 1 {
+		t.Fatalf("auto-fill = %#v", fillStyle.GridTemplateColumns)
+	}
+	if len(fitStyle.GridTemplateColumns) != 1 || fitStyle.GridTemplateColumns[0].AutoRepeat != GridAutoRepeatFit {
+		t.Fatalf("auto-fit = %#v", fitStyle.GridTemplateColumns)
+	}
+}
+
+func TestComputePositionAndLogicalInsets(t *testing.T) {
+	document := dom.NewDocument()
+	item := document.CreateElement("div", map[string]string{"style": "position:absolute; inset-block:30px auto; inset-inline:20px auto; z-index:-3"})
+	appendNode(t, document, document.Root, item)
+	computed, _ := Compute(document, nil).For(item)
+	if computed.Position != PositionAbsolute || computed.Inset.Top.Value.Pixels != 30 || computed.Inset.Left.Value.Pixels != 20 {
+		t.Fatalf("position/logical insets = %#v", computed)
+	}
+	if computed.Inset.Right.Kind != SizeAuto || computed.Inset.Bottom.Kind != SizeAuto {
+		t.Fatalf("auto logical insets = %#v", computed.Inset)
+	}
+	if computed.ZIndexAuto || computed.ZIndex != -3 {
+		t.Fatalf("z-index = (%v, %v)", computed.ZIndex, computed.ZIndexAuto)
+	}
+}
+
+func TestComputeMultipleBackgroundsAndRadialGradient(t *testing.T) {
+	document := dom.NewDocument()
+	item := document.CreateElement("div", map[string]string{"style": `background-image:linear-gradient(red, transparent), radial-gradient(circle at left top, blue, white), url("card.png"); background-repeat:no-repeat, repeat-x; background-position:center, left top; background-size:cover, 20px 10px`})
+	appendNode(t, document, document.Root, item)
+	computed, _ := Compute(document, nil).For(item)
+	if len(computed.BackgroundLayers) != 3 {
+		t.Fatalf("background layers = %#v", computed.BackgroundLayers)
+	}
+	if computed.BackgroundLayers[0].Image.Kind != BackgroundImageLinearGradient || computed.BackgroundLayers[1].Image.Kind != BackgroundImageRadialGradient || computed.BackgroundLayers[2].Image.Kind != BackgroundImageURL {
+		t.Fatalf("background layer kinds = %#v", computed.BackgroundLayers)
+	}
+	radial := computed.BackgroundLayers[1]
+	if !radial.Image.RadialCircle || radial.Image.GradientCenter.X.Percentage != 0 || radial.Image.GradientCenter.Y.Percentage != 0 || !radial.Repeat.X || radial.Repeat.Y {
+		t.Fatalf("radial layer = %#v", radial)
+	}
+	if computed.BackgroundLayers[2].Size.Kind != BackgroundSizeCover {
+		t.Fatalf("cycled layer values = %#v", computed.BackgroundLayers[2])
+	}
+}
+
+func TestComputeShadowsAndOutline(t *testing.T) {
+	document := dom.NewDocument()
+	item := document.CreateElement("div", map[string]string{"style": `box-shadow:1px 2px 3px 4px rgba(255,0,0,.5), inset -1px 0 2px blue; text-shadow:2px 3px 1px #123456; outline:2px dashed green; outline-offset:3px`})
+	appendNode(t, document, document.Root, item)
+	computed, _ := Compute(document, nil).For(item)
+	if len(computed.BoxShadows) != 2 || computed.BoxShadows[0].Spread != 4 || computed.BoxShadows[0].Color != 0xff000080 || !computed.BoxShadows[1].Inset {
+		t.Fatalf("box shadows = %#v", computed.BoxShadows)
+	}
+	if len(computed.TextShadows) != 1 || computed.TextShadows[0].OffsetX != 2 || computed.TextShadows[0].Color != 0x123456ff {
+		t.Fatalf("text shadows = %#v", computed.TextShadows)
+	}
+	if computed.Outline.Width != 2 || computed.Outline.Style != BorderDashed || computed.Outline.Color != 0x008000ff || computed.OutlineOffset != 3 {
+		t.Fatalf("outline = %#v offset %v", computed.Outline, computed.OutlineOffset)
+	}
+}
+
+func TestComputeAllTwoDimensionalTransformsAndOrigin(t *testing.T) {
+	document := dom.NewDocument()
+	item := document.CreateElement("div", map[string]string{"style": `transform:translate(10px, 20%) translateX(2px) translateY(3px) scale(2, 3) scaleX(4) scaleY(5) rotate(90deg) skew(10deg, 20deg) skewX(5deg) skewY(6deg) matrix(1, 2, 3, 4, 5, 6); transform-origin:left top`})
+	appendNode(t, document, document.Root, item)
+	computed, _ := Compute(document, nil).For(item)
+	if len(computed.Transform) != 11 {
+		t.Fatalf("transform functions = %#v", computed.Transform)
+	}
+	if computed.Transform[0].Kind != TransformTranslate || computed.Transform[0].Y.Percentage != 20 || computed.Transform[6].Kind != TransformRotate || computed.Transform[10].Kind != TransformMatrix {
+		t.Fatalf("parsed transforms = %#v", computed.Transform)
+	}
+	if computed.TransformOrigin.X != (LengthPercentage{}) || computed.TransformOrigin.Y != (LengthPercentage{}) {
+		t.Fatalf("transform origin = %#v", computed.TransformOrigin)
+	}
+
+	simple, valid := parseTransform("translate(10px, 20px) scale(2)", LengthContext{})
+	if !valid {
+		t.Fatal("simple transform did not parse")
+	}
+	matrix := ResolveTransform(simple, 100, 50)
+	if matrix != (Matrix{A: 2, D: 2, E: 10, F: 20}) {
+		t.Fatalf("composed matrix = %#v", matrix)
+	}
+	inverse, invertible := matrix.Inverse()
+	x, y := matrix.TransformPoint(7, 9)
+	localX, localY := inverse.TransformPoint(x, y)
+	if !invertible || localX != 7 || localY != 9 {
+		t.Fatalf("matrix inverse = %#v -> (%v, %v)", inverse, localX, localY)
+	}
+}
+
+func TestComputeVisibilityIsInherited(t *testing.T) {
+	document := dom.NewDocument()
+	parent := document.CreateElement("div", map[string]string{"style": "visibility:hidden"})
+	child := document.CreateElement("span", nil)
+	appendNode(t, document, document.Root, parent)
+	appendNode(t, document, parent, child)
+	computed := Compute(document, nil)
+	parentStyle, _ := computed.For(parent)
+	childStyle, _ := computed.For(child)
+	if parentStyle.Visibility != VisibilityHidden || childStyle.Visibility != VisibilityHidden {
+		t.Fatalf("visibility = parent %v child %v", parentStyle.Visibility, childStyle.Visibility)
+	}
+}
+
 func parseTestSelector(t *testing.T, value string) css.Selector {
 	t.Helper()
 	stylesheet, err := css.Parse(strings.NewReader(value + " { color: red }"))

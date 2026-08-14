@@ -27,19 +27,22 @@ python3 -m http.server 8080 --directory examples/counter
 python3 -m http.server 8080 --directory examples/todo
 python3 -m http.server 8080 --directory examples/css3-core
 python3 -m http.server 8080 --directory examples/flexbox
+python3 -m http.server 8080 --directory examples/dashboard
 ```
 
-Growseで`http://localhost:8080`を開くと、Counterではクリックによるカウント更新を、Todoではテキスト入力、フォーム送信、完了切替、削除を確認できます。CSS3 Core Showcaseでは、Custom Property、`calc()`、Media Query、Gradient、Box Model、角丸、Opacity、Text Decoration、Overflowを確認できます。Flexbox Showcaseでは、grow/shrink、wrap、alignment、gap、auto margin、inline-flex、nested flexを確認できます。WebGoソースはGoツールによる通常ビルドの対象外にするため、`_app.go`として配置しています。
+Growseで`http://localhost:8080`を開くと、Counterではクリックによるカウント更新を、Todoではテキスト入力、フォーム送信、完了切替、削除を確認できます。CSS3 Core Showcaseでは、Custom Property、`calc()`、Media Query、Gradient、Box Model、角丸、Opacity、Text Decoration、Overflowを確認できます。Flexbox Showcaseでは、grow/shrink、wrap、alignment、gap、auto margin、inline-flex、nested flexを確認できます。Dashboardでは、Grid、named area、Position、複数Background、Gradient、Shadow、Transform、Opacityを組み合わせた画面を確認できます。WebGoソースはGoツールによる通常ビルドの対象外にするため、`_app.go`として配置しています。
 
 起動すると、戻る・進む・再読込・URL入力欄・Gopherボタン・状態表示を備えたブラウザウィンドウが表示され、ウィンドウ内のマウスカーソルは青いGopherになります。リンクへカーソルを重ねると、認証情報を伏せた解決済み遷移先URLを状態表示で確認できます。リンクのクリック、戻る・進む、履歴を増やさない再読込に対応しています。
 
-URLを入力してEnterを押すかGopherボタンを押すとHTMLと同一オリジンのCSSを取得し、Growse独自DOM・Computed Style・Layout Tree・Display Listを経由してViewportへ描画します。v0.5.0ではSelectors Level 3の主要Selector、Cascade、Custom Property、CSS Length/Color、Media Query、Block/Inline Box、Flexbox、Background、Border、Text Decoration、Opacity、Overflowを型付きで処理します。Flexboxはhorizontal writing modeでrow/column、reverse、wrap、grow/shrink、min/max、alignment、gap、auto margin、order、aspect-ratio、nested/inline flexを扱います。詳細な対応範囲と制限は[CSS対応表](docs/css-support.md)を参照してください。
+URLを入力してEnterを押すかGopherボタンを押すとHTMLと同一オリジンのCSSを取得し、Growse独自DOM・Computed Style・Layout Tree・Display Listを経由してViewportへ描画します。v0.6.0ではv0.5.0までのBlock/Inline/Flexboxに加え、explicit/implicit Grid、track sizing、line/area/span配置、auto-placement、Grid/Flex相互nest、Positioned Layout、z-indexとStacking Context、複数Background、linear/radial Gradient、Shadow、Outline、2D Transform、nested clip、group opacityを扱います。PaintとHit Testingは同じstacking順・clip・transform geometryを参照し、scroll、hover、DOM mutation、resize後に再評価します。詳細な対応範囲と制限は[CSS対応表](docs/css-support.md)を参照してください。
 
 `<script type="text/go">`のインラインソースと外部`.go`ファイルはPageへ読み込み、localhost・127.0.0.1・`::1`のページではYaegi Runtimeで`main()`を実行します。WebGoスクリプトは`growse/dom`から要素の検索・生成・追加・削除、属性・クラス・input値の操作、click・input・change・submit・mouseenter・mouseleaveイベントの登録を行えます。DOM変更後はComputed Styleを再計算して画面を更新します。
 
 ## 品質チェック
 
 GitHub Actionsでは、Linuxのraceテストと70%の最低カバレッジ、`go vet`、Staticcheck、actionlint、govulncheckを実行します。Go ModulesとGitHub ActionsはDependabotで週次確認します。
+
+固定viewport/font/scaleのVisual Regressionと、Layout・Paint benchmarkの実行方法は[Visual Regression Test](docs/visual-regression.md)と[Performance Baseline](docs/performance.md)に記録しています。
 
 ローカルでは必要な[GioのLinux依存パッケージ](https://gioui.org/doc/install/linux)を導入した上で、次のコマンドから同等の検査を実行できます。
 
@@ -53,7 +56,7 @@ WebGo Runtimeは、信頼できないGoコードを安全に実行するSandbox�
 
 ## リリース
 
-`v0.5.0`のようなバージョンタグをpushすると、GitHub Actionsが各OSでテストを実行し、Linux amd64、macOS Intel、macOS Apple Silicon、Windows amd64向けのアーカイブとSHA-256チェックサムをGitHub Releaseへ公開します。Counter、Todo、CSS3 Core Showcase、Flexbox Showcaseも成果物へ同梱します。カーソル画像は実行ファイルへ埋め込まれるため、別途アセットを配置する必要はありません。
+`v0.6.0`のようなバージョンタグをpushすると、GitHub Actionsが各OSでテストを実行し、Linux amd64、macOS Intel、macOS Apple Silicon、Windows amd64向けのアーカイブとSHA-256チェックサムをGitHub Releaseへ公開します。Counter、Todo、CSS3 Core Showcase、Flexbox Showcase、Dashboardも成果物へ同梱します。カーソル画像は実行ファイルへ埋め込まれるため、別途アセットを配置する必要はありません。
 
 Linux、macOS、Git Bashを利用できるWindowsでは、次のコマンドで最新版を`~/.local/bin`へインストールできます。ダウンロードしたアーカイブはインストール前にSHA-256チェックサムを検証します。
 
@@ -64,13 +67,13 @@ wget -qO- https://github.com/Growse-Project/Growse/releases/latest/download/inst
 特定バージョンやインストール先を指定する場合は環境変数を利用します。
 
 ```sh
-wget -qO- https://github.com/Growse-Project/Growse/releases/latest/download/install.sh | GROWSE_VERSION=v0.5.0 GROWSE_INSTALL_DIR=/usr/local/bin bash
+wget -qO- https://github.com/Growse-Project/Growse/releases/latest/download/install.sh | GROWSE_VERSION=v0.6.0 GROWSE_INSTALL_DIR=/usr/local/bin bash
 ```
 
 同時にLinux amd64のDockerイメージをGitHub Container Registryへ、バージョンタグと`latest`タグで公開します。
 
 ```sh
-docker pull ghcr.io/growse-project/growse:v0.5.0
+docker pull ghcr.io/growse-project/growse:v0.6.0
 ```
 
 GrowseはGUIアプリケーションのため、コンテナから起動する場合はホストのディスプレイサーバーとGPUデバイスをコンテナへ接続する必要があります。

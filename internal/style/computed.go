@@ -13,6 +13,8 @@ const (
 	DisplayNone
 	DisplayFlex
 	DisplayInlineFlex
+	DisplayGrid
+	DisplayInlineGrid
 )
 
 // FlexDirection defines the main axis and its direction.
@@ -81,6 +83,61 @@ type AutoEdges struct {
 	Top, Right, Bottom, Left bool
 }
 
+// Position selects normal, offset, out-of-flow, viewport, or sticky positioning.
+type Position uint8
+
+const (
+	PositionStatic Position = iota
+	PositionRelative
+	PositionAbsolute
+	PositionFixed
+	PositionSticky
+)
+
+// Visibility controls painting and hit testing while preserving layout.
+type Visibility uint8
+
+const (
+	VisibilityVisible Visibility = iota
+	VisibilityHidden
+)
+
+// Insets stores the four computed inset properties; SizeAuto means auto.
+type Insets struct {
+	Top, Right, Bottom, Left SizeValue
+}
+
+// Shadow is one box-shadow or text-shadow layer.
+type Shadow struct {
+	Inset                  bool
+	OffsetX, OffsetY, Blur float32
+	Spread                 float32
+	Color                  uint32
+}
+
+// Matrix is a CSS 2D affine matrix [A C E; B D F; 0 0 1].
+type Matrix struct {
+	A, B, C, D, E, F float32
+}
+
+// TransformFunctionKind identifies a parsed CSS 2D transform function.
+type TransformFunctionKind uint8
+
+const (
+	TransformTranslate TransformFunctionKind = iota
+	TransformScale
+	TransformRotate
+	TransformSkew
+	TransformMatrix
+)
+
+// TransformFunction retains percentage translations until box geometry is known.
+type TransformFunction struct {
+	Kind             TransformFunctionKind
+	X, Y             LengthPercentage
+	A, B, C, D, E, F float32
+}
+
 // BoxSizing controls whether declared sizes include padding and border.
 type BoxSizing uint8
 
@@ -102,6 +159,64 @@ const (
 type SizeValue struct {
 	Kind  SizeKind
 	Value LengthPercentage
+}
+
+// GridTrackKind identifies the sizing function used by one grid track.
+type GridTrackKind uint8
+
+const (
+	GridTrackAuto GridTrackKind = iota
+	GridTrackLength
+	GridTrackFraction
+	GridTrackMinContent
+	GridTrackMaxContent
+	GridTrackAutoRepeat
+)
+
+// GridAutoRepeat identifies repeat(auto-fill, ...) and repeat(auto-fit, ...).
+type GridAutoRepeat uint8
+
+const (
+	GridAutoRepeatNone GridAutoRepeat = iota
+	GridAutoRepeatFill
+	GridAutoRepeatFit
+)
+
+// GridTrackSize retains track sizing values until the grid container is laid out.
+type GridTrackSize struct {
+	Kind          GridTrackKind
+	Value         LengthPercentage
+	Flex          float32
+	MinKind       GridTrackKind
+	MinValue      LengthPercentage
+	MinSet        bool
+	FitLimit      *LengthPercentage
+	AutoRepeat    GridAutoRepeat
+	RepeatPattern []GridTrackSize
+}
+
+// GridLine selects a numbered/named line or spans tracks from the opposite edge.
+type GridLine struct {
+	Index int
+	Name  string
+	Span  int
+}
+
+// GridPlacement stores the two edges of one grid axis.
+type GridPlacement struct {
+	Start GridLine
+	End   GridLine
+}
+
+// GridArea is a zero-based half-open rectangle derived from grid-template-areas.
+type GridArea struct {
+	RowStart, RowEnd, ColumnStart, ColumnEnd int
+}
+
+// GridAutoFlow selects the auto-placement major axis and optional backfilling.
+type GridAutoFlow struct {
+	Column bool
+	Dense  bool
 }
 
 // Edges contains resolved pixel values in CSS clockwise order.
@@ -190,6 +305,7 @@ const (
 	BackgroundImageNone BackgroundImageKind = iota
 	BackgroundImageURL
 	BackgroundImageLinearGradient
+	BackgroundImageRadialGradient
 )
 
 // GradientStop is one color stop in a linear gradient. Position is normalized
@@ -201,10 +317,20 @@ type GradientStop struct {
 
 // BackgroundImage is either one URL image or one linear gradient.
 type BackgroundImage struct {
-	Kind          BackgroundImageKind
-	URL           string
-	GradientAngle float32
-	GradientStops []GradientStop
+	Kind           BackgroundImageKind
+	URL            string
+	GradientAngle  float32
+	GradientStops  []GradientStop
+	GradientCenter BackgroundPosition
+	RadialCircle   bool
+}
+
+// BackgroundLayer groups one image with its layer-specific placement values.
+type BackgroundLayer struct {
+	Image    BackgroundImage
+	Repeat   BackgroundRepeat
+	Position BackgroundPosition
+	Size     BackgroundSize
 }
 
 // BackgroundRepeat stores repetition independently for each axis.
@@ -238,50 +364,75 @@ type BackgroundSize struct {
 
 // ComputedStyle contains the MVP properties consumed by layout and paint.
 type ComputedStyle struct {
-	Color            uint32
-	BackgroundColor  uint32
-	BackgroundImage  BackgroundImage
-	BackgroundRepeat BackgroundRepeat
-	BackgroundPos    BackgroundPosition
-	BackgroundSize   BackgroundSize
-	FontSize         float32
-	FontWeight       int
-	LineHeight       float32
-	WhiteSpace       WhiteSpace
-	OverflowX        Overflow
-	OverflowY        Overflow
-	Display          Display
-	FlexDirection    FlexDirection
-	FlexWrap         FlexWrap
-	JustifyContent   JustifyContent
-	AlignItems       Align
-	AlignContent     Align
-	Order            int
-	FlexGrow         float32
-	FlexShrink       float32
-	FlexBasis        FlexBasis
-	AlignSelf        Align
-	RowGap           LengthPercentage
-	ColumnGap        LengthPercentage
-	AspectRatio      float32
-	BoxSizing        BoxSizing
-	Width            SizeValue
-	Height           SizeValue
-	MinWidth         SizeValue
-	MinHeight        SizeValue
-	MaxWidth         SizeValue
-	MaxHeight        SizeValue
-	Margin           Edges
-	MarginAuto       AutoEdges
-	Padding          Edges
-	Border           Borders
-	BorderRadius     BorderRadii
-	TextDecoration   TextDecorationLine
-	DecorationColor  uint32
-	Opacity          float32
-	BeforeContent    string
-	AfterContent     string
-	CustomProperties map[string]string
+	Color               uint32
+	BackgroundColor     uint32
+	BackgroundImage     BackgroundImage
+	BackgroundRepeat    BackgroundRepeat
+	BackgroundPos       BackgroundPosition
+	BackgroundSize      BackgroundSize
+	BackgroundLayers    []BackgroundLayer
+	FontSize            float32
+	FontWeight          int
+	LineHeight          float32
+	WhiteSpace          WhiteSpace
+	OverflowX           Overflow
+	OverflowY           Overflow
+	Display             Display
+	Visibility          Visibility
+	FlexDirection       FlexDirection
+	FlexWrap            FlexWrap
+	JustifyContent      JustifyContent
+	AlignItems          Align
+	JustifyItems        Align
+	AlignContent        Align
+	Order               int
+	FlexGrow            float32
+	FlexShrink          float32
+	FlexBasis           FlexBasis
+	AlignSelf           Align
+	JustifySelf         Align
+	RowGap              LengthPercentage
+	ColumnGap           LengthPercentage
+	GridTemplateColumns []GridTrackSize
+	GridTemplateRows    []GridTrackSize
+	GridAutoColumns     []GridTrackSize
+	GridAutoRows        []GridTrackSize
+	GridColumnLines     map[string][]int
+	GridRowLines        map[string][]int
+	GridTemplateAreas   map[string]GridArea
+	GridColumn          GridPlacement
+	GridRow             GridPlacement
+	GridAreaName        string
+	GridAutoFlow        GridAutoFlow
+	Position            Position
+	Inset               Insets
+	ZIndex              int
+	ZIndexAuto          bool
+	BoxShadows          []Shadow
+	TextShadows         []Shadow
+	Outline             BorderSide
+	OutlineOffset       float32
+	Transform           []TransformFunction
+	TransformOrigin     BackgroundPosition
+	AspectRatio         float32
+	BoxSizing           BoxSizing
+	Width               SizeValue
+	Height              SizeValue
+	MinWidth            SizeValue
+	MinHeight           SizeValue
+	MaxWidth            SizeValue
+	MaxHeight           SizeValue
+	Margin              Edges
+	MarginAuto          AutoEdges
+	Padding             Edges
+	Border              Borders
+	BorderRadius        BorderRadii
+	TextDecoration      TextDecorationLine
+	DecorationColor     uint32
+	Opacity             float32
+	BeforeContent       string
+	AfterContent        string
+	CustomProperties    map[string]string
 }
 
 // Bold reports whether the computed weight should use a bold face.

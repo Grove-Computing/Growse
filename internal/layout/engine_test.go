@@ -440,6 +440,178 @@ func TestBuildIgnoresUnsupportedInputType(t *testing.T) {
 	}
 }
 
+func TestBuildResolvesRelativeAbsoluteFixedAndStickyPositioning(t *testing.T) {
+	document := dom.NewDocument()
+	parent := document.CreateElement("div", map[string]string{"class": "parent"})
+	normal := document.CreateElement("div", map[string]string{"class": "normal"})
+	relative := document.CreateElement("div", map[string]string{"class": "relative"})
+	sticky := document.CreateElement("div", map[string]string{"class": "sticky"})
+	following := document.CreateElement("div", map[string]string{"class": "following"})
+	absolute := document.CreateElement("div", map[string]string{"class": "absolute"})
+	fixed := document.CreateElement("div", map[string]string{"class": "fixed"})
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, parent}, [2]*dom.Node{parent, normal}, [2]*dom.Node{parent, relative},
+		[2]*dom.Node{parent, sticky}, [2]*dom.Node{parent, following}, [2]*dom.Node{parent, absolute}, [2]*dom.Node{parent, fixed},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.parent { position:relative; width:300px; height:200px; background-color:#eee }
+.normal, .relative, .sticky, .following { height:20px; background-color:#ddd }
+.relative { position:relative; left:15px; top:10px }
+.sticky { position:sticky; top:100px }
+.absolute { position:absolute; left:20px; top:30px; width:50px; height:40px; background-color:#ccc }
+.fixed { position:fixed; right:10px; bottom:20px; width:60px; height:30px; background-color:#bbb }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := BuildWithViewport(document, style.Compute(document, stylesheet), 400, 300)
+	parentRect := decorationForNode(t, tree, parent.ID)
+	normalRect, relativeRect := decorationForNode(t, tree, normal.ID), decorationForNode(t, tree, relative.ID)
+	stickyRect, followingRect := decorationForNode(t, tree, sticky.ID), decorationForNode(t, tree, following.ID)
+	absoluteRect, fixedRect := decorationForNode(t, tree, absolute.ID), decorationForNode(t, tree, fixed.ID)
+	if relativeRect.X != normalRect.X+15 || relativeRect.Y != normalRect.Y+30 {
+		t.Fatalf("relative position = normal %#v relative %#v", normalRect.Rect, relativeRect.Rect)
+	}
+	if followingRect.Y != normalRect.Y+60 || stickyRect.Y != 100 {
+		t.Fatalf("sticky flow geometry = sticky %#v following %#v", stickyRect.Rect, followingRect.Rect)
+	}
+	if absoluteRect.X != parentRect.X+20 || absoluteRect.Y != parentRect.Y+30 || absoluteRect.Width != 50 || absoluteRect.Height != 40 {
+		t.Fatalf("absolute containing block = parent %#v child %#v", parentRect.Rect, absoluteRect.Rect)
+	}
+	if fixedRect.X != 330 || fixedRect.Y != 250 || fixedRect.Width != 60 || fixedRect.Height != 30 {
+		t.Fatalf("fixed viewport geometry = %#v", fixedRect.Rect)
+	}
+}
+
+func TestBuildCreatesDeterministicStackingContextsAndPaintOrder(t *testing.T) {
+	document := dom.NewDocument()
+	parent := document.CreateElement("div", map[string]string{"class": "parent"})
+	high := document.CreateElement("div", map[string]string{"class": "high"})
+	low := document.CreateElement("div", map[string]string{"class": "low"})
+	transparent := document.CreateElement("div", map[string]string{"class": "transparent"})
+	appendNodes(t, document, [2]*dom.Node{document.Root, parent}, [2]*dom.Node{parent, high}, [2]*dom.Node{parent, low}, [2]*dom.Node{parent, transparent})
+	stylesheet, err := css.Parse(strings.NewReader(`
+.parent { position:relative; width:100px; height:100px }
+.high, .low { position:absolute; inset:0; width:50px; height:50px; background-color:#ddd }
+.high { z-index:2 }
+.low { z-index:1 }
+.transparent { opacity:.5; width:10px; height:10px; background-color:#ccc }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, style.Compute(document, stylesheet), 300)
+	if len(tree.StackingContexts) != 4 {
+		t.Fatalf("stacking contexts = %#v", tree.StackingContexts)
+	}
+	highRect := decorationForNode(t, tree, high.ID)
+	if hit, ok := HitTest(tree, highRect.X+1, highRect.Y+1); !ok || hit != high.ID {
+		t.Fatalf("z-index hit = (%d, %v), want high node %d", hit, ok, high.ID)
+	}
+	entries := tree.OrderedPaintEntries()
+	lastDecoration := dom.NodeID(0)
+	for _, entry := range entries {
+		if entry.DecorationIndex >= 0 {
+			lastDecoration = tree.Decorations[entry.DecorationIndex].NodeID
+		}
+	}
+	if lastDecoration != high.ID {
+		t.Fatalf("last painted decoration = %d, want high node %d", lastDecoration, high.ID)
+	}
+}
+
+func TestBuildAppliesTransformOriginToDisplayGeometry(t *testing.T) {
+	document := dom.NewDocument()
+	item := document.CreateElement("div", map[string]string{"class": "item"})
+	appendNodes(t, document, [2]*dom.Node{document.Root, item})
+	stylesheet, err := css.Parse(strings.NewReader(`.item { width:100px; height:50px; background-color:#ddd; transform:rotate(180deg); transform-origin:center }`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, style.Compute(document, stylesheet), 300)
+	decoration := decorationForNode(t, tree, item.ID)
+	want := style.Matrix{A: -1, D: -1, E: 164, F: 114}
+	for _, values := range [][2]float32{{decoration.Transform.A, want.A}, {decoration.Transform.B, want.B}, {decoration.Transform.C, want.C}, {decoration.Transform.D, want.D}, {decoration.Transform.E, want.E}, {decoration.Transform.F, want.F}} {
+		if difference := values[0] - values[1]; difference < -0.001 || difference > 0.001 {
+			t.Fatalf("transform matrix = %#v, want %#v", decoration.Transform, want)
+		}
+	}
+	if len(tree.StackingContexts) != 2 {
+		t.Fatalf("transform stacking context = %#v", tree.StackingContexts)
+	}
+}
+
+func TestBuildCarriesNestedRoundedClipsAndOpacityLayer(t *testing.T) {
+	document := dom.NewDocument()
+	outer := document.CreateElement("div", map[string]string{"class": "outer"})
+	inner := document.CreateElement("div", map[string]string{"class": "inner"})
+	group := document.CreateElement("div", map[string]string{"class": "group"})
+	child := document.CreateElement("div", map[string]string{"class": "child"})
+	appendNodes(t, document, [2]*dom.Node{document.Root, outer}, [2]*dom.Node{outer, inner}, [2]*dom.Node{inner, group}, [2]*dom.Node{group, child})
+	stylesheet, err := css.Parse(strings.NewReader(`
+.outer { width:100px; height:100px; overflow:hidden; border-radius:20px; background-color:#eee }
+.inner { width:80px; height:80px; overflow:hidden; border-radius:10px; background-color:#ddd }
+.group { opacity:.5 }
+.child { width:120px; height:40px; background-color:#ccc }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, style.Compute(document, stylesheet), 300)
+	childDecoration := decorationForNode(t, tree, child.ID)
+	if len(childDecoration.Clips) != 2 || childDecoration.Clips[0].Radius.TopLeft.X != 20 || childDecoration.Clips[1].Radius.TopLeft.X != 10 {
+		t.Fatalf("nested rounded clips = %#v", childDecoration.Clips)
+	}
+	foundLayer := false
+	for _, context := range tree.StackingContexts {
+		if context.NodeID == group.ID && context.Offscreen && context.Opacity == .5 {
+			foundLayer = true
+		}
+	}
+	if !foundLayer {
+		t.Fatalf("opacity compositing contexts = %#v", tree.StackingContexts)
+	}
+}
+
+func TestBuildWithScrollKeepsFixedStickyGridAndTransformHitGeometryAligned(t *testing.T) {
+	document := dom.NewDocument()
+	spacer := document.CreateElement("div", map[string]string{"class": "spacer"})
+	sticky := document.CreateElement("div", map[string]string{"class": "sticky"})
+	grid := document.CreateElement("div", map[string]string{"class": "grid"})
+	gridItem := document.CreateElement("div", map[string]string{"class": "grid-item"})
+	host := document.CreateElement("div", map[string]string{"class": "host"})
+	fixed := document.CreateElement("div", map[string]string{"class": "fixed"})
+	appendNodes(t, document, [2]*dom.Node{document.Root, spacer}, [2]*dom.Node{document.Root, sticky}, [2]*dom.Node{document.Root, grid}, [2]*dom.Node{grid, gridItem}, [2]*dom.Node{document.Root, host}, [2]*dom.Node{host, fixed})
+	stylesheet, err := css.Parse(strings.NewReader(`
+.spacer { height:200px }
+.sticky { position:sticky; top:10px; height:20px; background-color:#ddd }
+.grid { display:grid; width:100px; grid-template-columns:100px; grid-template-rows:50px; transform:translateX(40px) }
+.grid-item { background-color:#ccc }
+.host { position:relative; height:100px }
+.fixed { position:fixed; left:10px; top:20px; width:60px; height:30px; background-color:#bbb }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	computed := style.Compute(document, stylesheet)
+	tree := BuildWithScroll(document, computed, 400, 300, 0, 300)
+	stickyRect, fixedRect := decorationForNode(t, tree, sticky.ID), decorationForNode(t, tree, fixed.ID)
+	gridRect := decorationForNode(t, tree, gridItem.ID)
+	if stickyRect.Y != 310 || fixedRect.X != 10 || fixedRect.Y != 320 {
+		t.Fatalf("scroll positions = sticky %#v fixed %#v", stickyRect.Rect, fixedRect.Rect)
+	}
+	if hit, ok := HitTest(tree, stickyRect.X+1, stickyRect.Y+1); !ok || hit != sticky.ID {
+		t.Fatalf("sticky scroll hit = (%d, %v)", hit, ok)
+	}
+	if hit, ok := HitTest(tree, fixedRect.X+1, fixedRect.Y+1); !ok || hit != fixed.ID {
+		t.Fatalf("fixed scroll hit = (%d, %v)", hit, ok)
+	}
+	transformedX, transformedY := gridRect.Transform.TransformPoint(gridRect.X+1, gridRect.Y+1)
+	if hit, ok := HitTest(tree, transformedX, transformedY); !ok || hit != gridItem.ID {
+		t.Fatalf("transformed grid scroll hit = (%d, %v) at (%v,%v)", hit, ok, transformedX, transformedY)
+	}
+}
+
 func appendNodes(t *testing.T, document *dom.Document, edges ...[2]*dom.Node) {
 	t.Helper()
 	for _, edge := range edges {

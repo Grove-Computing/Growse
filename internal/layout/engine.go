@@ -17,47 +17,72 @@ const (
 )
 
 type blockStyle struct {
-	fontSize        float32
-	bold            bool
-	color           uint32
-	background      uint32
-	image           stylemodel.BackgroundImage
-	repeat          stylemodel.BackgroundRepeat
-	position        stylemodel.BackgroundPosition
-	backgroundSize  stylemodel.BackgroundSize
-	radius          stylemodel.BorderRadii
-	decoration      stylemodel.TextDecorationLine
-	decorationColor uint32
-	opacity         float32
-	display         stylemodel.Display
-	margin          stylemodel.Edges
-	padding         stylemodel.Edges
-	border          stylemodel.Borders
-	boxSizing       stylemodel.BoxSizing
-	width           stylemodel.SizeValue
-	height          stylemodel.SizeValue
-	minWidth        stylemodel.SizeValue
-	minHeight       stylemodel.SizeValue
-	maxWidth        stylemodel.SizeValue
-	maxHeight       stylemodel.SizeValue
-	lineHeight      float32
-	whiteSpace      stylemodel.WhiteSpace
-	overflowX       stylemodel.Overflow
-	overflowY       stylemodel.Overflow
-	flexDirection   stylemodel.FlexDirection
-	flexWrap        stylemodel.FlexWrap
-	justifyContent  stylemodel.JustifyContent
-	alignItems      stylemodel.Align
-	alignContent    stylemodel.Align
-	order           int
-	flexGrow        float32
-	flexShrink      float32
-	flexBasis       stylemodel.FlexBasis
-	alignSelf       stylemodel.Align
-	rowGap          stylemodel.LengthPercentage
-	columnGap       stylemodel.LengthPercentage
-	marginAuto      stylemodel.AutoEdges
-	aspectRatio     float32
+	fontSize            float32
+	bold                bool
+	color               uint32
+	background          uint32
+	image               stylemodel.BackgroundImage
+	repeat              stylemodel.BackgroundRepeat
+	position            stylemodel.BackgroundPosition
+	backgroundSize      stylemodel.BackgroundSize
+	backgroundLayers    []stylemodel.BackgroundLayer
+	layoutPosition      stylemodel.Position
+	inset               stylemodel.Insets
+	zIndex              int
+	zIndexAuto          bool
+	boxShadows          []stylemodel.Shadow
+	textShadows         []stylemodel.Shadow
+	outline             stylemodel.BorderSide
+	outlineOffset       float32
+	transform           []stylemodel.TransformFunction
+	transformOrigin     stylemodel.BackgroundPosition
+	radius              stylemodel.BorderRadii
+	decoration          stylemodel.TextDecorationLine
+	decorationColor     uint32
+	opacity             float32
+	display             stylemodel.Display
+	hidden              bool
+	margin              stylemodel.Edges
+	padding             stylemodel.Edges
+	border              stylemodel.Borders
+	boxSizing           stylemodel.BoxSizing
+	width               stylemodel.SizeValue
+	height              stylemodel.SizeValue
+	minWidth            stylemodel.SizeValue
+	minHeight           stylemodel.SizeValue
+	maxWidth            stylemodel.SizeValue
+	maxHeight           stylemodel.SizeValue
+	lineHeight          float32
+	whiteSpace          stylemodel.WhiteSpace
+	overflowX           stylemodel.Overflow
+	overflowY           stylemodel.Overflow
+	flexDirection       stylemodel.FlexDirection
+	flexWrap            stylemodel.FlexWrap
+	justifyContent      stylemodel.JustifyContent
+	alignItems          stylemodel.Align
+	justifyItems        stylemodel.Align
+	alignContent        stylemodel.Align
+	order               int
+	flexGrow            float32
+	flexShrink          float32
+	flexBasis           stylemodel.FlexBasis
+	alignSelf           stylemodel.Align
+	justifySelf         stylemodel.Align
+	rowGap              stylemodel.LengthPercentage
+	columnGap           stylemodel.LengthPercentage
+	gridTemplateColumns []stylemodel.GridTrackSize
+	gridTemplateRows    []stylemodel.GridTrackSize
+	gridAutoColumns     []stylemodel.GridTrackSize
+	gridAutoRows        []stylemodel.GridTrackSize
+	gridColumnLines     map[string][]int
+	gridRowLines        map[string][]int
+	gridTemplateAreas   map[string]stylemodel.GridArea
+	gridColumn          stylemodel.GridPlacement
+	gridRow             stylemodel.GridPlacement
+	gridAreaName        string
+	gridAutoFlow        stylemodel.GridAutoFlow
+	marginAuto          stylemodel.AutoEdges
+	aspectRatio         float32
 }
 
 type inlineRun struct {
@@ -68,6 +93,7 @@ type inlineRun struct {
 	style       blockStyle
 	atomic      bool
 	flex        bool
+	grid        bool
 	width       float32
 	widthOffset float32
 	height      float32
@@ -77,25 +103,34 @@ type inlineRun struct {
 
 // Build creates a vertical block layout with a minimal inline text flow.
 func Build(document *dom.Document, computed stylemodel.Map, viewportWidth float32) *Tree {
-	return build(document, computed, viewportWidth, 0)
+	return build(document, computed, viewportWidth, 0, 0, 0)
 }
 
 // BuildWithViewport lays out a document with definite viewport dimensions.
 func BuildWithViewport(document *dom.Document, computed stylemodel.Map, viewportWidth, viewportHeight float32) *Tree {
-	return build(document, computed, viewportWidth, viewportHeight)
+	return build(document, computed, viewportWidth, viewportHeight, 0, 0)
 }
 
-func build(document *dom.Document, computed stylemodel.Map, viewportWidth, viewportHeight float32) *Tree {
+// BuildWithScroll lays out viewport-attached and sticky elements at a scroll offset.
+func BuildWithScroll(document *dom.Document, computed stylemodel.Map, viewportWidth, viewportHeight, scrollX, scrollY float32) *Tree {
+	return build(document, computed, viewportWidth, viewportHeight, max(scrollX, float32(0)), max(scrollY, float32(0)))
+}
+
+func build(document *dom.Document, computed stylemodel.Map, viewportWidth, viewportHeight, scrollX, scrollY float32) *Tree {
 	if viewportWidth < pagePadding*2+1 {
 		viewportWidth = pagePadding*2 + 1
 	}
 
-	tree := &Tree{Width: viewportWidth, Background: 0xffffffff}
+	tree := &Tree{Width: viewportWidth, Background: 0xffffffff, StackingContexts: []StackingContext{{Parent: -1}}}
 	state := engine{
-		tree:     tree,
-		computed: computed,
-		y:        pagePadding,
-		opacity:  1,
+		tree:           tree,
+		computed:       computed,
+		y:              pagePadding,
+		opacity:        1,
+		viewportWidth:  viewportWidth,
+		viewportHeight: viewportHeight,
+		scrollX:        scrollX,
+		scrollY:        scrollY,
 	}
 	if document != nil {
 		if body := findElement(document.Root, "body"); body != nil {
@@ -126,12 +161,17 @@ func build(document *dom.Document, computed stylemodel.Map, viewportWidth, viewp
 }
 
 type engine struct {
-	tree     *Tree
-	computed stylemodel.Map
-	y        float32
-	clip     *Rect
-	order    int
-	opacity  float32
+	tree                          *Tree
+	computed                      stylemodel.Map
+	y                             float32
+	clip                          *Rect
+	clips                         []ClipRegion
+	order                         int
+	opacity                       float32
+	viewportWidth, viewportHeight float32
+	scrollX, scrollY              float32
+	positionCB                    *Rect
+	stackingID                    int
 }
 
 func (e *engine) nextOrder() int {
@@ -160,11 +200,19 @@ func (e *engine) walk(node *dom.Node, x, width, containingHeight float32, height
 		if style.display == stylemodel.DisplayNone {
 			return
 		}
+		// Top-level positioned elements do not pass through a block parent's
+		// positioned-child collection. Resolve them against the current
+		// containing block (or the initial containing block when it is nil)
+		// instead of accidentally laying them out in normal flow.
+		if style.layoutPosition == stylemodel.PositionAbsolute || style.layoutPosition == stylemodel.PositionFixed {
+			e.renderPositionedChild(node, style)
+			return
+		}
 		if isTextInput(node) {
 			e.addInput(node, style, x, width, containingHeight, heightDefinite)
 			return
 		}
-		if style.display == stylemodel.DisplayBlock || style.display == stylemodel.DisplayFlex {
+		if isBlockLevelDisplay(style.display) {
 			e.addBlock(node, style, x, width, containingHeight, heightDefinite, nil)
 			return
 		}
@@ -202,18 +250,23 @@ func (e *engine) addInput(node *dom.Node, style blockStyle, x, width, containing
 	usedHeight = constrainSize(usedHeight, style.minHeight, style.maxHeight, containingHeight, heightDefinite)
 	value, _ := node.Attribute("value")
 	e.tree.Boxes = append(e.tree.Boxes, Box{
-		Order:   e.nextOrder(),
-		NodeID:  node.ID,
-		Tag:     node.TagName,
-		Text:    value,
-		Input:   true,
-		X:       x,
-		Y:       e.y,
-		Width:   usedWidth,
-		Height:  usedHeight,
-		Color:   style.color,
-		Clip:    cloneRect(e.clip),
-		Opacity: e.opacity * style.opacity,
+		Order:       e.nextOrder(),
+		StackingID:  e.stackingID,
+		NodeID:      node.ID,
+		Tag:         node.TagName,
+		Text:        value,
+		Input:       true,
+		X:           x,
+		Y:           e.y,
+		Width:       usedWidth,
+		Height:      usedHeight,
+		Color:       style.color,
+		Clip:        cloneRect(e.clip),
+		Clips:       cloneClipRegions(e.clips),
+		Opacity:     e.opacity * style.opacity,
+		TextShadows: append([]stylemodel.Shadow(nil), style.textShadows...),
+		Transform:   stylemodel.IdentityMatrix(),
+		Hidden:      style.hidden,
 	})
 	e.y += usedHeight + style.margin.Bottom
 }
@@ -227,6 +280,12 @@ func isTextInput(node *dom.Node) bool {
 }
 
 func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containingHeight float32, heightDefinite bool, topMargin *float32) {
+	geometryBoxStart, geometryDecorationStart := len(e.tree.Boxes), len(e.tree.Decorations)
+	previousStackingID := e.stackingID
+	if style.opacity < 1 || len(style.transform) != 0 || style.layoutPosition != stylemodel.PositionStatic && !style.zIndexAuto {
+		e.stackingID = len(e.tree.StackingContexts)
+		e.tree.StackingContexts = append(e.tree.StackingContexts, StackingContext{Parent: previousStackingID, NodeID: node.ID, ZIndex: style.zIndex, Order: e.order, Opacity: style.opacity, Offscreen: style.opacity < 1})
+	}
 	previousOpacity := e.opacity
 	e.opacity *= style.opacity
 	if topMargin == nil {
@@ -266,14 +325,18 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 	}
 	boxTop := e.y
 	decorationIndex := -1
-	if style.background != 0 || style.image.Kind != stylemodel.BackgroundImageNone || hasVisibleBorder(style.border) {
+	if style.background != 0 || style.image.Kind != stylemodel.BackgroundImageNone || hasVisibleBorder(style.border) || len(style.boxShadows) != 0 || style.outline.Style != stylemodel.BorderNone {
 		decorationIndex = len(e.tree.Decorations)
 		e.tree.Decorations = append(e.tree.Decorations, Decoration{
-			Order: e.nextOrder(), NodeID: node.ID,
+			Order: e.nextOrder(), StackingID: e.stackingID, NodeID: node.ID,
 			Rect:       Rect{X: x, Y: boxTop, Width: outerWidth},
-			Background: style.background, Image: cloneBackgroundImage(style.image),
+			Background: style.background, Image: cloneBackgroundImage(style.image), Layers: cloneBackgroundLayers(style.backgroundLayers),
 			Repeat: style.repeat, Position: style.position, Size: style.backgroundSize, Clip: cloneRect(e.clip),
-			Border: style.border, Opacity: e.opacity,
+			Clips:  cloneClipRegions(e.clips),
+			Border: style.border, Opacity: e.opacity, BoxShadows: append([]stylemodel.Shadow(nil), style.boxShadows...),
+			Outline: style.outline, OutlineOffset: style.outlineOffset,
+			Transform: stylemodel.IdentityMatrix(),
+			Hidden:    style.hidden,
 		})
 	}
 	e.y += style.border.Top.Width + style.padding.Top
@@ -287,6 +350,15 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 		}
 	}
 	previousClip := e.clip
+	previousClips := e.clips
+	previousPositionCB := e.positionCB
+	if style.layoutPosition != stylemodel.PositionStatic {
+		cbHeight := childContainingHeight
+		if !declaredHeightDefinite {
+			cbHeight = containingHeight
+		}
+		e.positionCB = &Rect{X: x + style.border.Left.Width, Y: boxTop + style.border.Top.Width, Width: outerWidth - horizontalBorder, Height: max(cbHeight, float32(0))}
+	}
 	if (style.overflowX != stylemodel.OverflowVisible || style.overflowY != stylemodel.OverflowVisible) && declaredHeightDefinite {
 		clipHeight := declaredHeight
 		if style.boxSizing == stylemodel.BoxSizingContentBox {
@@ -296,10 +368,15 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 			X: x + style.border.Left.Width, Y: boxTop + style.border.Top.Width,
 			Width: outerWidth - horizontalBorder, Height: clipHeight,
 		})
+		clipRect := *e.clip
+		e.clips = append(cloneClipRegions(previousClips), ClipRegion{Rect: clipRect, Radius: resolveBorderRadii(style.radius, clipRect.Width, clipRect.Height)})
 	}
 
+	var positionedChildren []*dom.Node
 	if style.display == stylemodel.DisplayFlex {
 		e.addFlexChildren(node, style, contentX, contentWidth, childContainingHeight, declaredHeightDefinite)
+	} else if style.display == stylemodel.DisplayGrid {
+		e.addGridChildren(node, style, contentX, contentWidth, childContainingHeight, declaredHeightDefinite)
 	} else {
 		inlineRuns := e.generatedRuns(node, true, style)
 		previousBlock := false
@@ -318,6 +395,11 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 				if childStyle.display == stylemodel.DisplayNone {
 					continue
 				}
+				if childStyle.layoutPosition == stylemodel.PositionAbsolute || childStyle.layoutPosition == stylemodel.PositionFixed {
+					flushInline()
+					positionedChildren = append(positionedChildren, child)
+					continue
+				}
 				if isTextInput(child) {
 					flushInline()
 					e.addInput(child, childStyle, contentX, contentWidth, childContainingHeight, declaredHeightDefinite)
@@ -325,7 +407,7 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 					previousBottomMargin = childStyle.margin.Bottom
 					continue
 				}
-				if childStyle.display == stylemodel.DisplayBlock || childStyle.display == stylemodel.DisplayFlex {
+				if isBlockLevelDisplay(childStyle.display) {
 					flushInline()
 					if previousBlock {
 						e.y -= previousBottomMargin
@@ -345,6 +427,7 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 		flushInline()
 	}
 	e.clip = previousClip
+	e.clips = previousClips
 
 	contentHeight := e.y - contentTop
 	sizingHeight := contentHeight
@@ -363,8 +446,104 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 		e.tree.Decorations[decorationIndex].Height = outerHeight
 		e.tree.Decorations[decorationIndex].Radius = resolveBorderRadii(style.radius, outerWidth, outerHeight)
 	}
+	if e.positionCB != nil && style.layoutPosition != stylemodel.PositionStatic {
+		e.positionCB.Height = max(outerHeight-verticalBorder, float32(0))
+	}
+	for _, child := range positionedChildren {
+		e.renderPositionedChild(child, e.styleFor(child))
+	}
 	e.y = boxTop + outerHeight + style.margin.Bottom
+	if style.layoutPosition == stylemodel.PositionRelative || style.layoutPosition == stylemodel.PositionSticky {
+		dx, dy := float32(0), float32(0)
+		if style.layoutPosition == stylemodel.PositionRelative {
+			dx, dy = relativeOffset(style.inset, outerWidth, outerHeight)
+		} else {
+			if top, ok := resolveSize(style.inset.Top, outerHeight, true); ok {
+				dy = max(e.scrollY+top-boxTop, float32(0))
+			}
+		}
+		translateFlexGeometry(e.tree, geometryBoxStart, geometryDecorationStart, dx, dy, nil)
+	}
+	if len(style.transform) != 0 {
+		originX := x + style.transformOrigin.X.Resolve(outerWidth)
+		originY := boxTop + style.transformOrigin.Y.Resolve(outerHeight)
+		local := stylemodel.Matrix{A: 1, D: 1, E: originX, F: originY}.Multiply(stylemodel.ResolveTransform(style.transform, outerWidth, outerHeight))
+		local = local.Multiply(stylemodel.Matrix{A: 1, D: 1, E: -originX, F: -originY})
+		for index := geometryBoxStart; index < len(e.tree.Boxes); index++ {
+			e.tree.Boxes[index].Transform = local.Multiply(normalizeMatrix(e.tree.Boxes[index].Transform))
+		}
+		for index := geometryDecorationStart; index < len(e.tree.Decorations); index++ {
+			e.tree.Decorations[index].Transform = local.Multiply(normalizeMatrix(e.tree.Decorations[index].Transform))
+		}
+	}
+	e.positionCB = previousPositionCB
+	e.stackingID = previousStackingID
 	e.opacity = previousOpacity
+}
+
+func normalizeMatrix(matrix stylemodel.Matrix) stylemodel.Matrix {
+	if matrix == (stylemodel.Matrix{}) {
+		return stylemodel.IdentityMatrix()
+	}
+	return matrix
+}
+
+func relativeOffset(inset stylemodel.Insets, width, height float32) (float32, float32) {
+	dx, dy := float32(0), float32(0)
+	if left, ok := resolveSize(inset.Left, width, true); ok {
+		dx = left
+	} else if right, ok := resolveSize(inset.Right, width, true); ok {
+		dx = -right
+	}
+	if top, ok := resolveSize(inset.Top, height, true); ok {
+		dy = top
+	} else if bottom, ok := resolveSize(inset.Bottom, height, true); ok {
+		dy = -bottom
+	}
+	return dx, dy
+}
+
+func (e *engine) renderPositionedChild(node *dom.Node, style blockStyle) {
+	containingBlock := e.positionCB
+	if style.layoutPosition == stylemodel.PositionFixed || containingBlock == nil {
+		containingBlock = &Rect{X: e.scrollX, Y: e.scrollY, Width: e.viewportWidth, Height: e.viewportHeight}
+	}
+	left, hasLeft := resolveSize(style.inset.Left, containingBlock.Width, true)
+	right, hasRight := resolveSize(style.inset.Right, containingBlock.Width, true)
+	top, hasTop := resolveSize(style.inset.Top, containingBlock.Height, containingBlock.Height > 0)
+	bottom, hasBottom := resolveSize(style.inset.Bottom, containingBlock.Height, containingBlock.Height > 0)
+	usedWidth, widthDefinite := gridItemOuterSize(style.width, style, containingBlock.Width, true)
+	usedHeight, heightDefinite := gridItemOuterSize(style.height, style, containingBlock.Height, false)
+	if !widthDefinite && hasLeft && hasRight {
+		usedWidth = max(containingBlock.Width-left-right, float32(0))
+	}
+	if !heightDefinite && hasTop && hasBottom {
+		usedHeight = max(containingBlock.Height-top-bottom, float32(0))
+	}
+	if !widthDefinite && !(hasLeft && hasRight) || !heightDefinite && !(hasTop && hasBottom) {
+		intrinsicWidth, intrinsicHeight, _ := e.flexIntrinsicSizes(node, style, flexAxis{horizontal: true}, containingBlock.Width, containingBlock.Width, containingBlock.Height, containingBlock.Height > 0)
+		if !widthDefinite && !(hasLeft && hasRight) {
+			usedWidth = intrinsicWidth
+		}
+		if !heightDefinite && !(hasTop && hasBottom) {
+			usedHeight = intrinsicHeight
+		}
+	}
+	childX, childY := containingBlock.X, containingBlock.Y
+	if hasLeft {
+		childX += left
+	} else if hasRight {
+		childX += containingBlock.Width - right - usedWidth
+	}
+	if hasTop {
+		childY += top
+	} else if hasBottom {
+		childY += containingBlock.Height - bottom - usedHeight
+	}
+	if style.display == stylemodel.DisplayInline || style.display == stylemodel.DisplayInlineBlock || style.display == stylemodel.DisplayInlineFlex || style.display == stylemodel.DisplayInlineGrid {
+		style.display = stylemodel.DisplayBlock
+	}
+	e.renderGridItem(node, style, childX, childY, usedWidth, usedHeight)
 }
 
 func collapseMargins(first, second float32) float32 {
@@ -419,6 +598,9 @@ func (e *engine) collectInlineRunsWithOpacity(node, owner *dom.Node, opacity flo
 	}
 	if style.display == stylemodel.DisplayInlineFlex {
 		return []inlineRun{{nodeID: node.ID, node: node, tag: node.TagName, style: style, atomic: true, flex: true, opacity: opacity}}
+	}
+	if style.display == stylemodel.DisplayInlineGrid {
+		return []inlineRun{{nodeID: node.ID, node: node, tag: node.TagName, style: style, atomic: true, grid: true, opacity: opacity}}
 	}
 	if node.TagName == "br" {
 		return []inlineRun{{nodeID: node.ID, tag: node.TagName, text: "\n", style: style, opacity: opacity}}
@@ -487,18 +669,26 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 			lineHeight = container.fontSize * 1.4
 		}
 		e.tree.Boxes = append(e.tree.Boxes, Box{
-			Order:  e.nextOrder(),
+			Order: e.nextOrder(), StackingID: e.stackingID,
 			NodeID: nodeID, Tag: tag, Text: lineText.String(),
 			X: x, Y: e.y, Width: width, Height: lineHeight,
 			FontSize: container.fontSize, Bold: container.bold, Color: container.color,
 			Opacity: e.opacity, Decoration: container.decoration, DecorationColor: container.decorationColor,
-			Runs:     append([]TextRun(nil), lineRuns...),
-			Baseline: e.y + lineAscent, Clip: cloneRect(e.clip),
+			TextShadows: append([]stylemodel.Shadow(nil), container.textShadows...),
+			Transform:   stylemodel.IdentityMatrix(),
+			Hidden:      container.hidden,
+			Runs:        append([]TextRun(nil), lineRuns...),
+			Baseline:    e.y + lineAscent, Clip: cloneRect(e.clip), Clips: cloneClipRegions(e.clips),
 		})
 		for _, placement := range flexPlacements {
-			item := &flexLayoutItem{node: placement.node, style: placement.style, crossSize: placement.height}
-			item.algorithm = &flexItem{target: placement.width}
-			e.renderFlexItem(item, flexAxis{horizontal: true}, x+placement.widthOffset, e.y+lineAscent-placement.baseline, placement.width, placement.height)
+			placementX, placementY := x+placement.widthOffset, e.y+lineAscent-placement.baseline
+			if placement.grid {
+				e.renderInlineGrid(placement, placementX, placementY)
+			} else {
+				item := &flexLayoutItem{node: placement.node, style: placement.style, crossSize: placement.height}
+				item.algorithm = &flexItem{target: placement.width}
+				e.renderFlexItem(item, flexAxis{horizontal: true}, placementX, placementY, placement.width, placement.height)
+			}
 		}
 		e.y += lineHeight
 		lineRuns = lineRuns[:0]
@@ -513,6 +703,7 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 			FontSize: run.style.fontSize, Bold: run.style.bold,
 			Color: run.style.color, Background: run.style.background,
 			Decoration: run.style.decoration, DecorationColor: run.style.decorationColor, Opacity: run.opacity,
+			TextShadows: append([]stylemodel.Shadow(nil), run.style.textShadows...),
 		}
 		runHeight, runAscent := usedLineMetrics(run)
 		textRun.Baseline = e.y + runAscent
@@ -537,13 +728,15 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 		if token.atomic {
 			if token.flex {
 				token.width, token.height, token.baseline = e.resolveInlineFlexSize(token.node, token.style, width)
+			} else if token.grid {
+				token.width, token.height, token.baseline = e.resolveInlineGridSize(token.node, token.style, width)
 			} else {
 				token.width, token.height = resolveAtomicSize(token, width)
 			}
 			if usedWidth > 0 && usedWidth+token.width > width && wrapsWhitespace(token.style.whiteSpace) {
 				flushLine()
 			}
-			if token.flex {
+			if token.flex || token.grid {
 				token.widthOffset = usedWidth
 				flexPlacements = append(flexPlacements, token)
 				appendPiece(token, "", token.width)
@@ -614,6 +807,10 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 		}
 	}
 	flushLine()
+}
+
+func isBlockLevelDisplay(display stylemodel.Display) bool {
+	return display == stylemodel.DisplayBlock || display == stylemodel.DisplayFlex || display == stylemodel.DisplayGrid
 }
 
 func tokenizeInlineRuns(runs []inlineRun) []inlineRun {
@@ -707,9 +904,21 @@ func cloneRect(source *Rect) *Rect {
 	return &copy
 }
 
+func cloneClipRegions(source []ClipRegion) []ClipRegion {
+	return append([]ClipRegion(nil), source...)
+}
+
 func cloneBackgroundImage(source stylemodel.BackgroundImage) stylemodel.BackgroundImage {
 	result := source
 	result.GradientStops = append([]stylemodel.GradientStop(nil), source.GradientStops...)
+	return result
+}
+
+func cloneBackgroundLayers(source []stylemodel.BackgroundLayer) []stylemodel.BackgroundLayer {
+	result := append([]stylemodel.BackgroundLayer(nil), source...)
+	for index := range result {
+		result[index].Image = cloneBackgroundImage(result[index].Image)
+	}
 	return result
 }
 
@@ -814,11 +1023,20 @@ func applyComputed(block blockStyle, computed stylemodel.ComputedStyle) blockSty
 	block.repeat = computed.BackgroundRepeat
 	block.position = computed.BackgroundPos
 	block.backgroundSize = computed.BackgroundSize
+	block.backgroundLayers = cloneBackgroundLayers(computed.BackgroundLayers)
+	block.layoutPosition, block.inset = computed.Position, computed.Inset
+	block.zIndex, block.zIndexAuto = computed.ZIndex, computed.ZIndexAuto
+	block.boxShadows = append([]stylemodel.Shadow(nil), computed.BoxShadows...)
+	block.textShadows = append([]stylemodel.Shadow(nil), computed.TextShadows...)
+	block.outline, block.outlineOffset = computed.Outline, computed.OutlineOffset
+	block.transform = append([]stylemodel.TransformFunction(nil), computed.Transform...)
+	block.transformOrigin = computed.TransformOrigin
 	block.radius = computed.BorderRadius
 	block.decoration = computed.TextDecoration
 	block.decorationColor = computed.DecorationColor
 	block.opacity = computed.Opacity
 	block.display = computed.Display
+	block.hidden = computed.Visibility == stylemodel.VisibilityHidden
 	block.margin = computed.Margin
 	block.padding = computed.Padding
 	block.border = computed.Border
@@ -829,10 +1047,21 @@ func applyComputed(block blockStyle, computed stylemodel.ComputedStyle) blockSty
 	block.lineHeight, block.whiteSpace = computed.LineHeight, computed.WhiteSpace
 	block.overflowX, block.overflowY = computed.OverflowX, computed.OverflowY
 	block.flexDirection, block.flexWrap = computed.FlexDirection, computed.FlexWrap
-	block.justifyContent, block.alignItems, block.alignContent = computed.JustifyContent, computed.AlignItems, computed.AlignContent
+	block.justifyContent, block.alignItems, block.justifyItems, block.alignContent = computed.JustifyContent, computed.AlignItems, computed.JustifyItems, computed.AlignContent
 	block.order, block.flexGrow, block.flexShrink = computed.Order, computed.FlexGrow, computed.FlexShrink
-	block.flexBasis, block.alignSelf = computed.FlexBasis, computed.AlignSelf
+	block.flexBasis, block.alignSelf, block.justifySelf = computed.FlexBasis, computed.AlignSelf, computed.JustifySelf
 	block.rowGap, block.columnGap = computed.RowGap, computed.ColumnGap
+	block.gridTemplateColumns = append([]stylemodel.GridTrackSize(nil), computed.GridTemplateColumns...)
+	block.gridTemplateRows = append([]stylemodel.GridTrackSize(nil), computed.GridTemplateRows...)
+	block.gridAutoColumns = append([]stylemodel.GridTrackSize(nil), computed.GridAutoColumns...)
+	block.gridAutoRows = append([]stylemodel.GridTrackSize(nil), computed.GridAutoRows...)
+	block.gridColumnLines = computed.GridColumnLines
+	block.gridRowLines = computed.GridRowLines
+	block.gridTemplateAreas = computed.GridTemplateAreas
+	block.gridColumn = computed.GridColumn
+	block.gridRow = computed.GridRow
+	block.gridAreaName = computed.GridAreaName
+	block.gridAutoFlow = computed.GridAutoFlow
 	block.marginAuto, block.aspectRatio = computed.MarginAuto, computed.AspectRatio
 	return block
 }

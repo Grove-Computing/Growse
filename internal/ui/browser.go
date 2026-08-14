@@ -469,6 +469,15 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 	}
 	tree := layoutengine.BuildWithViewport(page.Document, page.ComputedStyles, viewportWidth, viewportHeight)
 	displayList := paintmodel.Build(tree)
+	if first := ui.pageList.Position.First; first >= 0 && first < len(displayList.Commands) {
+		if firstY, ok := commandDocumentY(displayList.Commands[first]); ok {
+			scrollY := max(firstY+float32(ui.pageList.Position.Offset)/gtx.Metric.PxPerDp, float32(0))
+			if scrollY > 0 {
+				tree = layoutengine.BuildWithScroll(page.Document, page.ComputedStyles, viewportWidth, viewportHeight, 0, scrollY)
+				displayList = paintmodel.Build(tree)
+			}
+		}
+	}
 	paint.Fill(gtx.Ops, rgba(displayList.Background))
 	ui.updateViewportHover(gtx, page, tree, displayList)
 	ui.handleViewportClicks(gtx, page, tree, displayList)
@@ -481,7 +490,7 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 		case paintmodel.DrawInput:
 			return ui.layoutDrawInput(gtx, command)
 		case paintmodel.DrawBox:
-			return layoutDrawBox(gtx, command, page.BackgroundImages[command.Image.URL])
+			return layoutDrawBox(gtx, command, page.BackgroundImages)
 		default:
 			return layout.Dimensions{}
 		}
@@ -617,10 +626,16 @@ func commandDocumentY(command paintmodel.Command) (float32, bool) {
 	}
 }
 
-func layoutDrawBox(gtx layout.Context, command paintmodel.DrawBox, backgroundImage image.Image) layout.Dimensions {
+func layoutDrawBox(gtx layout.Context, command paintmodel.DrawBox, backgroundImages map[string]image.Image) layout.Dimensions {
 	return layout.Inset{Top: unit.Dp(command.Top), Left: unit.Dp(command.X)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		if command.Transform != (stylemodel.Matrix{}) && command.Transform != stylemodel.IdentityMatrix() {
+			defer pushCSSMatrix(gtx, command.Transform, command.X, command.Y).Pop()
+		}
 		if command.Clip != nil {
 			defer commandClip(gtx, command.Clip, command.X, command.Y).Push(gtx.Ops).Pop()
+		}
+		for _, region := range command.Clips {
+			defer commandRoundedClip(gtx, region, command.X, command.Y).Push(gtx.Ops).Pop()
 		}
 		width := min(gtx.Dp(unit.Dp(command.Width)), gtx.Constraints.Max.X)
 		height := min(gtx.Dp(unit.Dp(command.Height)), gtx.Constraints.Max.Y)
@@ -628,29 +643,57 @@ func layoutDrawBox(gtx layout.Context, command paintmodel.DrawBox, backgroundIma
 		if command.Opacity < 1 {
 			defer paint.PushOpacity(gtx.Ops, max(command.Opacity, 0)).Pop()
 		}
+		for _, shadow := range command.BoxShadows {
+			if shadow.Inset {
+				continue
+			}
+			spread := gtx.Dp(unit.Dp(shadow.Spread + shadow.Blur/2))
+			offsetX, offsetY := gtx.Dp(unit.Dp(shadow.OffsetX)), gtx.Dp(unit.Dp(shadow.OffsetY))
+			paint.FillShape(gtx.Ops, rgba(shadow.Color), clip.Rect{Min: image.Pt(offsetX-spread, offsetY-spread), Max: image.Pt(width+offsetX+spread, height+offsetY+spread)}.Op())
+		}
 		rounded := roundedClip(gtx, command.Radius, width, height).Push(gtx.Ops)
 		defer rounded.Pop()
 		if command.Color != 0 {
 			paint.FillShape(gtx.Ops, rgba(command.Color), bounds.Op())
 		}
-		if command.Image.Kind == stylemodel.BackgroundImageLinearGradient && width > 0 && height > 0 {
-			area := bounds.Push(gtx.Ops)
-			widget.Image{
-				Src: paint.NewImageOp(rasterLinearGradient(width, height, command.Image)),
-				Fit: widget.Unscaled, Scale: 1 / gtx.Metric.PxPerDp,
-			}.Layout(gtx)
-			area.Pop()
-		} else if command.Image.Kind == stylemodel.BackgroundImageURL && backgroundImage != nil && width > 0 && height > 0 {
-			area := bounds.Push(gtx.Ops)
-			widget.Image{
-				Src: paint.NewImageOp(rasterBackgroundImage(width, height, backgroundImage, command, gtx.Metric.PxPerDp)),
-				Fit: widget.Unscaled, Scale: 1 / gtx.Metric.PxPerDp,
-			}.Layout(gtx)
-			area.Pop()
+		layers := command.Layers
+		if len(layers) == 0 && command.Image.Kind != stylemodel.BackgroundImageNone {
+			layers = []stylemodel.BackgroundLayer{{Image: command.Image, Repeat: command.Repeat, Position: command.Position, Size: command.Size}}
+		}
+		for index := len(layers) - 1; index >= 0; index-- {
+			layer := layers[index]
+			var raster image.Image
+			if layer.Image.Kind == stylemodel.BackgroundImageLinearGradient && width > 0 && height > 0 {
+				raster = rasterLinearGradient(width, height, layer.Image)
+			} else if layer.Image.Kind == stylemodel.BackgroundImageRadialGradient && width > 0 && height > 0 {
+				raster = rasterRadialGradient(width, height, layer.Image)
+			} else if layer.Image.Kind == stylemodel.BackgroundImageURL && backgroundImages[layer.Image.URL] != nil && width > 0 && height > 0 {
+				layerCommand := command
+				layerCommand.Image, layerCommand.Repeat, layerCommand.Position, layerCommand.Size = layer.Image, layer.Repeat, layer.Position, layer.Size
+				raster = rasterBackgroundImage(width, height, backgroundImages[layer.Image.URL], layerCommand, gtx.Metric.PxPerDp)
+			}
+			if raster != nil {
+				area := bounds.Push(gtx.Ops)
+				widget.Image{Src: paint.NewImageOp(raster), Fit: widget.Unscaled, Scale: 1 / gtx.Metric.PxPerDp}.Layout(gtx)
+				area.Pop()
+			}
 		}
 		paintBoxBorder(gtx, command.Border, width, height)
+		paintOutline(gtx, command.Outline, command.OutlineOffset, width, height)
 		return layout.Dimensions{}
 	})
+}
+
+func paintOutline(gtx layout.Context, outline stylemodel.BorderSide, offset float32, width, height int) {
+	if outline.Style == stylemodel.BorderNone || outline.Width <= 0 {
+		return
+	}
+	thickness, distance := gtx.Dp(unit.Dp(outline.Width)), gtx.Dp(unit.Dp(offset))
+	outer := image.Rect(-distance-thickness, -distance-thickness, width+distance+thickness, height+distance+thickness)
+	paintBorderStrip(gtx, image.Rect(outer.Min.X, outer.Min.Y, outer.Max.X, outer.Min.Y+thickness), outline, true)
+	paintBorderStrip(gtx, image.Rect(outer.Min.X, outer.Max.Y-thickness, outer.Max.X, outer.Max.Y), outline, true)
+	paintBorderStrip(gtx, image.Rect(outer.Min.X, outer.Min.Y, outer.Min.X+thickness, outer.Max.Y), outline, false)
+	paintBorderStrip(gtx, image.Rect(outer.Max.X-thickness, outer.Min.Y, outer.Max.X, outer.Max.Y), outline, false)
 }
 
 func roundedClip(gtx layout.Context, radius layoutengine.BorderRadii, width, height int) clip.Op {
@@ -851,6 +894,27 @@ func rasterLinearGradient(width, height int, background stylemodel.BackgroundIma
 	return result
 }
 
+func rasterRadialGradient(width, height int, background stylemodel.BackgroundImage) *image.NRGBA {
+	result := image.NewNRGBA(image.Rect(0, 0, width, height))
+	if len(background.GradientStops) == 0 || width <= 0 || height <= 0 {
+		return result
+	}
+	centerX := background.GradientCenter.X.Resolve(float32(width))
+	centerY := background.GradientCenter.Y.Resolve(float32(height))
+	radiusX, radiusY := max(centerX, float32(width)-centerX), max(centerY, float32(height)-centerY)
+	if background.RadialCircle {
+		radius := max(radiusX, radiusY)
+		radiusX, radiusY = radius, radius
+	}
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			dx, dy := (float32(x)-centerX)/max(radiusX, 1), (float32(y)-centerY)/max(radiusY, 1)
+			result.SetNRGBA(x, y, gradientColor(background.GradientStops, min(float32(math.Sqrt(float64(dx*dx+dy*dy))), 1)))
+		}
+	}
+	return result
+}
+
 func gradientColor(stops []stylemodel.GradientStop, position float32) color.NRGBA {
 	if position <= stops[0].Position {
 		return rgba(stops[0].Color)
@@ -964,8 +1028,14 @@ func (ui *BrowserUI) layoutDrawText(gtx layout.Context, command paintmodel.DrawT
 	}
 	right := unit.Dp(rightValue)
 	return layout.Inset{Top: unit.Dp(command.Top), Left: left, Right: right}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		if command.Transform != (stylemodel.Matrix{}) && command.Transform != stylemodel.IdentityMatrix() {
+			defer pushCSSMatrix(gtx, command.Transform, command.X, command.Y).Pop()
+		}
 		if command.Clip != nil {
 			defer commandClip(gtx, command.Clip, command.X, command.Y).Push(gtx.Ops).Pop()
+		}
+		for _, region := range command.Clips {
+			defer commandRoundedClip(gtx, region, command.X, command.Y).Push(gtx.Ops).Pop()
 		}
 		height := gtx.Dp(unit.Dp(command.Height))
 		if height < 1 {
@@ -990,14 +1060,15 @@ func (ui *BrowserUI) layoutDrawText(gtx layout.Context, command paintmodel.DrawT
 			defer paint.PushOpacity(gtx.Ops, max(command.Opacity, 0)).Pop()
 		}
 
-		label := material.Label(ui.theme, unit.Sp(command.FontSize), command.Text)
-		label.Color = rgba(command.Color)
-		label.MaxLines = 1
-		if command.Bold {
-			label.Font.Weight = font.Bold
-		}
-		return layoutDecoratedLabel(gtx, label.Layout, command.Decoration, command.DecorationColor, command.Baseline, command.FontSize)
+		return ui.layoutShadowedText(gtx, command.Text, command.FontSize, command.Bold, command.Color, command.Decoration, command.DecorationColor, command.Baseline, command.TextShadows)
 	})
+}
+
+func pushCSSMatrix(gtx layout.Context, matrix stylemodel.Matrix, originX, originY float32) op.TransformStack {
+	translationX := matrix.A*originX + matrix.C*originY + matrix.E - originX
+	translationY := matrix.B*originX + matrix.D*originY + matrix.F - originY
+	affine := f32.NewAffine2D(matrix.A, matrix.C, float32(gtx.Dp(unit.Dp(translationX))), matrix.B, matrix.D, float32(gtx.Dp(unit.Dp(translationY))))
+	return op.Affine(affine).Push(gtx.Ops)
 }
 
 func commandClip(gtx layout.Context, rectangle *layoutengine.Rect, originX, originY float32) clip.Rect {
@@ -1013,6 +1084,15 @@ func commandClip(gtx layout.Context, rectangle *layoutengine.Rect, originX, orig
 	}
 }
 
+func commandRoundedClip(gtx layout.Context, region layoutengine.ClipRegion, originX, originY float32) clip.Op {
+	left := gtx.Dp(unit.Dp(region.X - originX))
+	top := gtx.Dp(unit.Dp(region.Y - originY))
+	right := gtx.Dp(unit.Dp(region.X + region.Width - originX))
+	bottom := gtx.Dp(unit.Dp(region.Y + region.Height - originY))
+	radius := func(corner layoutengine.CornerRadius) int { return gtx.Dp(unit.Dp(max(corner.X, corner.Y))) }
+	return clip.RRect{Rect: image.Rect(left, top, right, bottom), NW: radius(region.Radius.TopLeft), NE: radius(region.Radius.TopRight), SE: radius(region.Radius.BottomRight), SW: radius(region.Radius.BottomLeft)}.Op(gtx.Ops)
+}
+
 func (ui *BrowserUI) layoutTextRun(gtx layout.Context, run paintmodel.TextRun, height int) layout.Dimensions {
 	gtx.Constraints.Min.X = 0
 	gtx.Constraints.Min.Y = height
@@ -1021,13 +1101,7 @@ func (ui *BrowserUI) layoutTextRun(gtx layout.Context, run paintmodel.TextRun, h
 		defer paint.PushOpacity(gtx.Ops, max(run.Opacity, 0)).Pop()
 	}
 	text := func(gtx layout.Context) layout.Dimensions {
-		label := material.Label(ui.theme, unit.Sp(run.FontSize), run.Text)
-		label.Color = rgba(run.Color)
-		label.MaxLines = 1
-		if run.Bold {
-			label.Font.Weight = font.Bold
-		}
-		return layoutDecoratedLabel(gtx, label.Layout, run.Decoration, run.DecorationColor, run.Baseline, run.FontSize)
+		return ui.layoutShadowedText(gtx, run.Text, run.FontSize, run.Bold, run.Color, run.Decoration, run.DecorationColor, run.Baseline, run.TextShadows)
 	}
 	if run.Background == 0 {
 		return text(gtx)
@@ -1039,6 +1113,31 @@ func (ui *BrowserUI) layoutTextRun(gtx layout.Context, run paintmodel.TextRun, h
 		}),
 		layout.Stacked(text),
 	)
+}
+
+func (ui *BrowserUI) layoutShadowedText(gtx layout.Context, text string, size float32, bold bool, color uint32, decoration stylemodel.TextDecorationLine, decorationColor uint32, baseline float32, shadows []stylemodel.Shadow) layout.Dimensions {
+	labelLayout := func(color uint32) layout.Widget {
+		return func(gtx layout.Context) layout.Dimensions {
+			label := material.Label(ui.theme, unit.Sp(size), text)
+			label.Color, label.MaxLines = rgba(color), 1
+			if bold {
+				label.Font.Weight = font.Bold
+			}
+			return layoutDecoratedLabel(gtx, label.Layout, decoration, decorationColor, baseline, size)
+		}
+	}
+	if len(shadows) == 0 {
+		return labelLayout(color)(gtx)
+	}
+	children := make([]layout.StackChild, 0, len(shadows)+1)
+	for _, shadow := range shadows {
+		shadow := shadow
+		children = append(children, layout.Stacked(func(gtx layout.Context) layout.Dimensions {
+			return layout.Inset{Top: unit.Dp(shadow.OffsetY), Left: unit.Dp(shadow.OffsetX)}.Layout(gtx, labelLayout(shadow.Color))
+		}))
+	}
+	children = append(children, layout.Stacked(labelLayout(color)))
+	return layout.Stack{Alignment: layout.NW}.Layout(gtx, children...)
 }
 
 func layoutDecoratedLabel(gtx layout.Context, label layout.Widget, decoration stylemodel.TextDecorationLine, decorationColor uint32, baseline, fontSize float32) layout.Dimensions {

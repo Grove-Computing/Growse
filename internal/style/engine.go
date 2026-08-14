@@ -105,7 +105,8 @@ func initialStyle() ComputedStyle {
 		Color: defaultTextColor, BackgroundColor: transparent, FontSize: 16, FontWeight: 400,
 		BackgroundRepeat: BackgroundRepeat{X: true, Y: true},
 		DecorationColor:  defaultTextColor, Opacity: 1, FlexShrink: 1,
-		AlignItems: AlignStretch, AlignContent: AlignStretch, AlignSelf: AlignAuto,
+		ZIndexAuto: true,
+		AlignItems: AlignStretch, JustifyItems: AlignStretch, AlignContent: AlignStretch, AlignSelf: AlignAuto, JustifySelf: AlignAuto,
 		Width: SizeValue{Kind: SizeAuto}, Height: SizeValue{Kind: SizeAuto},
 		MinWidth: SizeValue{Kind: SizeAuto}, MinHeight: SizeValue{Kind: SizeAuto},
 		MaxWidth: SizeValue{Kind: SizeNone}, MaxHeight: SizeValue{Kind: SizeNone},
@@ -115,11 +116,12 @@ func initialStyle() ComputedStyle {
 func inheritedStyle(parent ComputedStyle) ComputedStyle {
 	computed := ComputedStyle{
 		Color: parent.Color, FontSize: parent.FontSize, FontWeight: parent.FontWeight,
-		LineHeight: parent.LineHeight, WhiteSpace: parent.WhiteSpace,
+		LineHeight: parent.LineHeight, WhiteSpace: parent.WhiteSpace, Visibility: parent.Visibility,
 		BackgroundColor: transparent, Display: DisplayInline,
 		BackgroundRepeat: BackgroundRepeat{X: true, Y: true},
 		DecorationColor:  parent.Color, Opacity: 1, FlexShrink: 1,
-		AlignItems: AlignStretch, AlignContent: AlignStretch, AlignSelf: AlignAuto,
+		ZIndexAuto: true,
+		AlignItems: AlignStretch, JustifyItems: AlignStretch, AlignContent: AlignStretch, AlignSelf: AlignAuto, JustifySelf: AlignAuto,
 		Width: SizeValue{Kind: SizeAuto}, Height: SizeValue{Kind: SizeAuto},
 		MinWidth: SizeValue{Kind: SizeAuto}, MinHeight: SizeValue{Kind: SizeAuto},
 		MaxWidth: SizeValue{Kind: SizeNone}, MaxHeight: SizeValue{Kind: SizeNone},
@@ -320,6 +322,7 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 			}
 		}
 	}
+	computed = applyBackgroundLayers(computed, parent, winners, computed.CustomProperties, fontContext)
 	if value, ok := winners["font-size"]; ok {
 		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
 			parseFontSize := func(value string) (float32, bool) {
@@ -374,6 +377,23 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 			}
 		}
 	}
+	if value, ok := winners["visibility"]; ok {
+		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
+			switch parseGlobalKeyword(resolved) {
+			case globalInherit, globalUnset:
+				computed.Visibility = parent.Visibility
+			case globalInitial:
+				computed.Visibility = VisibilityVisible
+			default:
+				switch strings.ToLower(strings.TrimSpace(resolved)) {
+				case "visible":
+					computed.Visibility = VisibilityVisible
+				case "hidden", "collapse":
+					computed.Visibility = VisibilityHidden
+				}
+			}
+		}
+	}
 	if value, ok := winners["box-sizing"]; ok {
 		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
 			if parsed, valid := resolveBoxSizing(resolved, parent.BoxSizing); valid {
@@ -397,6 +417,10 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 	computed.Border = applyBorders(computed.Border, parent.Border, winners, computed.CustomProperties, lengthContext, computed.Color)
 	computed.BorderRadius = applyBorderRadii(computed.BorderRadius, parent.BorderRadius, winners, computed.CustomProperties, lengthContext)
 	computed = applyFlexProperties(computed, parent, winners, computed.CustomProperties, lengthContext)
+	computed = applyGridProperties(computed, parent, winners, computed.CustomProperties, lengthContext)
+	computed = applyPositionProperties(computed, parent, winners, computed.CustomProperties, lengthContext)
+	computed = applyShadowAndOutlineProperties(computed, parent, winners, computed.CustomProperties, lengthContext)
+	computed = applyTransformProperties(computed, parent, winners, computed.CustomProperties, lengthContext)
 	return computed
 }
 
@@ -865,6 +889,28 @@ func expandedProperties(property string) []string {
 		return []string{"flex-grow", "flex-shrink", "flex-basis"}
 	case "gap":
 		return []string{"row-gap", "column-gap"}
+	case "place-content":
+		return []string{"align-content", "justify-content"}
+	case "place-items":
+		return []string{"align-items", "justify-items"}
+	case "place-self":
+		return []string{"align-self", "justify-self"}
+	case "inset":
+		return []string{"top", "right", "bottom", "left"}
+	case "inset-block":
+		return []string{"top", "bottom"}
+	case "inset-inline":
+		return []string{"left", "right"}
+	case "inset-block-start":
+		return []string{"top"}
+	case "inset-block-end":
+		return []string{"bottom"}
+	case "inset-inline-start":
+		return []string{"left"}
+	case "inset-inline-end":
+		return []string{"right"}
+	case "outline":
+		return []string{"outline-width", "outline-style", "outline-color"}
 	default:
 		return []string{property}
 	}
@@ -1147,6 +1193,10 @@ func parseDisplay(value string) (Display, bool) {
 		return DisplayFlex, true
 	case "inline-flex":
 		return DisplayInlineFlex, true
+	case "grid":
+		return DisplayGrid, true
+	case "inline-grid":
+		return DisplayInlineGrid, true
 	case "none":
 		return DisplayNone, true
 	default:

@@ -60,8 +60,17 @@ jobs:
       - name: Check module files
         run: go mod tidy -diff
 
-      - name: Test v0.5.0 installer
+      - name: Test v0.6.0 installer
         run: bash tests/install.sh
+
+      - name: Validate release artifact matrix
+        run: bash tests/release.sh
+
+      - name: Validate Docker release
+        run: bash tests/docker.sh
+
+      - name: Validate v0.6.0 documentation
+        run: bash tests/docs.sh
 
       - name: Run race tests with coverage
         run: go test -race -covermode=atomic -coverprofile=coverage.out ./...
