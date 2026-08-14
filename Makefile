@@ -3,7 +3,7 @@ GOVULNCHECK_VERSION ?= v1.6.0
 ACTIONLINT_VERSION ?= v1.7.12
 PROJECT_GO := $(shell go env GOROOT)/bin/go
 
-.PHONY: test race vet staticcheck vulncheck actionlint installer-test release-test docker-test fmt-check tidy-check quality ci
+.PHONY: test race vet staticcheck vulncheck actionlint installer-test release-test docker-test docs-test fmt-check tidy-check quality ci
 
 test:
 	go test ./...
@@ -32,6 +32,9 @@ release-test:
 docker-test:
 	bash tests/docker.sh
 
+docs-test:
+	bash tests/docs.sh
+
 fmt-check:
 	@test -z "$$(gofmt -l .)" || (gofmt -l . && exit 1)
 
@@ -40,4 +43,4 @@ tidy-check:
 
 quality: fmt-check tidy-check vet staticcheck actionlint
 
-ci: quality race vulncheck installer-test release-test docker-test
+ci: quality race vulncheck installer-test release-test docker-test docs-test

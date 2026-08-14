@@ -69,6 +69,9 @@ jobs:
       - name: Validate Docker release
         run: bash tests/docker.sh
 
+      - name: Validate v0.6.0 documentation
+        run: bash tests/docs.sh
+
       - name: Run race tests with coverage
         run: go test -race -covermode=atomic -coverprofile=coverage.out ./...
 
