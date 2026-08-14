@@ -7,8 +7,8 @@ type historyEntry struct {
 	State        string
 	SameDocument bool
 	PageID       uint64
-	ScrollX      float32
-	ScrollY      float32
+	ScrollFirst  int
+	ScrollOffset int
 }
 
 func (entry *historyEntry) String() string {
@@ -94,6 +94,17 @@ func (h *history) current() (*historyEntry, bool) {
 		return nil, false
 	}
 	return cloneHistoryEntry(h.entries[h.index]), true
+}
+
+func (h *history) rebindPage(previousID, currentID uint64) {
+	if previousID == 0 || currentID == 0 || previousID == currentID {
+		return
+	}
+	for _, entry := range h.entries {
+		if entry != nil && entry.PageID == previousID {
+			entry.PageID = currentID
+		}
+	}
 }
 
 func (h *history) canBack() bool {

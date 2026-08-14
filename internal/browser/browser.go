@@ -792,14 +792,50 @@ func (b *Browser) CanForward() bool {
 	return b.history.canForward()
 }
 
+// UpdateHistoryScroll はUIの現在scroll位置をactive History entryへ保存する。
+func (b *Browser) UpdateHistoryScroll(first, offset int) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.page == nil || b.history.index < 0 || b.history.index >= len(b.history.entries) {
+		return
+	}
+	entry := b.history.entries[b.history.index]
+	if entry == nil || entry.PageID != b.page.HistoryID {
+		return
+	}
+	entry.ScrollFirst = first
+	entry.ScrollOffset = offset
+	b.page.ScrollFirst = first
+	b.page.ScrollOffset = offset
+}
+
 func (b *Browser) traverse(ctx context.Context, delta int) (*Page, error) {
-	b.mu.RLock()
-	target, index, ok := b.history.target(delta)
-	b.mu.RUnlock()
+	b.mu.Lock()
+	entry, index, ok := b.history.targetEntry(delta)
+	page := b.page
+	if ok && page != nil && entry.PageID != 0 && entry.PageID == page.HistoryID {
+		page.URL = cloneURL(entry.URL)
+		page.HistoryState = entry.State
+		page.ScrollFirst = entry.ScrollFirst
+		page.ScrollOffset = entry.ScrollOffset
+		page.ScrollRevision++
+		b.history.index = index
+		activeRuntime := b.activeRuntime
+		onMutation := b.onMutation
+		b.mu.Unlock()
+		if updater, supportsUpdate := activeRuntime.(runtimemodel.LocationUpdater); supportsUpdate {
+			updater.UpdateLocation(entry.URL)
+		}
+		if onMutation != nil {
+			onMutation()
+		}
+		return page, nil
+	}
+	b.mu.Unlock()
 	if !ok {
 		return nil, errors.New("no history entry in requested direction")
 	}
-	return b.load(ctx, target, historyTraverse, index)
+	return b.load(ctx, entry.URL, historyTraverse, index)
 }
 
 type historyCommit uint8
@@ -942,6 +978,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	previousPage := b.page
 	b.nextPageID++
 	page.HistoryID = b.nextPageID
+	page.ScrollRevision = 1
 	b.activeRuntime = pageRuntime
 	b.page = page
 	if previousPage != nil && previousPage != page && previousPage.Animations != nil {
@@ -954,8 +991,20 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	case historyPush:
 		b.history.pushEntry(&historyEntry{URL: page.URL, PageID: page.HistoryID})
 	case historyTraverse:
+		previousEntry := cloneHistoryEntry(b.history.entries[historyIndex])
 		b.history.index = historyIndex
-		b.history.replaceEntry(&historyEntry{URL: page.URL, PageID: page.HistoryID})
+		if previousEntry != nil {
+			page.HistoryState = previousEntry.State
+			page.ScrollFirst = previousEntry.ScrollFirst
+			page.ScrollOffset = previousEntry.ScrollOffset
+			b.history.rebindPage(previousEntry.PageID, page.HistoryID)
+			b.history.replaceEntry(&historyEntry{
+				URL: page.URL, State: previousEntry.State, PageID: page.HistoryID,
+				ScrollFirst: previousEntry.ScrollFirst, ScrollOffset: previousEntry.ScrollOffset,
+			})
+		} else {
+			b.history.replaceEntry(&historyEntry{URL: page.URL, PageID: page.HistoryID})
+		}
 	case historyReplace:
 		b.history.index = historyIndex
 		current, _ := b.history.current()
@@ -1007,6 +1056,7 @@ func (b *Browser) commitFragmentNavigation(target *url.URL) (*Page, bool) {
 		return nil, false
 	}
 	page.URL = cloneURL(target)
+	page.HistoryState = ""
 	b.history.pushEntry(&historyEntry{URL: target, SameDocument: true, PageID: page.HistoryID})
 	activeRuntime := b.activeRuntime
 	onMutation := b.onMutation
@@ -1042,8 +1092,10 @@ func (b *Browser) pushHistoryState(source *Page, target *url.URL, state string) 
 		return errors.New("history URL is not same-origin")
 	}
 	source.URL = cloneURL(target)
+	source.HistoryState = state
 	b.history.pushEntry(&historyEntry{
 		URL: target, State: state, SameDocument: true, PageID: source.HistoryID,
+		ScrollFirst: source.ScrollFirst, ScrollOffset: source.ScrollOffset,
 	})
 	activeRuntime := b.activeRuntime
 	onMutation := b.onMutation
@@ -1068,8 +1120,10 @@ func (b *Browser) replaceHistoryState(source *Page, target *url.URL, state strin
 		return errors.New("history URL is not same-origin")
 	}
 	source.URL = cloneURL(target)
+	source.HistoryState = state
 	b.history.replaceEntry(&historyEntry{
 		URL: target, State: state, SameDocument: true, PageID: source.HistoryID,
+		ScrollFirst: source.ScrollFirst, ScrollOffset: source.ScrollOffset,
 	})
 	activeRuntime := b.activeRuntime
 	onMutation := b.onMutation

@@ -18,6 +18,10 @@ import (
 // ページの表示を継続できるようにする。
 type Page struct {
 	HistoryID        uint64
+	HistoryState     string
+	ScrollFirst      int
+	ScrollOffset     int
+	ScrollRevision   uint64
 	URL              *url.URL
 	StatusCode       int
 	ContentType      string
