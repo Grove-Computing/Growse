@@ -80,7 +80,7 @@ func NewHTTPCacheWithDisk(cacheRoot string) (*HTTPCache, error) {
 // Store はCache対象Request/Responseをvariantとして保存する。
 func (cache *HTTPCache) Store(request *Request, response *Response) bool {
 	key, ok := baseCacheKey(request)
-	if cache == nil || !ok || response == nil || response.StatusCode != http.StatusOK {
+	if cache == nil || !ok || response == nil || response.StatusCode != http.StatusOK || cacheContainsCredentials(request, response) {
 		return false
 	}
 	policy := parseCachePolicy(response.Header.Values("Cache-Control"))
@@ -116,6 +116,13 @@ func (cache *HTTPCache) Store(request *Request, response *Response) bool {
 		cache.disk.store(key, entry)
 	}
 	return true
+}
+
+func cacheContainsCredentials(request *Request, response *Response) bool {
+	if request != nil && (request.Header.Get("Authorization") != "" || request.Header.Get("Proxy-Authorization") != "" || request.Header.Get("Cookie") != "") {
+		return true
+	}
+	return response != nil && (response.Header.Get("Set-Cookie") != "" || response.Header.Get("Set-Cookie2") != "")
 }
 
 func parseCachePolicy(values []string) cachePolicy {

@@ -218,7 +218,7 @@ func (c *Client) Do(ctx context.Context, requestData *Request) (*Response, error
 	cacheRequest.Method = method
 	cacheRequest.Header = request.Header.Clone()
 	if cached, ok := c.cache.MatchFresh(&cacheRequest); ok {
-		return cached, nil
+		return prepareCachedResponse(cached, requestData)
 	}
 	if validation, ok := c.cache.RevalidationHeaders(&cacheRequest); ok {
 		for name, values := range validation {
@@ -277,26 +277,42 @@ func (c *Client) Do(ctx context.Context, requestData *Request) (*Response, error
 	if response.Request != nil && response.Request.URL != nil {
 		finalURL = response.Request.URL
 	}
-	responseHeader := filterFetchResponseHeaders(response.Header, requestData, finalURL)
-
-	result := &Response{
+	cachedResult := &Response{
 		URL:         cloneURL(finalURL),
 		StatusCode:  response.StatusCode,
 		Status:      http.StatusText(response.StatusCode),
-		Header:      responseHeader,
+		Header:      response.Header.Clone(),
 		ContentType: response.Header.Get("Content-Type"),
 		Body:        body,
 		Redirected:  finalURL.String() != requestData.URL.String(),
 	}
-	c.invalidateAfterStateChange(&cacheRequest, result.StatusCode, response.Header, finalURL)
-	if result.StatusCode == http.StatusNotModified {
-		merged, ok := c.cache.MergeNotModified(&cacheRequest, result.Header)
+	c.invalidateAfterStateChange(&cacheRequest, cachedResult.StatusCode, response.Header, finalURL)
+	if cachedResult.StatusCode == http.StatusNotModified {
+		merged, ok := c.cache.MergeNotModified(&cacheRequest, cachedResult.Header)
 		if !ok {
 			return nil, ErrCacheValidation
 		}
-		return merged, nil
+		return prepareCachedResponse(merged, requestData)
 	}
-	c.cache.Store(&cacheRequest, result)
+	c.cache.Store(&cacheRequest, cachedResult)
+	return prepareCachedResponse(cachedResult, requestData)
+}
+
+func prepareCachedResponse(cached *Response, requestData *Request) (*Response, error) {
+	if cached == nil {
+		return nil, errors.New("cached response is nil")
+	}
+	finalURL := cached.URL
+	if finalURL == nil && requestData != nil {
+		finalURL = requestData.URL
+	}
+	probe := &http.Response{Header: cached.Header.Clone(), Request: &http.Request{URL: finalURL}}
+	if err := validateCORSResponse(probe, requestData); err != nil {
+		return nil, err
+	}
+	result := cloneResponse(cached)
+	result.Header = filterFetchResponseHeaders(cached.Header, requestData, finalURL)
+	result.ContentType = cached.Header.Get("Content-Type")
 	return result, nil
 }
 

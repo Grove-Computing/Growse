@@ -165,6 +165,9 @@ func (cache *diskCache) validRecord(id string, record diskCacheRecord) bool {
 	if err != nil || parsed.User != nil || cacheURL(parsed) != record.URL {
 		return false
 	}
+	if record.Response.Header.Get("Set-Cookie") != "" || record.Response.Header.Get("Set-Cookie2") != "" {
+		return false
+	}
 	origin, err := OriginFromURL(parsed)
 	return err == nil && origin.String() == record.Origin && headersWithinLimits(record.Response.Header)
 }

@@ -82,6 +82,34 @@ func TestClientRequestNoCacheBypassesFreshResponse(t *testing.T) {
 	}
 }
 
+func TestClientDoesNotReuseCredentialBearingResponses(t *testing.T) {
+	requests := map[string]int{}
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		requests[request.URL.Path]++
+		response.Header().Set("Cache-Control", "max-age=60")
+		if request.URL.Path == "/cookie" {
+			http.SetCookie(response, &http.Cookie{Name: "session", Value: "secret", Path: "/"})
+		}
+		_, _ = response.Write([]byte("private"))
+	}))
+	defer server.Close()
+	client := NewClientWithLimits(server.Client(), 1024)
+	for range 2 {
+		if _, err := client.Do(context.Background(), &Request{
+			Method: http.MethodGet, URL: mustParseURL(t, server.URL+"/authorization"),
+			Header: http.Header{"Authorization": []string{"Bearer secret"}},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := client.Get(context.Background(), mustParseURL(t, server.URL+"/cookie")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if requests["/authorization"] != 2 || requests["/cookie"] != 2 {
+		t.Fatalf("credential-bearing Network requests = %v, want two each", requests)
+	}
+}
+
 func TestSuccessfulUnsafeRequestInvalidatesRelatedSameOriginEntries(t *testing.T) {
 	itemVersion := 1
 	targetVersion := 1

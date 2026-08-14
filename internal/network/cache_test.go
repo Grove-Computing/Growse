@@ -117,6 +117,40 @@ func TestPrivateAndPublicResponsesCanBeStoredInPrivateCache(t *testing.T) {
 	}
 }
 
+func TestHTTPCacheRejectsCredentialBearingRequestsAndResponses(t *testing.T) {
+	cache := NewHTTPCache()
+	target := mustParseURL(t, "https://example.test/private")
+	for _, test := range []struct {
+		name     string
+		request  *Request
+		response *Response
+	}{
+		{
+			name:     "Authorization request",
+			request:  &Request{Method: http.MethodGet, URL: target, Header: http.Header{"Authorization": []string{"Bearer secret"}}},
+			response: &Response{StatusCode: http.StatusOK, Header: http.Header{"Cache-Control": []string{"max-age=60"}}},
+		},
+		{
+			name:     "Cookie request",
+			request:  &Request{Method: http.MethodGet, URL: target, Header: http.Header{"Cookie": []string{"session=secret"}}},
+			response: &Response{StatusCode: http.StatusOK, Header: http.Header{"Cache-Control": []string{"max-age=60"}}},
+		},
+		{
+			name:    "Set-Cookie response",
+			request: &Request{Method: http.MethodGet, URL: target},
+			response: &Response{StatusCode: http.StatusOK, Header: http.Header{
+				"Cache-Control": []string{"max-age=60"}, "Set-Cookie": []string{"session=secret"},
+			}},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if cache.Store(test.request, test.response) {
+				t.Fatal("credential-bearing response was cached")
+			}
+		})
+	}
+}
+
 func TestMatchFreshRejectsStaleAndNoCacheEntries(t *testing.T) {
 	now := time.Date(2026, time.August, 15, 12, 0, 0, 0, time.UTC)
 	request := &Request{Method: http.MethodGet, URL: mustParseURL(t, "https://example.test/data")}
