@@ -507,7 +507,9 @@ func (e *engine) renderFlexItem(item *flexLayoutItem, axis flexAxis, x, y, mainS
 	} else {
 		if style.display == stylemodel.DisplayInlineFlex {
 			style.display = stylemodel.DisplayFlex
-		} else if style.display != stylemodel.DisplayFlex {
+		} else if style.display == stylemodel.DisplayInlineGrid {
+			style.display = stylemodel.DisplayGrid
+		} else if style.display != stylemodel.DisplayFlex && style.display != stylemodel.DisplayGrid {
 			style.display = stylemodel.DisplayBlock
 		}
 		e.addBlock(item.node, style, 0, outerWidth, outerHeight, true, nil)

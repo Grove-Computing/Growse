@@ -258,3 +258,53 @@ func TestBuildGridGapContentSelfAlignmentAndAutoMargin(t *testing.T) {
 		t.Fatalf("auto margin alignment = %#v", autoRect.Rect)
 	}
 }
+
+func TestBuildNestedGridGridInFlexAndFlexInGrid(t *testing.T) {
+	document := dom.NewDocument()
+	outerGrid := document.CreateElement("div", map[string]string{"class": "outer-grid"})
+	innerGrid := document.CreateElement("div", map[string]string{"class": "inner-grid"})
+	innerFirst := document.CreateElement("div", map[string]string{"class": "cell"})
+	innerSecond := document.CreateElement("div", map[string]string{"class": "cell"})
+	flexHost := document.CreateElement("div", map[string]string{"class": "flex-host"})
+	gridInFlex := document.CreateElement("div", map[string]string{"class": "grid-in-flex"})
+	gridFlexFirst := document.CreateElement("div", map[string]string{"class": "cell"})
+	gridFlexSecond := document.CreateElement("div", map[string]string{"class": "cell"})
+	gridHost := document.CreateElement("div", map[string]string{"class": "grid-host"})
+	flexInGrid := document.CreateElement("div", map[string]string{"class": "flex-in-grid"})
+	flexFirst := document.CreateElement("div", map[string]string{"class": "flex-cell"})
+	flexSecond := document.CreateElement("div", map[string]string{"class": "flex-cell"})
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, outerGrid}, [2]*dom.Node{outerGrid, innerGrid},
+		[2]*dom.Node{innerGrid, innerFirst}, [2]*dom.Node{innerGrid, innerSecond},
+		[2]*dom.Node{document.Root, flexHost}, [2]*dom.Node{flexHost, gridInFlex},
+		[2]*dom.Node{gridInFlex, gridFlexFirst}, [2]*dom.Node{gridInFlex, gridFlexSecond},
+		[2]*dom.Node{document.Root, gridHost}, [2]*dom.Node{gridHost, flexInGrid},
+		[2]*dom.Node{flexInGrid, flexFirst}, [2]*dom.Node{flexInGrid, flexSecond},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.outer-grid { display:grid; width:300px; grid-template-columns:150px 150px; grid-template-rows:60px }
+.inner-grid { display:grid; grid-template-columns:50px 100px; grid-template-rows:60px }
+.flex-host { display:flex; width:300px }
+.grid-in-flex { display:grid; flex:0 0 200px; height:60px; grid-template-columns:80px 120px; grid-template-rows:60px }
+.grid-host { display:grid; width:200px; grid-template-columns:200px; grid-template-rows:50px }
+.flex-in-grid { display:flex }
+.flex-cell { flex:0 0 100px; background-color:#ccc }
+.cell { background-color:#ddd }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, stylemodel.Compute(document, stylesheet), 500)
+	innerFirstRect, innerSecondRect := decorationForNode(t, tree, innerFirst.ID), decorationForNode(t, tree, innerSecond.ID)
+	if innerFirstRect.Width != 50 || innerSecondRect.X != innerFirstRect.X+50 || innerSecondRect.Width != 100 {
+		t.Fatalf("nested grid = first %#v second %#v", innerFirstRect.Rect, innerSecondRect.Rect)
+	}
+	gridFlexFirstRect, gridFlexSecondRect := decorationForNode(t, tree, gridFlexFirst.ID), decorationForNode(t, tree, gridFlexSecond.ID)
+	if gridFlexFirstRect.Width != 80 || gridFlexSecondRect.X != gridFlexFirstRect.X+80 || gridFlexSecondRect.Width != 120 {
+		t.Fatalf("grid in flex = first %#v second %#v", gridFlexFirstRect.Rect, gridFlexSecondRect.Rect)
+	}
+	flexFirstRect, flexSecondRect := decorationForNode(t, tree, flexFirst.ID), decorationForNode(t, tree, flexSecond.ID)
+	if flexFirstRect.Width != 100 || flexSecondRect.X != flexFirstRect.X+100 || flexSecondRect.Width != 100 {
+		t.Fatalf("flex in grid = first %#v second %#v", flexFirstRect.Rect, flexSecondRect.Rect)
+	}
+}
