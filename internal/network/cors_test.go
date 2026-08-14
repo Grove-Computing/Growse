@@ -62,8 +62,8 @@ func TestFetchRejectsInvalidSimpleCORSResponseAndNonSimpleRequest(t *testing.T) 
 		Method: http.MethodPut, URL: target, SiteURL: site, Kind: RequestFetch,
 		Header: http.Header{"X-Custom": []string{"value"}},
 	})
-	if !errors.Is(err, ErrCORSPreflightRequired) {
-		t.Fatalf("non-simple CORS error = %v, want ErrCORSPreflightRequired", err)
+	if !errors.Is(err, ErrCORS) {
+		t.Fatalf("rejected preflight error = %v, want ErrCORS", err)
 	}
 }
 
@@ -78,5 +78,38 @@ func TestCredentialedCORSRejectsWildcardOrigin(t *testing.T) {
 	})
 	if !errors.Is(err, ErrCORS) {
 		t.Fatalf("credentialed wildcard CORS error = %v, want ErrCORS", err)
+	}
+}
+
+func TestCORSPreflightValidatesAndCachesPermission(t *testing.T) {
+	options := 0
+	actual := 0
+	allowedOrigin := "https://app.example.test"
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
+		if request.Method == http.MethodOptions {
+			options++
+			response.Header().Set("Access-Control-Allow-Methods", "PUT")
+			response.Header().Set("Access-Control-Allow-Headers", "X-Custom")
+			response.Header().Set("Access-Control-Max-Age", "600")
+			return
+		}
+		actual++
+		_, _ = response.Write([]byte("updated"))
+	}))
+	defer server.Close()
+	client := NewClientWithLimits(server.Client(), 1024)
+	request := &Request{
+		Method: http.MethodPut, URL: parseOriginURL(t, server.URL+"/data"),
+		SiteURL: parseOriginURL(t, allowedOrigin+"/page"), Kind: RequestFetch,
+		Header: http.Header{"X-Custom": []string{"value"}}, Body: []byte("body"),
+	}
+	for index := 0; index < 2; index++ {
+		if _, err := client.Do(context.Background(), request); err != nil {
+			t.Fatalf("Do(%d) error = %v", index, err)
+		}
+	}
+	if options != 1 || actual != 2 {
+		t.Fatalf("request counts = OPTIONS:%d actual:%d, want 1 and 2", options, actual)
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sync"
 	"time"
 )
 
@@ -72,15 +73,18 @@ const (
 
 // Client is a size-limited HTTP resource loader.
 type Client struct {
-	httpClient   *http.Client
-	maxBodyBytes int64
+	httpClient     *http.Client
+	maxBodyBytes   int64
+	preflightMu    sync.Mutex
+	preflightCache map[string]time.Time
+	now            func() time.Time
 }
 
 // NewClient creates a client with production defaults.
 func NewClient() *Client {
 	return &Client{
-		httpClient:   configuredHTTPClient(&http.Client{Timeout: defaultTimeout}),
-		maxBodyBytes: defaultMaxBodyBytes,
+		httpClient: configuredHTTPClient(&http.Client{Timeout: defaultTimeout}), maxBodyBytes: defaultMaxBodyBytes,
+		preflightCache: make(map[string]time.Time), now: time.Now,
 	}
 }
 
@@ -93,7 +97,10 @@ func NewClientWithLimits(httpClient *http.Client, maxBodyBytes int64) *Client {
 	if maxBodyBytes <= 0 {
 		maxBodyBytes = defaultMaxBodyBytes
 	}
-	return &Client{httpClient: configuredHTTPClient(httpClient), maxBodyBytes: maxBodyBytes}
+	return &Client{
+		httpClient: configuredHTTPClient(httpClient), maxBodyBytes: maxBodyBytes,
+		preflightCache: make(map[string]time.Time), now: time.Now,
+	}
 }
 
 func configuredHTTPClient(source *http.Client) *http.Client {
@@ -177,7 +184,7 @@ func (c *Client) Do(ctx context.Context, requestData *Request) (*Response, error
 	jar := operationClient.Jar
 	operationClient.Jar = nil
 	addRequestCookies(request, jar, requestData)
-	if err := applyCORSRequest(request, requestData); err != nil {
+	if err := c.prepareCORS(ctx, &operationClient, request, requestData); err != nil {
 		return nil, err
 	}
 	redirectPolicy := operationClient.CheckRedirect
@@ -196,7 +203,7 @@ func (c *Client) Do(ctx context.Context, requestData *Request) (*Response, error
 		redirectData.URL = redirect.URL
 		redirectData.Method = redirect.Method
 		addRequestCookies(redirect, jar, &redirectData)
-		return applyCORSRequest(redirect, &redirectData)
+		return c.prepareCORS(ctx, &operationClient, redirect, &redirectData)
 	}
 	response, err := operationClient.Do(request)
 	if err != nil {
