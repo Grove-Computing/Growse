@@ -505,6 +505,60 @@ func (b *Browser) Navigate(ctx context.Context, rawURL string) (*Page, error) {
 	return b.load(ctx, pageURL, historyPush, -1)
 }
 
+// SubmitGET serializes a form into the action query and navigates with history.
+func (b *Browser) SubmitGET(ctx context.Context, formID, submitterID dom.NodeID) (*Page, error) {
+	b.mu.RLock()
+	page := b.page
+	if page == nil || page.Document == nil || page.URL == nil {
+		b.mu.RUnlock()
+		return nil, errors.New("no active page for form submission")
+	}
+	form, ok := page.Document.NodeByID(formID)
+	if !ok {
+		b.mu.RUnlock()
+		return nil, errors.New("form was not found")
+	}
+	var submitter *dom.Node
+	if submitterID != 0 {
+		submitter, ok = page.Document.NodeByID(submitterID)
+		if !ok {
+			b.mu.RUnlock()
+			return nil, errors.New("submitter was not found")
+		}
+	}
+	config, ok := forms.ResolveFormSubmission(page.Document, form, submitter)
+	if !ok || config.Method != "get" {
+		b.mu.RUnlock()
+		return nil, errors.New("form is not a GET submission")
+	}
+	entries := forms.CollectEntries(page.Document, form, submitter)
+	baseURL := cloneURL(page.URL)
+	b.mu.RUnlock()
+
+	target, err := resolveFormAction(baseURL, config.Action)
+	if err != nil {
+		return nil, err
+	}
+	target.RawQuery = forms.EncodeURLEncoded(entries)
+	target.Fragment = ""
+	return b.load(ctx, target, historyPush, -1)
+}
+
+func resolveFormAction(baseURL *url.URL, action string) (*url.URL, error) {
+	if baseURL == nil {
+		return nil, errors.New("form action has no base URL")
+	}
+	reference, err := url.Parse(strings.TrimSpace(action))
+	if err != nil {
+		return nil, fmt.Errorf("parse form action: %w", err)
+	}
+	target := baseURL.ResolveReference(reference)
+	if target.Scheme != "http" && target.Scheme != "https" {
+		return nil, fmt.Errorf("unsupported form action scheme %q", target.Scheme)
+	}
+	return target, nil
+}
+
 // Back loads the previous successful navigation entry.
 func (b *Browser) Back(ctx context.Context) (*Page, error) {
 	return b.traverse(ctx, -1)

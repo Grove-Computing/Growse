@@ -1011,6 +1011,40 @@ func TestValidateFormFocusesFirstInvalidControlAndUpdatesPseudoClass(t *testing.
 	}
 }
 
+func TestSubmitGETNavigatesWithEncodedEntriesAndPushesHistory(t *testing.T) {
+	document := dom.NewDocument()
+	form := document.CreateElement("form", map[string]string{"action": "/search?old=1#fragment", "method": "get"})
+	query := document.CreateElement("input", map[string]string{"name": "q", "value": "hello world"})
+	tag := document.CreateElement("input", map[string]string{"name": "tag", "value": "go"})
+	submit := document.CreateElement("button", nil)
+	for _, edge := range [][2]*dom.Node{{document.Root, form}, {form, query}, {form, tag}, {form, submit}} {
+		if err := document.AppendChild(edge[0], edge[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	baseURL := mustParseURL(t, "https://example.com/form")
+	targetURL := mustParseURL(t, "https://example.com/search?q=hello+world&tag=go")
+	loader := &routeLoader{responses: map[string]*network.Response{
+		targetURL.String(): {URL: targetURL, StatusCode: 200, ContentType: "text/html", Body: []byte(`<!doctype html><title>Results</title>`)},
+	}}
+	browser := New(loader)
+	browser.SetPage(&Page{URL: baseURL, Document: document, ComputedStyles: style.Compute(document, nil), Events: events.NewDispatcher()})
+
+	page, err := browser.SubmitGET(context.Background(), form.ID, submit.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.URL.String() != targetURL.String() || !browser.CanBack() {
+		t.Fatalf("page=%s canBack=%v", page.URL, browser.CanBack())
+	}
+	if got := loader.requested; !reflect.DeepEqual(got, []string{targetURL.String()}) {
+		t.Fatalf("requested = %v", got)
+	}
+	if len(browser.history.entries) != 2 || browser.history.entries[0].String() != baseURL.String() {
+		t.Fatalf("history = %#v", browser.history.entries)
+	}
+}
+
 func TestNewPageCopiesURL(t *testing.T) {
 	pageURL := mustParseURL(t, "https://example.com/original")
 	page := NewPage(pageURL)

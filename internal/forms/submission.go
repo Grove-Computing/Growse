@@ -156,6 +156,17 @@ func ResolveSubmission(document *dom.Document, submitter *dom.Node) (SubmissionC
 	if form == nil {
 		return SubmissionConfig{}, false
 	}
+	return ResolveFormSubmission(document, form, submitter)
+}
+
+// ResolveFormSubmission resolves a form with an optional submitter.
+func ResolveFormSubmission(document *dom.Document, form, submitter *dom.Node) (SubmissionConfig, bool) {
+	if document == nil || form == nil || form.TagName != "form" || !document.IsConnected(form) {
+		return SubmissionConfig{}, false
+	}
+	if submitter != nil && (FormOwner(document, submitter) != form || !IsSubmitButton(submitter) || Disabled(submitter)) {
+		return SubmissionConfig{}, false
+	}
 	config := SubmissionConfig{Form: form, Submitter: submitter, Method: "get", Enctype: URLEncoded, Target: "_self"}
 	config.Action, _ = form.Attribute("action")
 	if method, exists := form.Attribute("method"); exists {
@@ -168,20 +179,22 @@ func ResolveSubmission(document *dom.Document, submitter *dom.Node) (SubmissionC
 		config.Target = strings.TrimSpace(target)
 	}
 	_, config.NoValidate = form.Attribute("novalidate")
-	if value, exists := submitter.Attribute("formaction"); exists {
-		config.Action = value
-	}
-	if value, exists := submitter.Attribute("formmethod"); exists {
-		config.Method = normalizeMethod(value)
-	}
-	if value, exists := submitter.Attribute("formenctype"); exists {
-		config.Enctype = normalizeEnctype(value)
-	}
-	if value, exists := submitter.Attribute("formtarget"); exists && strings.TrimSpace(value) != "" {
-		config.Target = strings.TrimSpace(value)
-	}
-	if _, exists := submitter.Attribute("formnovalidate"); exists {
-		config.NoValidate = true
+	if submitter != nil {
+		if value, exists := submitter.Attribute("formaction"); exists {
+			config.Action = value
+		}
+		if value, exists := submitter.Attribute("formmethod"); exists {
+			config.Method = normalizeMethod(value)
+		}
+		if value, exists := submitter.Attribute("formenctype"); exists {
+			config.Enctype = normalizeEnctype(value)
+		}
+		if value, exists := submitter.Attribute("formtarget"); exists && strings.TrimSpace(value) != "" {
+			config.Target = strings.TrimSpace(value)
+		}
+		if _, exists := submitter.Attribute("formnovalidate"); exists {
+			config.NoValidate = true
+		}
 	}
 	return config, true
 }
