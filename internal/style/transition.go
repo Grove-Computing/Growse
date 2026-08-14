@@ -102,6 +102,8 @@ func interpolateTransitionValue(from, to TransitionValue, progress float64) Tran
 		return TransitionValue{Kind: TransitionNumber, Number: InterpolateOpacity(from.Number, to.Number, progress)}
 	case TransitionColor:
 		return TransitionValue{Kind: TransitionColor, Color: InterpolateColor(from.Color, to.Color, progress)}
+	case TransitionTransform:
+		return TransitionValue{Kind: TransitionTransform, Transform: InterpolateTransform(from.Transform, to.Transform, progress, 0, 0)}
 	default:
 		if progress >= 1 {
 			return cloneTransitionValue(to)
