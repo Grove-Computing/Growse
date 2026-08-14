@@ -13,7 +13,7 @@ func TestTimelineUsesOneMonotonicTimestampForEveryAnimation(t *testing.T) {
 	}}
 	first := &recordingAnimation{activeFrames: 2}
 	second := &recordingAnimation{activeFrames: 2}
-	timeline := NewTimeline(clock)
+	timeline := NewTimeline(clock, nil)
 	timeline.Add(first)
 	timeline.Add(second)
 
@@ -36,6 +36,46 @@ func TestTimelineUsesOneMonotonicTimestampForEveryAnimation(t *testing.T) {
 				t.Fatalf("%s animation frame %d = %v, want shared monotonic timestamp", name, index, frame)
 			}
 		}
+	}
+}
+
+func TestTimelineRequestsFramesOnlyWhileAnimationIsActive(t *testing.T) {
+	clock := &sequenceClock{times: []time.Time{
+		time.Unix(1, 0),
+		time.Unix(2, 0),
+		time.Unix(3, 0),
+	}}
+	requests := 0
+	timeline := NewTimeline(clock, func() { requests++ })
+
+	timeline.Add(&recordingAnimation{activeFrames: 2})
+	timeline.Add(&recordingAnimation{activeFrames: 1})
+	if requests != 1 {
+		t.Fatalf("frame requests after two additions = %d, want 1", requests)
+	}
+	if !timeline.Active() {
+		t.Fatal("timeline is inactive after adding animations")
+	}
+
+	timeline.Tick()
+	if requests != 2 {
+		t.Fatalf("frame requests after active tick = %d, want 2", requests)
+	}
+	if !timeline.Active() {
+		t.Fatal("timeline became inactive before the remaining animation finished")
+	}
+
+	timeline.Tick()
+	if requests != 2 {
+		t.Fatalf("frame requests after final tick = %d, want no additional request", requests)
+	}
+	if timeline.Active() {
+		t.Fatal("timeline remains active after every animation finished")
+	}
+
+	timeline.Tick()
+	if requests != 2 {
+		t.Fatalf("frame requests after empty tick = %d, want no additional request", requests)
 	}
 }
 

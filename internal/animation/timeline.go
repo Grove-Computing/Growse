@@ -18,29 +18,38 @@ type Animation interface {
 
 // Timeline advances every registered animation against one shared clock.
 type Timeline struct {
-	clock     Clock
-	lastFrame time.Time
-	active    []Animation
+	clock        Clock
+	requestFrame func()
+	lastFrame    time.Time
+	active       []Animation
+	framePending bool
 }
 
 // NewTimeline creates an empty timeline driven by clock.
-func NewTimeline(clock Clock) *Timeline {
+func NewTimeline(clock Clock, requestFrame func()) *Timeline {
 	if clock == nil {
 		clock = systemClock{}
 	}
-	return &Timeline{clock: clock}
+	return &Timeline{clock: clock, requestFrame: requestFrame}
 }
 
 // Add registers an animation for the next frame. Nil animations are ignored.
 func (t *Timeline) Add(animation Animation) {
 	if animation != nil {
 		t.active = append(t.active, animation)
+		t.requestNextFrame()
 	}
+}
+
+// Active reports whether at least one animation needs another frame.
+func (t *Timeline) Active() bool {
+	return len(t.active) > 0
 }
 
 // Tick samples the clock once and advances all active animations with the
 // resulting timestamp. Finished animations are removed from the timeline.
 func (t *Timeline) Tick() time.Time {
+	t.framePending = false
 	frameTime := t.clock.Now()
 	if !t.lastFrame.IsZero() && frameTime.Before(t.lastFrame) {
 		frameTime = t.lastFrame
@@ -54,7 +63,18 @@ func (t *Timeline) Tick() time.Time {
 		}
 	}
 	t.active = remaining
+	if len(t.active) > 0 {
+		t.requestNextFrame()
+	}
 	return frameTime
+}
+
+func (t *Timeline) requestNextFrame() {
+	if t.requestFrame == nil || t.framePending {
+		return
+	}
+	t.framePending = true
+	t.requestFrame()
 }
 
 type systemClock struct{}
