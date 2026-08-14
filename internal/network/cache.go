@@ -187,6 +187,22 @@ func durationFromSeconds(seconds uint64) time.Duration {
 
 // Match はRequest Headerを含めて一致する保存済みvariantを返す。
 func (cache *HTTPCache) Match(request *Request) (*Response, bool) {
+	entry, ok := cache.matchEntry(request)
+	if !ok {
+		return nil, false
+	}
+	return cloneResponse(entry.response), true
+}
+
+func (cache *HTTPCache) MatchFresh(request *Request) (*Response, bool) {
+	entry, ok := cache.matchEntry(request)
+	if !ok || entry.policy.noCache || !entry.freshness.fresh(cache.now()) {
+		return nil, false
+	}
+	return cloneResponse(entry.response), true
+}
+
+func (cache *HTTPCache) matchEntry(request *Request) (*cacheEntry, bool) {
 	key, ok := baseCacheKey(request)
 	if cache == nil || !ok {
 		return nil, false
@@ -195,7 +211,7 @@ func (cache *HTTPCache) Match(request *Request) (*Response, bool) {
 	defer cache.mu.RUnlock()
 	for _, entry := range cache.entries[key] {
 		if equalStrings(entry.varyValues, requestHeaderValues(request.Header, entry.vary)) {
-			return cloneResponse(entry.response), true
+			return entry, true
 		}
 	}
 	return nil, false

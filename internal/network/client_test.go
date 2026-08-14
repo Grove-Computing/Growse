@@ -35,6 +35,28 @@ func TestClientGetHTML(t *testing.T) {
 	}
 }
 
+func TestClientReusesFreshResponseWithoutNetworkRequest(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		requests++
+		response.Header().Set("Cache-Control", "max-age=60")
+		response.Header().Set("Content-Type", "text/plain")
+		_, _ = response.Write([]byte("cached"))
+	}))
+	defer server.Close()
+	client := NewClientWithLimits(server.Client(), 1024)
+	target := mustParseURL(t, server.URL+"/resource")
+	for range 2 {
+		result, err := client.Get(context.Background(), target)
+		if err != nil || string(result.Body) != "cached" {
+			t.Fatalf("Get() = (%v, %v)", result, err)
+		}
+	}
+	if requests != 1 {
+		t.Fatalf("Network requests = %d, want 1", requests)
+	}
+}
+
 func TestClientDoSendsMethodHeadersAndBody(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		body, _ := io.ReadAll(request.Body)

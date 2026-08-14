@@ -83,6 +83,7 @@ type Client struct {
 	preflightMu    sync.Mutex
 	preflightCache map[string]time.Time
 	now            func() time.Time
+	cache          *HTTPCache
 }
 
 // NewClient creates a client with production defaults.
@@ -90,6 +91,7 @@ func NewClient() *Client {
 	return &Client{
 		httpClient: configuredHTTPClient(&http.Client{Timeout: defaultTimeout}), maxBodyBytes: defaultMaxBodyBytes,
 		preflightCache: make(map[string]time.Time), now: time.Now,
+		cache: NewHTTPCache(),
 	}
 }
 
@@ -105,6 +107,7 @@ func NewClientWithLimits(httpClient *http.Client, maxBodyBytes int64) *Client {
 	return &Client{
 		httpClient: configuredHTTPClient(httpClient), maxBodyBytes: maxBodyBytes,
 		preflightCache: make(map[string]time.Time), now: time.Now,
+		cache: NewHTTPCache(),
 	}
 }
 
@@ -198,6 +201,12 @@ func (c *Client) Do(ctx context.Context, requestData *Request) (*Response, error
 	if err := c.prepareCORS(ctx, &operationClient, request, requestData); err != nil {
 		return nil, err
 	}
+	cacheRequest := *requestData
+	cacheRequest.Method = method
+	cacheRequest.Header = request.Header.Clone()
+	if cached, ok := c.cache.MatchFresh(&cacheRequest); ok {
+		return cached, nil
+	}
 	redirectPolicy := operationClient.CheckRedirect
 	operationClient.CheckRedirect = func(redirect *http.Request, via []*http.Request) error {
 		if err := validateCORSResponse(redirect.Response, requestData); err != nil {
@@ -250,7 +259,7 @@ func (c *Client) Do(ctx context.Context, requestData *Request) (*Response, error
 	}
 	responseHeader := filterFetchResponseHeaders(response.Header, requestData, finalURL)
 
-	return &Response{
+	result := &Response{
 		URL:         cloneURL(finalURL),
 		StatusCode:  response.StatusCode,
 		Status:      http.StatusText(response.StatusCode),
@@ -258,7 +267,9 @@ func (c *Client) Do(ctx context.Context, requestData *Request) (*Response, error
 		ContentType: response.Header.Get("Content-Type"),
 		Body:        body,
 		Redirected:  finalURL.String() != requestData.URL.String(),
-	}, nil
+	}
+	c.cache.Store(&cacheRequest, result)
+	return result, nil
 }
 
 func headersWithinLimits(header http.Header) bool {

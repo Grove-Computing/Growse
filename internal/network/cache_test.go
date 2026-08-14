@@ -117,6 +117,29 @@ func TestPrivateAndPublicResponsesCanBeStoredInPrivateCache(t *testing.T) {
 	}
 }
 
+func TestMatchFreshRejectsStaleAndNoCacheEntries(t *testing.T) {
+	now := time.Date(2026, time.August, 15, 12, 0, 0, 0, time.UTC)
+	request := &Request{Method: http.MethodGet, URL: mustParseURL(t, "https://example.test/data")}
+	cache := NewHTTPCache()
+	cache.now = func() time.Time { return now }
+	if !cache.Store(request, &Response{StatusCode: http.StatusOK, Header: http.Header{"Cache-Control": []string{"max-age=10"}}}) {
+		t.Fatal("Store() failed")
+	}
+	if _, ok := cache.MatchFresh(request); !ok {
+		t.Fatal("fresh entry was not reusable")
+	}
+	now = now.Add(10 * time.Second)
+	if _, ok := cache.MatchFresh(request); ok {
+		t.Fatal("stale entry was reusable")
+	}
+	noCache := NewHTTPCache()
+	noCache.now = func() time.Time { return now }
+	noCache.Store(request, &Response{StatusCode: http.StatusOK, Header: http.Header{"Cache-Control": []string{"no-cache, max-age=3600"}}})
+	if _, ok := noCache.MatchFresh(request); ok {
+		t.Fatal("no-cache entry was reused without validation")
+	}
+}
+
 func TestHTTPCacheRejectsUnsafeOrUnusableKeys(t *testing.T) {
 	cache := NewHTTPCache()
 	response := &Response{StatusCode: http.StatusOK, Header: make(http.Header)}
