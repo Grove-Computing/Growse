@@ -202,6 +202,36 @@ func (cache *HTTPCache) MatchFresh(request *Request) (*Response, bool) {
 	return cloneResponse(entry.response), true
 }
 
+// RevalidationHeaders はstale/no-cache variantの条件付きRequest Headerを返す。
+func (cache *HTTPCache) RevalidationHeaders(request *Request) (http.Header, bool) {
+	entry, ok := cache.matchEntry(request)
+	if !ok || !entry.policy.noCache && entry.freshness.fresh(cache.now()) {
+		return nil, false
+	}
+	header := make(http.Header)
+	if etag := strings.TrimSpace(headerValue(entry.response.Header, "ETag")); etag != "" {
+		header.Set("If-None-Match", etag)
+		return header, true
+	}
+	if modified := strings.TrimSpace(headerValue(entry.response.Header, "Last-Modified")); modified != "" {
+		header.Set("If-Modified-Since", modified)
+		return header, true
+	}
+	return nil, false
+}
+
+func headerValue(header http.Header, name string) string {
+	if value := header.Get(name); value != "" {
+		return value
+	}
+	for current, values := range header {
+		if strings.EqualFold(current, name) {
+			return strings.Join(values, ", ")
+		}
+	}
+	return ""
+}
+
 func (cache *HTTPCache) matchEntry(request *Request) (*cacheEntry, bool) {
 	key, ok := baseCacheKey(request)
 	if cache == nil || !ok {

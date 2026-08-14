@@ -57,6 +57,31 @@ func TestClientReusesFreshResponseWithoutNetworkRequest(t *testing.T) {
 	}
 }
 
+func TestClientConditionallyRevalidatesStaleResponse(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		requests++
+		response.Header().Set("Cache-Control", "no-cache")
+		response.Header().Set("ETag", `"v1"`)
+		if requests == 2 && request.Header.Get("If-None-Match") != `"v1"` {
+			t.Errorf("If-None-Match = %q", request.Header.Get("If-None-Match"))
+		}
+		_, _ = response.Write([]byte("version"))
+	}))
+	defer server.Close()
+	client := NewClientWithLimits(server.Client(), 1024)
+	target := mustParseURL(t, server.URL+"/data")
+	if _, err := client.Get(context.Background(), target); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Get(context.Background(), target); err != nil {
+		t.Fatal(err)
+	}
+	if requests != 2 {
+		t.Fatalf("Network requests = %d, want 2", requests)
+	}
+}
+
 func TestClientDoSendsMethodHeadersAndBody(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		body, _ := io.ReadAll(request.Body)

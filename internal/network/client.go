@@ -207,6 +207,13 @@ func (c *Client) Do(ctx context.Context, requestData *Request) (*Response, error
 	if cached, ok := c.cache.MatchFresh(&cacheRequest); ok {
 		return cached, nil
 	}
+	if validation, ok := c.cache.RevalidationHeaders(&cacheRequest); ok {
+		for name, values := range validation {
+			if request.Header.Get(name) == "" {
+				request.Header[name] = append([]string(nil), values...)
+			}
+		}
+	}
 	redirectPolicy := operationClient.CheckRedirect
 	operationClient.CheckRedirect = func(redirect *http.Request, via []*http.Request) error {
 		if err := validateCORSResponse(redirect.Response, requestData); err != nil {

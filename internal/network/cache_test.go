@@ -140,6 +140,26 @@ func TestMatchFreshRejectsStaleAndNoCacheEntries(t *testing.T) {
 	}
 }
 
+func TestRevalidationHeadersPreferETagAndFallbackToLastModified(t *testing.T) {
+	request := &Request{Method: http.MethodGet, URL: mustParseURL(t, "https://example.test/data")}
+	cache := NewHTTPCache()
+	cache.Store(request, &Response{StatusCode: http.StatusOK, Header: http.Header{
+		"Cache-Control": []string{"no-cache"}, "ETag": []string{`"v2"`}, "Last-Modified": []string{"Fri, 14 Aug 2026 12:00:00 GMT"},
+	}})
+	header, ok := cache.RevalidationHeaders(request)
+	if !ok || header.Get("If-None-Match") != `"v2"` || header.Get("If-Modified-Since") != "" {
+		t.Fatalf("ETag validation headers = %v", header)
+	}
+	lastModifiedCache := NewHTTPCache()
+	lastModifiedCache.Store(request, &Response{StatusCode: http.StatusOK, Header: http.Header{
+		"Cache-Control": []string{"no-cache"}, "Last-Modified": []string{"Fri, 14 Aug 2026 12:00:00 GMT"},
+	}})
+	header, ok = lastModifiedCache.RevalidationHeaders(request)
+	if !ok || header.Get("If-Modified-Since") == "" || header.Get("If-None-Match") != "" {
+		t.Fatalf("Last-Modified validation headers = %v", header)
+	}
+}
+
 func TestHTTPCacheRejectsUnsafeOrUnusableKeys(t *testing.T) {
 	cache := NewHTTPCache()
 	response := &Response{StatusCode: http.StatusOK, Header: make(http.Header)}
