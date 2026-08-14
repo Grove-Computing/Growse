@@ -1,0 +1,130 @@
+:root {
+    --ink: #172033;
+    --blue: #2563eb;
+    --panel: #f8fafc;
+}
+
+body {
+    background-color: #e8eef8;
+    color: var(--ink);
+}
+
+.showcase {
+    width: calc(100% - 64px);
+    max-width: 920px;
+    margin: 24px auto;
+}
+
+.hero {
+    padding: 24px;
+    border: 2px solid #1d4ed8;
+    border-radius: 18px;
+    background-color: #1e3a8a;
+    background-image: linear-gradient(120deg, #1e3a8a 0%, #2563eb 55%, #38bdf8 100%);
+    color: white;
+}
+
+.eyebrow {
+    text-decoration-line: underline;
+}
+
+.toolbar {
+    display: flex;
+    align-items: center;
+    column-gap: 12px;
+    margin-top: 18px;
+    padding: 12px;
+    border: 1px solid #93c5fd;
+    border-radius: 12px;
+    background-color: white;
+}
+
+.toolbar button {
+    flex: 0 0 72px;
+    padding: 8px;
+    background-color: #dbeafe;
+    color: #1e40af;
+}
+
+.toolbar button:hover {
+    background-color: #bae6fd;
+}
+
+.address {
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 8px;
+    border: 1px solid #bfdbfe;
+    background-color: var(--panel);
+}
+
+.cards {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: stretch;
+    gap: 16px;
+    margin-top: 18px;
+}
+
+.card {
+    flex: 1 1 220px;
+    min-width: 180px;
+    padding: 16px;
+    border: 2px solid #93c5fd;
+    border-radius: 14px;
+    background-color: var(--panel);
+}
+
+.card.featured {
+    flex-grow: 2;
+}
+
+.badge, .status {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 10px;
+    border-radius: 12px;
+    background-color: #dbeafe;
+    color: #1e40af;
+}
+
+.nested {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 18px;
+    padding: 16px;
+    border: 2px dashed #64748b;
+    background-color: white;
+}
+
+.status-group {
+    display: flex;
+    column-gap: 8px;
+    margin-left: auto;
+}
+
+.status.ready {
+    background-color: #dcfce7;
+    color: #166534;
+}
+
+.status.tested {
+    background-color: #fef3c7;
+    color: #92400e;
+}
+
+@media screen and (max-width: 640px) {
+    .toolbar {
+        flex-wrap: wrap;
+    }
+
+    .address {
+        order: -1;
+        flex-basis: 100%;
+    }
+
+    .cards {
+        flex-direction: column;
+    }
+}
