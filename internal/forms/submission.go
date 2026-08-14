@@ -1,6 +1,7 @@
 package forms
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/Grove-Computing/Growse/internal/dom"
@@ -98,6 +99,37 @@ func normalizeCRLF(value string) string {
 	value = strings.ReplaceAll(value, "\r\n", "\n")
 	value = strings.ReplaceAll(value, "\r", "\n")
 	return strings.ReplaceAll(value, "\n", "\r\n")
+}
+
+// EncodeURLEncoded serializes entries as UTF-8 application/x-www-form-urlencoded.
+func EncodeURLEncoded(entries []Entry) string {
+	var encoded strings.Builder
+	for index, entry := range entries {
+		if index != 0 {
+			encoded.WriteByte('&')
+		}
+		encoded.WriteString(encodeFormComponent(entry.Name))
+		encoded.WriteByte('=')
+		encoded.WriteString(encodeFormComponent(entry.Value))
+	}
+	return encoded.String()
+}
+
+func encodeFormComponent(value string) string {
+	value = strings.ToValidUTF8(value, "\uFFFD")
+	var encoded strings.Builder
+	for _, character := range []byte(value) {
+		switch {
+		case character >= 'a' && character <= 'z', character >= 'A' && character <= 'Z', character >= '0' && character <= '9',
+			character == '*', character == '-', character == '.', character == '_':
+			encoded.WriteByte(character)
+		case character == ' ':
+			encoded.WriteByte('+')
+		default:
+			fmt.Fprintf(&encoded, "%%%02X", character)
+		}
+	}
+	return encoded.String()
 }
 
 // FormOwner resolves an explicit form=id association before ancestor lookup.

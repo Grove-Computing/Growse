@@ -82,3 +82,15 @@ func TestCollectEntriesPreservesDOMOrderDuplicatesAndSuccessfulControls(t *testi
 		}
 	}
 }
+
+func TestEncodeURLEncodedUsesUTF8AndPreservesEntryOrder(t *testing.T) {
+	entries := []Entry{
+		{Name: "tag", Value: "one"},
+		{Name: "日本 語", Value: "東京/大阪~"},
+		{Name: "tag", Value: ""},
+	}
+	want := "tag=one&%E6%97%A5%E6%9C%AC+%E8%AA%9E=%E6%9D%B1%E4%BA%AC%2F%E5%A4%A7%E9%98%AA%7E&tag="
+	if got := EncodeURLEncoded(entries); got != want {
+		t.Fatalf("encoded = %q, want %q", got, want)
+	}
+}
