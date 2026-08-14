@@ -14,6 +14,7 @@ import (
 	"sync"
 	"testing/fstest"
 
+	"github.com/Grove-Computing/Growse/internal/network"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 	consoleapi "github.com/Grove-Computing/Growse/internal/webapi/console"
 	domapi "github.com/Grove-Computing/Growse/internal/webapi/dom"
@@ -237,5 +238,5 @@ func scriptName(script runtimemodel.Script, fallback string) string {
 	if script.SourceURL == nil {
 		return fallback
 	}
-	return script.SourceURL.Redacted()
+	return network.RedactedURL(script.SourceURL)
 }

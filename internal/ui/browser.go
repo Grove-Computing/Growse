@@ -32,6 +32,7 @@ import (
 	"github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/forms"
 	layoutengine "github.com/Grove-Computing/Growse/internal/layout"
+	"github.com/Grove-Computing/Growse/internal/network"
 	paintmodel "github.com/Grove-Computing/Growse/internal/paint"
 	stylemodel "github.com/Grove-Computing/Growse/internal/style"
 )
@@ -594,7 +595,7 @@ func (ui *BrowserUI) updateLinkPreview(page *browser.Page, nodeID dom.NodeID) {
 		return
 	}
 	if linkURL, ok := page.LinkURL(nodeID); ok {
-		ui.status = linkURL.Redacted()
+		ui.status = network.RedactedURL(linkURL)
 		return
 	}
 	ui.status = ui.pageStatus

@@ -165,6 +165,29 @@ func TestClientRejectsPathologicalRequestAndResponseHeaders(t *testing.T) {
 	}
 }
 
+func TestClientRedactsURLCookieAndAuthorizationFromErrors(t *testing.T) {
+	sentinel := errors.New("transport sentinel")
+	client := NewClientWithLimits(&http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		return nil, fmt.Errorf("%w URL=%s Authorization=%s Cookie=%s", sentinel, request.URL.String(), request.Header.Get("Authorization"), request.Header.Get("Cookie"))
+	})}, 1024)
+	target := mustParseURL(t, "https://alice:password@example.test/private")
+	_, err := client.Do(context.Background(), &Request{
+		URL: target, Header: http.Header{"Authorization": []string{"Bearer top-secret"}, "Cookie": []string{"session=secret"}},
+	})
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("error chain lost transport sentinel: %v", err)
+	}
+	message := err.Error()
+	for _, secret := range []string{"alice", "password", "top-secret", "session=secret"} {
+		if strings.Contains(message, secret) {
+			t.Fatalf("error leaked %q: %s", secret, message)
+		}
+	}
+	if got := RedactedURL(target); got != "https://example.test/private" {
+		t.Fatalf("RedactedURL() = %q", got)
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (function roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {

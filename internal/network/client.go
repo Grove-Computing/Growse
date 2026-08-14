@@ -178,7 +178,7 @@ func (c *Client) Do(ctx context.Context, requestData *Request) (*Response, error
 	}
 	request, err := http.NewRequestWithContext(ctx, method, requestData.URL.String(), bytes.NewReader(requestData.Body))
 	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
+		return nil, &redactedError{message: "create HTTP request failed", cause: err}
 	}
 	request.Header = requestData.Header.Clone()
 	if request.Header == nil {
@@ -331,13 +331,31 @@ func classifyRequestError(err error) error {
 	case errors.Is(err, context.Canceled):
 		return fmt.Errorf("send request: %w", context.Canceled)
 	case errors.Is(err, context.DeadlineExceeded):
-		return fmt.Errorf("%w: %w", ErrTimeout, context.DeadlineExceeded)
+		return &redactedError{message: ErrTimeout.Error(), cause: errors.Join(ErrTimeout, context.DeadlineExceeded)}
 	}
 	var networkError net.Error
 	if errors.As(err, &networkError) && networkError.Timeout() {
-		return fmt.Errorf("%w: %v", ErrTimeout, err)
+		return &redactedError{message: ErrTimeout.Error(), cause: errors.Join(ErrTimeout, err)}
 	}
-	return fmt.Errorf("send request: %w", err)
+	return &redactedError{message: "network request failed", cause: err}
+}
+
+type redactedError struct {
+	message string
+	cause   error
+}
+
+func (err *redactedError) Error() string { return err.message }
+func (err *redactedError) Unwrap() error { return err.cause }
+
+// RedactedURL removes userinfo before a URL is included in UI or errors.
+func RedactedURL(target *url.URL) string {
+	if target == nil {
+		return "unknown"
+	}
+	copy := *target
+	copy.User = nil
+	return copy.String()
 }
 
 func cloneURL(source *url.URL) *url.URL {
