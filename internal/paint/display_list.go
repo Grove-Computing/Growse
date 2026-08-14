@@ -42,6 +42,7 @@ type DrawText struct {
 	DecorationColor uint32
 	Opacity         float32
 	Runs            []TextRun
+	TextShadows     []stylemodel.Shadow
 }
 
 func (DrawText) paintCommand() {}
@@ -65,22 +66,25 @@ func (DrawInput) paintCommand() {}
 // DrawBox paints an element background without advancing by its painted height.
 // Its Top value only moves the list cursor to the element's document position.
 type DrawBox struct {
-	NodeID   dom.NodeID
-	X        float32
-	Y        float32
-	Top      float32
-	Width    float32
-	Height   float32
-	Color    uint32
-	Image    stylemodel.BackgroundImage
-	Layers   []stylemodel.BackgroundLayer
-	Repeat   stylemodel.BackgroundRepeat
-	Position stylemodel.BackgroundPosition
-	Size     stylemodel.BackgroundSize
-	Border   stylemodel.Borders
-	Radius   layout.BorderRadii
-	Opacity  float32
-	Clip     *layout.Rect
+	NodeID        dom.NodeID
+	X             float32
+	Y             float32
+	Top           float32
+	Width         float32
+	Height        float32
+	Color         uint32
+	Image         stylemodel.BackgroundImage
+	Layers        []stylemodel.BackgroundLayer
+	Repeat        stylemodel.BackgroundRepeat
+	Position      stylemodel.BackgroundPosition
+	Size          stylemodel.BackgroundSize
+	Border        stylemodel.Borders
+	Radius        layout.BorderRadii
+	Opacity       float32
+	Clip          *layout.Rect
+	BoxShadows    []stylemodel.Shadow
+	Outline       stylemodel.BorderSide
+	OutlineOffset float32
 }
 
 func (DrawBox) paintCommand() {}
@@ -100,6 +104,7 @@ type TextRun struct {
 	Decoration      stylemodel.TextDecorationLine
 	DecorationColor uint32
 	Opacity         float32
+	TextShadows     []stylemodel.Shadow
 }
 
 // Build creates a display list from a layout tree.
@@ -139,6 +144,7 @@ func Build(tree *layout.Tree) *DisplayList {
 				Image: cloneBackgroundImage(decoration.Image), Layers: cloneBackgroundLayers(decoration.Layers), Repeat: decoration.Repeat,
 				Position: decoration.Position, Size: decoration.Size, Clip: cloneLayoutRect(decoration.Clip),
 				Border: decoration.Border, Radius: decoration.Radius, Opacity: decoration.Opacity,
+				BoxShadows: append([]stylemodel.Shadow(nil), decoration.BoxShadows...), Outline: decoration.Outline, OutlineOffset: decoration.OutlineOffset,
 			})
 			previousBottom += top
 			continue
@@ -176,8 +182,9 @@ func Build(tree *layout.Tree) *DisplayList {
 			Color:      box.Color,
 			Background: box.Background,
 			Decoration: box.Decoration, DecorationColor: box.DecorationColor, Opacity: box.Opacity,
-			Baseline: box.Baseline - box.Y,
-			Clip:     cloneLayoutRect(box.Clip),
+			Baseline:    box.Baseline - box.Y,
+			Clip:        cloneLayoutRect(box.Clip),
+			TextShadows: append([]stylemodel.Shadow(nil), box.TextShadows...),
 		}
 		command.Runs = make([]TextRun, 0, len(box.Runs))
 		for _, run := range box.Runs {
@@ -186,6 +193,7 @@ func Build(tree *layout.Tree) *DisplayList {
 				FontSize: run.FontSize, Bold: run.Bold, Color: run.Color, Background: run.Background,
 				Baseline: run.Baseline - box.Y, Decoration: run.Decoration,
 				DecorationColor: run.DecorationColor, Opacity: run.Opacity,
+				TextShadows: append([]stylemodel.Shadow(nil), run.TextShadows...),
 			})
 		}
 		list.Commands = append(list.Commands, command)

@@ -99,6 +99,14 @@ type Insets struct {
 	Top, Right, Bottom, Left SizeValue
 }
 
+// Shadow is one box-shadow or text-shadow layer.
+type Shadow struct {
+	Inset                  bool
+	OffsetX, OffsetY, Blur float32
+	Spread                 float32
+	Color                  uint32
+}
+
 // BoxSizing controls whether declared sizes include padding and border.
 type BoxSizing uint8
 
@@ -368,6 +376,10 @@ type ComputedStyle struct {
 	Inset               Insets
 	ZIndex              int
 	ZIndexAuto          bool
+	BoxShadows          []Shadow
+	TextShadows         []Shadow
+	Outline             BorderSide
+	OutlineOffset       float32
 	AspectRatio         float32
 	BoxSizing           BoxSizing
 	Width               SizeValue

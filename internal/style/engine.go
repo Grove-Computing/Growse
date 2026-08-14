@@ -402,6 +402,7 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 	computed = applyFlexProperties(computed, parent, winners, computed.CustomProperties, lengthContext)
 	computed = applyGridProperties(computed, parent, winners, computed.CustomProperties, lengthContext)
 	computed = applyPositionProperties(computed, parent, winners, computed.CustomProperties, lengthContext)
+	computed = applyShadowAndOutlineProperties(computed, parent, winners, computed.CustomProperties, lengthContext)
 	return computed
 }
 
@@ -890,6 +891,8 @@ func expandedProperties(property string) []string {
 		return []string{"left"}
 	case "inset-inline-end":
 		return []string{"right"}
+	case "outline":
+		return []string{"outline-width", "outline-style", "outline-color"}
 	default:
 		return []string{property}
 	}

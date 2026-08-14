@@ -30,6 +30,10 @@ type blockStyle struct {
 	inset               stylemodel.Insets
 	zIndex              int
 	zIndexAuto          bool
+	boxShadows          []stylemodel.Shadow
+	textShadows         []stylemodel.Shadow
+	outline             stylemodel.BorderSide
+	outlineOffset       float32
 	radius              stylemodel.BorderRadii
 	decoration          stylemodel.TextDecorationLine
 	decorationColor     uint32
@@ -226,19 +230,20 @@ func (e *engine) addInput(node *dom.Node, style blockStyle, x, width, containing
 	usedHeight = constrainSize(usedHeight, style.minHeight, style.maxHeight, containingHeight, heightDefinite)
 	value, _ := node.Attribute("value")
 	e.tree.Boxes = append(e.tree.Boxes, Box{
-		Order:      e.nextOrder(),
-		StackingID: e.stackingID,
-		NodeID:     node.ID,
-		Tag:        node.TagName,
-		Text:       value,
-		Input:      true,
-		X:          x,
-		Y:          e.y,
-		Width:      usedWidth,
-		Height:     usedHeight,
-		Color:      style.color,
-		Clip:       cloneRect(e.clip),
-		Opacity:    e.opacity * style.opacity,
+		Order:       e.nextOrder(),
+		StackingID:  e.stackingID,
+		NodeID:      node.ID,
+		Tag:         node.TagName,
+		Text:        value,
+		Input:       true,
+		X:           x,
+		Y:           e.y,
+		Width:       usedWidth,
+		Height:      usedHeight,
+		Color:       style.color,
+		Clip:        cloneRect(e.clip),
+		Opacity:     e.opacity * style.opacity,
+		TextShadows: append([]stylemodel.Shadow(nil), style.textShadows...),
 	})
 	e.y += usedHeight + style.margin.Bottom
 }
@@ -297,14 +302,15 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 	}
 	boxTop := e.y
 	decorationIndex := -1
-	if style.background != 0 || style.image.Kind != stylemodel.BackgroundImageNone || hasVisibleBorder(style.border) {
+	if style.background != 0 || style.image.Kind != stylemodel.BackgroundImageNone || hasVisibleBorder(style.border) || len(style.boxShadows) != 0 || style.outline.Style != stylemodel.BorderNone {
 		decorationIndex = len(e.tree.Decorations)
 		e.tree.Decorations = append(e.tree.Decorations, Decoration{
 			Order: e.nextOrder(), StackingID: e.stackingID, NodeID: node.ID,
 			Rect:       Rect{X: x, Y: boxTop, Width: outerWidth},
 			Background: style.background, Image: cloneBackgroundImage(style.image), Layers: cloneBackgroundLayers(style.backgroundLayers),
 			Repeat: style.repeat, Position: style.position, Size: style.backgroundSize, Clip: cloneRect(e.clip),
-			Border: style.border, Opacity: e.opacity,
+			Border: style.border, Opacity: e.opacity, BoxShadows: append([]stylemodel.Shadow(nil), style.boxShadows...),
+			Outline: style.outline, OutlineOffset: style.outlineOffset,
 		})
 	}
 	e.y += style.border.Top.Width + style.padding.Top
@@ -619,8 +625,9 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 			X: x, Y: e.y, Width: width, Height: lineHeight,
 			FontSize: container.fontSize, Bold: container.bold, Color: container.color,
 			Opacity: e.opacity, Decoration: container.decoration, DecorationColor: container.decorationColor,
-			Runs:     append([]TextRun(nil), lineRuns...),
-			Baseline: e.y + lineAscent, Clip: cloneRect(e.clip),
+			TextShadows: append([]stylemodel.Shadow(nil), container.textShadows...),
+			Runs:        append([]TextRun(nil), lineRuns...),
+			Baseline:    e.y + lineAscent, Clip: cloneRect(e.clip),
 		})
 		for _, placement := range flexPlacements {
 			placementX, placementY := x+placement.widthOffset, e.y+lineAscent-placement.baseline
@@ -645,6 +652,7 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 			FontSize: run.style.fontSize, Bold: run.style.bold,
 			Color: run.style.color, Background: run.style.background,
 			Decoration: run.style.decoration, DecorationColor: run.style.decorationColor, Opacity: run.opacity,
+			TextShadows: append([]stylemodel.Shadow(nil), run.style.textShadows...),
 		}
 		runHeight, runAscent := usedLineMetrics(run)
 		textRun.Baseline = e.y + runAscent
@@ -963,6 +971,9 @@ func applyComputed(block blockStyle, computed stylemodel.ComputedStyle) blockSty
 	block.backgroundLayers = cloneBackgroundLayers(computed.BackgroundLayers)
 	block.layoutPosition, block.inset = computed.Position, computed.Inset
 	block.zIndex, block.zIndexAuto = computed.ZIndex, computed.ZIndexAuto
+	block.boxShadows = append([]stylemodel.Shadow(nil), computed.BoxShadows...)
+	block.textShadows = append([]stylemodel.Shadow(nil), computed.TextShadows...)
+	block.outline, block.outlineOffset = computed.Outline, computed.OutlineOffset
 	block.radius = computed.BorderRadius
 	block.decoration = computed.TextDecoration
 	block.decorationColor = computed.DecorationColor

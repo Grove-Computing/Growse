@@ -999,6 +999,22 @@ func TestComputeMultipleBackgroundsAndRadialGradient(t *testing.T) {
 	}
 }
 
+func TestComputeShadowsAndOutline(t *testing.T) {
+	document := dom.NewDocument()
+	item := document.CreateElement("div", map[string]string{"style": `box-shadow:1px 2px 3px 4px rgba(255,0,0,.5), inset -1px 0 2px blue; text-shadow:2px 3px 1px #123456; outline:2px dashed green; outline-offset:3px`})
+	appendNode(t, document, document.Root, item)
+	computed, _ := Compute(document, nil).For(item)
+	if len(computed.BoxShadows) != 2 || computed.BoxShadows[0].Spread != 4 || computed.BoxShadows[0].Color != 0xff000080 || !computed.BoxShadows[1].Inset {
+		t.Fatalf("box shadows = %#v", computed.BoxShadows)
+	}
+	if len(computed.TextShadows) != 1 || computed.TextShadows[0].OffsetX != 2 || computed.TextShadows[0].Color != 0x123456ff {
+		t.Fatalf("text shadows = %#v", computed.TextShadows)
+	}
+	if computed.Outline.Width != 2 || computed.Outline.Style != BorderDashed || computed.Outline.Color != 0x008000ff || computed.OutlineOffset != 3 {
+		t.Fatalf("outline = %#v offset %v", computed.Outline, computed.OutlineOffset)
+	}
+}
+
 func parseTestSelector(t *testing.T, value string) css.Selector {
 	t.Helper()
 	stylesheet, err := css.Parse(strings.NewReader(value + " { color: red }"))

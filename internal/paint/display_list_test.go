@@ -133,6 +133,23 @@ func TestBuildPreservesBorderRadiusDecorationAndOpacity(t *testing.T) {
 	}
 }
 
+func TestBuildPreservesShadowsAndOutline(t *testing.T) {
+	shadow := style.Shadow{OffsetX: 2, OffsetY: 3, Blur: 4, Spread: 1, Color: 0x123456ff}
+	tree := &layout.Tree{
+		Decorations: []layout.Decoration{{BoxShadows: []style.Shadow{shadow}, Outline: style.BorderSide{Width: 2, Style: style.BorderDotted, Color: 0xff0000ff}, OutlineOffset: 3}},
+		Boxes:       []layout.Box{{Order: 1, TextShadows: []style.Shadow{shadow}}},
+	}
+	list := Build(tree)
+	box := list.Commands[0].(DrawBox)
+	text := list.Commands[1].(DrawText)
+	if len(box.BoxShadows) != 1 || box.BoxShadows[0] != shadow || box.Outline.Style != style.BorderDotted || box.OutlineOffset != 3 {
+		t.Fatalf("box effects = %#v", box)
+	}
+	if len(text.TextShadows) != 1 || text.TextShadows[0] != shadow {
+		t.Fatalf("text shadows = %#v", text.TextShadows)
+	}
+}
+
 func TestBuildUsesExactLayoutDecorationGeometry(t *testing.T) {
 	tree := &layout.Tree{Decorations: []layout.Decoration{{
 		NodeID: 12, Rect: layout.Rect{X: 14, Y: 25, Width: 120, Height: 60},

@@ -82,16 +82,19 @@ type Decoration struct {
 	StackingID int
 	NodeID     dom.NodeID
 	Rect
-	Background uint32
-	Image      stylemodel.BackgroundImage
-	Layers     []stylemodel.BackgroundLayer
-	Repeat     stylemodel.BackgroundRepeat
-	Position   stylemodel.BackgroundPosition
-	Size       stylemodel.BackgroundSize
-	Border     stylemodel.Borders
-	Radius     BorderRadii
-	Opacity    float32
-	Clip       *Rect
+	Background    uint32
+	Image         stylemodel.BackgroundImage
+	Layers        []stylemodel.BackgroundLayer
+	Repeat        stylemodel.BackgroundRepeat
+	Position      stylemodel.BackgroundPosition
+	Size          stylemodel.BackgroundSize
+	Border        stylemodel.Borders
+	Radius        BorderRadii
+	Opacity       float32
+	Clip          *Rect
+	BoxShadows    []stylemodel.Shadow
+	Outline       stylemodel.BorderSide
+	OutlineOffset float32
 }
 
 // CornerRadius is one resolved elliptical radius in CSS pixels.
@@ -130,6 +133,7 @@ type Box struct {
 	Background      uint32
 	Decoration      stylemodel.TextDecorationLine
 	DecorationColor uint32
+	TextShadows     []stylemodel.Shadow
 	Runs            []TextRun
 }
 
@@ -148,4 +152,5 @@ type TextRun struct {
 	Decoration      stylemodel.TextDecorationLine
 	DecorationColor uint32
 	Opacity         float32
+	TextShadows     []stylemodel.Shadow
 }
