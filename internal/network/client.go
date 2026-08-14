@@ -18,6 +18,9 @@ const (
 	defaultTimeout      = 15 * time.Second
 	defaultMaxBodyBytes = 4 << 20 // 4 MiB
 	maxRedirects        = 10
+	maxRequestBodyBytes = 1 << 20
+	maxHeaderCount      = 100
+	maxHeaderBytes      = 64 << 10
 )
 
 // ErrResponseTooLarge is returned when a response exceeds the configured
@@ -28,6 +31,8 @@ var (
 	ErrRedirectLoop      = errors.New("redirect loop")
 	ErrRedirectLimit     = errors.New("redirect limit exceeded")
 	ErrTimeout           = errors.New("request timed out")
+	ErrRequestTooLarge   = errors.New("request exceeds safety limit")
+	ErrHeadersTooLarge   = errors.New("HTTP headers exceed safety limit")
 )
 
 // Response contains the network metadata needed to construct a browser page.
@@ -161,6 +166,12 @@ func (c *Client) Do(ctx context.Context, requestData *Request) (*Response, error
 	if requestData == nil || requestData.URL == nil {
 		return nil, errors.New("resource URL is nil")
 	}
+	if len(requestData.Body) > maxRequestBodyBytes {
+		return nil, ErrRequestTooLarge
+	}
+	if !headersWithinLimits(requestData.Header) {
+		return nil, ErrHeadersTooLarge
+	}
 	method := requestData.Method
 	if method == "" {
 		method = http.MethodGet
@@ -210,6 +221,9 @@ func (c *Client) Do(ctx context.Context, requestData *Request) (*Response, error
 		return nil, classifyRequestError(err)
 	}
 	defer response.Body.Close()
+	if !headersWithinLimits(response.Header) {
+		return nil, ErrHeadersTooLarge
+	}
 	storeResponseCookies(jar, response, requestData)
 	if err := validateCORSResponse(response, requestData); err != nil {
 		return nil, err
@@ -245,6 +259,21 @@ func (c *Client) Do(ctx context.Context, requestData *Request) (*Response, error
 		Body:        body,
 		Redirected:  finalURL.String() != requestData.URL.String(),
 	}, nil
+}
+
+func headersWithinLimits(header http.Header) bool {
+	count := 0
+	size := 0
+	for name, values := range header {
+		count += len(values)
+		for _, value := range values {
+			size += len(name) + len(value)
+		}
+		if count > maxHeaderCount || size > maxHeaderBytes {
+			return false
+		}
+	}
+	return true
 }
 
 func addRequestCookies(request *http.Request, jar http.CookieJar, requestData *Request) {

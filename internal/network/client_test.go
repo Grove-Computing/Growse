@@ -141,6 +141,36 @@ func TestClientReportsTruncatedResponse(t *testing.T) {
 	}
 }
 
+func TestClientRejectsPathologicalRequestAndResponseHeaders(t *testing.T) {
+	target := mustParseURL(t, "https://example.test")
+	client := NewClientWithLimits(&http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK, Request: request,
+			Header: http.Header{"X-Large": []string{strings.Repeat("x", maxHeaderBytes)}},
+			Body:   io.NopCloser(strings.NewReader("ok")),
+		}, nil
+	})}, 1024)
+	if _, err := client.Do(context.Background(), &Request{Method: http.MethodPost, URL: target, Body: make([]byte, maxRequestBodyBytes+1)}); !errors.Is(err, ErrRequestTooLarge) {
+		t.Fatalf("request body error = %v", err)
+	}
+	headers := make(http.Header)
+	for index := 0; index <= maxHeaderCount; index++ {
+		headers[fmt.Sprintf("X-%03d", index)] = []string{"value"}
+	}
+	if _, err := client.Do(context.Background(), &Request{URL: target, Header: headers}); !errors.Is(err, ErrHeadersTooLarge) {
+		t.Fatalf("request header error = %v", err)
+	}
+	if _, err := client.Get(context.Background(), target); !errors.Is(err, ErrHeadersTooLarge) {
+		t.Fatalf("response header error = %v", err)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (function roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return function(request)
+}
+
 func TestClientAppliesRedirectMethodAndBodyRules(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		if request.URL.Path == "/final" {

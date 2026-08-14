@@ -549,7 +549,11 @@ func (b *Browser) SubmitGET(ctx context.Context, formID, submitterID dom.NodeID)
 	if err != nil {
 		return nil, err
 	}
-	target.RawQuery = forms.EncodeURLEncoded(entries)
+	encoded, err := forms.EncodeURLEncodedLimited(entries)
+	if err != nil {
+		return nil, err
+	}
+	target.RawQuery = encoded
 	target.Fragment = ""
 	return b.load(ctx, target, historyPush, -1)
 }
@@ -600,7 +604,11 @@ func (b *Browser) SubmitPOST(ctx context.Context, formID, submitterID dom.NodeID
 	reducedMotion := b.reducedMotion
 	b.mu.Unlock()
 
-	body := []byte(forms.EncodeURLEncoded(entries))
+	encoded, err := forms.EncodeURLEncodedLimited(entries)
+	if err != nil {
+		return nil, err
+	}
+	body := []byte(encoded)
 	response, err := loader.Do(ctx, &network.Request{
 		Method: http.MethodPost, URL: target, Body: body,
 		Header:  http.Header{"Content-Type": []string{forms.URLEncoded}},
