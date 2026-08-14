@@ -3,6 +3,7 @@ package network
 import (
 	"net/http"
 	"testing"
+	"time"
 )
 
 func TestHTTPCacheKeysGETHEADURLPartitionAndVary(t *testing.T) {
@@ -35,6 +36,57 @@ func TestHTTPCacheKeysGETHEADURLPartitionAndVary(t *testing.T) {
 	otherPartition.SiteURL = mustParseURL(t, "https://other.test/page")
 	if _, ok := cache.Match(&otherPartition); ok {
 		t.Fatal("cross-partition request reused cache entry")
+	}
+}
+
+func TestCalculateFreshnessUsesMaxAgeDateExpiresAndAge(t *testing.T) {
+	storedAt := time.Date(2026, time.August, 15, 12, 0, 10, 0, time.UTC)
+	tests := []struct {
+		name       string
+		header     http.Header
+		freshAfter time.Duration
+		staleAfter time.Duration
+	}{
+		{name: "max-age with apparent age", header: http.Header{
+			"Cache-Control": []string{"max-age=60"}, "Date": []string{storedAt.Add(-10 * time.Second).Format(http.TimeFormat)},
+		}, freshAfter: 49 * time.Second, staleAfter: 50 * time.Second},
+		{name: "Expires with Age", header: http.Header{
+			"Date": []string{storedAt.Format(http.TimeFormat)}, "Expires": []string{storedAt.Add(time.Minute).Format(http.TimeFormat)}, "Age": []string{"20"},
+		}, freshAfter: 39 * time.Second, staleAfter: 40 * time.Second},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			freshness := calculateFreshness(test.header, storedAt)
+			if !freshness.fresh(storedAt.Add(test.freshAfter)) {
+				t.Fatal("entry became stale too early")
+			}
+			if freshness.fresh(storedAt.Add(test.staleAfter)) {
+				t.Fatal("entry remained fresh at lifetime boundary")
+			}
+		})
+	}
+}
+
+func TestCalculateFreshnessUsesBoundedLastModifiedHeuristic(t *testing.T) {
+	storedAt := time.Date(2026, time.August, 15, 12, 0, 0, 0, time.UTC)
+	header := http.Header{
+		"Date":          []string{storedAt.Format(http.TimeFormat)},
+		"Last-Modified": []string{storedAt.Add(-20 * 24 * time.Hour).Format(http.TimeFormat)},
+	}
+	value := calculateFreshness(header, storedAt)
+	if value.lifetime != 24*time.Hour {
+		t.Fatalf("heuristic lifetime = %v, want 24h cap", value.lifetime)
+	}
+}
+
+func TestCalculateFreshnessBoundsHugeAgeAndMaxAge(t *testing.T) {
+	storedAt := time.Now()
+	value := calculateFreshness(http.Header{
+		"Cache-Control": []string{"max-age=18446744073709551615"},
+		"Age":           []string{"18446744073709551615"},
+	}, storedAt)
+	if value.lifetime < 0 || value.initialAge < 0 {
+		t.Fatalf("overflowed freshness = %#v", value)
 	}
 }
 

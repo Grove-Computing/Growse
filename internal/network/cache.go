@@ -1,11 +1,14 @@
 package network
 
 import (
+	"math"
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 const (
@@ -20,16 +23,35 @@ type cacheEntry struct {
 	vary       []string
 	varyValues []string
 	response   *Response
+	freshness  freshness
+}
+
+type freshness struct {
+	storedAt   time.Time
+	lifetime   time.Duration
+	initialAge time.Duration
+}
+
+func (value freshness) fresh(now time.Time) bool {
+	elapsed := now.Sub(value.storedAt)
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	if value.initialAge >= value.lifetime {
+		return false
+	}
+	return elapsed < value.lifetime-value.initialAge
 }
 
 // HTTPCache はprivate HTTP Response variantをmemoryで管理する。
 type HTTPCache struct {
 	mu      sync.RWMutex
 	entries map[string][]*cacheEntry
+	now     func() time.Time
 }
 
 func NewHTTPCache() *HTTPCache {
-	return &HTTPCache{entries: make(map[string][]*cacheEntry)}
+	return &HTTPCache{entries: make(map[string][]*cacheEntry), now: time.Now}
 }
 
 // Store はCache対象Request/Responseをvariantとして保存する。
@@ -45,6 +67,7 @@ func (cache *HTTPCache) Store(request *Request, response *Response) bool {
 	entry := &cacheEntry{
 		method: requestMethod(request), url: cacheURL(request.URL), partition: cachePartition(request),
 		vary: vary, varyValues: requestHeaderValues(request.Header, vary), response: cloneResponse(response),
+		freshness: calculateFreshness(response.Header, cache.now()),
 	}
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
@@ -58,6 +81,69 @@ func (cache *HTTPCache) Store(request *Request, response *Response) bool {
 	}
 	cache.entries[key] = append(variants, entry)
 	return true
+}
+
+func calculateFreshness(header http.Header, storedAt time.Time) freshness {
+	date := storedAt
+	if parsed, err := http.ParseTime(header.Get("Date")); err == nil {
+		date = parsed
+	}
+	apparentAge := storedAt.Sub(date)
+	if apparentAge < 0 {
+		apparentAge = 0
+	}
+	headerAge := secondsDuration(header.Get("Age"))
+	initialAge := max(apparentAge, headerAge)
+	lifetime, explicit := maxAgeLifetime(header.Values("Cache-Control"))
+	if !explicit {
+		if expires, err := http.ParseTime(header.Get("Expires")); err == nil {
+			lifetime = expires.Sub(date)
+			if lifetime < 0 {
+				lifetime = 0
+			}
+			explicit = true
+		}
+	}
+	if !explicit {
+		if modified, err := http.ParseTime(header.Get("Last-Modified")); err == nil && modified.Before(date) {
+			lifetime = min(date.Sub(modified)/10, 24*time.Hour)
+		}
+	}
+	return freshness{storedAt: storedAt, lifetime: lifetime, initialAge: initialAge}
+}
+
+func maxAgeLifetime(values []string) (time.Duration, bool) {
+	for _, value := range values {
+		for _, directive := range strings.Split(value, ",") {
+			name, raw, found := strings.Cut(strings.TrimSpace(directive), "=")
+			if !found || !strings.EqualFold(name, "max-age") {
+				continue
+			}
+			raw = strings.Trim(strings.TrimSpace(raw), `"`)
+			seconds, err := strconv.ParseUint(raw, 10, 64)
+			if err != nil {
+				return 0, true
+			}
+			return durationFromSeconds(seconds), true
+		}
+	}
+	return 0, false
+}
+
+func secondsDuration(raw string) time.Duration {
+	seconds, err := strconv.ParseUint(strings.TrimSpace(raw), 10, 64)
+	if err != nil {
+		return 0
+	}
+	return durationFromSeconds(seconds)
+}
+
+func durationFromSeconds(seconds uint64) time.Duration {
+	limit := uint64(math.MaxInt64 / int64(time.Second))
+	if seconds > limit {
+		return time.Duration(math.MaxInt64)
+	}
+	return time.Duration(seconds) * time.Second
 }
 
 // Match はRequest Headerを含めて一致する保存済みvariantを返す。
