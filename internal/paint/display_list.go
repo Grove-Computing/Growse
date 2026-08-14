@@ -3,6 +3,7 @@ package paint
 
 import (
 	"github.com/Grove-Computing/Growse/internal/dom"
+	"github.com/Grove-Computing/Growse/internal/forms"
 	"github.com/Grove-Computing/Growse/internal/layout"
 	stylemodel "github.com/Grove-Computing/Growse/internal/style"
 )
@@ -67,6 +68,24 @@ type DrawInput struct {
 }
 
 func (DrawInput) paintCommand() {}
+
+// DrawSelect paints one single-selection control.
+type DrawSelect struct {
+	NodeID   dom.NodeID
+	Options  []forms.Option
+	Selected int
+	Label    string
+	X        float32
+	Y        float32
+	Top      float32
+	Width    float32
+	Height   float32
+	Color    uint32
+	Opacity  float32
+	Clip     *layout.Rect
+}
+
+func (DrawSelect) paintCommand() {}
 
 // DrawBox paints an element background without advancing by its painted height.
 // Its Top value only moves the list cursor to the element's document position.
@@ -187,6 +206,15 @@ func Build(tree *layout.Tree) *DisplayList {
 			previousBottom = box.Y + box.Height
 			continue
 		}
+		if box.Select {
+			list.Commands = append(list.Commands, DrawSelect{
+				NodeID: box.NodeID, Options: append([]forms.Option(nil), box.Options...), Selected: box.Selected, Label: box.Text,
+				X: box.X, Y: box.Y, Top: top, Width: box.Width, Height: box.Height,
+				Color: box.Color, Opacity: box.Opacity, Clip: cloneLayoutRect(box.Clip),
+			})
+			previousBottom = box.Y + box.Height
+			continue
+		}
 		command := DrawText{
 			NodeID:     box.NodeID,
 			Text:       box.Text,
@@ -264,6 +292,14 @@ func ApplyAnimatedStyles(list *DisplayList, styles stylemodel.Map) {
 			}
 			list.Commands[index] = command
 		case DrawInput:
+			computed, ok := styles[command.NodeID]
+			if !ok {
+				continue
+			}
+			command.Color = computed.Color
+			command.Opacity = computed.Opacity
+			list.Commands[index] = command
+		case DrawSelect:
 			computed, ok := styles[command.NodeID]
 			if !ok {
 				continue

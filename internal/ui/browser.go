@@ -29,6 +29,7 @@ import (
 
 	"github.com/Grove-Computing/Growse/internal/browser"
 	"github.com/Grove-Computing/Growse/internal/dom"
+	"github.com/Grove-Computing/Growse/internal/forms"
 	layoutengine "github.com/Grove-Computing/Growse/internal/layout"
 	paintmodel "github.com/Grove-Computing/Growse/internal/paint"
 	stylemodel "github.com/Grove-Computing/Growse/internal/style"
@@ -78,6 +79,7 @@ type BrowserUI struct {
 	inputEditors      map[dom.NodeID]*widget.Editor
 	inputFocused      map[dom.NodeID]bool
 	inputCommitted    map[dom.NodeID]string
+	selectButtons     map[dom.NodeID]*widget.Clickable
 	layoutBuild       func(*dom.Document, stylemodel.Map, float32, float32, float32, float32) *layoutengine.Tree
 	layoutCache       documentLayoutCache
 }
@@ -102,6 +104,7 @@ type Navigator interface {
 	Page() *browser.Page
 	DispatchClick(nodeID dom.NodeID, x, y float32) bool
 	SetInputValue(nodeID dom.NodeID, value string) bool
+	SetSelectValue(nodeID dom.NodeID, value string) bool
 	CommitInputValue(nodeID dom.NodeID, value string) bool
 	SubmitForm(nodeID dom.NodeID) bool
 	UpdateHover(nodeID dom.NodeID, x, y float32) bool
@@ -139,6 +142,7 @@ func NewBrowserUI(navigator Navigator, invalidate func()) *BrowserUI {
 		inputEditors:   make(map[dom.NodeID]*widget.Editor),
 		inputFocused:   make(map[dom.NodeID]bool),
 		inputCommitted: make(map[dom.NodeID]string),
+		selectButtons:  make(map[dom.NodeID]*widget.Clickable),
 		layoutBuild:    layoutengine.BuildWithScroll,
 	}
 	if cursorErr != nil {
@@ -247,6 +251,7 @@ func (ui *BrowserUI) consumeNavigationResult() {
 			ui.inputEditors = make(map[dom.NodeID]*widget.Editor)
 			ui.inputFocused = make(map[dom.NodeID]bool)
 			ui.inputCommitted = make(map[dom.NodeID]string)
+			ui.selectButtons = make(map[dom.NodeID]*widget.Clickable)
 			if result.err != nil {
 				ui.status = "読み込みエラー: " + result.err.Error()
 				ui.pageStatus = ui.status
@@ -494,6 +499,8 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 			return ui.layoutDrawText(gtx, command)
 		case paintmodel.DrawInput:
 			return ui.layoutDrawInput(gtx, command)
+		case paintmodel.DrawSelect:
+			return ui.layoutDrawSelect(gtx, command)
 		case paintmodel.DrawBox:
 			return layoutDrawBox(gtx, command, page.BackgroundImages)
 		default:
@@ -656,6 +663,8 @@ func commandDocumentY(command paintmodel.Command) (float32, bool) {
 	case paintmodel.DrawText:
 		return command.Y - command.Top, true
 	case paintmodel.DrawInput:
+		return command.Y - command.Top, true
+	case paintmodel.DrawSelect:
 		return command.Y - command.Top, true
 	case paintmodel.DrawBox:
 		return command.Y - command.Top, true
@@ -1044,6 +1053,39 @@ func (ui *BrowserUI) layoutDrawInput(gtx layout.Context, command paintmodel.Draw
 			style.Color = rgba(command.Color)
 			return layout.UniformInset(unit.Dp(8)).Layout(gtx, style.Layout)
 		})
+	})
+}
+
+func (ui *BrowserUI) layoutDrawSelect(gtx layout.Context, command paintmodel.DrawSelect) layout.Dimensions {
+	left := unit.Dp(command.X)
+	viewportWidth := float32(gtx.Constraints.Max.X) / gtx.Metric.PxPerDp
+	right := unit.Dp(max(viewportWidth-command.X-command.Width, float32(0)))
+	return layout.Inset{Top: unit.Dp(command.Top), Left: left, Right: right}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		if command.Clip != nil {
+			defer commandClip(gtx, command.Clip, command.X, command.Y).Push(gtx.Ops).Pop()
+		}
+		if command.Opacity < 1 {
+			defer paint.PushOpacity(gtx.Ops, max(command.Opacity, 0)).Pop()
+		}
+		button := ui.selectButtons[command.NodeID]
+		if button == nil {
+			button = new(widget.Clickable)
+			ui.selectButtons[command.NodeID] = button
+		}
+		for button.Clicked(gtx) {
+			if next, ok := forms.NextEnabledValue(command.Options, command.Selected); ok && ui.navigator != nil {
+				ui.navigator.SetSelectValue(command.NodeID, next)
+			}
+		}
+		gtx.Constraints.Min.Y = gtx.Dp(unit.Dp(command.Height))
+		gtx.Constraints.Max.Y = gtx.Constraints.Min.Y
+		label := command.Label
+		if label == "" {
+			label = "選択してください"
+		}
+		style := material.Button(ui.theme, button, label+" ▾")
+		style.Color = rgba(command.Color)
+		return style.Layout(gtx)
 	})
 }
 

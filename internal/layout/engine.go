@@ -5,6 +5,7 @@ import (
 	"unicode"
 
 	"github.com/Grove-Computing/Growse/internal/dom"
+	"github.com/Grove-Computing/Growse/internal/forms"
 	stylemodel "github.com/Grove-Computing/Growse/internal/style"
 )
 
@@ -217,6 +218,10 @@ func (e *engine) walk(node *dom.Node, x, width, containingHeight float32, height
 			e.addInput(node, style, x, width, containingHeight, heightDefinite)
 			return
 		}
+		if isSelectControl(node) {
+			e.addSelect(node, style, x, width, containingHeight, heightDefinite)
+			return
+		}
 		if isBlockLevelDisplay(style.display) {
 			e.addBlock(node, style, x, width, containingHeight, heightDefinite, nil)
 			return
@@ -297,6 +302,40 @@ func isEditableTextControl(node *dom.Node) bool {
 	}
 	typeValue, ok := node.Attribute("type")
 	return !ok || strings.EqualFold(strings.TrimSpace(typeValue), "text")
+}
+
+func isSelectControl(node *dom.Node) bool {
+	return node != nil && node.Type == dom.NodeElement && node.TagName == "select"
+}
+
+func (e *engine) addSelect(node *dom.Node, style blockStyle, x, width, containingHeight float32, heightDefinite bool) {
+	e.y += style.margin.Top
+	x += style.margin.Left
+	availableWidth := width - style.margin.Left - style.margin.Right
+	usedWidth := inputWidth
+	if resolved, ok := resolveSize(style.width, availableWidth, true); ok {
+		usedWidth = resolved
+	}
+	usedWidth = min(max(usedWidth, float32(1)), max(availableWidth, float32(1)))
+	usedHeight := inputHeight
+	if resolved, ok := resolveSize(style.height, containingHeight, heightDefinite); ok {
+		usedHeight = resolved
+	}
+	options := forms.SelectOptions(node)
+	selected := forms.SelectedIndex(node, options)
+	label := ""
+	if selected >= 0 {
+		label = options[selected].Label
+	}
+	e.tree.Boxes = append(e.tree.Boxes, Box{
+		Order: e.nextOrder(), StackingID: e.stackingID, NodeID: node.ID, Tag: node.TagName,
+		Text: label, Select: true, Options: options, Selected: selected,
+		X: x, Y: e.y, Width: usedWidth, Height: usedHeight, Color: style.color,
+		Clip: cloneRect(e.clip), Clips: cloneClipRegions(e.clips), Opacity: e.opacity * style.opacity,
+		Transform: stylemodel.IdentityMatrix(), Hidden: style.hidden,
+	})
+	e.tree.Bounds[node.ID] = Rect{X: x, Y: e.y, Width: usedWidth, Height: usedHeight}
+	e.y += usedHeight + style.margin.Bottom
 }
 
 func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containingHeight float32, heightDefinite bool, topMargin *float32) {
@@ -423,6 +462,13 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 				if isEditableTextControl(child) {
 					flushInline()
 					e.addInput(child, childStyle, contentX, contentWidth, childContainingHeight, declaredHeightDefinite)
+					previousBlock = true
+					previousBottomMargin = childStyle.margin.Bottom
+					continue
+				}
+				if isSelectControl(child) {
+					flushInline()
+					e.addSelect(child, childStyle, contentX, contentWidth, childContainingHeight, declaredHeightDefinite)
 					previousBlock = true
 					previousBottomMargin = childStyle.margin.Bottom
 					continue

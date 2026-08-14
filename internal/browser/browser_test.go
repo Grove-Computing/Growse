@@ -784,6 +784,34 @@ func TestNormalizeURL(t *testing.T) {
 	}
 }
 
+func TestSetSelectValueChangesEnabledOptionAndDispatchesEvents(t *testing.T) {
+	document := dom.NewDocument()
+	selectNode := document.CreateElement("select", nil)
+	first := document.CreateElement("option", map[string]string{"value": "one"})
+	second := document.CreateElement("option", map[string]string{"value": "two"})
+	for _, edge := range [][2]*dom.Node{{document.Root, selectNode}, {selectNode, first}, {first, document.CreateText("One")}, {selectNode, second}, {second, document.CreateText("Two")}} {
+		if err := document.AppendChild(edge[0], edge[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	page := &Page{Document: document, ComputedStyles: style.Compute(document, nil), Events: events.NewDispatcher()}
+	var received []events.Type
+	page.Events.AddEventListener(selectNode.ID, events.Input, func(event events.Event) { received = append(received, event.Type) })
+	page.Events.AddEventListener(selectNode.ID, events.Change, func(event events.Event) { received = append(received, event.Type) })
+	browser := New(nil)
+	browser.SetPage(page)
+
+	if !browser.SetSelectValue(selectNode.ID, "two") {
+		t.Fatal("SetSelectValue returned false")
+	}
+	if got, ok := selectNode.Attribute("value"); !ok || got != "two" {
+		t.Fatalf("select value = (%q, %v)", got, ok)
+	}
+	if !reflect.DeepEqual(received, []events.Type{events.Input, events.Change}) {
+		t.Fatalf("events = %#v", received)
+	}
+}
+
 func TestNewPageCopiesURL(t *testing.T) {
 	pageURL := mustParseURL(t, "https://example.com/original")
 	page := NewPage(pageURL)

@@ -6,6 +6,7 @@ import (
 
 	"github.com/Grove-Computing/Growse/internal/css"
 	"github.com/Grove-Computing/Growse/internal/dom"
+	"github.com/Grove-Computing/Growse/internal/forms"
 	"github.com/Grove-Computing/Growse/internal/layout"
 	"github.com/Grove-Computing/Growse/internal/style"
 )
@@ -215,6 +216,19 @@ func TestBuildPreservesMultilineTextareaCommand(t *testing.T) {
 	input, ok := list.Commands[0].(DrawInput)
 	if !ok || !input.Multiline || input.Value != "first\nsecond" {
 		t.Fatalf("textarea command = %#v", list.Commands[0])
+	}
+}
+
+func TestBuildCreatesSelectCommand(t *testing.T) {
+	tree := &layout.Tree{Width: 400, Height: 100, Boxes: []layout.Box{{
+		NodeID: 9, Tag: "select", Text: "Two", Select: true, Selected: 1,
+		Options: []forms.Option{{Value: "one", Label: "One"}, {Value: "two", Label: "Two"}},
+		X:       20, Y: 30, Width: 280, Height: 40,
+	}}}
+
+	command, ok := Build(tree).Commands[0].(DrawSelect)
+	if !ok || command.NodeID != 9 || command.Selected != 1 || command.Options[command.Selected].Value != "two" || command.Label != "Two" || len(command.Options) != 2 {
+		t.Fatalf("select command = %#v", Build(tree).Commands[0])
 	}
 }
 

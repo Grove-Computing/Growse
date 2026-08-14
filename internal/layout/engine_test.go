@@ -559,6 +559,29 @@ func TestBuildAppliesTransformOriginToDisplayGeometry(t *testing.T) {
 	}
 }
 
+func TestBuildCreatesSelectWithSelectedOption(t *testing.T) {
+	document := dom.NewDocument()
+	selectNode := document.CreateElement("select", nil)
+	first := document.CreateElement("option", map[string]string{"value": "one"})
+	second := document.CreateElement("option", map[string]string{"value": "two", "selected": ""})
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, selectNode},
+		[2]*dom.Node{selectNode, first},
+		[2]*dom.Node{first, document.CreateText("One")},
+		[2]*dom.Node{selectNode, second},
+		[2]*dom.Node{second, document.CreateText("Two")},
+	)
+
+	tree := Build(document, style.Compute(document, nil), 800)
+	if len(tree.Boxes) != 1 {
+		t.Fatalf("boxes = %#v", tree.Boxes)
+	}
+	box := tree.Boxes[0]
+	if !box.Select || box.Selected != 1 || box.Text != "Two" || len(box.Options) != 2 {
+		t.Fatalf("select box = %#v", box)
+	}
+}
+
 func TestBuildCarriesNestedRoundedClipsAndOpacityLayer(t *testing.T) {
 	document := dom.NewDocument()
 	outer := document.CreateElement("div", map[string]string{"class": "outer"})

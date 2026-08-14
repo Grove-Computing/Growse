@@ -5,6 +5,7 @@ import (
 	"sort"
 
 	"github.com/Grove-Computing/Growse/internal/dom"
+	"github.com/Grove-Computing/Growse/internal/forms"
 	stylemodel "github.com/Grove-Computing/Growse/internal/style"
 )
 
@@ -132,6 +133,9 @@ type Box struct {
 	Text       string
 	Input      bool
 	Multiline  bool
+	Select     bool
+	Options    []forms.Option
+	Selected   int
 
 	X        float32
 	Y        float32

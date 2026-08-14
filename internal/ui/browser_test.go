@@ -21,6 +21,7 @@ import (
 	"github.com/Grove-Computing/Growse/internal/css"
 	"github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/events"
+	"github.com/Grove-Computing/Growse/internal/forms"
 	layoutengine "github.com/Grove-Computing/Growse/internal/layout"
 	paintmodel "github.com/Grove-Computing/Growse/internal/paint"
 	"github.com/Grove-Computing/Growse/internal/style"
@@ -127,6 +128,16 @@ func (navigator *stubNavigator) SetInputValue(nodeID dom.NodeID, value string) b
 		return false
 	}
 	changed := navigator.page.Document.SetAttribute(nodeID, "value", value)
+	if changed {
+		navigator.recomputeHoverStyles()
+	}
+	return changed
+}
+func (navigator *stubNavigator) SetSelectValue(nodeID dom.NodeID, value string) bool {
+	if navigator.page == nil || navigator.page.Document == nil {
+		return false
+	}
+	changed := forms.SetSelectedValue(navigator.page.Document, nodeID, value)
 	if changed {
 		navigator.recomputeHoverStyles()
 	}
@@ -809,6 +820,33 @@ func TestTextInputEnterDispatchesChangeAfterEdit(t *testing.T) {
 	}
 	if submissions[0].Target != form.ID {
 		t.Fatalf("submit target = %d, want %d", submissions[0].Target, form.ID)
+	}
+}
+
+func TestSelectButtonDisplaysAndChangesSelectedOption(t *testing.T) {
+	document := dom.NewDocument()
+	selectNode := document.CreateElement("select", nil)
+	first := document.CreateElement("option", map[string]string{"value": "one", "selected": ""})
+	second := document.CreateElement("option", map[string]string{"value": "two"})
+	for _, edge := range [][2]*dom.Node{{document.Root, selectNode}, {selectNode, first}, {first, document.CreateText("One")}, {selectNode, second}, {second, document.CreateText("Two")}} {
+		if err := document.AppendChild(edge[0], edge[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	page := &browser.Page{Document: document, ComputedStyles: style.Compute(document, nil), Events: events.NewDispatcher()}
+	ui := NewBrowserUI(&stubNavigator{page: page}, nil)
+	gtx := layout.Context{Ops: new(op.Ops), Constraints: layout.Exact(image.Pt(800, 600)), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}}
+
+	ui.layoutDocument(gtx, page)
+	button := ui.selectButtons[selectNode.ID]
+	if button == nil {
+		t.Fatal("select button was not created")
+	}
+	button.Click()
+	gtx.Reset()
+	ui.layoutDocument(gtx, page)
+	if got, ok := selectNode.Attribute("value"); !ok || got != "two" {
+		t.Fatalf("selected value = (%q, %v), want (two, true)", got, ok)
 	}
 }
 
