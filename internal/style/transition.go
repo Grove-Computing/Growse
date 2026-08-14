@@ -99,13 +99,21 @@ func interpolateTransitionValue(from, to TransitionValue, progress float64) Tran
 	}
 	switch from.Kind {
 	case TransitionNumber:
-		return TransitionValue{Kind: TransitionNumber, Number: from.Number + (to.Number-from.Number)*float32(progress)}
+		return TransitionValue{Kind: TransitionNumber, Number: InterpolateOpacity(from.Number, to.Number, progress)}
 	default:
 		if progress >= 1 {
 			return cloneTransitionValue(to)
 		}
 		return cloneTransitionValue(from)
 	}
+}
+
+// InterpolateOpacity returns the linear interpolation of two computed opacity
+// values. The used value remains in opacity's valid range even when an easing
+// function produces an overshooting progress value.
+func InterpolateOpacity(from, to float32, progress float64) float32 {
+	value := from + (to-from)*float32(progress)
+	return min(max(value, 0), 1)
 }
 
 func cloneTransitionValue(value TransitionValue) TransitionValue {

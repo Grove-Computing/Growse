@@ -147,6 +147,36 @@ func TestRunningTransitionInterruptsTowardNewTargetAtFullDuration(t *testing.T) 
 	}
 }
 
+func TestInterpolateOpacity(t *testing.T) {
+	tests := []struct {
+		name     string
+		from, to float32
+		progress float64
+		want     float32
+	}{
+		{name: "start", from: 0.2, to: 0.8, progress: 0, want: 0.2},
+		{name: "middle", from: 0.2, to: 0.8, progress: 0.5, want: 0.5},
+		{name: "end", from: 0.2, to: 0.8, progress: 1, want: 0.8},
+		{name: "reverse", from: 0.8, to: 0.2, progress: 0.25, want: 0.65},
+		{name: "overshoot upper", from: 0.2, to: 0.8, progress: 2, want: 1},
+		{name: "overshoot lower", from: 0.2, to: 0.8, progress: -1, want: 0},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := InterpolateOpacity(test.from, test.to, test.progress); abs32(got-test.want) > 0.000001 {
+				t.Fatalf("InterpolateOpacity(%v, %v, %v) = %v, want %v", test.from, test.to, test.progress, got, test.want)
+			}
+		})
+	}
+}
+
+func abs32(value float32) float32 {
+	if value < 0 {
+		return -value
+	}
+	return value
+}
+
 func transitionTestStyle(t *testing.T, declarations string) ComputedStyle {
 	t.Helper()
 	document := dom.NewDocument()
