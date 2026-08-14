@@ -305,3 +305,33 @@ func TestAnimationFrameRegistersCancelsAndDefersNestedCallback(t *testing.T) {
 		t.Fatal("one-shot frame callback remained active")
 	}
 }
+
+func TestCloseDiscardsTimerAndFrameCallbacks(t *testing.T) {
+	start := time.Unix(100, 0)
+	clock := &fakeClock{current: start}
+	callbackCount := 0
+	api := newAPI(context.Background(), clock, func(callback func()) bool {
+		callback()
+		return true
+	}, func() {}, false)
+	timerID, err := api.SetTimeout(time.Second, func() { callbackCount++ })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.RequestAnimationFrame(func(Timestamp) { callbackCount++ }); err != nil {
+		t.Fatal(err)
+	}
+
+	api.Close()
+	clock.current = start.Add(2 * time.Second)
+	api.runDue(clock.Now())
+	if api.RunAnimationFrame(clock.Now()) || api.HasAnimationFrameCallbacks() {
+		t.Fatal("closed scheduler retained an animation frame callback")
+	}
+	if api.ClearTimer(timerID) {
+		t.Fatal("closed scheduler retained a timer")
+	}
+	if callbackCount != 0 {
+		t.Fatalf("callback count after Close = %d, want 0", callbackCount)
+	}
+}

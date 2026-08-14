@@ -486,6 +486,39 @@ func TestRuntimeStopDiscardsQueuedAndFutureCallbacks(t *testing.T) {
 	}
 }
 
+func TestRuntimeStopDiscardsSchedulerCallbacks(t *testing.T) {
+	runtime := New()
+	scripts := []runtimemodel.Script{{Source: `package main
+import "growse/scheduler"
+func main() {
+	_, _ = scheduler.SetTimeout(scheduler.Second, func() {})
+	_, _ = scheduler.RequestAnimationFrame(func(timestamp scheduler.Timestamp) {
+		_ = timestamp
+	})
+}`}}
+	if err := runtime.Load(context.Background(), scripts, runtimemodel.Environment{}); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if !runtime.HasAnimationFrameCallbacks() {
+		t.Fatal("runtime did not retain the registered frame before Stop")
+	}
+	if err := runtime.Stop(); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+	if runtime.HasAnimationFrameCallbacks() || runtime.RunAnimationFrame(time.Now()) {
+		t.Fatal("stopped runtime retained a frame callback")
+	}
+	if runtime.schedulerAPI == nil {
+		t.Fatal("scheduler API was not initialized")
+	}
+	if _, err := runtime.schedulerAPI.SetTimeout(0, func() {}); err == nil {
+		t.Fatal("stopped runtime scheduler accepted a new timer")
+	}
+}
+
 func equalStrings(left, right []string) bool {
 	if len(left) != len(right) {
 		return false
