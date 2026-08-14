@@ -38,6 +38,7 @@ type visualSnapshot struct {
 	Geometry   []string `json:"geometry"`
 	Display    []string `json:"display_list"`
 	HitTesting []string `json:"hit_testing"`
+	Timestamp  string   `json:"timestamp,omitempty"`
 }
 
 // TestDashboardVisualRegression protects pixels, layout geometry, display-list
@@ -82,6 +83,72 @@ func TestDashboardVisualRegression(t *testing.T) {
 	if !reflect.DeepEqual(snapshot, wantSnapshot) {
 		t.Fatalf("visual snapshot changed; inspect the rendering difference before updating testdata/dashboard.golden.json\n--- actual ---\n%s", actual)
 	}
+}
+
+func TestAnimationVisualRegressionAtSpecifiedTimestamp(t *testing.T) {
+	document := dom.NewDocument()
+	target := document.CreateElement("div", map[string]string{"id": "target"})
+	if err := document.AppendChild(document.Root, target); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(target, document.CreateText("Moving")); err != nil {
+		t.Fatal(err)
+	}
+	stylesheet, err := css.Parse(strings.NewReader(`
+#target { display:block; width:80px; height:40px; color:white; background-color:red; transform-origin:0 0; }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	underlying := style.Compute(document, stylesheet)
+	tree := layout.BuildWithViewport(document, underlying, visualViewportWidth, visualViewportHeight)
+
+	const timestamp = 375000000 // 375ms in nanoseconds
+	progress := float64(timestamp) / float64(1_000_000_000)
+	animatedStyle := underlying[target.ID]
+	animatedStyle.Opacity = style.InterpolateOpacity(1, 0.2, progress)
+	animatedStyle.BackgroundColor = style.InterpolateColor(0xff0000ff, 0x0000ffff, progress)
+	animatedStyle.Transform = style.InterpolateTransform(nil, []style.TransformFunction{{
+		Kind: style.TransformTranslate, X: style.LengthPercentage{Pixels: 80},
+	}}, progress, 80, 40)
+	layout.ApplyAnimatedStyles(tree, style.Map{target.ID: animatedStyle})
+	list := Build(tree)
+	imageValue := rasterVisualFixture(t, list, visualViewportWidth, visualViewportHeight, visualScale)
+	hash := sha256.Sum256(imageValue.Pix)
+	snapshot := visualSnapshot{
+		Viewport: fmt.Sprintf("%dx%d", visualViewportWidth, visualViewportHeight), Scale: visualScale,
+		Font: "gofont/goregular@72dpi-hinting-none", PixelSHA: hex.EncodeToString(hash[:]),
+		Geometry: geometrySnapshot(tree), Display: displaySnapshot(list),
+		HitTesting: []string{
+			animationHitSnapshot(tree, 70, 40),
+			animationHitSnapshot(tree, 35, 40),
+		},
+		Timestamp: "375ms",
+	}
+	actual, err := json.MarshalIndent(snapshot, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	actual = append(actual, '\n')
+	want, err := os.ReadFile("testdata/animation-375ms.golden.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantSnapshot, err := decodeVisualSnapshot(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(snapshot, wantSnapshot) {
+		t.Fatalf("animation visual snapshot changed at 375ms\n--- actual ---\n%s", actual)
+	}
+}
+
+func animationHitSnapshot(tree *layout.Tree, x, y float32) string {
+	nodeID, ok := layout.HitTest(tree, x, y)
+	if !ok {
+		return fmt.Sprintf("%.0f,%.0f=none", x, y)
+	}
+	return fmt.Sprintf("%.0f,%.0f=node(%d)", x, y, nodeID)
 }
 
 func TestVisualSnapshotGoldenAcceptsCRLF(t *testing.T) {
