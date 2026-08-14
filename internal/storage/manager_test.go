@@ -1,6 +1,8 @@
 package storage
 
 import (
+	"errors"
+	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -142,5 +144,46 @@ func TestPersistentAreaRollsBackWhenAtomicRenameFails(t *testing.T) {
 	}
 	if info.Mode().Perm() != 0o600 {
 		t.Fatalf("storage file permissions = %o, want 600", info.Mode().Perm())
+	}
+}
+
+func TestManagerCapsOriginNamespaces(t *testing.T) {
+	manager := NewManager()
+	for index := 0; index < MaxStorageOrigins; index++ {
+		if _, _, err := manager.Areas(parseURL(t, fmt.Sprintf("https://origin-%d.test/", index))); err != nil {
+			t.Fatalf("Areas(%d) error = %v", index, err)
+		}
+	}
+	if _, _, err := manager.Areas(parseURL(t, "https://overflow.test/")); !errors.Is(err, ErrQuotaExceeded) {
+		t.Fatalf("Origin namespace quota error = %v", err)
+	}
+}
+
+func TestPersistentManagerAppliesProfileQuotaBeforeWrite(t *testing.T) {
+	root := t.TempDir()
+	manager, err := NewPersistentManager(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	local, _, err := manager.Areas(parseURL(t, "https://example.test/"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	filler := filepath.Join(root, "local-storage", "existing-profile-data")
+	file, err := os.Create(filler)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Truncate(MaxProfileStorageBytes); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := local.Set("key", "value"); !errors.Is(err, ErrQuotaExceeded) {
+		t.Fatalf("profile quota error = %v", err)
+	}
+	if _, found := local.Get("key"); found {
+		t.Fatal("profile quota failure mutated Local Storage")
 	}
 }

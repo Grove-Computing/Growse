@@ -75,6 +75,10 @@ func savePersistentArea(directory, origin string, entries []Entry) error {
 	if err != nil {
 		return errors.New("encode local storage")
 	}
+	targetPath := persistentFilePath(directory, origin)
+	if exceedsProfileQuota(directory, targetPath, int64(len(content))) {
+		return ErrQuotaExceeded
+	}
 	temporary, err := os.CreateTemp(directory, ".storage-*.tmp")
 	if err != nil {
 		return errors.New("create local storage transaction")
@@ -99,7 +103,7 @@ func savePersistentArea(directory, origin string, entries []Entry) error {
 	if err := temporary.Close(); err != nil {
 		return errors.New("close local storage transaction")
 	}
-	if err := os.Rename(temporaryPath, persistentFilePath(directory, origin)); err != nil {
+	if err := os.Rename(temporaryPath, targetPath); err != nil {
 		return errors.New("commit local storage transaction")
 	}
 	committed = true
@@ -108,6 +112,31 @@ func savePersistentArea(directory, origin string, entries []Entry) error {
 		_ = directoryHandle.Close()
 	}
 	return nil
+}
+
+func exceedsProfileQuota(directory, targetPath string, replacementBytes int64) bool {
+	total := replacementBytes
+	files, err := os.ReadDir(directory)
+	if err != nil {
+		return true
+	}
+	for _, file := range files {
+		path := filepath.Join(directory, file.Name())
+		if path == targetPath {
+			continue
+		}
+		info, err := file.Info()
+		if err != nil {
+			return true
+		}
+		if info.Mode().IsRegular() {
+			total += info.Size()
+			if total > MaxProfileStorageBytes {
+				return true
+			}
+		}
+	}
+	return total > MaxProfileStorageBytes
 }
 
 func persistentFilePath(directory, origin string) string {

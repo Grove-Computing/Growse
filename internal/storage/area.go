@@ -1,7 +1,24 @@
 // Package storage はOriginごとのWeb Storage data modelを提供する。
 package storage
 
-import "sync"
+import (
+	"errors"
+	"sync"
+	"unicode/utf8"
+)
+
+const (
+	MaxKeyBytes            = 4 * 1024
+	MaxValueBytes          = 1024 * 1024
+	MaxOriginStorageBytes  = 5 * 1024 * 1024
+	MaxProfileStorageBytes = 50 * 1024 * 1024
+	MaxStorageOrigins      = 128
+)
+
+var (
+	ErrQuotaExceeded = errors.New("storage quota exceeded")
+	ErrInvalidString = errors.New("invalid storage string")
+)
 
 // Area は挿入順を保持する1つのStorage namespaceである。
 type Area struct {
@@ -50,12 +67,28 @@ func (area *Area) Set(key, value string) error {
 	if area == nil {
 		return nil
 	}
+	if err := ValidateKey(key); err != nil {
+		return err
+	}
+	if !utf8.ValidString(value) {
+		return ErrInvalidString
+	}
+	if len(value) > MaxValueBytes {
+		return ErrQuotaExceeded
+	}
 	area.mu.Lock()
 	defer area.mu.Unlock()
 	if current, exists := area.values[key]; exists && current == value {
 		return nil
 	}
 	previous := area.entriesLocked()
+	projected := area.bytesLocked() + len(key) + len(value)
+	if current, exists := area.values[key]; exists {
+		projected -= len(key) + len(current)
+	}
+	if projected > MaxOriginStorageBytes {
+		return ErrQuotaExceeded
+	}
 	if _, exists := area.values[key]; !exists {
 		area.ordered = append(area.ordered, key)
 	}
@@ -71,6 +104,9 @@ func (area *Area) Set(key, value string) error {
 func (area *Area) Remove(key string) error {
 	if area == nil {
 		return nil
+	}
+	if err := ValidateKey(key); err != nil {
+		return err
 	}
 	area.mu.Lock()
 	defer area.mu.Unlock()
@@ -88,6 +124,17 @@ func (area *Area) Remove(key string) error {
 	if err := area.commitLocked(); err != nil {
 		area.restoreLocked(previous)
 		return err
+	}
+	return nil
+}
+
+// ValidateKey はWeb Storage keyのUTF-8とsize上限を検証する。
+func ValidateKey(key string) error {
+	if !utf8.ValidString(key) {
+		return ErrInvalidString
+	}
+	if len(key) > MaxKeyBytes {
+		return ErrQuotaExceeded
 	}
 	return nil
 }
@@ -118,6 +165,14 @@ func (area *Area) entriesLocked() []Entry {
 		entries = append(entries, Entry{Key: key, Value: area.values[key]})
 	}
 	return entries
+}
+
+func (area *Area) bytesLocked() int {
+	total := 0
+	for key, value := range area.values {
+		total += len(key) + len(value)
+	}
+	return total
 }
 
 func (area *Area) commitLocked() error {

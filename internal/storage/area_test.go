@@ -1,6 +1,10 @@
 package storage
 
-import "testing"
+import (
+	"errors"
+	"strings"
+	"testing"
+)
 
 func TestAreaSupportsCRUDLengthAndKey(t *testing.T) {
 	area := NewArea()
@@ -53,5 +57,37 @@ func TestAreaDistinguishesEmptyMissingAndPreservesEnumerationOrder(t *testing.T)
 	}
 	if _, ok := area.Key(2); ok {
 		t.Fatal("Key(2) unexpectedly exists")
+	}
+}
+
+func TestAreaAppliesKeyValueAndOriginQuotasWithoutMutation(t *testing.T) {
+	area := NewArea()
+	invalidUTF8 := string([]byte{0xff})
+	for _, test := range []struct{ key, value string }{
+		{key: strings.Repeat("k", MaxKeyBytes+1), value: "value"},
+		{key: invalidUTF8, value: "value"},
+		{key: "key", value: strings.Repeat("v", MaxValueBytes+1)},
+		{key: "key", value: invalidUTF8},
+	} {
+		if err := area.Set(test.key, test.value); err == nil {
+			t.Fatal("Set() accepted invalid or oversized input")
+		}
+	}
+	if area.Len() != 0 {
+		t.Fatalf("rejected input changed area length = %d", area.Len())
+	}
+
+	chunk := strings.Repeat("v", MaxValueBytes)
+	for index := 0; index < 4; index++ {
+		if err := area.Set(string(rune('a'+index)), chunk); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before := area.Len()
+	if err := area.Set("overflow", chunk); !errors.Is(err, ErrQuotaExceeded) {
+		t.Fatalf("Origin quota error = %v", err)
+	}
+	if area.Len() != before {
+		t.Fatal("Origin quota failure mutated Area")
 	}
 }

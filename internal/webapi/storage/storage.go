@@ -43,6 +43,9 @@ func (storage *Storage) Get(key string) (string, bool, error) {
 	if storage == nil || storage.area == nil {
 		return "", false, ErrUnavailable
 	}
+	if err := storagecore.ValidateKey(key); err != nil {
+		return "", false, err
+	}
 	value, ok := storage.area.Get(key)
 	return value, ok, nil
 }

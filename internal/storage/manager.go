@@ -51,6 +51,9 @@ func (manager *Manager) Areas(documentURL *url.URL) (local, session *Area, err e
 	defer manager.mu.Unlock()
 	local = manager.local[key]
 	if local == nil {
+		if len(manager.local) >= MaxStorageOrigins {
+			return nil, nil, ErrQuotaExceeded
+		}
 		if manager.localDir == "" {
 			local = NewArea()
 		} else {
