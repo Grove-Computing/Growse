@@ -27,6 +27,8 @@ type blockStyle struct {
 	backgroundSize      stylemodel.BackgroundSize
 	layoutPosition      stylemodel.Position
 	inset               stylemodel.Insets
+	zIndex              int
+	zIndexAuto          bool
 	radius              stylemodel.BorderRadii
 	decoration          stylemodel.TextDecorationLine
 	decorationColor     uint32
@@ -106,7 +108,7 @@ func build(document *dom.Document, computed stylemodel.Map, viewportWidth, viewp
 		viewportWidth = pagePadding*2 + 1
 	}
 
-	tree := &Tree{Width: viewportWidth, Background: 0xffffffff}
+	tree := &Tree{Width: viewportWidth, Background: 0xffffffff, StackingContexts: []StackingContext{{Parent: -1}}}
 	state := engine{
 		tree:           tree,
 		computed:       computed,
@@ -152,6 +154,7 @@ type engine struct {
 	opacity                       float32
 	viewportWidth, viewportHeight float32
 	positionCB                    *Rect
+	stackingID                    int
 }
 
 func (e *engine) nextOrder() int {
@@ -222,18 +225,19 @@ func (e *engine) addInput(node *dom.Node, style blockStyle, x, width, containing
 	usedHeight = constrainSize(usedHeight, style.minHeight, style.maxHeight, containingHeight, heightDefinite)
 	value, _ := node.Attribute("value")
 	e.tree.Boxes = append(e.tree.Boxes, Box{
-		Order:   e.nextOrder(),
-		NodeID:  node.ID,
-		Tag:     node.TagName,
-		Text:    value,
-		Input:   true,
-		X:       x,
-		Y:       e.y,
-		Width:   usedWidth,
-		Height:  usedHeight,
-		Color:   style.color,
-		Clip:    cloneRect(e.clip),
-		Opacity: e.opacity * style.opacity,
+		Order:      e.nextOrder(),
+		StackingID: e.stackingID,
+		NodeID:     node.ID,
+		Tag:        node.TagName,
+		Text:       value,
+		Input:      true,
+		X:          x,
+		Y:          e.y,
+		Width:      usedWidth,
+		Height:     usedHeight,
+		Color:      style.color,
+		Clip:       cloneRect(e.clip),
+		Opacity:    e.opacity * style.opacity,
 	})
 	e.y += usedHeight + style.margin.Bottom
 }
@@ -248,6 +252,11 @@ func isTextInput(node *dom.Node) bool {
 
 func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containingHeight float32, heightDefinite bool, topMargin *float32) {
 	geometryBoxStart, geometryDecorationStart := len(e.tree.Boxes), len(e.tree.Decorations)
+	previousStackingID := e.stackingID
+	if style.opacity < 1 || style.layoutPosition != stylemodel.PositionStatic && !style.zIndexAuto {
+		e.stackingID = len(e.tree.StackingContexts)
+		e.tree.StackingContexts = append(e.tree.StackingContexts, StackingContext{Parent: previousStackingID, NodeID: node.ID, ZIndex: style.zIndex, Order: e.order})
+	}
 	previousOpacity := e.opacity
 	e.opacity *= style.opacity
 	if topMargin == nil {
@@ -290,7 +299,7 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 	if style.background != 0 || style.image.Kind != stylemodel.BackgroundImageNone || hasVisibleBorder(style.border) {
 		decorationIndex = len(e.tree.Decorations)
 		e.tree.Decorations = append(e.tree.Decorations, Decoration{
-			Order: e.nextOrder(), NodeID: node.ID,
+			Order: e.nextOrder(), StackingID: e.stackingID, NodeID: node.ID,
 			Rect:       Rect{X: x, Y: boxTop, Width: outerWidth},
 			Background: style.background, Image: cloneBackgroundImage(style.image),
 			Repeat: style.repeat, Position: style.position, Size: style.backgroundSize, Clip: cloneRect(e.clip),
@@ -419,6 +428,7 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 		translateFlexGeometry(e.tree, geometryBoxStart, geometryDecorationStart, dx, dy, nil)
 	}
 	e.positionCB = previousPositionCB
+	e.stackingID = previousStackingID
 	e.opacity = previousOpacity
 }
 
@@ -474,7 +484,6 @@ func (e *engine) renderPositionedChild(node *dom.Node, style blockStyle) {
 	} else if hasBottom {
 		childY += containingBlock.Height - bottom - usedHeight
 	}
-	style.layoutPosition = stylemodel.PositionStatic
 	if style.display == stylemodel.DisplayInline || style.display == stylemodel.DisplayInlineBlock || style.display == stylemodel.DisplayInlineFlex || style.display == stylemodel.DisplayInlineGrid {
 		style.display = stylemodel.DisplayBlock
 	}
@@ -604,7 +613,7 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 			lineHeight = container.fontSize * 1.4
 		}
 		e.tree.Boxes = append(e.tree.Boxes, Box{
-			Order:  e.nextOrder(),
+			Order: e.nextOrder(), StackingID: e.stackingID,
 			NodeID: nodeID, Tag: tag, Text: lineText.String(),
 			X: x, Y: e.y, Width: width, Height: lineHeight,
 			FontSize: container.fontSize, Bold: container.bold, Color: container.color,
@@ -943,6 +952,7 @@ func applyComputed(block blockStyle, computed stylemodel.ComputedStyle) blockSty
 	block.position = computed.BackgroundPos
 	block.backgroundSize = computed.BackgroundSize
 	block.layoutPosition, block.inset = computed.Position, computed.Inset
+	block.zIndex, block.zIndexAuto = computed.ZIndex, computed.ZIndexAuto
 	block.radius = computed.BorderRadius
 	block.decoration = computed.TextDecoration
 	block.decorationColor = computed.DecorationColor

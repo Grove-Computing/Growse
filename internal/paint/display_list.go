@@ -2,8 +2,6 @@
 package paint
 
 import (
-	"sort"
-
 	"github.com/saku0512/growse/internal/dom"
 	"github.com/saku0512/growse/internal/layout"
 	stylemodel "github.com/saku0512/growse/internal/style"
@@ -118,14 +116,15 @@ func Build(tree *layout.Tree) *DisplayList {
 		decoration *layout.Decoration
 		box        *layout.Box
 	}
-	items := make([]orderedItem, 0, len(tree.Decorations)+len(tree.Boxes))
-	for index := range tree.Decorations {
-		items = append(items, orderedItem{order: tree.Decorations[index].Order, decoration: &tree.Decorations[index]})
+	entries := tree.OrderedPaintEntries()
+	items := make([]orderedItem, 0, len(entries))
+	for _, entry := range entries {
+		if entry.DecorationIndex >= 0 {
+			items = append(items, orderedItem{order: entry.Order, decoration: &tree.Decorations[entry.DecorationIndex]})
+		} else {
+			items = append(items, orderedItem{order: entry.Order, box: &tree.Boxes[entry.BoxIndex]})
+		}
 	}
-	for index := range tree.Boxes {
-		items = append(items, orderedItem{order: tree.Boxes[index].Order, box: &tree.Boxes[index]})
-	}
-	sort.SliceStable(items, func(left, right int) bool { return items[left].order < items[right].order })
 
 	list.Commands = make([]Command, 0, len(items))
 	previousBottom := float32(0)

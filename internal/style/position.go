@@ -1,6 +1,9 @@
 package style
 
-import "strings"
+import (
+	"strconv"
+	"strings"
+)
 
 func applyPositionProperties(computed, parent ComputedStyle, winners map[string]winner, custom map[string]string, context LengthContext) ComputedStyle {
 	if candidate, ok := winners["position"]; ok {
@@ -52,6 +55,22 @@ func applyPositionProperties(computed, parent ComputedStyle, winners map[string]
 				*values[index] = SizeValue{Kind: SizeAuto}
 			} else if length, valid := ResolveLength(component, context); valid {
 				*values[index] = SizeValue{Kind: SizeLength, Value: length}
+			}
+		}
+	}
+	if candidate, ok := winners["z-index"]; ok {
+		if value, valid := winnerValue(candidate, custom); valid {
+			switch parseGlobalKeyword(value) {
+			case globalInherit:
+				computed.ZIndex, computed.ZIndexAuto = parent.ZIndex, parent.ZIndexAuto
+			case globalInitial, globalUnset:
+				computed.ZIndex, computed.ZIndexAuto = 0, true
+			default:
+				if strings.EqualFold(strings.TrimSpace(value), "auto") {
+					computed.ZIndex, computed.ZIndexAuto = 0, true
+				} else if index, err := strconv.Atoi(strings.TrimSpace(value)); err == nil {
+					computed.ZIndex, computed.ZIndexAuto = index, false
+				}
 			}
 		}
 	}

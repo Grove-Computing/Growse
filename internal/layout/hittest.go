@@ -7,8 +7,20 @@ func HitTest(tree *Tree, x, y float32) (dom.NodeID, bool) {
 	if tree == nil {
 		return 0, false
 	}
-	for boxIndex := len(tree.Boxes) - 1; boxIndex >= 0; boxIndex-- {
-		box := tree.Boxes[boxIndex]
+	entries := tree.OrderedPaintEntries()
+	for entryIndex := len(entries) - 1; entryIndex >= 0; entryIndex-- {
+		entry := entries[entryIndex]
+		if entry.BoxIndex < 0 {
+			decoration := tree.Decorations[entry.DecorationIndex]
+			if decoration.Clip != nil && !containsPoint(decoration.Clip.X, decoration.Clip.Y, decoration.Clip.Width, decoration.Clip.Height, x, y) {
+				continue
+			}
+			if containsRoundedRect(decoration.Rect, decoration.Radius, x, y) {
+				return decoration.NodeID, true
+			}
+			continue
+		}
+		box := tree.Boxes[entry.BoxIndex]
 		if box.Clip != nil && !containsPoint(box.Clip.X, box.Clip.Y, box.Clip.Width, box.Clip.Height, x, y) {
 			continue
 		}
@@ -24,15 +36,6 @@ func HitTest(tree *Tree, x, y float32) (dom.NodeID, bool) {
 			runX += run.Width
 		}
 		return box.NodeID, true
-	}
-	for decorationIndex := len(tree.Decorations) - 1; decorationIndex >= 0; decorationIndex-- {
-		decoration := tree.Decorations[decorationIndex]
-		if decoration.Clip != nil && !containsPoint(decoration.Clip.X, decoration.Clip.Y, decoration.Clip.Width, decoration.Clip.Height, x, y) {
-			continue
-		}
-		if containsRoundedRect(decoration.Rect, decoration.Radius, x, y) {
-			return decoration.NodeID, true
-		}
 	}
 	return 0, false
 }

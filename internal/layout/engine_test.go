@@ -483,6 +483,43 @@ func TestBuildResolvesRelativeAbsoluteFixedAndStickyPositioning(t *testing.T) {
 	}
 }
 
+func TestBuildCreatesDeterministicStackingContextsAndPaintOrder(t *testing.T) {
+	document := dom.NewDocument()
+	parent := document.CreateElement("div", map[string]string{"class": "parent"})
+	high := document.CreateElement("div", map[string]string{"class": "high"})
+	low := document.CreateElement("div", map[string]string{"class": "low"})
+	transparent := document.CreateElement("div", map[string]string{"class": "transparent"})
+	appendNodes(t, document, [2]*dom.Node{document.Root, parent}, [2]*dom.Node{parent, high}, [2]*dom.Node{parent, low}, [2]*dom.Node{parent, transparent})
+	stylesheet, err := css.Parse(strings.NewReader(`
+.parent { position:relative; width:100px; height:100px }
+.high, .low { position:absolute; inset:0; width:50px; height:50px; background-color:#ddd }
+.high { z-index:2 }
+.low { z-index:1 }
+.transparent { opacity:.5; width:10px; height:10px; background-color:#ccc }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, style.Compute(document, stylesheet), 300)
+	if len(tree.StackingContexts) != 4 {
+		t.Fatalf("stacking contexts = %#v", tree.StackingContexts)
+	}
+	highRect := decorationForNode(t, tree, high.ID)
+	if hit, ok := HitTest(tree, highRect.X+1, highRect.Y+1); !ok || hit != high.ID {
+		t.Fatalf("z-index hit = (%d, %v), want high node %d", hit, ok, high.ID)
+	}
+	entries := tree.OrderedPaintEntries()
+	lastDecoration := dom.NodeID(0)
+	for _, entry := range entries {
+		if entry.DecorationIndex >= 0 {
+			lastDecoration = tree.Decorations[entry.DecorationIndex].NodeID
+		}
+	}
+	if lastDecoration != high.ID {
+		t.Fatalf("last painted decoration = %d, want high node %d", lastDecoration, high.ID)
+	}
+}
+
 func appendNodes(t *testing.T, document *dom.Document, edges ...[2]*dom.Node) {
 	t.Helper()
 	for _, edge := range edges {

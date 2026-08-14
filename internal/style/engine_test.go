@@ -965,7 +965,7 @@ func TestComputeGridAutoFillAndAutoFit(t *testing.T) {
 
 func TestComputePositionAndLogicalInsets(t *testing.T) {
 	document := dom.NewDocument()
-	item := document.CreateElement("div", map[string]string{"style": "position:absolute; inset-block:30px auto; inset-inline:20px auto"})
+	item := document.CreateElement("div", map[string]string{"style": "position:absolute; inset-block:30px auto; inset-inline:20px auto; z-index:-3"})
 	appendNode(t, document, document.Root, item)
 	computed, _ := Compute(document, nil).For(item)
 	if computed.Position != PositionAbsolute || computed.Inset.Top.Value.Pixels != 30 || computed.Inset.Left.Value.Pixels != 20 {
@@ -973,6 +973,9 @@ func TestComputePositionAndLogicalInsets(t *testing.T) {
 	}
 	if computed.Inset.Right.Kind != SizeAuto || computed.Inset.Bottom.Kind != SizeAuto {
 		t.Fatalf("auto logical insets = %#v", computed.Inset)
+	}
+	if computed.ZIndexAuto || computed.ZIndex != -3 {
+		t.Fatalf("z-index = (%v, %v)", computed.ZIndex, computed.ZIndexAuto)
 	}
 }
 

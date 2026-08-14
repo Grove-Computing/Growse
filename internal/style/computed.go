@@ -354,6 +354,8 @@ type ComputedStyle struct {
 	GridAutoFlow        GridAutoFlow
 	Position            Position
 	Inset               Insets
+	ZIndex              int
+	ZIndexAuto          bool
 	AspectRatio         float32
 	BoxSizing           BoxSizing
 	Width               SizeValue
