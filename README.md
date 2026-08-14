@@ -1,86 +1,183 @@
 # Growse
 
-Go をクライアントサイド言語として実行する、実験的な Web ブラウザです。
+Growseは、Goをクライアントサイド言語として実行する実験的なWebブラウザです。
 
-## 開発環境のセットアップ
+HTMLとCSSで画面を構築し、`<script type="text/go">`に書いたWebGoからDOM、Form、HTTP通信を操作できます。
 
-Go 1.26 以降と、Gio が利用する OS のグラフィックス開発ライブラリを用意します。Ubuntu / Debian 系では少なくとも Vulkan 開発ヘッダが必要です。
+## Growseでできること
+
+| 項目 | 主な機能 |
+| --- | --- |
+| ブラウジング | URL入力、リンク遷移、戻る、進む、再読込、同一オリジンのResource Loading |
+| HTML / DOM | 要素の検索・生成・追加・削除、属性・class・Form値の操作 |
+| CSS Layout | Box Model、Flexbox、Grid、Position、Overflow |
+| CSS Paint | Color、Gradient、複数Background、Shadow、Opacity、2D Transform |
+| Animation | CSS Transition、`@keyframes`、Easing、Iteration、Direction、Fill Mode、Pause、`prefers-reduced-motion` |
+| Form | Form Controls、Focus、Constraint Validation、GET / POST Submission |
+| HTTP | WebGo Fetch、Redirect、Timeout、Cancel、Cookie、Same-Origin Policy、CORS |
+| WebGo | click、input、change、submit、mouseenter、mouseleave Eventと非同期Fetch callback |
+
+詳しい対応範囲と制限は、[CSS対応表](docs/css-support.md)と[Form / Fetch / Cookie対応表](docs/form-fetch-cookie-support.md)を参照してください。
+
+## クイックスタート
+
+### 必要なもの
+
+- Go 1.26以降
+- Gioが利用するOSのグラフィックス開発ライブラリ
+
+Ubuntu / Debian系では、次のパッケージをインストールします。
 
 ```sh
 sudo apt-get update
-sudo apt-get install -y libvulkan-dev gcc pkg-config libwayland-dev libx11-dev libx11-xcb-dev libxkbcommon-x11-dev libgles2-mesa-dev libegl1-mesa-dev libffi-dev libxcursor-dev libvulkan-dev
+sudo apt-get install -y libvulkan-dev gcc pkg-config libwayland-dev libx11-dev libx11-xcb-dev libxkbcommon-x11-dev libgles2-mesa-dev libegl1-mesa-dev libffi-dev libxcursor-dev
 ```
 
-ほかの Linux ディストリビューションを使う場合は、[Gio の Linux セットアップ手順](https://gioui.org/doc/install/linux) を参照してください。
+ほかのLinuxディストリビューションについては、[GioのLinuxセットアップ手順](https://gioui.org/doc/install/linux)を参照してください。
 
-依存関係を取得して起動します。
+### 起動する
 
 ```sh
 go mod download
 go run ./cmd/growse
 ```
 
-Demoは、別のターミナルでいずれか1つを次のように配信します。
+起動すると、戻る・進む・再読込・URL入力欄・Gopherボタン・状態表示を備えたブラウザウィンドウが開きます。
+
+## Demoを試す
+
+別のターミナルでDemoを1つ配信し、Growseで`http://localhost:8080`を開きます。
 
 ```sh
-python3 -m http.server 8080 --directory examples/counter
-python3 -m http.server 8080 --directory examples/todo
-python3 -m http.server 8080 --directory examples/css3-core
-python3 -m http.server 8080 --directory examples/flexbox
-python3 -m http.server 8080 --directory examples/dashboard
-python3 -m http.server 8080 --directory examples/animation
 python3 -m http.server 8080 --directory examples/data-app
 ```
 
-Growseで`http://localhost:8080`を開くと、Counterではクリックによるカウント更新を、Todoではテキスト入力、フォーム送信、完了切替、削除を確認できます。CSS3 Core Showcaseでは、Custom Property、`calc()`、Media Query、Gradient、Box Model、角丸、Opacity、Text Decoration、Overflowを確認できます。Flexbox Showcaseでは、grow/shrink、wrap、alignment、gap、auto margin、inline-flex、nested flexを確認できます。Dashboardでは、Grid、named area、Position、複数Background、Gradient、Shadow、Transform、Opacityを組み合わせた画面を確認できます。Animation Showcaseでは、Transitionのhover反転と、Opacity・Color・2D Transformを使う複数Keyframes Animationを確認できます。Data App Showcaseでは、Form送信、WebGo Fetch、Session Cookie、通信結果によるDOM更新とAnimationを一つの画面で確認できます。WebGoソースはGoツールによる通常ビルドの対象外にするため、`_app.go`として配置しています。
+ほかのDemoへ切り替える場合は、配信するディレクトリを変更します。
 
-起動すると、戻る・進む・再読込・URL入力欄・Gopherボタン・状態表示を備えたブラウザウィンドウが表示され、ウィンドウ内のマウスカーソルは青いGopherになります。リンクへカーソルを重ねると、認証情報を伏せた解決済み遷移先URLを状態表示で確認できます。リンクのクリック、戻る・進む、履歴を増やさない再読込に対応しています。
+| Demo | 配信ディレクトリ | 確認できる機能 |
+| --- | --- | --- |
+| Counter | `examples/counter` | click Eventによるカウント更新 |
+| Todo | `examples/todo` | テキスト入力、Form送信、完了切替、削除 |
+| CSS3 Core Showcase | `examples/css3-core` | Custom Property、`calc()`、Media Query、Gradient、Box Model |
+| Flexbox Showcase | `examples/flexbox` | grow / shrink、wrap、alignment、gap、auto margin、nested flex |
+| Dashboard | `examples/dashboard` | Grid、Position、複数Background、Shadow、Transform、Opacity |
+| Animation Showcase | `examples/animation` | hover Transition、複数Keyframes Animation |
+| Data App Showcase | `examples/data-app` | Form、WebGo Fetch、Session Cookie、DOM更新、Animation |
 
-URLを入力してEnterを押すかGopherボタンを押すとHTMLと同一オリジンのCSSを取得し、Growse独自DOM・Computed Style・Layout Tree・Display Listを経由してViewportへ描画します。v0.7.0ではCSS Transition、`@keyframes` Animation、Easing、繰り返し、Direction、Fill Mode、Pause、`prefers-reduced-motion`を扱います。v0.8.0ではForm Controls、Constraint Validation、GET/POST Submission、WebGo FetchとHTTP Lifecycle、Cookie、Same-Origin Policy、CORSを追加しました。詳細な対応範囲と制限は[CSS対応表](docs/css-support.md)と[Form / Fetch / Cookie対応表](docs/form-fetch-cookie-support.md)を参照してください。
+WebGoソースは通常のGo build対象から除外するため、各Demoでは`_app.go`として配置しています。
 
-`<script type="text/go">`のインラインソースと外部`.go`ファイルはPageへ読み込み、localhost・127.0.0.1・`::1`のページではYaegi Runtimeで`main()`を実行します。WebGoスクリプトは`growse/dom`からDOMとFormを操作し、`growse/fetch`から非同期HTTPリクエストを開始できます。FetchのcallbackはPageのイベントキューで実行され、Page終了時には通信をcancelします。DOM変更後はComputed Styleを再計算して画面を更新します。
+## ブラウザの仕組み
+
+### Rendering Pipeline
+
+Growseは取得したHTMLとCSSを、独自のPipelineで画面へ描画します。
+
+```text
+HTML / CSS
+  → DOM
+  → Computed Style
+  → Layout Tree
+  → Display List
+  → Viewport
+```
+
+Animation中のPaintとHit Testingは、同じFrameの値を参照します。DOMを変更するとComputed Style以降を再計算し、画面を更新します。
+
+### Navigation
+
+- URL入力欄でEnterを押すか、Gopherボタンを押すと移動します。
+- リンクのclick、戻る、進む、履歴を増やさない再読込に対応しています。
+- リンクへカーソルを重ねると、認証情報を除去した遷移先URLを状態表示に示します。
+- ウィンドウ内では、青いGopherをマウスカーソルとして表示します。
+
+### WebGo Runtime
+
+インラインの`<script type="text/go">`と外部`.go`ファイルをPageへ読み込み、localhost、127.0.0.1、`::1`のページでYaegi Runtimeの`main()`を実行します。
+
+- `growse/dom`: DOM、Form、Eventを操作
+- `growse/fetch`: 非同期HTTP Requestを実行
+- Fetch callback: PageのEvent Queueで実行
+- Page終了時: 実行中のFetchをcancel
+
+WebGo RuntimeはSandboxではありません。信頼できるローカルページだけを開いてください。
+
+## ドキュメント
+
+| 文書 | 内容 |
+| --- | --- |
+| [CSS対応表](docs/css-support.md) | CSS Property、Layout、Animationの対応状況と制限 |
+| [Form / Fetch / Cookie対応表](docs/form-fetch-cookie-support.md) | Form、HTTP、Cookie、CORSの対応状況と制限 |
+| [Visual Regression Test](docs/visual-regression.md) | 固定Viewport、Font、Scaleによる画像回帰テスト |
+| [Performance Baseline](docs/performance.md) | Layout、Paint、Form、Cookie、FetchのBenchmark基準値 |
+| [WPT由来テスト](docs/wpt.md) | Web Platform Testsから移植したTestと出典 |
+| [v0.8.0リリース定義](docs/v0.8.0.md) | v0.8.0のTheme、Scope、完了条件 |
 
 ## 品質チェック
 
-GitHub Actionsでは、Linuxのraceテストと70%の最低カバレッジ、`go vet`、Staticcheck、actionlint、govulncheckを実行します。Go ModulesとGitHub ActionsはDependabotで週次確認します。
-
-固定viewport/font/scaleのVisual Regressionと、Layout・Paint benchmarkの実行方法は[Visual Regression Test](docs/visual-regression.md)と[Performance Baseline](docs/performance.md)に記録しています。
-
-ローカルでは必要な[GioのLinux依存パッケージ](https://gioui.org/doc/install/linux)を導入した上で、次のコマンドから同等の検査を実行できます。
+ローカルで、CIと同等の検査を実行できます。
 
 ```sh
 make ci
 ```
 
+主な検査項目は次のとおりです。
+
+- `go test -race ./...`
+- 最低Test Coverage 70%
+- `go vet`
+- Staticcheck
+- actionlint
+- govulncheck
+- Installer、Release成果物、Docker、文書の検証
+
+Go ModulesとGitHub Actionsの依存関係は、Dependabotで週次確認します。
+
 ## セキュリティ
 
-WebGo Runtimeは、信頼できないGoコードを安全に実行するSandboxではありません。信頼できるローカルページだけを開いてください。脆弱性の非公開報告方法とサポート対象は[SECURITY.md](SECURITY.md)を参照してください。
+GrowseとWebGo Runtimeは、信頼できないGoコードを安全に実行するSandboxではありません。信頼できないWebGoソースを開いたり、権限の高いユーザーで実行したりしないでください。
 
-## リリース
+脆弱性の非公開報告方法、サポート対象、通信とResource LoadingのSecurity Boundaryは[SECURITY.md](SECURITY.md)を参照してください。
 
-`v0.8.0`のようなバージョンタグをpushすると、GitHub Actionsが各OSでテストを実行し、Linux amd64、macOS Intel、macOS Apple Silicon、Windows amd64向けのアーカイブとSHA-256チェックサムをGitHub Releaseへ公開します。Counter、Todo、CSS3 Core Showcase、Flexbox Showcase、Dashboard、Animation Showcase、Data App Showcaseも成果物へ同梱します。カーソル画像は実行ファイルへ埋め込まれるため、別途アセットを配置する必要はありません。
+## インストールとリリース
 
-Linux、macOS、Git Bashを利用できるWindowsでは、次のコマンドで最新版を`~/.local/bin`へインストールできます。ダウンロードしたアーカイブはインストール前にSHA-256チェックサムを検証します。
+### Installer
+
+Linux、macOS、Git Bashを利用できるWindowsでは、最新版を`~/.local/bin`へインストールできます。InstallerはダウンロードしたArchiveのSHA-256 checksumを検証します。
 
 ```sh
 wget -qO- https://github.com/Grove-Computing/Growse/releases/latest/download/install.sh | bash
 ```
 
-特定バージョンやインストール先を指定する場合は環境変数を利用します。
+Versionとインストール先を指定する場合は、環境変数を利用します。
 
 ```sh
 wget -qO- https://github.com/Grove-Computing/Growse/releases/latest/download/install.sh | GROWSE_VERSION=v0.8.0 GROWSE_INSTALL_DIR=/usr/local/bin bash
 ```
 
-同時にLinux amd64のDockerイメージをGitHub Container Registryへ、バージョンタグと`latest`タグで公開します。
+### Docker
+
+Linux amd64のDocker imageを、GitHub Container Registryから取得できます。
 
 ```sh
 docker pull ghcr.io/grove-computing/growse:v0.8.0
 ```
 
-GrowseはGUIアプリケーションのため、コンテナから起動する場合はホストのディスプレイサーバーとGPUデバイスをコンテナへ接続する必要があります。
+GrowseはGUI applicationのため、Containerから起動する場合はホストのDisplay ServerとGPU deviceを接続する必要があります。
 
-## Go Gopher のクレジット
+### Release成果物
+
+`v0.8.0`のようなVersion tagをpushすると、GitHub Actionsが次の成果物とSHA-256 checksumをGitHub Releaseへ公開します。
+
+- Linux amd64
+- macOS Intel
+- macOS Apple Silicon
+- Windows amd64
+- Linux amd64 Docker imageのVersion tagと`latest` tag
+
+Archiveには、Growse本体とすべてのDemoを同梱します。Gopher cursor imageは実行ファイルへ埋め込まれるため、別途assetを配置する必要はありません。
+
+## Go Gopherのクレジット
 
 The Go Gopher was designed by Renée French.
+
 The Go Gopher is licensed under the Creative Commons Attribution 4.0 License.
