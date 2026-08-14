@@ -15,6 +15,7 @@ import (
 	"github.com/Grove-Computing/Growse/internal/events"
 	"github.com/Grove-Computing/Growse/internal/forms"
 	"github.com/Grove-Computing/Growse/internal/network"
+	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 	"github.com/Grove-Computing/Growse/internal/style"
 )
 
@@ -561,6 +562,59 @@ func TestNavigatePreservesPageOnFailure(t *testing.T) {
 	}
 }
 
+func TestFragmentNavigationReusesDocumentAndRuntimeWithoutNetwork(t *testing.T) {
+	pageURL := mustParseURL(t, "http://localhost/notes")
+	loader := &routeLoader{responses: map[string]*network.Response{
+		pageURL.String(): {URL: pageURL, StatusCode: 200, ContentType: "text/html", Body: []byte(`<script type="text/go">package main; func main() {}</script><p>Notes</p>`)},
+	}}
+	runtime := &runtimeStub{}
+	browser := NewWithRuntimeFactory(loader, func() runtimemodel.Runtime { return runtime })
+	page, err := browser.Navigate(context.Background(), pageURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fragmentURL := pageURL.String() + "#details"
+	updated, err := browser.Navigate(context.Background(), fragmentURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated != page || browser.Page() != page {
+		t.Fatal("fragment Navigation replaced the active Page")
+	}
+	if got := page.URL.String(); got != fragmentURL {
+		t.Fatalf("Page URL = %q, want %q", got, fragmentURL)
+	}
+	if got := len(loader.requested); got != 1 {
+		t.Fatalf("loader requests = %d, want one document request", got)
+	}
+	if runtime.stopCalls.Load() != 0 || runtime.startCalls.Load() != 1 {
+		t.Fatalf("Runtime calls = start:%d stop:%d, want start:1 stop:0", runtime.startCalls.Load(), runtime.stopCalls.Load())
+	}
+	if got, want := len(browser.history.entries), 2; got != want {
+		t.Fatalf("history entries = %d, want %d", got, want)
+	}
+	if len(runtime.hashChanges) != 1 || runtime.hashChanges[0] != [2]string{pageURL.String(), fragmentURL} {
+		t.Fatalf("hashchange events = %v", runtime.hashChanges)
+	}
+	if len(runtime.popStates) != 0 {
+		t.Fatalf("popstate events = %v, want none", runtime.popStates)
+	}
+	if _, err := browser.Back(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(runtime.popStates) != 1 || runtime.popStates[0] != "" {
+		t.Fatalf("traversal popstate events = %v", runtime.popStates)
+	}
+	if len(runtime.hashChanges) != 2 || runtime.hashChanges[1] != [2]string{fragmentURL, pageURL.String()} {
+		t.Fatalf("traversal hashchange events = %v", runtime.hashChanges)
+	}
+	wantOrder := []string{"hashchange", "popstate", "hashchange"}
+	if !reflect.DeepEqual(runtime.navigationEvents, wantOrder) {
+		t.Fatalf("Navigation Event order = %v, want %v", runtime.navigationEvents, wantOrder)
+	}
+}
+
 func TestBackAndForwardLoadHistoryEntries(t *testing.T) {
 	firstURL := mustParseURL(t, "https://example.com/first")
 	secondURL := mustParseURL(t, "https://example.com/second")
@@ -590,6 +644,74 @@ func TestBackAndForwardLoadHistoryEntries(t *testing.T) {
 	page, err = browser.Forward(context.Background())
 	if err != nil || page.URL.String() != secondURL.String() {
 		t.Fatalf("Forward() = (%v, %v), want second page", page, err)
+	}
+}
+
+func TestSameDocumentTraversalRestoresURLStateAndScrollWithoutNetwork(t *testing.T) {
+	pageURL := mustParseURL(t, "http://localhost/notes")
+	loader := &routeLoader{responses: map[string]*network.Response{
+		pageURL.String(): {URL: pageURL, StatusCode: 200, ContentType: "text/html", Body: []byte(`<p>Notes</p>`)},
+	}}
+	browser := New(loader)
+	page, err := browser.Navigate(context.Background(), pageURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	browser.UpdateHistoryScroll(2, -10)
+	detailURL := mustParseURL(t, "http://localhost/notes?view=detail")
+	if err := browser.pushHistoryState(page, detailURL, `{"view":"detail"}`); err != nil {
+		t.Fatal(err)
+	}
+	browser.UpdateHistoryScroll(5, -24)
+
+	back, err := browser.Back(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if back != page || page.URL.String() != pageURL.String() || page.HistoryState != "" || page.ScrollFirst != 2 || page.ScrollOffset != -10 {
+		t.Fatalf("Back restored Page = %p URL=%v state=%q scroll=(%d,%d)", back, page.URL, page.HistoryState, page.ScrollFirst, page.ScrollOffset)
+	}
+	forward, err := browser.Forward(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if forward != page || page.URL.String() != detailURL.String() || page.HistoryState != `{"view":"detail"}` || page.ScrollFirst != 5 || page.ScrollOffset != -24 {
+		t.Fatalf("Forward restored Page = %p URL=%v state=%q scroll=(%d,%d)", forward, page.URL, page.HistoryState, page.ScrollFirst, page.ScrollOffset)
+	}
+	if got := len(loader.requested); got != 1 {
+		t.Fatalf("network requests = %d, want 1", got)
+	}
+}
+
+func TestCrossDocumentTraversalRestoresStateAndScroll(t *testing.T) {
+	firstURL := mustParseURL(t, "https://example.com/first")
+	secondURL := mustParseURL(t, "https://example.com/second")
+	loader := &routeLoader{responses: map[string]*network.Response{
+		firstURL.String():  {URL: firstURL, StatusCode: 200, ContentType: "text/html", Body: []byte(`<p>First</p>`)},
+		secondURL.String(): {URL: secondURL, StatusCode: 200, ContentType: "text/html", Body: []byte(`<p>Second</p>`)},
+	}}
+	browser := New(loader)
+	first, err := browser.Navigate(context.Background(), firstURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := browser.replaceHistoryState(first, firstURL, `{"document":1}`); err != nil {
+		t.Fatal(err)
+	}
+	browser.UpdateHistoryScroll(4, -16)
+	if _, err := browser.Navigate(context.Background(), secondURL.String()); err != nil {
+		t.Fatal(err)
+	}
+
+	restored, err := browser.Back(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restored == first || restored.URL.String() != firstURL.String() || restored.HistoryState != `{"document":1}` || restored.ScrollFirst != 4 || restored.ScrollOffset != -16 {
+		t.Fatalf("restored Page = %p URL=%v state=%q scroll=(%d,%d)", restored, restored.URL, restored.HistoryState, restored.ScrollFirst, restored.ScrollOffset)
+	}
+	if got := len(loader.requested); got != 3 {
+		t.Fatalf("network requests = %d, want 3", got)
 	}
 }
 

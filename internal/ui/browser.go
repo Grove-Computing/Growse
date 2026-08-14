@@ -87,6 +87,7 @@ type BrowserUI struct {
 	formButtons       map[dom.NodeID]*widget.Clickable
 	layoutBuild       func(*dom.Document, stylemodel.Map, float32, float32, float32, float32) *layoutengine.Tree
 	layoutCache       documentLayoutCache
+	scrollRevision    uint64
 }
 
 type documentLayoutCache struct {
@@ -124,6 +125,10 @@ type Navigator interface {
 type animationFrameNavigator interface {
 	RunAnimationFrame(time.Time) bool
 	HasAnimationFrameCallbacks() bool
+}
+
+type historyScrollNavigator interface {
+	UpdateHistoryScroll(first, offset int)
 }
 
 type navigationResult struct {
@@ -251,6 +256,7 @@ func (ui *BrowserUI) startNavigation(rawURL string) {
 }
 
 func (ui *BrowserUI) startPageLoad(status string, load func(context.Context) (*browser.Page, error)) {
+	ui.persistHistoryScroll()
 	if ui.navigator != nil {
 		ui.navigator.ClearHover()
 	}
@@ -302,7 +308,8 @@ func (ui *BrowserUI) consumeNavigationResult() {
 			}
 
 			ui.address.SetText(result.page.URL.String())
-			ui.pageList.Position = layout.Position{}
+			ui.pageList.Position = layout.Position{First: result.page.ScrollFirst, Offset: result.page.ScrollOffset}
+			ui.scrollRevision = result.page.ScrollRevision
 			ui.pageTitle = result.page.URL.Host
 			domSummary := "DOM未生成"
 			if result.page.Document != nil {
@@ -514,6 +521,11 @@ func (ui *BrowserUI) layoutViewport(gtx layout.Context) layout.Dimensions {
 
 func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layout.Dimensions {
 	paint.Fill(gtx.Ops, color.NRGBA{R: 255, G: 255, B: 255, A: 255})
+	if ui.scrollRevision != page.ScrollRevision {
+		ui.pageList.Position = layout.Position{First: page.ScrollFirst, Offset: page.ScrollOffset}
+		ui.scrollRevision = page.ScrollRevision
+		ui.layoutCache = documentLayoutCache{}
+	}
 	if navigator, ok := ui.navigator.(animationFrameNavigator); ok {
 		navigator.RunAnimationFrame(gtx.Now)
 	}
@@ -562,7 +574,14 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 	if navigator, ok := ui.navigator.(animationFrameNavigator); ok && navigator.HasAnimationFrameCallbacks() && ui.invalidate != nil {
 		ui.invalidate()
 	}
+	ui.persistHistoryScroll()
 	return dimensions
+}
+
+func (ui *BrowserUI) persistHistoryScroll() {
+	if navigator, ok := ui.navigator.(historyScrollNavigator); ok {
+		navigator.UpdateHistoryScroll(ui.pageList.Position.First, ui.pageList.Position.Offset)
+	}
 }
 
 func (ui *BrowserUI) cachedDocumentTree(page *browser.Page, viewportWidth, viewportHeight, pxPerDp float32) *layoutengine.Tree {

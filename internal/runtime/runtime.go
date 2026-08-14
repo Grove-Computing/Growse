@@ -20,14 +20,19 @@ type Script struct {
 
 // Environment はRuntimeへ公開するページの状態を保持する。
 type Environment struct {
-	Document     *dom.Document
-	Events       *events.Dispatcher
-	BaseURL      *url.URL
-	Fetch        func(context.Context, *network.Request) (*network.Response, error)
-	OnMutation   func()
-	RequestFrame func()
-	FrameScope   func(time.Time, func())
-	ConsoleLog   func(message string)
+	Document        *dom.Document
+	Events          *events.Dispatcher
+	BaseURL         *url.URL
+	Fetch           func(context.Context, *network.Request) (*network.Response, error)
+	Navigate        func(*url.URL) error
+	HistoryPush     func(string, *url.URL) error
+	HistoryReplace  func(string, *url.URL) error
+	HistoryTraverse func(int) error
+	HistoryInfo     func() (int, string)
+	OnMutation      func()
+	RequestFrame    func()
+	FrameScope      func(time.Time, func())
+	ConsoleLog      func(message string)
 }
 
 // Runtime は1ページに属するGoスクリプトを実行する。
@@ -35,6 +40,17 @@ type Runtime interface {
 	Load(ctx context.Context, scripts []Script, environment Environment) error
 	Start(ctx context.Context) error
 	Stop() error
+}
+
+// LocationUpdater はsame-document Navigationを現在Runtimeへ通知する。
+type LocationUpdater interface {
+	UpdateLocation(*url.URL)
+}
+
+// NavigationEventDispatcher はNavigation Eventを現在Runtimeへ配送する。
+type NavigationEventDispatcher interface {
+	DispatchPopState(state string)
+	DispatchHashChange(oldURL, newURL string)
 }
 
 // Factory はページごとに独立したRuntimeを生成する。

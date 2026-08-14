@@ -228,6 +228,208 @@ func main() {
 	}
 }
 
+func TestRuntimeExposesCurrentNavigationLocation(t *testing.T) {
+	runtime := New()
+	scripts := []runtimemodel.Script{{Source: `package main
+import "growse/navigation"
+var Href string
+var Origin string
+var Path string
+var Query string
+var Fragment string
+func main() {
+	current := navigation.Current()
+	Href = current.Href
+	Origin = current.Origin
+	Path = current.Path
+	Query = current.Query
+	Fragment = current.Fragment
+}`}}
+	documentURL, err := url.Parse("https://example.test:8443/notes/today?filter=open#second")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Load(context.Background(), scripts, runtimemodel.Environment{BaseURL: documentURL}); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	symbols := runtime.interpreter.Symbols("page")["page"]
+	for name, want := range map[string]string{
+		"Href":   "https://example.test:8443/notes/today?filter=open#second",
+		"Origin": "https://example.test:8443", "Path": "/notes/today",
+		"Query": "filter=open", "Fragment": "second",
+	} {
+		if got := symbols[name].String(); got != want {
+			t.Fatalf("%s = %q, want %q", name, got, want)
+		}
+	}
+}
+
+func TestRuntimeResolvesAndRequestsWebGoNavigation(t *testing.T) {
+	runtime := New()
+	scripts := []runtimemodel.Script{{Source: `package main
+import "growse/navigation"
+var Resolved string
+var Failure string
+func main() {
+	location, err := navigation.Resolve("../next?from=webgo")
+	if err != nil { Failure = err.Error(); return }
+	Resolved = location.Href
+	if err := navigation.Navigate("../next?from=webgo"); err != nil { Failure = err.Error() }
+}`}}
+	baseURL, _ := url.Parse("http://localhost/app/index.html")
+	var requested *url.URL
+	environment := runtimemodel.Environment{BaseURL: baseURL, Navigate: func(target *url.URL) error {
+		requested = target
+		return nil
+	}}
+	if err := runtime.Load(context.Background(), scripts, environment); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	symbols := runtime.interpreter.Symbols("page")["page"]
+	if got := symbols["Failure"].String(); got != "" {
+		t.Fatalf("Failure = %q", got)
+	}
+	const want = "http://localhost/next?from=webgo"
+	if got := symbols["Resolved"].String(); got != want {
+		t.Fatalf("Resolved = %q, want %q", got, want)
+	}
+	if requested == nil || requested.String() != want {
+		t.Fatalf("requested URL = %v, want %q", requested, want)
+	}
+}
+
+func TestRuntimePushesJSONHistoryState(t *testing.T) {
+	runtime := New()
+	scripts := []runtimemodel.Script{{Source: `package main
+import "growse/navigation"
+var Failure string
+func main() {
+	if err := navigation.PushState("{\"view\":\"detail\"}", "/notes/9"); err != nil { Failure = err.Error() }
+}`}}
+	baseURL, _ := url.Parse("http://localhost/notes")
+	var state string
+	var target *url.URL
+	environment := runtimemodel.Environment{
+		BaseURL: baseURL,
+		HistoryPush: func(gotState string, gotTarget *url.URL) error {
+			state, target = gotState, gotTarget
+			return nil
+		},
+	}
+	if err := runtime.Load(context.Background(), scripts, environment); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := runtime.interpreter.Symbols("page")["page"]["Failure"].String(); got != "" {
+		t.Fatalf("Failure = %q", got)
+	}
+	if state != `{"view":"detail"}` || target == nil || target.String() != "http://localhost/notes/9" {
+		t.Fatalf("HistoryPush = (%q, %v)", state, target)
+	}
+}
+
+func TestRuntimeExposesHistoryTraversalAndSnapshot(t *testing.T) {
+	runtime := New()
+	scripts := []runtimemodel.Script{{Source: `package main
+import "growse/navigation"
+var Length int
+var State string
+var Failure string
+func main() {
+	Length = navigation.HistoryLength()
+	State = navigation.HistoryState()
+	if err := navigation.Go(-2); err != nil { Failure = err.Error() }
+}`}}
+	var delta int
+	environment := runtimemodel.Environment{
+		HistoryTraverse: func(got int) error { delta = got; return nil },
+		HistoryInfo:     func() (int, string) { return 3, `{"route":"notes"}` },
+	}
+	if err := runtime.Load(context.Background(), scripts, environment); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	symbols := runtime.interpreter.Symbols("page")["page"]
+	if got := int(symbols["Length"].Int()); got != 3 {
+		t.Fatalf("Length = %d, want 3", got)
+	}
+	if got := symbols["State"].String(); got != `{"route":"notes"}` {
+		t.Fatalf("State = %q", got)
+	}
+	if got := symbols["Failure"].String(); got != "" || delta != -2 {
+		t.Fatalf("traversal = delta:%d failure:%q", delta, got)
+	}
+}
+
+func TestRuntimeDeliversNavigationEventsThroughPageQueue(t *testing.T) {
+	runtime := New()
+	scripts := []runtimemodel.Script{{Source: `package main
+import "growse/dom"
+import "growse/navigation"
+var PopState string
+var OldURL string
+var NewURL string
+func main() {
+	navigation.OnPopState(func(event navigation.PopStateEvent) {
+		PopState = event.State
+		dom.GetElementByID("result").SetText("pop")
+	})
+	navigation.OnHashChange(func(event navigation.HashChangeEvent) {
+		OldURL = event.OldURL
+		NewURL = event.NewURL
+		dom.GetElementByID("result").SetText("hash")
+	})
+}`}}
+	document := dommodel.NewDocument()
+	result := document.CreateElement("p", map[string]string{"id": "result"})
+	if err := document.AppendChild(document.Root, result); err != nil {
+		t.Fatal(err)
+	}
+	mutated := make(chan struct{}, 2)
+	environment := runtimemodel.Environment{
+		Document: document, Events: events.NewDispatcher(),
+		OnMutation: func() { mutated <- struct{}{} },
+	}
+	if err := runtime.Load(context.Background(), scripts, environment); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	runtime.DispatchPopState(`{"page":2}`)
+	runtime.DispatchHashChange("https://example.test/#one", "https://example.test/#two")
+	for range 2 {
+		select {
+		case <-mutated:
+		case <-time.After(time.Second):
+			t.Fatal("Navigation Event callback was not delivered")
+		}
+	}
+	symbols := runtime.interpreter.Symbols("page")["page"]
+	if got := symbols["PopState"].String(); got != `{"page":2}` {
+		t.Fatalf("PopState = %q", got)
+	}
+	if got := symbols["OldURL"].String(); got != "https://example.test/#one" {
+		t.Fatalf("OldURL = %q", got)
+	}
+	if got := symbols["NewURL"].String(); got != "https://example.test/#two" {
+		t.Fatalf("NewURL = %q", got)
+	}
+	if err := runtime.Stop(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRuntimeFetchSendsMethodRelativeURLHeadersAndTextBody(t *testing.T) {
 	runtime := New()
 	var captured *network.Request

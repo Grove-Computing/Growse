@@ -5,6 +5,7 @@ package browser
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"mime"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	animationmodel "github.com/Grove-Computing/Growse/internal/animation"
 	"github.com/Grove-Computing/Growse/internal/dom"
@@ -22,6 +24,13 @@ import (
 	"github.com/Grove-Computing/Growse/internal/network"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 	"github.com/Grove-Computing/Growse/internal/style"
+)
+
+const (
+	maxHistoryEntries           = 1024
+	maxHistoryStateBytes        = 64 * 1024
+	maxHistorySessionStateBytes = 4 * 1024 * 1024
+	maxHistoryURLBytes          = 8 * 1024
 )
 
 // ResourceLoader retrieves a resource for navigation.
@@ -54,6 +63,7 @@ type Browser struct {
 	activeRuntime  runtimemodel.Runtime
 	onMutation     func()
 	navigationID   uint64
+	nextPageID     uint64
 	history        history
 	clock          animationmodel.Clock
 	reducedMotion  bool
@@ -513,7 +523,10 @@ func (b *Browser) SetPage(page *Page) {
 	if page == nil {
 		b.history = newHistory()
 	} else {
-		b.history.reset(page.URL)
+		b.nextPageID++
+		page.HistoryID = b.nextPageID
+		b.history = newHistory()
+		b.history.pushEntry(&historyEntry{URL: page.URL, PageID: page.HistoryID})
 	}
 	b.mu.Unlock()
 	if activeRuntime != nil {
@@ -547,6 +560,14 @@ func (b *Browser) Navigate(ctx context.Context, rawURL string) (*Page, error) {
 	pageURL, err := normalizeURL(rawURL)
 	if err != nil {
 		return nil, err
+	}
+	fragmentTarget := cloneURL(pageURL)
+	if reference, parseErr := url.Parse(strings.TrimSpace(rawURL)); parseErr == nil {
+		fragmentTarget.Fragment = reference.Fragment
+		fragmentTarget.RawFragment = reference.RawFragment
+	}
+	if page, ok := b.commitFragmentNavigation(fragmentTarget); ok {
+		return page, nil
 	}
 	return b.load(ctx, pageURL, historyPush, -1)
 }
@@ -780,14 +801,57 @@ func (b *Browser) CanForward() bool {
 	return b.history.canForward()
 }
 
+// UpdateHistoryScroll はUIの現在scroll位置をactive History entryへ保存する。
+func (b *Browser) UpdateHistoryScroll(first, offset int) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.page == nil || b.history.index < 0 || b.history.index >= len(b.history.entries) {
+		return
+	}
+	entry := b.history.entries[b.history.index]
+	if entry == nil || entry.PageID != b.page.HistoryID {
+		return
+	}
+	entry.ScrollFirst = first
+	entry.ScrollOffset = offset
+	b.page.ScrollFirst = first
+	b.page.ScrollOffset = offset
+}
+
 func (b *Browser) traverse(ctx context.Context, delta int) (*Page, error) {
-	b.mu.RLock()
-	target, index, ok := b.history.target(delta)
-	b.mu.RUnlock()
+	b.mu.Lock()
+	entry, index, ok := b.history.targetEntry(delta)
+	page := b.page
+	if ok && page != nil && entry.PageID != 0 && entry.PageID == page.HistoryID {
+		oldURL := cloneURL(page.URL)
+		page.URL = cloneURL(entry.URL)
+		page.HistoryState = entry.State
+		page.ScrollFirst = entry.ScrollFirst
+		page.ScrollOffset = entry.ScrollOffset
+		page.ScrollRevision++
+		b.history.index = index
+		activeRuntime := b.activeRuntime
+		onMutation := b.onMutation
+		b.mu.Unlock()
+		if updater, supportsUpdate := activeRuntime.(runtimemodel.LocationUpdater); supportsUpdate {
+			updater.UpdateLocation(entry.URL)
+		}
+		if dispatcher, supportsEvents := activeRuntime.(runtimemodel.NavigationEventDispatcher); supportsEvents {
+			dispatcher.DispatchPopState(entry.State)
+			if oldURL != nil && oldURL.Fragment != entry.URL.Fragment {
+				dispatcher.DispatchHashChange(network.RedactedURL(oldURL), network.RedactedURL(entry.URL))
+			}
+		}
+		if onMutation != nil {
+			onMutation()
+		}
+		return page, nil
+	}
+	b.mu.Unlock()
 	if !ok {
 		return nil, errors.New("no history entry in requested direction")
 	}
-	return b.load(ctx, target, historyTraverse, index)
+	return b.load(ctx, entry.URL, historyTraverse, index)
 }
 
 type historyCommit uint8
@@ -891,8 +955,23 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 		ScriptErrors:     scriptErrors,
 	}
 	page.Animations.Reconcile(computedStyles, b.currentTime())
-	pageRuntime := startRuntime(ctx, runtimeFactory, page, runtimeClient, onMutation, b.currentTime)
+	navigationReady := make(chan struct{})
+	pageRuntime := startRuntime(ctx, runtimeFactory, page, runtimeClient, onMutation, b.currentTime, func(target *url.URL) error {
+		resolved := cloneURL(target)
+		go func() {
+			<-navigationReady
+			b.navigateFromRuntime(page, resolved)
+		}()
+		return nil
+	}, func(state string, target *url.URL) error {
+		return b.pushHistoryState(page, target, state)
+	}, func(state string, target *url.URL) error {
+		return b.replaceHistoryState(page, target, state)
+	}, func(delta int) error {
+		return b.queueHistoryTraversal(page, navigationReady, delta)
+	}, b.historyInfo)
 	if err := ctx.Err(); err != nil {
+		close(navigationReady)
 		page.Animations.Clear()
 		page.Transitions.Clear()
 		if pageRuntime != nil {
@@ -903,6 +982,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	b.mu.Lock()
 	if navigationID != b.navigationID {
 		b.mu.Unlock()
+		close(navigationReady)
 		page.Animations.Clear()
 		page.Transitions.Clear()
 		if pageRuntime != nil {
@@ -912,6 +992,9 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	}
 	previousRuntime := b.activeRuntime
 	previousPage := b.page
+	b.nextPageID++
+	page.HistoryID = b.nextPageID
+	page.ScrollRevision = 1
 	b.activeRuntime = pageRuntime
 	b.page = page
 	if previousPage != nil && previousPage != page && previousPage.Animations != nil {
@@ -920,24 +1003,237 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	if previousPage != nil && previousPage != page && previousPage.Transitions != nil {
 		previousPage.Transitions.Clear()
 	}
+	dispatchPopState := false
+	popState := ""
 	switch commit {
 	case historyPush:
-		b.history.push(page.URL)
+		b.history.pushEntry(&historyEntry{URL: page.URL, PageID: page.HistoryID})
 	case historyTraverse:
+		previousEntry := cloneHistoryEntry(b.history.entries[historyIndex])
 		b.history.index = historyIndex
-		b.history.replace(page.URL)
+		if previousEntry != nil {
+			dispatchPopState = true
+			popState = previousEntry.State
+			page.HistoryState = previousEntry.State
+			page.ScrollFirst = previousEntry.ScrollFirst
+			page.ScrollOffset = previousEntry.ScrollOffset
+			b.history.rebindPage(previousEntry.PageID, page.HistoryID)
+			b.history.replaceEntry(&historyEntry{
+				URL: page.URL, State: previousEntry.State, PageID: page.HistoryID,
+				ScrollFirst: previousEntry.ScrollFirst, ScrollOffset: previousEntry.ScrollOffset,
+			})
+		} else {
+			b.history.replaceEntry(&historyEntry{URL: page.URL, PageID: page.HistoryID})
+		}
 	case historyReplace:
 		b.history.index = historyIndex
-		b.history.replace(page.URL)
+		current, _ := b.history.current()
+		state := ""
+		if current != nil {
+			state = current.State
+		}
+		b.history.replaceEntry(&historyEntry{URL: page.URL, State: state, PageID: page.HistoryID})
 	}
 	b.mu.Unlock()
+	close(navigationReady)
 	if previousRuntime != nil {
 		_ = previousRuntime.Stop()
+	}
+	if dispatchPopState {
+		if dispatcher, ok := pageRuntime.(runtimemodel.NavigationEventDispatcher); ok {
+			dispatcher.DispatchPopState(popState)
+		}
 	}
 	return page, nil
 }
 
-func startRuntime(ctx context.Context, factory runtimemodel.Factory, page *Page, client ResourceLoader, onMutation func(), now func() time.Time) runtimemodel.Runtime {
+func (b *Browser) navigateFromRuntime(source *Page, target *url.URL) {
+	b.mu.RLock()
+	active := b.page == source
+	b.mu.RUnlock()
+	if !active {
+		return
+	}
+	if _, ok := b.commitFragmentNavigation(target); ok {
+		return
+	}
+	_, err := b.load(context.Background(), target, historyPush, -1)
+	if err != nil {
+		b.mu.Lock()
+		if b.page == source {
+			source.RuntimeError = fmt.Sprintf("navigation failed: %v", err)
+		}
+		b.mu.Unlock()
+	}
+	b.mu.RLock()
+	onMutation := b.onMutation
+	b.mu.RUnlock()
+	if onMutation != nil {
+		onMutation()
+	}
+}
+
+func (b *Browser) commitFragmentNavigation(target *url.URL) (*Page, bool) {
+	b.mu.Lock()
+	page := b.page
+	if page == nil || page.URL == nil || !fragmentOnlyChange(page.URL, target) {
+		b.mu.Unlock()
+		return nil, false
+	}
+	oldURL := cloneURL(page.URL)
+	page.URL = cloneURL(target)
+	page.HistoryState = ""
+	b.history.pushEntry(&historyEntry{
+		URL: target, SameDocument: true, PageID: page.HistoryID,
+		ScrollFirst: page.ScrollFirst, ScrollOffset: page.ScrollOffset,
+	})
+	activeRuntime := b.activeRuntime
+	onMutation := b.onMutation
+	b.mu.Unlock()
+	if updater, ok := activeRuntime.(runtimemodel.LocationUpdater); ok {
+		updater.UpdateLocation(target)
+	}
+	if dispatcher, ok := activeRuntime.(runtimemodel.NavigationEventDispatcher); ok {
+		dispatcher.DispatchHashChange(network.RedactedURL(oldURL), network.RedactedURL(target))
+	}
+	if onMutation != nil {
+		onMutation()
+	}
+	return page, true
+}
+
+func fragmentOnlyChange(current, target *url.URL) bool {
+	if current == nil || target == nil || current.Fragment == target.Fragment {
+		return false
+	}
+	left := cloneURL(current)
+	right := cloneURL(target)
+	left.Fragment, left.RawFragment = "", ""
+	right.Fragment, right.RawFragment = "", ""
+	return left.String() == right.String()
+}
+
+func (b *Browser) pushHistoryState(source *Page, target *url.URL, state string) error {
+	b.mu.Lock()
+	if source == nil || b.page != source || source.URL == nil || target == nil {
+		b.mu.Unlock()
+		return errors.New("history is unavailable")
+	}
+	if !validBrowserHistoryState(state) || len(target.String()) > maxHistoryURLBytes || target.User != nil || !network.SameOrigin(source.URL, target) {
+		b.mu.Unlock()
+		return errors.New("invalid history entry")
+	}
+	newLength := b.history.index + 2
+	if newLength > maxHistoryEntries || b.history.stateBytesAfterPush(state) > maxHistorySessionStateBytes {
+		b.mu.Unlock()
+		return errors.New("history capacity exceeded")
+	}
+	source.URL = cloneURL(target)
+	source.HistoryState = state
+	b.history.pushEntry(&historyEntry{
+		URL: target, State: state, SameDocument: true, PageID: source.HistoryID,
+		ScrollFirst: source.ScrollFirst, ScrollOffset: source.ScrollOffset,
+	})
+	activeRuntime := b.activeRuntime
+	onMutation := b.onMutation
+	b.mu.Unlock()
+	if updater, ok := activeRuntime.(runtimemodel.LocationUpdater); ok {
+		updater.UpdateLocation(target)
+	}
+	if onMutation != nil {
+		onMutation()
+	}
+	return nil
+}
+
+func (b *Browser) replaceHistoryState(source *Page, target *url.URL, state string) error {
+	b.mu.Lock()
+	if source == nil || b.page != source || source.URL == nil || target == nil {
+		b.mu.Unlock()
+		return errors.New("history is unavailable")
+	}
+	if !validBrowserHistoryState(state) || len(target.String()) > maxHistoryURLBytes || target.User != nil || !network.SameOrigin(source.URL, target) {
+		b.mu.Unlock()
+		return errors.New("invalid history entry")
+	}
+	if b.history.stateBytesAfterReplace(state) > maxHistorySessionStateBytes {
+		b.mu.Unlock()
+		return errors.New("history capacity exceeded")
+	}
+	source.URL = cloneURL(target)
+	source.HistoryState = state
+	b.history.replaceEntry(&historyEntry{
+		URL: target, State: state, SameDocument: true, PageID: source.HistoryID,
+		ScrollFirst: source.ScrollFirst, ScrollOffset: source.ScrollOffset,
+	})
+	activeRuntime := b.activeRuntime
+	onMutation := b.onMutation
+	b.mu.Unlock()
+	if updater, ok := activeRuntime.(runtimemodel.LocationUpdater); ok {
+		updater.UpdateLocation(target)
+	}
+	if onMutation != nil {
+		onMutation()
+	}
+	return nil
+}
+
+func validBrowserHistoryState(state string) bool {
+	return len(state) > 0 && len(state) <= maxHistoryStateBytes && utf8.ValidString(state) && json.Valid([]byte(state))
+}
+
+func (b *Browser) historyInfo() (int, string) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	entry, ok := b.history.current()
+	if !ok {
+		return len(b.history.entries), ""
+	}
+	return len(b.history.entries), entry.State
+}
+
+func (b *Browser) queueHistoryTraversal(source *Page, ready <-chan struct{}, delta int) error {
+	if delta == 0 {
+		return nil
+	}
+	b.mu.RLock()
+	_, _, targetExists := b.history.targetEntry(delta)
+	active := b.page == source
+	b.mu.RUnlock()
+	if !active || !targetExists {
+		return errors.New("history entry is unavailable")
+	}
+	go func() {
+		<-ready
+		b.traverseFromRuntime(source, delta)
+	}()
+	return nil
+}
+
+func (b *Browser) traverseFromRuntime(source *Page, delta int) {
+	b.mu.RLock()
+	active := b.page == source
+	b.mu.RUnlock()
+	if !active {
+		return
+	}
+	_, err := b.traverse(context.Background(), delta)
+	if err != nil {
+		b.mu.Lock()
+		if b.page == source {
+			source.RuntimeError = fmt.Sprintf("history traversal failed: %v", err)
+		}
+		b.mu.Unlock()
+	}
+	b.mu.RLock()
+	onMutation := b.onMutation
+	b.mu.RUnlock()
+	if onMutation != nil {
+		onMutation()
+	}
+}
+
+func startRuntime(ctx context.Context, factory runtimemodel.Factory, page *Page, client ResourceLoader, onMutation func(), now func() time.Time, navigate func(*url.URL) error, historyPush, historyReplace func(string, *url.URL) error, historyTraverse func(int) error, historyInfo func() (int, string)) runtimemodel.Runtime {
 	if factory == nil || page == nil || len(page.Scripts) == 0 {
 		return nil
 	}
@@ -974,9 +1270,14 @@ func startRuntime(ctx context.Context, factory runtimemodel.Factory, page *Page,
 		return now()
 	}
 	environment := runtimemodel.Environment{
-		Document: page.Document,
-		Events:   page.Events,
-		BaseURL:  cloneURL(page.URL),
+		Document:        page.Document,
+		Events:          page.Events,
+		BaseURL:         cloneURL(page.URL),
+		Navigate:        navigate,
+		HistoryPush:     historyPush,
+		HistoryReplace:  historyReplace,
+		HistoryTraverse: historyTraverse,
+		HistoryInfo:     historyInfo,
 		OnMutation: func() {
 			page.HoverPath = hoverPath(page.Document, page.HoverTarget)
 			if len(page.HoverPath) == 0 {

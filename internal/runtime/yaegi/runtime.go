@@ -9,6 +9,7 @@ import (
 	"go/parser"
 	"go/token"
 	"io/fs"
+	"net/url"
 	"reflect"
 	"strings"
 	"sync"
@@ -20,6 +21,7 @@ import (
 	consoleapi "github.com/Grove-Computing/Growse/internal/webapi/console"
 	domapi "github.com/Grove-Computing/Growse/internal/webapi/dom"
 	fetchapi "github.com/Grove-Computing/Growse/internal/webapi/fetch"
+	navigationapi "github.com/Grove-Computing/Growse/internal/webapi/navigation"
 	schedulerapi "github.com/Grove-Computing/Growse/internal/webapi/scheduler"
 	strconvapi "github.com/Grove-Computing/Growse/internal/webapi/strconv"
 	"github.com/traefik/yaegi/interp"
@@ -35,6 +37,7 @@ type Runtime struct {
 	callbackQueue chan func()
 	callbackDone  chan struct{}
 	fetchAPI      *fetchapi.API
+	navigationAPI *navigationapi.API
 	schedulerAPI  *schedulerapi.API
 	loaded        bool
 	started       bool
@@ -94,7 +97,12 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 	console := consoleapi.New(environment.ConsoleLog)
 	dom := domapi.New(environment.Document, environment.Events, environment.OnMutation)
 	fetch := fetchapi.NewPage(r.runtimeCtx, environment.BaseURL, environment.Fetch, r.enqueueCallback)
+	navigation := navigationapi.NewPage(environment.BaseURL, environment.Navigate)
+	navigation.SetPushStateHandler(environment.HistoryPush)
+	navigation.SetReplaceStateHandler(environment.HistoryReplace)
+	navigation.SetTraversalHandler(environment.HistoryTraverse, environment.HistoryInfo)
 	r.fetchAPI = fetch
+	r.navigationAPI = navigation
 	scheduler := schedulerapi.NewPage(r.runtimeCtx, r.enqueueCallback, environment.RequestFrame)
 	scheduler.SetFrameScope(environment.FrameScope)
 	r.schedulerAPI = scheduler
@@ -119,6 +127,23 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 			"Request":               reflect.ValueOf((*fetchapi.Request)(nil)),
 			"Response":              reflect.ValueOf((*fetchapi.Response)(nil)),
 		},
+		"growse/navigation/navigation": {
+			"Back":            reflect.ValueOf(navigation.Back),
+			"Current":         reflect.ValueOf(navigation.Current),
+			"Forward":         reflect.ValueOf(navigation.Forward),
+			"Go":              reflect.ValueOf(navigation.Go),
+			"HashChangeEvent": reflect.ValueOf((*navigationapi.HashChangeEvent)(nil)),
+			"HistoryLength":   reflect.ValueOf(navigation.HistoryLength),
+			"HistoryState":    reflect.ValueOf(navigation.HistoryState),
+			"Location":        reflect.ValueOf((*navigationapi.Location)(nil)),
+			"Navigate":        reflect.ValueOf(navigation.Navigate),
+			"OnHashChange":    reflect.ValueOf(navigation.OnHashChange),
+			"OnPopState":      reflect.ValueOf(navigation.OnPopState),
+			"PopStateEvent":   reflect.ValueOf((*navigationapi.PopStateEvent)(nil)),
+			"PushState":       reflect.ValueOf(navigation.PushState),
+			"ReplaceState":    reflect.ValueOf(navigation.ReplaceState),
+			"Resolve":         reflect.ValueOf(navigation.Resolve),
+		},
 		"growse/scheduler/scheduler": {
 			"CancelAnimationFrame":  reflect.ValueOf(scheduler.CancelAnimationFrame),
 			"ClearTimer":            reflect.ValueOf(scheduler.ClearTimer),
@@ -139,6 +164,36 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 	}
 	r.loaded = true
 	return nil
+}
+
+// UpdateLocation はsame-document Navigation後のURLをWebGo APIへ反映する。
+func (r *Runtime) UpdateLocation(documentURL *url.URL) {
+	r.mu.Lock()
+	navigation := r.navigationAPI
+	r.mu.Unlock()
+	if navigation != nil {
+		navigation.UpdateCurrent(documentURL)
+	}
+}
+
+// DispatchPopState はpopstate相当EventをPage callback queueへ追加する。
+func (r *Runtime) DispatchPopState(state string) {
+	r.mu.Lock()
+	navigation := r.navigationAPI
+	r.mu.Unlock()
+	if navigation != nil {
+		r.enqueueCallback(func() { navigation.DispatchPopState(state) })
+	}
+}
+
+// DispatchHashChange はhashchange相当EventをPage callback queueへ追加する。
+func (r *Runtime) DispatchHashChange(oldURL, newURL string) {
+	r.mu.Lock()
+	navigation := r.navigationAPI
+	r.mu.Unlock()
+	if navigation != nil {
+		r.enqueueCallback(func() { navigation.DispatchHashChange(oldURL, newURL) })
+	}
 }
 
 // RunAnimationFrame synchronously delivers one frame through the page queue.
