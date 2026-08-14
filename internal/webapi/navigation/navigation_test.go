@@ -149,3 +149,28 @@ func TestReplaceStateUsesCurrentURLWhenURLIsEmpty(t *testing.T) {
 		t.Fatalf("replacement = (%q, %v)", state, target)
 	}
 }
+
+func TestHistoryTraversalAndSnapshotUseBrowserHandlers(t *testing.T) {
+	api := New(nil)
+	var deltas []int
+	api.SetTraversalHandler(func(delta int) error {
+		deltas = append(deltas, delta)
+		return nil
+	}, func() (int, string) { return 4, `{"page":2}` })
+
+	if err := api.Back(); err != nil {
+		t.Fatal(err)
+	}
+	if err := api.Forward(); err != nil {
+		t.Fatal(err)
+	}
+	if err := api.Go(-2); err != nil {
+		t.Fatal(err)
+	}
+	if len(deltas) != 3 || deltas[0] != -1 || deltas[1] != 1 || deltas[2] != -2 {
+		t.Fatalf("traversal deltas = %v", deltas)
+	}
+	if api.HistoryLength() != 4 || api.HistoryState() != `{"page":2}` {
+		t.Fatalf("history snapshot = (%d, %q)", api.HistoryLength(), api.HistoryState())
+	}
+}

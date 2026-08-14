@@ -45,6 +45,8 @@ type API struct {
 	navigate     func(*url.URL) error
 	pushState    func(string, *url.URL) error
 	replaceState func(string, *url.URL) error
+	traverse     func(int) error
+	historyInfo  func() (int, string)
 }
 
 // SetPushStateHandler はsame-document History entryの追加先を設定する。
@@ -64,6 +66,17 @@ func (api *API) SetReplaceStateHandler(handler func(string, *url.URL) error) {
 	}
 	api.mu.Lock()
 	api.replaceState = handler
+	api.mu.Unlock()
+}
+
+// SetTraversalHandler はBrowser History traversalと現在情報の取得先を設定する。
+func (api *API) SetTraversalHandler(traverse func(int) error, info func() (int, string)) {
+	if api == nil {
+		return
+	}
+	api.mu.Lock()
+	api.traverse = traverse
+	api.historyInfo = info
 	api.mu.Unlock()
 }
 
@@ -148,6 +161,58 @@ func validateHistoryState(stateJSON string) error {
 		return errors.New("invalid history state")
 	}
 	return nil
+}
+
+// Back は1つ前のHistory entryへの移動を要求する。
+func (api *API) Back() error {
+	return api.Go(-1)
+}
+
+// Forward は1つ後のHistory entryへの移動を要求する。
+func (api *API) Forward() error {
+	return api.Go(1)
+}
+
+// Go はdeltaで指定したHistory entryへの移動を要求する。
+func (api *API) Go(delta int) error {
+	if api == nil {
+		return ErrUnavailable
+	}
+	if delta == 0 {
+		return nil
+	}
+	api.mu.RLock()
+	handler := api.traverse
+	api.mu.RUnlock()
+	if handler == nil {
+		return ErrUnavailable
+	}
+	return handler(delta)
+}
+
+// HistoryLength は現在Sessionのentry数を返す。
+func (api *API) HistoryLength() int {
+	length, _ := api.historySnapshot()
+	return length
+}
+
+// HistoryState は現在entryのJSON stateを返す。未設定の場合は空文字列である。
+func (api *API) HistoryState() string {
+	_, state := api.historySnapshot()
+	return state
+}
+
+func (api *API) historySnapshot() (int, string) {
+	if api == nil {
+		return 0, ""
+	}
+	api.mu.RLock()
+	info := api.historyInfo
+	api.mu.RUnlock()
+	if info == nil {
+		return 0, ""
+	}
+	return info()
 }
 
 func (api *API) resolveHistoryURL(rawURL string) (*url.URL, error) {

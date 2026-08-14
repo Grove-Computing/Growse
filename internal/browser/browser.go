@@ -915,7 +915,9 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 		return b.pushHistoryState(page, target, state)
 	}, func(state string, target *url.URL) error {
 		return b.replaceHistoryState(page, target, state)
-	})
+	}, func(delta int) error {
+		return b.queueHistoryTraversal(page, navigationReady, delta)
+	}, b.historyInfo)
 	if err := ctx.Err(); err != nil {
 		close(navigationReady)
 		page.Animations.Clear()
@@ -1081,7 +1083,58 @@ func (b *Browser) replaceHistoryState(source *Page, target *url.URL, state strin
 	return nil
 }
 
-func startRuntime(ctx context.Context, factory runtimemodel.Factory, page *Page, client ResourceLoader, onMutation func(), now func() time.Time, navigate func(*url.URL) error, historyPush, historyReplace func(string, *url.URL) error) runtimemodel.Runtime {
+func (b *Browser) historyInfo() (int, string) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	entry, ok := b.history.current()
+	if !ok {
+		return len(b.history.entries), ""
+	}
+	return len(b.history.entries), entry.State
+}
+
+func (b *Browser) queueHistoryTraversal(source *Page, ready <-chan struct{}, delta int) error {
+	if delta == 0 {
+		return nil
+	}
+	b.mu.RLock()
+	_, _, targetExists := b.history.targetEntry(delta)
+	active := b.page == source
+	b.mu.RUnlock()
+	if !active || !targetExists {
+		return errors.New("history entry is unavailable")
+	}
+	go func() {
+		<-ready
+		b.traverseFromRuntime(source, delta)
+	}()
+	return nil
+}
+
+func (b *Browser) traverseFromRuntime(source *Page, delta int) {
+	b.mu.RLock()
+	active := b.page == source
+	b.mu.RUnlock()
+	if !active {
+		return
+	}
+	_, err := b.traverse(context.Background(), delta)
+	if err != nil {
+		b.mu.Lock()
+		if b.page == source {
+			source.RuntimeError = fmt.Sprintf("history traversal failed: %v", err)
+		}
+		b.mu.Unlock()
+	}
+	b.mu.RLock()
+	onMutation := b.onMutation
+	b.mu.RUnlock()
+	if onMutation != nil {
+		onMutation()
+	}
+}
+
+func startRuntime(ctx context.Context, factory runtimemodel.Factory, page *Page, client ResourceLoader, onMutation func(), now func() time.Time, navigate func(*url.URL) error, historyPush, historyReplace func(string, *url.URL) error, historyTraverse func(int) error, historyInfo func() (int, string)) runtimemodel.Runtime {
 	if factory == nil || page == nil || len(page.Scripts) == 0 {
 		return nil
 	}
@@ -1118,12 +1171,14 @@ func startRuntime(ctx context.Context, factory runtimemodel.Factory, page *Page,
 		return now()
 	}
 	environment := runtimemodel.Environment{
-		Document:       page.Document,
-		Events:         page.Events,
-		BaseURL:        cloneURL(page.URL),
-		Navigate:       navigate,
-		HistoryPush:    historyPush,
-		HistoryReplace: historyReplace,
+		Document:        page.Document,
+		Events:          page.Events,
+		BaseURL:         cloneURL(page.URL),
+		Navigate:        navigate,
+		HistoryPush:     historyPush,
+		HistoryReplace:  historyReplace,
+		HistoryTraverse: historyTraverse,
+		HistoryInfo:     historyInfo,
 		OnMutation: func() {
 			page.HoverPath = hoverPath(page.Document, page.HoverTarget)
 			if len(page.HoverPath) == 0 {

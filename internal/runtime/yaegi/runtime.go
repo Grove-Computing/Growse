@@ -100,6 +100,7 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 	navigation := navigationapi.NewPage(environment.BaseURL, environment.Navigate)
 	navigation.SetPushStateHandler(environment.HistoryPush)
 	navigation.SetReplaceStateHandler(environment.HistoryReplace)
+	navigation.SetTraversalHandler(environment.HistoryTraverse, environment.HistoryInfo)
 	r.fetchAPI = fetch
 	r.navigationAPI = navigation
 	scheduler := schedulerapi.NewPage(r.runtimeCtx, r.enqueueCallback, environment.RequestFrame)
@@ -127,12 +128,17 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 			"Response":              reflect.ValueOf((*fetchapi.Response)(nil)),
 		},
 		"growse/navigation/navigation": {
-			"Current":      reflect.ValueOf(navigation.Current),
-			"Location":     reflect.ValueOf((*navigationapi.Location)(nil)),
-			"Navigate":     reflect.ValueOf(navigation.Navigate),
-			"PushState":    reflect.ValueOf(navigation.PushState),
-			"ReplaceState": reflect.ValueOf(navigation.ReplaceState),
-			"Resolve":      reflect.ValueOf(navigation.Resolve),
+			"Back":          reflect.ValueOf(navigation.Back),
+			"Current":       reflect.ValueOf(navigation.Current),
+			"Forward":       reflect.ValueOf(navigation.Forward),
+			"Go":            reflect.ValueOf(navigation.Go),
+			"HistoryLength": reflect.ValueOf(navigation.HistoryLength),
+			"HistoryState":  reflect.ValueOf(navigation.HistoryState),
+			"Location":      reflect.ValueOf((*navigationapi.Location)(nil)),
+			"Navigate":      reflect.ValueOf(navigation.Navigate),
+			"PushState":     reflect.ValueOf(navigation.PushState),
+			"ReplaceState":  reflect.ValueOf(navigation.ReplaceState),
+			"Resolve":       reflect.ValueOf(navigation.Resolve),
 		},
 		"growse/scheduler/scheduler": {
 			"CancelAnimationFrame":  reflect.ValueOf(scheduler.CancelAnimationFrame),

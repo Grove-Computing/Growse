@@ -191,6 +191,39 @@ func TestWebGoReplaceStateDoesNotAddHistoryEntry(t *testing.T) {
 	}
 }
 
+func TestWebGoHistoryTraversalUsesCrossDocumentLifecycle(t *testing.T) {
+	firstURL := mustParseURL(t, "http://localhost/first")
+	secondURL := mustParseURL(t, "http://localhost/second")
+	loader := &routeLoader{responses: map[string]*network.Response{
+		firstURL.String():  {URL: firstURL, StatusCode: 200, ContentType: "text/html", Body: []byte(`<p>First</p>`)},
+		secondURL.String(): {URL: secondURL, StatusCode: 200, ContentType: "text/html", Body: []byte(`<script type="text/go">package main; func main() {}</script><p>Second</p>`)},
+	}}
+	runtime := &runtimeStub{}
+	browser := NewWithRuntimeFactory(loader, func() runtimemodel.Runtime { return runtime })
+	if _, err := browser.Navigate(context.Background(), firstURL.String()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := browser.Navigate(context.Background(), secondURL.String()); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.environment.HistoryTraverse(-1); err != nil {
+		t.Fatalf("HistoryTraverse() error = %v", err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for browser.Page().URL.String() != firstURL.String() && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if got := browser.Page().URL.String(); got != firstURL.String() {
+		t.Fatalf("active URL = %q, want %q", got, firstURL)
+	}
+	if got, want := len(browser.history.entries), 2; got != want {
+		t.Fatalf("history entries = %d, want %d", got, want)
+	}
+	if browser.history.index != 0 || runtime.stopCalls != 1 {
+		t.Fatalf("history index = %d, Runtime Stop calls = %d", browser.history.index, runtime.stopCalls)
+	}
+}
+
 func TestNavigateStartsRuntimeForTrustedOrigin(t *testing.T) {
 	pageURL := mustParseURL(t, "http://localhost/index.html")
 	loader := stubLoader{response: &network.Response{

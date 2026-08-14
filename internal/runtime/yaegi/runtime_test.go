@@ -336,6 +336,41 @@ func main() {
 	}
 }
 
+func TestRuntimeExposesHistoryTraversalAndSnapshot(t *testing.T) {
+	runtime := New()
+	scripts := []runtimemodel.Script{{Source: `package main
+import "growse/navigation"
+var Length int
+var State string
+var Failure string
+func main() {
+	Length = navigation.HistoryLength()
+	State = navigation.HistoryState()
+	if err := navigation.Go(-2); err != nil { Failure = err.Error() }
+}`}}
+	var delta int
+	environment := runtimemodel.Environment{
+		HistoryTraverse: func(got int) error { delta = got; return nil },
+		HistoryInfo:     func() (int, string) { return 3, `{"route":"notes"}` },
+	}
+	if err := runtime.Load(context.Background(), scripts, environment); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	symbols := runtime.interpreter.Symbols("page")["page"]
+	if got := int(symbols["Length"].Int()); got != 3 {
+		t.Fatalf("Length = %d, want 3", got)
+	}
+	if got := symbols["State"].String(); got != `{"route":"notes"}` {
+		t.Fatalf("State = %q", got)
+	}
+	if got := symbols["Failure"].String(); got != "" || delta != -2 {
+		t.Fatalf("traversal = delta:%d failure:%q", delta, got)
+	}
+}
+
 func TestRuntimeFetchSendsMethodRelativeURLHeadersAndTextBody(t *testing.T) {
 	runtime := New()
 	var captured *network.Request
