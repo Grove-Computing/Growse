@@ -121,3 +121,30 @@ func TestBuildGridSizesFixedPercentageIntrinsicAndFlexibleTracks(t *testing.T) {
 		t.Fatalf("intrinsic/flexible widths = %v, %v, %v", minRect.Width, maxRect.Width, flexRect.Width)
 	}
 }
+
+func TestBuildGridResolvesMinmaxFitContentAndRepeat(t *testing.T) {
+	document := dom.NewDocument()
+	grid := document.CreateElement("div", map[string]string{"class": "grid"})
+	items := make([]*dom.Node, 4)
+	appendNodes(t, document, [2]*dom.Node{document.Root, grid})
+	for index := range items {
+		items[index] = document.CreateElement("div", map[string]string{"class": "item"})
+		appendNodes(t, document, [2]*dom.Node{grid, items[index]})
+	}
+	appendNodes(t, document, [2]*dom.Node{items[3], document.CreateText("aa aa aa aa aa aa aa aa")})
+	stylesheet, err := css.Parse(strings.NewReader(`
+.grid { display:grid; width:400px; grid-template-columns:repeat(2, 40px) minmax(60px, 1fr) fit-content(80px); grid-template-rows:20px }
+.item { background-color:#ddd }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, stylemodel.Compute(document, stylesheet), 600)
+	want := []float32{40, 40, 240, 80}
+	for index, item := range items {
+		actual := decorationForNode(t, tree, item.ID).Width
+		if difference := actual - want[index]; difference < -0.01 || difference > 0.01 {
+			t.Fatalf("track %d width = %v, want %v", index, actual, want[index])
+		}
+	}
+}

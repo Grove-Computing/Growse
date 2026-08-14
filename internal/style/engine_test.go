@@ -878,6 +878,23 @@ func TestComputeGridIntrinsicAndFlexibleTracks(t *testing.T) {
 	}
 }
 
+func TestComputeGridMinmaxFitContentAndRepeat(t *testing.T) {
+	document := dom.NewDocument()
+	grid := document.CreateElement("div", map[string]string{"style": "display:grid; grid-template-columns:repeat(2, 40px) minmax(60px, 1fr) fit-content(80px)"})
+	appendNode(t, document, document.Root, grid)
+	computed, _ := Compute(document, nil).For(grid)
+	tracks := computed.GridTemplateColumns
+	if len(tracks) != 4 || tracks[0].Value.Pixels != 40 || tracks[1].Value.Pixels != 40 {
+		t.Fatalf("fixed repeat expansion = %#v", tracks)
+	}
+	if tracks[2].Kind != GridTrackFraction || tracks[2].Flex != 1 || !tracks[2].MinSet || tracks[2].MinKind != GridTrackLength || tracks[2].MinValue.Pixels != 60 {
+		t.Fatalf("minmax track = %#v", tracks[2])
+	}
+	if tracks[3].Kind != GridTrackMaxContent || tracks[3].FitLimit == nil || tracks[3].FitLimit.Pixels != 80 {
+		t.Fatalf("fit-content track = %#v", tracks[3])
+	}
+}
+
 func parseTestSelector(t *testing.T, value string) css.Selector {
 	t.Helper()
 	stylesheet, err := css.Parse(strings.NewReader(value + " { color: red }"))

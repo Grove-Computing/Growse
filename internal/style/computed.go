@@ -119,9 +119,13 @@ const (
 
 // GridTrackSize retains track sizing values until the grid container is laid out.
 type GridTrackSize struct {
-	Kind  GridTrackKind
-	Value LengthPercentage
-	Flex  float32
+	Kind     GridTrackKind
+	Value    LengthPercentage
+	Flex     float32
+	MinKind  GridTrackKind
+	MinValue LengthPercentage
+	MinSet   bool
+	FitLimit *LengthPercentage
 }
 
 // Edges contains resolved pixel values in CSS clockwise order.

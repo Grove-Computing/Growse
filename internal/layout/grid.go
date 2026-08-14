@@ -98,12 +98,19 @@ func resolveGridTracks(explicit, implicit []stylemodel.GridTrackSize, count int,
 			result[index] = contentContribution(minContent, index)
 		case stylemodel.GridTrackMaxContent:
 			result[index] = contentContribution(maxContent, index)
+			if track.FitLimit != nil {
+				result[index] = min(result[index], max(track.FitLimit.Resolve(basis), contentContribution(minContent, index)))
+			}
 		case stylemodel.GridTrackFraction:
 			result[index] = contentContribution(minContent, index)
 			flexTotal += track.Flex
 		case stylemodel.GridTrackAuto:
 			result[index] = contentContribution(maxContent, index)
 			autoCount++
+		}
+		if track.MinSet {
+			minimum := gridTrackMinimum(track, index, basis, basisDefinite, minContent, maxContent)
+			result[index] = max(result[index], minimum)
 		}
 		used += result[index]
 	}
@@ -126,6 +133,22 @@ func resolveGridTracks(explicit, implicit []stylemodel.GridTrackSize, count int,
 		}
 	}
 	return result
+}
+
+func gridTrackMinimum(track stylemodel.GridTrackSize, index int, basis float32, basisDefinite bool, minContent, maxContent []float32) float32 {
+	switch track.MinKind {
+	case stylemodel.GridTrackLength:
+		if track.MinValue.Percentage == 0 || basisDefinite {
+			return max(track.MinValue.Resolve(basis), float32(0))
+		}
+		return contentContribution(maxContent, index)
+	case stylemodel.GridTrackMinContent:
+		return contentContribution(minContent, index)
+	case stylemodel.GridTrackMaxContent, stylemodel.GridTrackAuto:
+		return contentContribution(maxContent, index)
+	default:
+		return 0
+	}
 }
 
 func contentContribution(values []float32, index int) float32 {
