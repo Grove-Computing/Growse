@@ -139,6 +139,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - name: Linux
+            runner: ubuntu-24.04
+            goos: linux
+            goarch: amd64
+            cgo_enabled: "1"
           - name: macOS
             runner: macos-15
             goos: darwin
@@ -163,6 +168,16 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache-dependency-path: go.sum
 
+      - name: Install Gio Linux dependencies
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            gcc pkg-config libwayland-dev libx11-dev libx11-xcb-dev \
+            libxkbcommon-x11-dev libgles2-mesa-dev libegl1-mesa-dev \
+            libffi-dev libxcursor-dev libvulkan-dev
+
       - name: Download modules
         shell: bash
         run: go mod download
@@ -173,7 +188,7 @@ jobs:
           CGO_ENABLED: ${{ matrix.cgo_enabled }}
           GOARCH: ${{ matrix.goarch }}
           GOOS: ${{ matrix.goos }}
-        run: scripts/package-gui.sh dist/package v0.8.1 "$GITHUB_RUN_NUMBER"
+        run: scripts/package-gui.sh dist/package v0.9.0 "$GITHUB_RUN_NUMBER"
 
       - name: Verify GUI package
         shell: bash
@@ -181,6 +196,11 @@ jobs:
           GOOS: ${{ matrix.goos }}
         run: |
           case "$GOOS" in
+            linux)
+              test -x dist/package/growse
+              test -f dist/package/share/applications/io.github.grovecomputing.Growse.desktop
+              test -f dist/package/share/icons/hicolor/512x512/apps/io.github.grovecomputing.Growse.png
+              ;;
             darwin)
               test -x dist/package/Growse.app/Contents/MacOS/growse
               test -f dist/package/Growse.app/Contents/Info.plist

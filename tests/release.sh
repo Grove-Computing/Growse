@@ -28,6 +28,7 @@ for value in \
     "examples/dashboard" \
     "examples/animation" \
     "examples/data-app" \
+    "examples/persistent-app" \
     'application_id="io.github.grovecomputing.Growse"' \
     '-X gioui.org/app.ID=${application_id}' \
     "packaging/linux/io.github.grovecomputing.Growse.desktop" \
