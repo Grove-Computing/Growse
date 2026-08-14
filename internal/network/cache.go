@@ -61,10 +61,20 @@ type HTTPCache struct {
 	mu      sync.RWMutex
 	entries map[string][]*cacheEntry
 	now     func() time.Time
+	disk    *diskCache
 }
 
 func NewHTTPCache() *HTTPCache {
 	return &HTTPCache{entries: make(map[string][]*cacheEntry), now: time.Now}
+}
+
+// NewHTTPCacheWithDisk はmemory frontと永続Disk Cacheを持つprivate Cacheを生成する。
+func NewHTTPCacheWithDisk(cacheRoot string) (*HTTPCache, error) {
+	disk, err := newDiskCache(cacheRoot, defaultDiskCacheLimits())
+	if err != nil {
+		return nil, err
+	}
+	return &HTTPCache{entries: make(map[string][]*cacheEntry), now: time.Now, disk: disk}, nil
 }
 
 // Store はCache対象Request/Responseをvariantとして保存する。
@@ -88,16 +98,23 @@ func (cache *HTTPCache) Store(request *Request, response *Response) bool {
 		policy:    policy,
 	}
 	cache.mu.Lock()
-	defer cache.mu.Unlock()
 	variants := cache.entries[key]
 	for index, current := range variants {
 		if sameVariant(current, entry) {
 			variants[index] = entry
 			cache.entries[key] = variants
+			cache.mu.Unlock()
+			if cache.disk != nil {
+				cache.disk.store(key, entry)
+			}
 			return true
 		}
 	}
 	cache.entries[key] = append(variants, entry)
+	cache.mu.Unlock()
+	if cache.disk != nil {
+		cache.disk.store(key, entry)
+	}
 	return true
 }
 
@@ -252,7 +269,6 @@ func (cache *HTTPCache) MergeNotModified(request *Request, notModified http.Head
 		return nil, false
 	}
 	cache.mu.Lock()
-	defer cache.mu.Unlock()
 	for _, entry := range cache.entries[key] {
 		if !equalStrings(entry.varyValues, requestHeaderValues(request.Header, entry.vary)) {
 			continue
@@ -266,14 +282,21 @@ func (cache *HTTPCache) MergeNotModified(request *Request, notModified http.Head
 		}
 		policy := parseCachePolicy(merged.Values("Cache-Control"))
 		if policy.noStore {
+			cache.mu.Unlock()
 			return nil, false
 		}
 		entry.response.Header = merged
 		entry.response.ContentType = merged.Get("Content-Type")
 		entry.freshness = calculateFreshness(merged, cache.now())
 		entry.policy = policy
-		return cloneResponse(entry.response), true
+		result := cloneResponse(entry.response)
+		cache.mu.Unlock()
+		if cache.disk != nil {
+			cache.disk.store(key, entry)
+		}
+		return result, true
 	}
+	cache.mu.Unlock()
 	return nil, false
 }
 
@@ -295,6 +318,9 @@ func (cache *HTTPCache) InvalidateURL(request *Request, target *url.URL) {
 	defer cache.mu.Unlock()
 	for _, key := range keys {
 		delete(cache.entries, key)
+	}
+	if cache.disk != nil {
+		cache.disk.invalidate(keys)
 	}
 }
 
@@ -325,9 +351,18 @@ func (cache *HTTPCache) matchEntry(request *Request) (*cacheEntry, bool) {
 		return nil, false
 	}
 	cache.mu.RLock()
-	defer cache.mu.RUnlock()
 	for _, entry := range cache.entries[key] {
 		if equalStrings(entry.varyValues, requestHeaderValues(request.Header, entry.vary)) {
+			cache.mu.RUnlock()
+			return entry, true
+		}
+	}
+	cache.mu.RUnlock()
+	if cache.disk != nil {
+		if entry := cache.disk.match(request); entry != nil {
+			cache.mu.Lock()
+			cache.entries[key] = append(cache.entries[key], entry)
+			cache.mu.Unlock()
 			return entry, true
 		}
 	}

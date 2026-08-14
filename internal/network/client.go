@@ -112,6 +112,18 @@ func NewClientWithLimits(httpClient *http.Client, maxBodyBytes int64) *Client {
 	}
 }
 
+// NewClientWithCacheRoot creates a client whose disposable HTTP Cache is
+// persisted below the explicitly supplied cache root.
+func NewClientWithCacheRoot(httpClient *http.Client, maxBodyBytes int64, cacheRoot string) (*Client, error) {
+	client := NewClientWithLimits(httpClient, maxBodyBytes)
+	cache, err := NewHTTPCacheWithDisk(cacheRoot)
+	if err != nil {
+		return nil, err
+	}
+	client.cache = cache
+	return client, nil
+}
+
 func configuredHTTPClient(source *http.Client) *http.Client {
 	copy := *source
 	if copy.Jar == nil {
