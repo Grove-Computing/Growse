@@ -1,0 +1,29 @@
+@keyframes status-pulse {
+  from { opacity: 0.55; }
+  to { opacity: 1; }
+}
+
+.app {
+  display: block;
+  width: 360px;
+  padding: 20px;
+  background-color: #f8fafc;
+  color: #172033;
+}
+
+header { background-color: #e0e7ff; padding: 12px; }
+.eyebrow { color: #4338ca; }
+.route { color: #475569; transition: color 180ms ease-out; }
+nav { margin-top: 12px; }
+form { display: block; margin-top: 12px; }
+input { width: 320px; padding: 8px; }
+.note { min-height: 48px; margin-top: 12px; padding: 12px; background-color: #ffffff; }
+.note.empty { color: #64748b; }
+.status { margin-top: 12px; padding: 8px; color: #ffffff; background-color: #64748b; }
+.status.loading, .status.saving { animation: 700ms ease-in-out infinite alternate status-pulse; }
+.status.saving { background-color: #d97706; }
+.status.saved, .status.synced { background-color: #15803d; transition: background-color 180ms ease-out; }
+.status.offline { background-color: #475569; }
+.status.conflict { background-color: #7c3aed; }
+.status.network-error { background-color: #b91c1c; }
+.frame-committed .route { color: #15803d; }
