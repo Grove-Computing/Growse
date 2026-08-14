@@ -8,11 +8,30 @@ type Area struct {
 	mu      sync.RWMutex
 	values  map[string]string
 	ordered []string
+	commit  func([]Entry) error
+}
+
+// Entry は永続化可能な挿入順key/valueである。
+type Entry struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
 }
 
 // NewArea は空のStorage Areaを生成する。
 func NewArea() *Area {
 	return &Area{values: make(map[string]string)}
+}
+
+func newPersistentArea(entries []Entry, commit func([]Entry) error) *Area {
+	area := NewArea()
+	area.commit = commit
+	for _, entry := range entries {
+		if _, exists := area.values[entry.Key]; !exists {
+			area.ordered = append(area.ordered, entry.Key)
+		}
+		area.values[entry.Key] = entry.Value
+	}
+	return area
 }
 
 // Get はkeyのvalueと存在有無を返す。
@@ -27,28 +46,38 @@ func (area *Area) Get(key string) (string, bool) {
 }
 
 // Set はkeyのvalueを追加または更新する。
-func (area *Area) Set(key, value string) {
+func (area *Area) Set(key, value string) error {
 	if area == nil {
-		return
+		return nil
 	}
 	area.mu.Lock()
 	defer area.mu.Unlock()
+	if current, exists := area.values[key]; exists && current == value {
+		return nil
+	}
+	previous := area.entriesLocked()
 	if _, exists := area.values[key]; !exists {
 		area.ordered = append(area.ordered, key)
 	}
 	area.values[key] = value
+	if err := area.commitLocked(); err != nil {
+		area.restoreLocked(previous)
+		return err
+	}
+	return nil
 }
 
 // Remove はkeyが存在する場合に削除する。
-func (area *Area) Remove(key string) {
+func (area *Area) Remove(key string) error {
 	if area == nil {
-		return
+		return nil
 	}
 	area.mu.Lock()
 	defer area.mu.Unlock()
 	if _, exists := area.values[key]; !exists {
-		return
+		return nil
 	}
+	previous := area.entriesLocked()
 	delete(area.values, key)
 	for index, current := range area.ordered {
 		if current == key {
@@ -56,17 +85,55 @@ func (area *Area) Remove(key string) {
 			break
 		}
 	}
+	if err := area.commitLocked(); err != nil {
+		area.restoreLocked(previous)
+		return err
+	}
+	return nil
 }
 
 // Clear はすべてのentryを削除する。
-func (area *Area) Clear() {
+func (area *Area) Clear() error {
 	if area == nil {
-		return
+		return nil
 	}
 	area.mu.Lock()
+	defer area.mu.Unlock()
+	if len(area.ordered) == 0 {
+		return nil
+	}
+	previous := area.entriesLocked()
 	area.values = make(map[string]string)
 	area.ordered = nil
-	area.mu.Unlock()
+	if err := area.commitLocked(); err != nil {
+		area.restoreLocked(previous)
+		return err
+	}
+	return nil
+}
+
+func (area *Area) entriesLocked() []Entry {
+	entries := make([]Entry, 0, len(area.ordered))
+	for _, key := range area.ordered {
+		entries = append(entries, Entry{Key: key, Value: area.values[key]})
+	}
+	return entries
+}
+
+func (area *Area) commitLocked() error {
+	if area.commit == nil {
+		return nil
+	}
+	return area.commit(area.entriesLocked())
+}
+
+func (area *Area) restoreLocked(entries []Entry) {
+	area.values = make(map[string]string, len(entries))
+	area.ordered = make([]string, 0, len(entries))
+	for _, entry := range entries {
+		area.values[entry.Key] = entry.Value
+		area.ordered = append(area.ordered, entry.Key)
+	}
 }
 
 // Len はentry数を返す。

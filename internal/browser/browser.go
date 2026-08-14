@@ -83,7 +83,15 @@ func New(client ResourceLoader) *Browser {
 
 // NewWithRuntimeFactory は信頼済みページのスクリプトを実行するBrowserを生成する。
 func NewWithRuntimeFactory(client ResourceLoader, factory runtimemodel.Factory) *Browser {
-	return &Browser{client: client, runtimeFactory: factory, history: newHistory(), clock: animationmodel.SystemClock{}, storage: storagecore.NewManager()}
+	return NewWithRuntimeFactoryAndStorage(client, factory, storagecore.NewManager())
+}
+
+// NewWithRuntimeFactoryAndStorage は注入されたStorage profileを使用するBrowserを生成する。
+func NewWithRuntimeFactoryAndStorage(client ResourceLoader, factory runtimemodel.Factory, manager *storagecore.Manager) *Browser {
+	if manager == nil {
+		manager = storagecore.NewManager()
+	}
+	return &Browser{client: client, runtimeFactory: factory, history: newHistory(), clock: animationmodel.SystemClock{}, storage: manager}
 }
 
 // SetAnimationClock replaces the page animation clock. Tests can inject a
@@ -1308,7 +1316,7 @@ func startRuntime(ctx context.Context, factory runtimemodel.Factory, page *Page,
 			callback()
 		},
 	}
-	if local, session, ok := storageManager.Areas(page.URL); ok {
+	if local, session, err := storageManager.Areas(page.URL); err == nil {
 		environment.LocalStorage = local
 		environment.SessionStorage = session
 	}

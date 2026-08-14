@@ -51,24 +51,21 @@ func (storage *Storage) Set(key, value string) error {
 	if storage == nil || storage.area == nil {
 		return ErrUnavailable
 	}
-	storage.area.Set(key, value)
-	return nil
+	return storage.area.Set(key, value)
 }
 
 func (storage *Storage) Remove(key string) error {
 	if storage == nil || storage.area == nil {
 		return ErrUnavailable
 	}
-	storage.area.Remove(key)
-	return nil
+	return storage.area.Remove(key)
 }
 
 func (storage *Storage) Clear() error {
 	if storage == nil || storage.area == nil {
 		return ErrUnavailable
 	}
-	storage.area.Clear()
-	return nil
+	return storage.area.Clear()
 }
 
 func (storage *Storage) Length() int {
