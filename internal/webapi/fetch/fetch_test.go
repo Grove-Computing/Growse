@@ -109,6 +109,45 @@ func TestFetchRejectsInvalidRequestBeforeSending(t *testing.T) {
 	}
 }
 
+func TestFetchDistinguishesHTTPErrorStatusFromNetworkError(t *testing.T) {
+	baseURL, err := url.Parse("https://example.test/page")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Run("HTTP status uses success callback", func(t *testing.T) {
+		api := New(baseURL, func(context.Context, *network.Request) (*network.Response, error) {
+			return &network.Response{StatusCode: http.StatusServiceUnavailable, Status: "Service Unavailable"}, nil
+		})
+		success := make(chan Response, 1)
+		failure := make(chan string, 1)
+		api.Fetch(Request{URL: "/status"}, func(response Response) { success <- response }, func(message string) { failure <- message })
+		select {
+		case response := <-success:
+			if response.Status != http.StatusServiceUnavailable {
+				t.Fatalf("status = %d", response.Status)
+			}
+		case message := <-failure:
+			t.Fatalf("HTTP status used failure callback: %s", message)
+		}
+	})
+	t.Run("network failure uses error callback", func(t *testing.T) {
+		api := New(baseURL, func(context.Context, *network.Request) (*network.Response, error) {
+			return nil, errors.New("connection reset")
+		})
+		success := make(chan Response, 1)
+		failure := make(chan string, 1)
+		api.Fetch(Request{URL: "/data"}, func(response Response) { success <- response }, func(message string) { failure <- message })
+		select {
+		case response := <-success:
+			t.Fatalf("network failure used success callback: %#v", response)
+		case message := <-failure:
+			if message != "connection reset" {
+				t.Fatalf("failure = %q", message)
+			}
+		}
+	})
+}
+
 func equalStrings(left, right []string) bool {
 	if len(left) != len(right) {
 		return false

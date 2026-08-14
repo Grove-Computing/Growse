@@ -40,16 +40,6 @@ type Request struct {
 	Body   []byte
 }
 
-// StatusError reports a non-successful HTTP response.
-type StatusError struct {
-	Code   int
-	Status string
-}
-
-func (e *StatusError) Error() string {
-	return fmt.Sprintf("unexpected HTTP status: %s", e.Status)
-}
-
 // Client is a size-limited HTTP resource loader.
 type Client struct {
 	httpClient   *http.Client
@@ -111,9 +101,6 @@ func (c *Client) Do(ctx context.Context, requestData *Request) (*Response, error
 	}
 	defer response.Body.Close()
 
-	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return nil, &StatusError{Code: response.StatusCode, Status: response.Status}
-	}
 	if response.ContentLength > c.maxBodyBytes {
 		return nil, fmt.Errorf("%w: limit is %d bytes", ErrResponseTooLarge, c.maxBodyBytes)
 	}

@@ -53,14 +53,19 @@ func TestClientDoSendsMethodHeadersAndBody(t *testing.T) {
 	}
 }
 
-func TestClientRejectsHTTPError(t *testing.T) {
-	server := httptest.NewServer(http.NotFoundHandler())
+func TestClientReturnsHTTPErrorStatusAsResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusNotFound)
+		_, _ = response.Write([]byte("missing"))
+	}))
 	defer server.Close()
 
-	_, err := NewClient().Get(context.Background(), mustParseURL(t, server.URL))
-	var statusError *StatusError
-	if !errors.As(err, &statusError) || statusError.Code != http.StatusNotFound {
-		t.Fatalf("Get() error = %v, want 404 StatusError", err)
+	response, err := NewClient().Get(context.Background(), mustParseURL(t, server.URL))
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if response.StatusCode != http.StatusNotFound || string(response.Body) != "missing" {
+		t.Fatalf("response = status:%d body:%q", response.StatusCode, response.Body)
 	}
 }
 
