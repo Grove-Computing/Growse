@@ -28,7 +28,7 @@ type Timeline struct {
 // NewTimeline creates an empty timeline driven by clock.
 func NewTimeline(clock Clock, requestFrame func()) *Timeline {
 	if clock == nil {
-		clock = systemClock{}
+		clock = SystemClock{}
 	}
 	return &Timeline{clock: clock, requestFrame: requestFrame}
 }
@@ -77,8 +77,9 @@ func (t *Timeline) requestNextFrame() {
 	t.requestFrame()
 }
 
-type systemClock struct{}
+// SystemClock supplies the process monotonic wall-clock time for production.
+type SystemClock struct{}
 
-func (systemClock) Now() time.Time {
+func (SystemClock) Now() time.Time {
 	return time.Now()
 }

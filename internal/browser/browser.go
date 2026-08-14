@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	animationmodel "github.com/Grove-Computing/Growse/internal/animation"
 	"github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/events"
 	htmlparser "github.com/Grove-Computing/Growse/internal/html"
@@ -39,7 +40,7 @@ type Browser struct {
 	onMutation     func()
 	navigationID   uint64
 	history        history
-	now            func() time.Time
+	clock          animationmodel.Clock
 	reducedMotion  bool
 }
 
@@ -50,7 +51,18 @@ func New(client ResourceLoader) *Browser {
 
 // NewWithRuntimeFactory は信頼済みページのスクリプトを実行するBrowserを生成する。
 func NewWithRuntimeFactory(client ResourceLoader, factory runtimemodel.Factory) *Browser {
-	return &Browser{client: client, runtimeFactory: factory, history: newHistory(), now: time.Now}
+	return &Browser{client: client, runtimeFactory: factory, history: newHistory(), clock: animationmodel.SystemClock{}}
+}
+
+// SetAnimationClock replaces the page animation clock. Tests can inject a
+// controllable Clock before navigation; nil restores the production clock.
+func (b *Browser) SetAnimationClock(clock animationmodel.Clock) {
+	b.mu.Lock()
+	if clock == nil {
+		clock = animationmodel.SystemClock{}
+	}
+	b.clock = clock
+	b.mu.Unlock()
 }
 
 // SetOnMutation はWebGoによるDOM変更後の通知先を設定する。
@@ -576,10 +588,10 @@ func recomputePageStyles(page *Page, current time.Time) {
 }
 
 func (b *Browser) currentTime() time.Time {
-	if b.now == nil {
+	if b.clock == nil {
 		return time.Now()
 	}
-	return b.now()
+	return b.clock.Now()
 }
 
 func validFocusTarget(document *dom.Document, nodeID dom.NodeID) dom.NodeID {

@@ -35,7 +35,8 @@ func main() {
 	}}
 	current := time.Unix(100, 0)
 	browserState := NewWithRuntimeFactory(loader, func() runtimemodel.Runtime { return yaegi.New() })
-	browserState.now = func() time.Time { return current }
+	clock := &browserFakeClock{current: current}
+	browserState.SetAnimationClock(clock)
 	var page *Page
 	var err error
 	var targetID dom.NodeID
@@ -62,6 +63,7 @@ func main() {
 	assertAnimationSample(t, page, target.ID, current.Add(250*time.Millisecond), "base", 0.25)
 
 	current = current.Add(250 * time.Millisecond)
+	clock.current = current
 	if !browserState.UpdateHover(target.ID, 0, 0) {
 		t.Fatal("UpdateHover() = false, want true")
 	}
@@ -69,6 +71,7 @@ func main() {
 	assertAnimationSample(t, page, target.ID, current.Add(250*time.Millisecond), "hovered", 0.25)
 
 	current = current.Add(500 * time.Millisecond)
+	clock.current = current
 	mutationNames = nil
 	if !browserState.DispatchClick(target.ID, 0, 0) {
 		t.Fatal("WebGo click mutation was not handled")
@@ -91,7 +94,8 @@ func TestHoverResizeAndScrollDoNotRestartUnchangedAnimation(t *testing.T) {
 	start := time.Unix(100, 0)
 	current := start
 	browserState := New(loader)
-	browserState.now = func() time.Time { return current }
+	clock := &browserFakeClock{current: current}
+	browserState.SetAnimationClock(clock)
 	page, err := browserState.Navigate(context.Background(), pageURL.String())
 	if err != nil {
 		t.Fatal(err)
@@ -99,12 +103,14 @@ func TestHoverResizeAndScrollDoNotRestartUnchangedAnimation(t *testing.T) {
 	target, _ := page.Document.GetElementByID("target")
 
 	current = start.Add(250 * time.Millisecond)
+	clock.current = current
 	if !browserState.UpdateHover(target.ID, 0, 0) {
 		t.Fatal("hover state did not change")
 	}
 	assertAnimationSample(t, page, target.ID, start.Add(500*time.Millisecond), "steady", 0.5)
 
 	current = start.Add(600 * time.Millisecond)
+	clock.current = current
 	if !browserState.UpdateViewport(640, 480) {
 		t.Fatal("viewport did not change")
 	}
@@ -112,6 +118,14 @@ func TestHoverResizeAndScrollDoNotRestartUnchangedAnimation(t *testing.T) {
 
 	_ = layoutengine.BuildWithScroll(page.Document, page.ComputedStyles, 640, 480, 0, 100)
 	assertAnimationSample(t, page, target.ID, start.Add(900*time.Millisecond), "steady", 0.9)
+}
+
+type browserFakeClock struct {
+	current time.Time
+}
+
+func (clock *browserFakeClock) Now() time.Time {
+	return clock.current
 }
 
 func assertAnimationSample(t *testing.T, page *Page, nodeID dom.NodeID, current time.Time, name string, progress float64) {
