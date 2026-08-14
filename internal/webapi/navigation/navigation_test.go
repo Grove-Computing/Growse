@@ -82,3 +82,21 @@ func TestNavigationRejectsUnsafeURLsBeforeCallback(t *testing.T) {
 		t.Fatal("unsafe URL reached Browser callback")
 	}
 }
+
+func TestUpdateCurrentChangesLocationAndResolutionBase(t *testing.T) {
+	initial, _ := url.Parse("https://example.test/notes#first")
+	updated, _ := url.Parse("https://example.test/archive#second")
+	api := New(initial)
+
+	api.UpdateCurrent(updated)
+	if got := api.Current().Href; got != updated.String() {
+		t.Fatalf("Current().Href = %q, want %q", got, updated)
+	}
+	resolved, err := api.Resolve("next")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := resolved.Href, "https://example.test/next"; got != want {
+		t.Fatalf("Resolve().Href = %q, want %q", got, want)
+	}
+}

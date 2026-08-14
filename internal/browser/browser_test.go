@@ -15,6 +15,7 @@ import (
 	"github.com/Grove-Computing/Growse/internal/events"
 	"github.com/Grove-Computing/Growse/internal/forms"
 	"github.com/Grove-Computing/Growse/internal/network"
+	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 	"github.com/Grove-Computing/Growse/internal/style"
 )
 
@@ -558,6 +559,40 @@ func TestNavigatePreservesPageOnFailure(t *testing.T) {
 	}
 	if browser.Page() != current {
 		t.Fatal("failed navigation replaced the active page")
+	}
+}
+
+func TestFragmentNavigationReusesDocumentAndRuntimeWithoutNetwork(t *testing.T) {
+	pageURL := mustParseURL(t, "http://localhost/notes")
+	loader := &routeLoader{responses: map[string]*network.Response{
+		pageURL.String(): {URL: pageURL, StatusCode: 200, ContentType: "text/html", Body: []byte(`<script type="text/go">package main; func main() {}</script><p>Notes</p>`)},
+	}}
+	runtime := &runtimeStub{}
+	browser := NewWithRuntimeFactory(loader, func() runtimemodel.Runtime { return runtime })
+	page, err := browser.Navigate(context.Background(), pageURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fragmentURL := pageURL.String() + "#details"
+	updated, err := browser.Navigate(context.Background(), fragmentURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated != page || browser.Page() != page {
+		t.Fatal("fragment Navigation replaced the active Page")
+	}
+	if got := page.URL.String(); got != fragmentURL {
+		t.Fatalf("Page URL = %q, want %q", got, fragmentURL)
+	}
+	if got := len(loader.requested); got != 1 {
+		t.Fatalf("loader requests = %d, want one document request", got)
+	}
+	if runtime.stopCalls != 0 || runtime.startCalls != 1 {
+		t.Fatalf("Runtime calls = start:%d stop:%d, want start:1 stop:0", runtime.startCalls, runtime.stopCalls)
+	}
+	if got, want := len(browser.history.entries), 2; got != want {
+		t.Fatalf("history entries = %d, want %d", got, want)
 	}
 }
 

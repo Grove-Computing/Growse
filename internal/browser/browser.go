@@ -548,6 +548,14 @@ func (b *Browser) Navigate(ctx context.Context, rawURL string) (*Page, error) {
 	if err != nil {
 		return nil, err
 	}
+	fragmentTarget := cloneURL(pageURL)
+	if reference, parseErr := url.Parse(strings.TrimSpace(rawURL)); parseErr == nil {
+		fragmentTarget.Fragment = reference.Fragment
+		fragmentTarget.RawFragment = reference.RawFragment
+	}
+	if page, ok := b.commitFragmentNavigation(fragmentTarget); ok {
+		return page, nil
+	}
 	return b.load(ctx, pageURL, historyPush, -1)
 }
 
@@ -955,6 +963,9 @@ func (b *Browser) navigateFromRuntime(source *Page, target *url.URL) {
 	if !active {
 		return
 	}
+	if _, ok := b.commitFragmentNavigation(target); ok {
+		return
+	}
 	_, err := b.load(context.Background(), target, historyPush, -1)
 	if err != nil {
 		b.mu.Lock()
@@ -969,6 +980,38 @@ func (b *Browser) navigateFromRuntime(source *Page, target *url.URL) {
 	if onMutation != nil {
 		onMutation()
 	}
+}
+
+func (b *Browser) commitFragmentNavigation(target *url.URL) (*Page, bool) {
+	b.mu.Lock()
+	page := b.page
+	if page == nil || page.URL == nil || !fragmentOnlyChange(page.URL, target) {
+		b.mu.Unlock()
+		return nil, false
+	}
+	page.URL = cloneURL(target)
+	b.history.push(target)
+	activeRuntime := b.activeRuntime
+	onMutation := b.onMutation
+	b.mu.Unlock()
+	if updater, ok := activeRuntime.(runtimemodel.LocationUpdater); ok {
+		updater.UpdateLocation(target)
+	}
+	if onMutation != nil {
+		onMutation()
+	}
+	return page, true
+}
+
+func fragmentOnlyChange(current, target *url.URL) bool {
+	if current == nil || target == nil || current.Fragment == target.Fragment {
+		return false
+	}
+	left := cloneURL(current)
+	right := cloneURL(target)
+	left.Fragment, left.RawFragment = "", ""
+	right.Fragment, right.RawFragment = "", ""
+	return left.String() == right.String()
 }
 
 func startRuntime(ctx context.Context, factory runtimemodel.Factory, page *Page, client ResourceLoader, onMutation func(), now func() time.Time, navigate func(*url.URL) error) runtimemodel.Runtime {

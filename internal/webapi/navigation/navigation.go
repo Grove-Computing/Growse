@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/url"
 	"strings"
+	"sync"
 
 	"github.com/Grove-Computing/Growse/internal/network"
 )
@@ -34,6 +35,7 @@ type Location struct {
 
 // API は1つのPageに属するNavigation APIである。
 type API struct {
+	mu       sync.RWMutex
 	base     *url.URL
 	current  Location
 	navigate func(*url.URL) error
@@ -72,14 +74,20 @@ func (api *API) Navigate(rawURL string) error {
 }
 
 func (api *API) resolve(rawURL string) (*url.URL, error) {
-	if api == nil || api.base == nil || len(rawURL) == 0 || len(rawURL) > maxURLBytes || strings.TrimSpace(rawURL) != rawURL {
+	if api == nil || len(rawURL) == 0 || len(rawURL) > maxURLBytes || strings.TrimSpace(rawURL) != rawURL {
+		return nil, ErrInvalidURL
+	}
+	api.mu.RLock()
+	base := cloneURL(api.base)
+	api.mu.RUnlock()
+	if base == nil {
 		return nil, ErrInvalidURL
 	}
 	reference, err := url.Parse(rawURL)
 	if err != nil {
 		return nil, ErrInvalidURL
 	}
-	target := api.base.ResolveReference(reference)
+	target := base.ResolveReference(reference)
 	if target.Scheme != "http" && target.Scheme != "https" || target.Hostname() == "" || target.User != nil {
 		return nil, ErrInvalidURL
 	}
@@ -94,7 +102,20 @@ func (api *API) Current() Location {
 	if api == nil {
 		return Location{}
 	}
+	api.mu.RLock()
+	defer api.mu.RUnlock()
 	return api.current
+}
+
+// UpdateCurrent はsame-document Navigation後のDocument URLを反映する。
+func (api *API) UpdateCurrent(documentURL *url.URL) {
+	if api == nil {
+		return
+	}
+	api.mu.Lock()
+	api.base = cloneURL(documentURL)
+	api.current = locationFromURL(documentURL)
+	api.mu.Unlock()
 }
 
 func locationFromURL(documentURL *url.URL) Location {

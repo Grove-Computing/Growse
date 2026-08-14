@@ -38,5 +38,10 @@ type Runtime interface {
 	Stop() error
 }
 
+// LocationUpdater はsame-document Navigationを現在Runtimeへ通知する。
+type LocationUpdater interface {
+	UpdateLocation(*url.URL)
+}
+
 // Factory はページごとに独立したRuntimeを生成する。
 type Factory func() Runtime

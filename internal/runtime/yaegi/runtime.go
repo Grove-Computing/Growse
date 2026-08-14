@@ -9,6 +9,7 @@ import (
 	"go/parser"
 	"go/token"
 	"io/fs"
+	"net/url"
 	"reflect"
 	"strings"
 	"sync"
@@ -36,6 +37,7 @@ type Runtime struct {
 	callbackQueue chan func()
 	callbackDone  chan struct{}
 	fetchAPI      *fetchapi.API
+	navigationAPI *navigationapi.API
 	schedulerAPI  *schedulerapi.API
 	loaded        bool
 	started       bool
@@ -97,6 +99,7 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 	fetch := fetchapi.NewPage(r.runtimeCtx, environment.BaseURL, environment.Fetch, r.enqueueCallback)
 	navigation := navigationapi.NewPage(environment.BaseURL, environment.Navigate)
 	r.fetchAPI = fetch
+	r.navigationAPI = navigation
 	scheduler := schedulerapi.NewPage(r.runtimeCtx, r.enqueueCallback, environment.RequestFrame)
 	scheduler.SetFrameScope(environment.FrameScope)
 	r.schedulerAPI = scheduler
@@ -147,6 +150,16 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 	}
 	r.loaded = true
 	return nil
+}
+
+// UpdateLocation はsame-document Navigation後のURLをWebGo APIへ反映する。
+func (r *Runtime) UpdateLocation(documentURL *url.URL) {
+	r.mu.Lock()
+	navigation := r.navigationAPI
+	r.mu.Unlock()
+	if navigation != nil {
+		navigation.UpdateCurrent(documentURL)
+	}
 }
 
 // RunAnimationFrame synchronously delivers one frame through the page queue.
