@@ -156,6 +156,28 @@ func TestRunningAnimationCanStartPaused(t *testing.T) {
 	}
 }
 
+func TestAnimationStackExecutesMultipleAnimationsOnOneElement(t *testing.T) {
+	start := time.Unix(100, 0)
+	shortTiming, _ := animationmodel.NewTiming(time.Second, 0, animationmodel.Linear{})
+	longTiming, _ := animationmodel.NewTiming(2*time.Second, 0, animationmodel.Linear{})
+	stack := NewAnimationStack([]CSSAnimation{
+		{Name: "fade", Timing: shortTiming, Iterations: 1, PlayState: AnimationRunning},
+		{Name: "move", Timing: longTiming, Iterations: 1, PlayState: AnimationRunning},
+		{Name: "none", Timing: longTiming, Iterations: 1, PlayState: AnimationRunning},
+	}, start)
+	if stack.Len() != 2 {
+		t.Fatalf("executable animations = %d, want 2", stack.Len())
+	}
+
+	samples := stack.Sample(start.Add(500 * time.Millisecond))
+	if len(samples) != 2 || samples[0].Name != "fade" || samples[1].Name != "move" {
+		t.Fatalf("sample order = %#v", samples)
+	}
+	if samples[0].Sample.Progress != 0.5 || samples[1].Sample.Progress != 0.25 {
+		t.Fatalf("sample progress = fade:%v move:%v, want 0.5 and 0.25", samples[0].Sample.Progress, samples[1].Sample.Progress)
+	}
+}
+
 func animationTestStyle(t *testing.T, declarations string) ComputedStyle {
 	t.Helper()
 	document := dom.NewDocument()

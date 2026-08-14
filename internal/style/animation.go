@@ -37,6 +37,46 @@ type RunningAnimation struct {
 	totalPaused time.Duration
 }
 
+// SampledAnimation associates a named list entry with its current sample.
+type SampledAnimation struct {
+	Name   string
+	Sample AnimationSample
+}
+
+// AnimationStack executes the comma-separated animation list of one element
+// in source order. Later entries remain later in the returned samples so they
+// can override earlier entries for the same property.
+type AnimationStack struct {
+	items []*RunningAnimation
+}
+
+// NewAnimationStack starts every named animation on one shared timestamp.
+func NewAnimationStack(animations []CSSAnimation, start time.Time) *AnimationStack {
+	stack := &AnimationStack{}
+	for _, item := range animations {
+		if strings.EqualFold(item.Name, "none") {
+			continue
+		}
+		stack.items = append(stack.items, NewRunningAnimation(item, start))
+	}
+	return stack
+}
+
+// Sample evaluates every animation using the same timestamp and preserves
+// comma-list order.
+func (stack *AnimationStack) Sample(current time.Time) []SampledAnimation {
+	result := make([]SampledAnimation, len(stack.items))
+	for index, item := range stack.items {
+		result[index] = SampledAnimation{Name: item.Animation.Name, Sample: item.Sample(current)}
+	}
+	return result
+}
+
+// Len reports the number of executable named animations.
+func (stack *AnimationStack) Len() int {
+	return len(stack.items)
+}
+
 // NewRunningAnimation creates an animation whose timeline begins at start.
 func NewRunningAnimation(animation CSSAnimation, start time.Time) *RunningAnimation {
 	running := &RunningAnimation{Animation: animation, StartTime: start}
