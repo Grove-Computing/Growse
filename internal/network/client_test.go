@@ -35,6 +35,263 @@ func TestClientGetHTML(t *testing.T) {
 	}
 }
 
+func TestClientReusesFreshResponseWithoutNetworkRequest(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		requests++
+		response.Header().Set("Cache-Control", "max-age=60")
+		response.Header().Set("Content-Type", "text/plain")
+		_, _ = response.Write([]byte("cached"))
+	}))
+	defer server.Close()
+	client := NewClientWithLimits(server.Client(), 1024)
+	target := mustParseURL(t, server.URL+"/resource")
+	for range 2 {
+		result, err := client.Get(context.Background(), target)
+		if err != nil || string(result.Body) != "cached" {
+			t.Fatalf("Get() = (%v, %v)", result, err)
+		}
+	}
+	if requests != 1 {
+		t.Fatalf("Network requests = %d, want 1", requests)
+	}
+}
+
+func TestClientRequestNoCacheBypassesFreshResponse(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		requests++
+		response.Header().Set("Cache-Control", "max-age=60")
+		_, _ = response.Write([]byte("version"))
+	}))
+	defer server.Close()
+	client := NewClientWithLimits(server.Client(), 1024)
+	target := mustParseURL(t, server.URL+"/resource")
+	if _, err := client.Get(context.Background(), target); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Do(context.Background(), &Request{
+		Method: http.MethodGet,
+		URL:    target,
+		Header: http.Header{"Cache-Control": []string{"no-cache"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if requests != 2 {
+		t.Fatalf("Network requests = %d, want 2", requests)
+	}
+}
+
+func TestClientDoesNotReuseCredentialBearingResponses(t *testing.T) {
+	requests := map[string]int{}
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		requests[request.URL.Path]++
+		response.Header().Set("Cache-Control", "max-age=60")
+		if request.URL.Path == "/cookie" {
+			http.SetCookie(response, &http.Cookie{Name: "session", Value: "secret", Path: "/"})
+		}
+		_, _ = response.Write([]byte("private"))
+	}))
+	defer server.Close()
+	client := NewClientWithLimits(server.Client(), 1024)
+	for range 2 {
+		if _, err := client.Do(context.Background(), &Request{
+			Method: http.MethodGet, URL: mustParseURL(t, server.URL+"/authorization"),
+			Header: http.Header{"Authorization": []string{"Bearer secret"}},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := client.Get(context.Background(), mustParseURL(t, server.URL+"/cookie")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if requests["/authorization"] != 2 || requests["/cookie"] != 2 {
+		t.Fatalf("credential-bearing Network requests = %v, want two each", requests)
+	}
+}
+
+func TestSuccessfulUnsafeRequestInvalidatesRelatedSameOriginEntries(t *testing.T) {
+	itemVersion := 1
+	targetVersion := 1
+	getRequests := map[string]int{}
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.Method == http.MethodPost {
+			itemVersion++
+			targetVersion++
+			response.Header().Set("Content-Location", "/target")
+			response.WriteHeader(http.StatusNoContent)
+			return
+		}
+		getRequests[request.URL.Path]++
+		response.Header().Set("Cache-Control", "max-age=60")
+		if request.URL.Path == "/target" {
+			_, _ = fmt.Fprintf(response, "target-%d", targetVersion)
+			return
+		}
+		_, _ = fmt.Fprintf(response, "item-%d", itemVersion)
+	}))
+	defer server.Close()
+	client := NewClientWithLimits(server.Client(), 1024)
+	itemURL := mustParseURL(t, server.URL+"/item")
+	targetURL := mustParseURL(t, server.URL+"/target")
+	for _, target := range []*url.URL{itemURL, targetURL} {
+		if _, err := client.Get(context.Background(), target); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := client.Do(context.Background(), &Request{Method: http.MethodPost, URL: itemURL}); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		target *url.URL
+		body   string
+	}{
+		{target: itemURL, body: "item-2"},
+		{target: targetURL, body: "target-2"},
+	} {
+		response, err := client.Get(context.Background(), test.target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := string(response.Body); got != test.body {
+			t.Errorf("GET %s body = %q, want %q", test.target.Path, got, test.body)
+		}
+	}
+	if getRequests["/item"] != 2 || getRequests["/target"] != 2 {
+		t.Fatalf("GET requests after invalidation = %v, want item:2 target:2", getRequests)
+	}
+}
+
+func TestUnsafeRequestDoesNotInvalidateCrossOriginLocation(t *testing.T) {
+	targetRequests := 0
+	targetServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		targetRequests++
+		response.Header().Set("Cache-Control", "max-age=60")
+		_, _ = response.Write([]byte("target"))
+	}))
+	defer targetServer.Close()
+	mutationServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.Header().Set("Location", targetServer.URL+"/target")
+		response.WriteHeader(http.StatusNoContent)
+	}))
+	defer mutationServer.Close()
+	client := NewClientWithLimits(targetServer.Client(), 1024)
+	targetURL := mustParseURL(t, targetServer.URL+"/target")
+	if _, err := client.Get(context.Background(), targetURL); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Do(context.Background(), &Request{
+		Method: http.MethodPost,
+		URL:    mustParseURL(t, mutationServer.URL+"/mutation"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Get(context.Background(), targetURL); err != nil {
+		t.Fatal(err)
+	}
+	if targetRequests != 1 {
+		t.Fatalf("cross-origin target requests = %d, want 1 cached request", targetRequests)
+	}
+}
+
+func TestClientConditionallyRevalidatesStaleResponse(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		requests++
+		response.Header().Set("Cache-Control", "no-cache")
+		response.Header().Set("ETag", `"v1"`)
+		if requests == 2 && request.Header.Get("If-None-Match") != `"v1"` {
+			t.Errorf("If-None-Match = %q", request.Header.Get("If-None-Match"))
+		}
+		_, _ = response.Write([]byte("version"))
+	}))
+	defer server.Close()
+	client := NewClientWithLimits(server.Client(), 1024)
+	target := mustParseURL(t, server.URL+"/data")
+	if _, err := client.Get(context.Background(), target); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Get(context.Background(), target); err != nil {
+		t.Fatal(err)
+	}
+	if requests != 2 {
+		t.Fatalf("Network requests = %d, want 2", requests)
+	}
+}
+
+func TestClientMerges304AndReusesStoredBody(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		requests++
+		if requests == 1 {
+			response.Header().Set("Cache-Control", "no-cache")
+			response.Header().Set("ETag", `"v1"`)
+			response.Header().Set("Content-Type", "text/plain")
+			_, _ = response.Write([]byte("stored-body"))
+			return
+		}
+		if request.Header.Get("If-None-Match") != `"v1"` {
+			t.Errorf("If-None-Match = %q", request.Header.Get("If-None-Match"))
+		}
+		response.Header().Set("Cache-Control", "max-age=60")
+		response.Header().Set("X-Revalidated", "yes")
+		response.WriteHeader(http.StatusNotModified)
+	}))
+	defer server.Close()
+	client := NewClientWithLimits(server.Client(), 1024)
+	target := mustParseURL(t, server.URL+"/data")
+	for range 3 {
+		result, err := client.Get(context.Background(), target)
+		if err != nil || result.StatusCode != http.StatusOK || string(result.Body) != "stored-body" {
+			t.Fatalf("Get() = (%#v, %v)", result, err)
+		}
+	}
+	if requests != 2 {
+		t.Fatalf("Network requests = %d, want 2", requests)
+	}
+}
+
+func TestClientRejects304WithoutStoredEntry(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusNotModified)
+	}))
+	defer server.Close()
+	_, err := NewClientWithLimits(server.Client(), 1024).Get(context.Background(), mustParseURL(t, server.URL))
+	if !errors.Is(err, ErrCacheValidation) {
+		t.Fatalf("Get() error = %v, want ErrCacheValidation", err)
+	}
+}
+
+func TestClientSharesCachePolicyAcrossRequestKinds(t *testing.T) {
+	counts := make(map[string]int)
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		counts[request.URL.Path]++
+		response.Header().Set("Cache-Control", "max-age=60")
+		response.Header().Set("Access-Control-Allow-Origin", "*")
+		_, _ = response.Write([]byte(request.URL.Path))
+	}))
+	defer server.Close()
+	client := NewClientWithLimits(server.Client(), 1024)
+	siteURL := mustParseURL(t, server.URL+"/page")
+	requests := []*Request{
+		{Method: http.MethodGet, URL: mustParseURL(t, server.URL+"/navigation"), Kind: RequestNavigation},
+		{Method: http.MethodGet, URL: mustParseURL(t, server.URL+"/stylesheet"), SiteURL: siteURL, Kind: RequestSubresource},
+		{Method: http.MethodGet, URL: mustParseURL(t, server.URL+"/image"), SiteURL: siteURL, Kind: RequestSubresource},
+		{Method: http.MethodGet, URL: mustParseURL(t, server.URL+"/webgo"), SiteURL: siteURL, Kind: RequestSubresource},
+		{Method: http.MethodGet, URL: mustParseURL(t, server.URL+"/fetch"), SiteURL: siteURL, Kind: RequestFetch, Credentials: CredentialsOmit},
+	}
+	for _, request := range requests {
+		for range 2 {
+			if _, err := client.Do(context.Background(), request); err != nil {
+				t.Fatalf("Do(%s) error = %v", request.URL.Path, err)
+			}
+		}
+		if counts[request.URL.Path] != 1 {
+			t.Fatalf("%s Network requests = %d, want 1", request.URL.Path, counts[request.URL.Path])
+		}
+	}
+}
+
 func TestClientDoSendsMethodHeadersAndBody(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		body, _ := io.ReadAll(request.Body)

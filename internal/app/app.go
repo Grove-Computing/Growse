@@ -45,7 +45,17 @@ func runWindow(window *gioapp.Window) error {
 	} else {
 		log.Printf("Local Storage data directoryを解決できませんでした: %v", err)
 	}
-	browserState := browser.NewWithRuntimeFactoryAndStorage(network.NewClient(), func() runtimemodel.Runtime {
+	networkClient := network.NewClient()
+	if cacheRoot, err := network.DefaultCacheRoot(); err == nil {
+		if persistent, persistentErr := network.NewClientWithCacheRoot(nil, 0, cacheRoot); persistentErr == nil {
+			networkClient = persistent
+		} else {
+			log.Printf("HTTP Cache profileを初期化できませんでした: %v", persistentErr)
+		}
+	} else {
+		log.Printf("HTTP Cache directoryを解決できませんでした: %v", err)
+	}
+	browserState := browser.NewWithRuntimeFactoryAndStorage(networkClient, func() runtimemodel.Runtime {
 		return yaegi.New()
 	}, storageManager)
 	browserState.SetOnMutation(window.Invalidate)

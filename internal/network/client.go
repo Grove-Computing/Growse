@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 )
@@ -83,6 +84,7 @@ type Client struct {
 	preflightMu    sync.Mutex
 	preflightCache map[string]time.Time
 	now            func() time.Time
+	cache          *HTTPCache
 }
 
 // NewClient creates a client with production defaults.
@@ -90,6 +92,7 @@ func NewClient() *Client {
 	return &Client{
 		httpClient: configuredHTTPClient(&http.Client{Timeout: defaultTimeout}), maxBodyBytes: defaultMaxBodyBytes,
 		preflightCache: make(map[string]time.Time), now: time.Now,
+		cache: NewHTTPCache(),
 	}
 }
 
@@ -105,7 +108,20 @@ func NewClientWithLimits(httpClient *http.Client, maxBodyBytes int64) *Client {
 	return &Client{
 		httpClient: configuredHTTPClient(httpClient), maxBodyBytes: maxBodyBytes,
 		preflightCache: make(map[string]time.Time), now: time.Now,
+		cache: NewHTTPCache(),
 	}
+}
+
+// NewClientWithCacheRoot creates a client whose disposable HTTP Cache is
+// persisted below the explicitly supplied cache root.
+func NewClientWithCacheRoot(httpClient *http.Client, maxBodyBytes int64, cacheRoot string) (*Client, error) {
+	client := NewClientWithLimits(httpClient, maxBodyBytes)
+	cache, err := NewHTTPCacheWithDisk(cacheRoot)
+	if err != nil {
+		return nil, err
+	}
+	client.cache = cache
+	return client, nil
 }
 
 func configuredHTTPClient(source *http.Client) *http.Client {
@@ -198,6 +214,19 @@ func (c *Client) Do(ctx context.Context, requestData *Request) (*Response, error
 	if err := c.prepareCORS(ctx, &operationClient, request, requestData); err != nil {
 		return nil, err
 	}
+	cacheRequest := *requestData
+	cacheRequest.Method = method
+	cacheRequest.Header = request.Header.Clone()
+	if cached, ok := c.cache.MatchFresh(&cacheRequest); ok {
+		return prepareCachedResponse(cached, requestData)
+	}
+	if validation, ok := c.cache.RevalidationHeaders(&cacheRequest); ok {
+		for name, values := range validation {
+			if request.Header.Get(name) == "" {
+				request.Header[name] = append([]string(nil), values...)
+			}
+		}
+	}
 	redirectPolicy := operationClient.CheckRedirect
 	operationClient.CheckRedirect = func(redirect *http.Request, via []*http.Request) error {
 		if err := validateCORSResponse(redirect.Response, requestData); err != nil {
@@ -248,17 +277,76 @@ func (c *Client) Do(ctx context.Context, requestData *Request) (*Response, error
 	if response.Request != nil && response.Request.URL != nil {
 		finalURL = response.Request.URL
 	}
-	responseHeader := filterFetchResponseHeaders(response.Header, requestData, finalURL)
-
-	return &Response{
+	cachedResult := &Response{
 		URL:         cloneURL(finalURL),
 		StatusCode:  response.StatusCode,
 		Status:      http.StatusText(response.StatusCode),
-		Header:      responseHeader,
+		Header:      response.Header.Clone(),
 		ContentType: response.Header.Get("Content-Type"),
 		Body:        body,
 		Redirected:  finalURL.String() != requestData.URL.String(),
-	}, nil
+	}
+	c.invalidateAfterStateChange(&cacheRequest, cachedResult.StatusCode, response.Header, finalURL)
+	if cachedResult.StatusCode == http.StatusNotModified {
+		merged, ok := c.cache.MergeNotModified(&cacheRequest, cachedResult.Header)
+		if !ok {
+			return nil, ErrCacheValidation
+		}
+		return prepareCachedResponse(merged, requestData)
+	}
+	c.cache.Store(&cacheRequest, cachedResult)
+	return prepareCachedResponse(cachedResult, requestData)
+}
+
+func prepareCachedResponse(cached *Response, requestData *Request) (*Response, error) {
+	if cached == nil {
+		return nil, errors.New("cached response is nil")
+	}
+	finalURL := cached.URL
+	if finalURL == nil && requestData != nil {
+		finalURL = requestData.URL
+	}
+	probe := &http.Response{Header: cached.Header.Clone(), Request: &http.Request{URL: finalURL}}
+	if err := validateCORSResponse(probe, requestData); err != nil {
+		return nil, err
+	}
+	result := cloneResponse(cached)
+	result.Header = filterFetchResponseHeaders(cached.Header, requestData, finalURL)
+	result.ContentType = cached.Header.Get("Content-Type")
+	return result, nil
+}
+
+func (c *Client) invalidateAfterStateChange(request *Request, statusCode int, header http.Header, finalURL *url.URL) {
+	if c == nil || c.cache == nil || request == nil || !isUnsafeMethod(requestMethod(request)) || statusCode < 200 || statusCode >= 400 {
+		return
+	}
+	c.cache.InvalidateURL(request, request.URL)
+	if finalURL != nil && SameOrigin(request.URL, finalURL) {
+		c.cache.InvalidateURL(request, finalURL)
+	}
+	for _, name := range []string{"Location", "Content-Location"} {
+		raw := strings.TrimSpace(header.Get(name))
+		if raw == "" || finalURL == nil {
+			continue
+		}
+		reference, err := url.Parse(raw)
+		if err != nil {
+			continue
+		}
+		target := finalURL.ResolveReference(reference)
+		if SameOrigin(finalURL, target) {
+			c.cache.InvalidateURL(request, target)
+		}
+	}
+}
+
+func isUnsafeMethod(method string) bool {
+	switch strings.ToUpper(method) {
+	case http.MethodGet, http.MethodHead, http.MethodOptions, http.MethodTrace:
+		return false
+	default:
+		return true
+	}
 }
 
 func headersWithinLimits(header http.Header) bool {

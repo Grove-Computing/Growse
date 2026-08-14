@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"reflect"
 	"strings"
@@ -773,6 +774,7 @@ func TestReloadIgnoringCacheRevalidatesDocumentAndSubresources(t *testing.T) {
 	if _, err := browser.Navigate(context.Background(), pageURL.String()); err != nil {
 		t.Fatal(err)
 	}
+	loader.requests = nil
 
 	if _, err := browser.ReloadIgnoringCache(context.Background()); err != nil {
 		t.Fatal(err)
@@ -788,6 +790,49 @@ func TestReloadIgnoringCacheRevalidatesDocumentAndSubresources(t *testing.T) {
 	}
 	if got, want := len(browser.history.entries), 1; got != want {
 		t.Fatalf("history entries after ReloadIgnoringCache = %d, want %d", got, want)
+	}
+}
+
+func TestNavigationReloadAndForcedReloadUseDistinctCacheModes(t *testing.T) {
+	documentRequests := 0
+	stylesheetRequests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Cache-Control", "max-age=60")
+		switch request.URL.Path {
+		case "/page":
+			documentRequests++
+			response.Header().Set("Content-Type", "text/html")
+			_, _ = response.Write([]byte(`<link rel="stylesheet" href="/app.css"><p>Page</p>`))
+		case "/app.css":
+			stylesheetRequests++
+			response.Header().Set("Content-Type", "text/css")
+			_, _ = response.Write([]byte(`p { color: blue; }`))
+		default:
+			http.NotFound(response, request)
+		}
+	}))
+	defer server.Close()
+
+	browser := New(network.NewClientWithLimits(server.Client(), 1<<20))
+	for range 2 {
+		if _, err := browser.Navigate(context.Background(), server.URL+"/page"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if documentRequests != 1 || stylesheetRequests != 1 {
+		t.Fatalf("normal Navigation requests = document:%d stylesheet:%d, want 1:1", documentRequests, stylesheetRequests)
+	}
+	if _, err := browser.Reload(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if documentRequests != 2 || stylesheetRequests != 1 {
+		t.Fatalf("Reload requests = document:%d stylesheet:%d, want 2:1", documentRequests, stylesheetRequests)
+	}
+	if _, err := browser.ReloadIgnoringCache(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if documentRequests != 3 || stylesheetRequests != 2 {
+		t.Fatalf("forced Reload requests = document:%d stylesheet:%d, want 3:2", documentRequests, stylesheetRequests)
 	}
 }
 
@@ -871,6 +916,70 @@ func TestNavigateRejectsUnsupportedContentType(t *testing.T) {
 
 	if _, err := browser.Navigate(context.Background(), "https://example.com/image.png"); err == nil {
 		t.Fatal("Navigate() error = nil, want unsupported Content-Type error")
+	}
+}
+
+func TestCachedNavigationStillValidatesDocumentMIMEType(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		requests++
+		response.Header().Set("Cache-Control", "max-age=60")
+		response.Header().Set("Content-Type", "image/png")
+		_, _ = response.Write([]byte("not-html"))
+	}))
+	defer server.Close()
+	client := network.NewClientWithLimits(server.Client(), 1024)
+	target := mustParseURL(t, server.URL+"/image")
+	if _, err := client.Get(context.Background(), target); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := New(client).Navigate(context.Background(), target.String()); err == nil || !strings.Contains(err.Error(), "unsupported Content-Type") {
+		t.Fatalf("cached Navigate error = %v, want unsupported Content-Type", err)
+	}
+	if requests != 1 {
+		t.Fatalf("Network requests = %d, want cached Navigation", requests)
+	}
+}
+
+func TestCachedStylesheetRedirectStillValidatesFinalOrigin(t *testing.T) {
+	externalRequests := 0
+	external := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		externalRequests++
+		response.Header().Set("Cache-Control", "max-age=60")
+		response.Header().Set("Content-Type", "text/css")
+		_, _ = response.Write([]byte(`h1 { color: red; }`))
+	}))
+	defer external.Close()
+	stylesheetRequests := 0
+	pageServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/style.css":
+			stylesheetRequests++
+			http.Redirect(response, request, external.URL+"/style.css", http.StatusFound)
+		case "/page":
+			response.Header().Set("Content-Type", "text/html")
+			_, _ = response.Write([]byte(`<link rel="stylesheet" href="/style.css"><h1>Safe</h1>`))
+		default:
+			http.NotFound(response, request)
+		}
+	}))
+	defer pageServer.Close()
+	client := network.NewClientWithLimits(pageServer.Client(), 1<<20)
+	stylesheetURL := mustParseURL(t, pageServer.URL+"/style.css")
+	if _, err := client.Get(context.Background(), stylesheetURL); err != nil {
+		t.Fatal(err)
+	}
+	page, err := New(client).Navigate(context.Background(), pageServer.URL+"/page")
+	if err != nil {
+		t.Fatal(err)
+	}
+	heading, _ := page.Document.QuerySelector("h1")
+	computed, _ := page.ComputedStyles.For(heading)
+	if computed.Color == 0xff0000ff {
+		t.Fatal("cross-origin final stylesheet was applied from Cache")
+	}
+	if stylesheetRequests != 1 || externalRequests != 1 {
+		t.Fatalf("stylesheet Network requests = redirect:%d external:%d, want cached 1:1", stylesheetRequests, externalRequests)
 	}
 }
 

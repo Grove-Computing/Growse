@@ -795,7 +795,7 @@ func (b *Browser) reload(ctx context.Context, ignoreCache bool) (*Page, error) {
 	if ignoreCache {
 		return b.loadIgnoringCache(ctx, pageURL, historyReplace, index)
 	}
-	return b.load(ctx, pageURL, historyReplace, index)
+	return b.loadReloadingDocument(ctx, pageURL, historyReplace, index)
 }
 
 // CanBack reports whether Back has a target entry.
@@ -874,14 +874,18 @@ const (
 )
 
 func (b *Browser) load(ctx context.Context, pageURL *url.URL, commit historyCommit, historyIndex int) (*Page, error) {
-	return b.loadWithClient(ctx, pageURL, commit, historyIndex, false)
+	return b.loadWithClient(ctx, pageURL, commit, historyIndex, false, false)
+}
+
+func (b *Browser) loadReloadingDocument(ctx context.Context, pageURL *url.URL, commit historyCommit, historyIndex int) (*Page, error) {
+	return b.loadWithClient(ctx, pageURL, commit, historyIndex, true, false)
 }
 
 func (b *Browser) loadIgnoringCache(ctx context.Context, pageURL *url.URL, commit historyCommit, historyIndex int) (*Page, error) {
-	return b.loadWithClient(ctx, pageURL, commit, historyIndex, true)
+	return b.loadWithClient(ctx, pageURL, commit, historyIndex, true, true)
 }
 
-func (b *Browser) loadWithClient(ctx context.Context, pageURL *url.URL, commit historyCommit, historyIndex int, ignoreCache bool) (*Page, error) {
+func (b *Browser) loadWithClient(ctx context.Context, pageURL *url.URL, commit historyCommit, historyIndex int, revalidateDocument, revalidateResources bool) (*Page, error) {
 	b.mu.Lock()
 	b.navigationID++
 	navigationID := b.navigationID
@@ -895,12 +899,16 @@ func (b *Browser) loadWithClient(ctx context.Context, pageURL *url.URL, commit h
 	if client == nil {
 		return nil, errors.New("network client is not configured")
 	}
+	documentClient := client
+	if revalidateDocument {
+		documentClient = cacheRevalidatingLoader{ResourceLoader: client}
+	}
 	resourceClient := client
-	if ignoreCache {
+	if revalidateResources {
 		resourceClient = cacheRevalidatingLoader{ResourceLoader: client}
 	}
 
-	response, err := resourceClient.Get(ctx, pageURL)
+	response, err := documentClient.Get(ctx, pageURL)
 	if err != nil {
 		return nil, fmt.Errorf("navigate to %s: %w", network.RedactedURL(pageURL), err)
 	}
@@ -909,6 +917,17 @@ func (b *Browser) loadWithClient(ctx context.Context, pageURL *url.URL, commit h
 
 type cacheRevalidatingLoader struct {
 	ResourceLoader
+}
+
+type pageResourceLoader struct {
+	loader  requestLoader
+	siteURL *url.URL
+}
+
+func (loader pageResourceLoader) Get(ctx context.Context, resourceURL *url.URL) (*network.Response, error) {
+	return loader.loader.Do(ctx, &network.Request{
+		Method: http.MethodGet, URL: resourceURL, SiteURL: cloneURL(loader.siteURL), Kind: network.RequestSubresource,
+	})
 }
 
 func (loader cacheRevalidatingLoader) Get(ctx context.Context, resourceURL *url.URL) (*network.Response, error) {
@@ -925,6 +944,21 @@ func (loader cacheRevalidatingLoader) Get(ctx context.Context, resourceURL *url.
 	return loader.ResourceLoader.Get(ctx, resourceURL)
 }
 
+func (loader cacheRevalidatingLoader) Do(ctx context.Context, request *network.Request) (*network.Response, error) {
+	requestClient, ok := loader.ResourceLoader.(requestLoader)
+	if !ok {
+		return loader.Get(ctx, request.URL)
+	}
+	copy := *request
+	copy.Header = request.Header.Clone()
+	if copy.Header == nil {
+		copy.Header = make(http.Header)
+	}
+	copy.Header.Set("Cache-Control", "no-cache")
+	copy.Header.Set("Pragma", "no-cache")
+	return requestClient.Do(ctx, &copy)
+}
+
 func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *network.Response, commit historyCommit, historyIndex int, navigationID uint64, resourceClient ResourceLoader, runtimeClient ResourceLoader, runtimeFactory runtimemodel.Factory, storageManager *storagecore.Manager, onMutation func(), reducedMotion bool) (*Page, error) {
 	mediaType, _, err := mime.ParseMediaType(response.ContentType)
 	if err != nil {
@@ -937,7 +971,11 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	if err != nil {
 		return nil, fmt.Errorf("build DOM for %s: %w", network.RedactedURL(pageURL), err)
 	}
-	stylesheet, err := b.loadStyles(ctx, resourceClient, response.URL, document)
+	pageResources := resourceClient
+	if loader, ok := resourceClient.(requestLoader); ok {
+		pageResources = pageResourceLoader{loader: loader, siteURL: response.URL}
+	}
+	stylesheet, err := b.loadStyles(ctx, pageResources, response.URL, document)
 	if err != nil {
 		return nil, fmt.Errorf("load styles for %s: %w", network.RedactedURL(pageURL), err)
 	}
@@ -945,8 +983,8 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 		ViewportWidth: 1280, ViewportHeight: 720, RootFontSize: 16, ResolutionDPI: 96,
 		ColorScheme: "light", Hover: true, Pointer: "fine", ReducedMotion: reducedMotion,
 	})
-	backgroundImages, backgroundErrors := loadBackgroundImages(ctx, resourceClient, computedStyles)
-	scripts, scriptErrors := loadScripts(ctx, resourceClient, response.URL, document)
+	backgroundImages, backgroundErrors := loadBackgroundImages(ctx, pageResources, computedStyles)
+	scripts, scriptErrors := loadScripts(ctx, pageResources, response.URL, document)
 
 	page := &Page{
 		URL:              cloneURL(response.URL),

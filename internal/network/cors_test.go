@@ -81,6 +81,42 @@ func TestCredentialedCORSRejectsWildcardOrigin(t *testing.T) {
 	}
 }
 
+func TestCacheHitReevaluatesCORSCredentialsAndHeaderExposure(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		requests++
+		response.Header().Set("Cache-Control", "max-age=60")
+		response.Header().Set("Access-Control-Allow-Origin", "*")
+		response.Header().Set("Access-Control-Expose-Headers", "X-Visible")
+		response.Header().Set("X-Visible", "shown")
+		response.Header().Set("X-Secret", "hidden")
+		_, _ = response.Write([]byte("cached"))
+	}))
+	defer server.Close()
+	client := NewClientWithLimits(server.Client(), 1024)
+	request := &Request{
+		Method: http.MethodGet, URL: parseOriginURL(t, server.URL+"/data"),
+		SiteURL: parseOriginURL(t, "https://app.example.test/page"), Kind: RequestFetch, Credentials: CredentialsOmit,
+	}
+	for range 2 {
+		response, err := client.Do(context.Background(), request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if response.Header.Get("X-Visible") != "shown" || response.Header.Get("X-Secret") != "" || response.Header.Get("Access-Control-Allow-Origin") != "" {
+			t.Fatalf("filtered Fetch headers = %v", response.Header)
+		}
+	}
+	credentialed := *request
+	credentialed.Credentials = CredentialsInclude
+	if _, err := client.Do(context.Background(), &credentialed); !errors.Is(err, ErrCORS) {
+		t.Fatalf("credentialed cache hit error = %v, want ErrCORS", err)
+	}
+	if requests != 1 {
+		t.Fatalf("Network requests = %d, want 1 before cached policy checks", requests)
+	}
+}
+
 func TestCORSPreflightValidatesAndCachesPermission(t *testing.T) {
 	options := 0
 	actual := 0
