@@ -1,0 +1,27 @@
+{
+  "viewport": "320x240",
+  "scale": 1,
+  "font": "gofont/goregular@72dpi-hinting-none",
+  "pixel_sha256": "a16c6aee90a5e824e5e2acab833bb02e813e316212c0102c07f401f72189793d",
+  "geometry": [
+    "box node=2 rect=32.0,32.0,240.0,160.0 stack=0",
+    "box node=3 rect=32.0,32.0,240.0,48.0 stack=0",
+    "box node=6 rect=32.0,88.0,80.0,104.0 stack=0",
+    "box node=7 rect=120.0,88.0,152.0,104.0 stack=0",
+    "box node=8 rect=228.0,96.0,36.0,20.0 stack=1",
+    "text node=4 rect=32.0,32.0,240.0,16.2 text=\"Growse 0.6\""
+  ],
+  "display_list": [
+    "0 box node=2 rect=32.0,32.0,240.0,160.0 color=20283aff opacity=1.00 transform=1.000,0.000,0.000,1.000,0.000,0.000",
+    "1 box node=3 rect=32.0,32.0,240.0,48.0 color=4263ebff opacity=1.00 transform=1.000,0.000,0.000,1.000,0.000,0.000",
+    "2 text rect=32.0,32.0,240.0,16.2 color=ffffffff text=\"Growse 0.6\"",
+    "3 box node=6 rect=32.0,88.0,80.0,104.0 color=334155ff opacity=1.00 transform=1.000,0.000,0.000,1.000,0.000,0.000",
+    "4 box node=7 rect=120.0,88.0,152.0,104.0 color=f8fafcff opacity=1.00 transform=1.000,0.000,0.000,1.000,0.000,0.000",
+    "5 box node=8 rect=228.0,96.0,36.0,20.0 color=f59f00ff opacity=1.00 transform=0.990,0.139,-0.139,0.990,1.567,-2.408"
+  ],
+  "hit_testing": [
+    "40,40=label(4)",
+    "130,105=card(7)",
+    "230,137=badge(8)"
+  ]
+}
