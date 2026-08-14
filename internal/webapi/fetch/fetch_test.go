@@ -217,6 +217,29 @@ func TestConcurrentFetchesDeliverCallbacksInCompletionOrder(t *testing.T) {
 	<-workerDone
 }
 
+func TestCloseWaitsForCanceledFetchOperation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	started := make(chan struct{})
+	finished := make(chan struct{})
+	baseURL, _ := url.Parse("https://example.test/page")
+	api := NewPage(ctx, baseURL, func(ctx context.Context, _ *network.Request) (*network.Response, error) {
+		close(started)
+		<-ctx.Done()
+		close(finished)
+		return nil, ctx.Err()
+	}, func(func()) bool { return false })
+	api.Fetch(Request{URL: "/slow"}, nil, nil)
+	<-started
+	cancel()
+	api.Close()
+	select {
+	case <-finished:
+	default:
+		t.Fatal("Close returned before Fetch goroutine released its references")
+	}
+	api.Fetch(Request{URL: "/ignored"}, nil, nil)
+}
+
 func equalStrings(left, right []string) bool {
 	if len(left) != len(right) {
 		return false

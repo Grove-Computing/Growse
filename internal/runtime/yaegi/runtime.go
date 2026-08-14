@@ -32,6 +32,7 @@ type Runtime struct {
 	runtimeCtx    context.Context
 	callbackQueue chan func()
 	callbackDone  chan struct{}
+	fetchAPI      *fetchapi.API
 	loaded        bool
 	started       bool
 	stopped       bool
@@ -90,6 +91,7 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 	console := consoleapi.New(environment.ConsoleLog)
 	dom := domapi.New(environment.Document, environment.Events, environment.OnMutation)
 	fetch := fetchapi.NewPage(r.runtimeCtx, environment.BaseURL, environment.Fetch, r.enqueueCallback)
+	r.fetchAPI = fetch
 	if err := r.interpreter.Use(interp.Exports{
 		"growse/console/console": {
 			"Log": reflect.ValueOf(console.Log),
@@ -169,9 +171,13 @@ func (r *Runtime) Stop() error {
 	r.cancel = nil
 	r.stopped = true
 	done := r.callbackDone
+	fetch := r.fetchAPI
 	r.mu.Unlock()
 	if cancel != nil {
 		cancel()
+	}
+	if fetch != nil {
+		fetch.Close()
 	}
 	if done != nil {
 		<-done

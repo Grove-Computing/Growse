@@ -194,6 +194,29 @@ func (function roundTripFunc) RoundTrip(request *http.Request) (*http.Response, 
 	return function(request)
 }
 
+func TestClientAlwaysClosesResponseBody(t *testing.T) {
+	body := &trackingReadCloser{Reader: strings.NewReader("ok")}
+	client := NewClientWithLimits(&http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Request: request, Header: make(http.Header), Body: body}, nil
+	})}, 1024)
+	if _, err := client.Get(context.Background(), mustParseURL(t, "https://example.test")); err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if !body.closed {
+		t.Fatal("Response Body was not closed")
+	}
+}
+
+type trackingReadCloser struct {
+	io.Reader
+	closed bool
+}
+
+func (body *trackingReadCloser) Close() error {
+	body.closed = true
+	return nil
+}
+
 func TestClientAppliesRedirectMethodAndBodyRules(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		if request.URL.Path == "/final" {

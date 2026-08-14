@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 
 	"github.com/Grove-Computing/Growse/internal/network"
 )
@@ -98,6 +99,9 @@ type API struct {
 	baseURL *url.URL
 	do      func(context.Context, *network.Request) (*network.Response, error)
 	enqueue func(func()) bool
+	mu      sync.Mutex
+	closed  bool
+	active  sync.WaitGroup
 }
 
 // New creates a page-scoped Fetch API.
@@ -118,6 +122,12 @@ func NewPage(ctx context.Context, baseURL *url.URL, do func(context.Context, *ne
 
 // Fetch starts request asynchronously and delivers exactly one callback.
 func (api *API) Fetch(request Request, success func(Response), failure func(string)) {
+	api.mu.Lock()
+	closed := api.closed
+	api.mu.Unlock()
+	if closed {
+		return
+	}
 	networkRequest, err := api.prepare(request)
 	if err != nil {
 		api.deliver(func() {
@@ -127,7 +137,15 @@ func (api *API) Fetch(request Request, success func(Response), failure func(stri
 		})
 		return
 	}
+	api.mu.Lock()
+	if api.closed {
+		api.mu.Unlock()
+		return
+	}
+	api.active.Add(1)
+	api.mu.Unlock()
 	go func() {
+		defer api.active.Done()
 		response, fetchError := api.do(api.ctx, networkRequest)
 		api.deliver(func() {
 			if fetchError != nil {
@@ -141,6 +159,17 @@ func (api *API) Fetch(request Request, success func(Response), failure func(stri
 			}
 		})
 	}()
+}
+
+// Close rejects new Fetches and waits for all request goroutines to release references.
+func (api *API) Close() {
+	if api == nil {
+		return
+	}
+	api.mu.Lock()
+	api.closed = true
+	api.mu.Unlock()
+	api.active.Wait()
 }
 
 func (api *API) deliver(callback func()) {
