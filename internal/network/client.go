@@ -49,7 +49,7 @@ type Client struct {
 // NewClient creates a client with production defaults.
 func NewClient() *Client {
 	return &Client{
-		httpClient:   &http.Client{Timeout: defaultTimeout},
+		httpClient:   configuredHTTPClient(&http.Client{Timeout: defaultTimeout}),
 		maxBodyBytes: defaultMaxBodyBytes,
 	}
 }
@@ -63,7 +63,44 @@ func NewClientWithLimits(httpClient *http.Client, maxBodyBytes int64) *Client {
 	if maxBodyBytes <= 0 {
 		maxBodyBytes = defaultMaxBodyBytes
 	}
-	return &Client{httpClient: httpClient, maxBodyBytes: maxBodyBytes}
+	return &Client{httpClient: configuredHTTPClient(httpClient), maxBodyBytes: maxBodyBytes}
+}
+
+func configuredHTTPClient(source *http.Client) *http.Client {
+	copy := *source
+	if copy.CheckRedirect == nil {
+		copy.CheckRedirect = applyRedirectPolicy
+	}
+	return &copy
+}
+
+func applyRedirectPolicy(request *http.Request, via []*http.Request) error {
+	if request == nil || request.Response == nil || len(via) == 0 {
+		return nil
+	}
+	previous := via[len(via)-1]
+	switch request.Response.StatusCode {
+	case http.StatusMovedPermanently, http.StatusFound:
+		if previous.Method == http.MethodPost {
+			makeRedirectGET(request)
+		}
+	case http.StatusSeeOther:
+		if previous.Method != http.MethodHead {
+			makeRedirectGET(request)
+		}
+	case http.StatusTemporaryRedirect, http.StatusPermanentRedirect:
+		// net/http reconstructs the request body through GetBody for 307/308.
+	}
+	return nil
+}
+
+func makeRedirectGET(request *http.Request) {
+	request.Method = http.MethodGet
+	request.Body = nil
+	request.GetBody = nil
+	request.ContentLength = 0
+	request.Header.Del("Content-Length")
+	request.Header.Del("Content-Type")
 }
 
 // Get retrieves one HTTP(S) resource.
