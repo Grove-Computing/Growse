@@ -25,6 +25,12 @@ const (
 	Second      = time.Second
 	// MaxTimerDuration bounds retained callbacks and deadline arithmetic.
 	MaxTimerDuration = 365 * 24 * time.Hour
+	// MaxTimersPerPage bounds callbacks retained by timeouts and intervals.
+	MaxTimersPerPage = 10000
+	// MaxFrameCallbacksPerPage bounds callbacks retained until the next frame.
+	MaxFrameCallbacksPerPage = 10000
+	// MaxCallbacksPerTurn prevents one deadline from starving the Page queue.
+	MaxCallbacksPerTurn = 1000
 )
 
 // Clock supplies monotonic time to the scheduler.
@@ -173,6 +179,10 @@ func (api *API) RequestAnimationFrame(callback func(Timestamp)) (FrameID, error)
 		api.mu.Unlock()
 		return 0, errors.New("scheduler is closed")
 	}
+	if len(api.frameCallbacks) >= MaxFrameCallbacksPerPage {
+		api.mu.Unlock()
+		return 0, errors.New("animation frame callback limit exceeded")
+	}
 	api.nextFrameID++
 	if api.nextFrameID == 0 {
 		api.nextFrameID++
@@ -298,6 +308,10 @@ func (api *API) schedule(delay, interval time.Duration, repeat bool, callback fu
 		api.mu.Unlock()
 		return 0, errors.New("scheduler is closed")
 	}
+	if len(api.timers) >= MaxTimersPerPage {
+		api.mu.Unlock()
+		return 0, errors.New("scheduler timer limit exceeded")
+	}
 	nesting := api.nesting + 1
 	delay, err := normalizeDelay(delay, nesting)
 	if err != nil {
@@ -390,7 +404,7 @@ func (api *API) runDue(current time.Time) {
 	api.mu.Lock()
 	current = api.observeLocked(current)
 	api.mu.Unlock()
-	for {
+	for delivered := 0; delivered < MaxCallbacksPerTurn; delivered++ {
 		api.mu.Lock()
 		if api.closed || len(api.queue) == 0 || api.queue[0].deadline.After(current) {
 			api.mu.Unlock()

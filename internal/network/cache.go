@@ -15,8 +15,10 @@ import (
 var ErrCacheValidation = errors.New("HTTP cache validation failed")
 
 const (
-	maxCacheKeyBytes = 8 * 1024
-	maxVaryHeaders   = 16
+	maxCacheKeyBytes       = 8 * 1024
+	maxVaryHeaders         = 16
+	maxMemoryCacheEntries  = 1024
+	maxCacheVariantsPerKey = 32
 )
 
 type cacheEntry struct {
@@ -60,6 +62,7 @@ func (value freshness) fresh(now time.Time) bool {
 type HTTPCache struct {
 	mu      sync.RWMutex
 	entries map[string][]*cacheEntry
+	count   int
 	now     func() time.Time
 	disk    *diskCache
 }
@@ -110,7 +113,12 @@ func (cache *HTTPCache) Store(request *Request, response *Response) bool {
 			return true
 		}
 	}
+	if cache.count >= maxMemoryCacheEntries || len(variants) >= maxCacheVariantsPerKey {
+		cache.mu.Unlock()
+		return false
+	}
 	cache.entries[key] = append(variants, entry)
+	cache.count++
 	cache.mu.Unlock()
 	if cache.disk != nil {
 		cache.disk.store(key, entry)
@@ -324,7 +332,11 @@ func (cache *HTTPCache) InvalidateURL(request *Request, target *url.URL) {
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
 	for _, key := range keys {
+		cache.count -= len(cache.entries[key])
 		delete(cache.entries, key)
+	}
+	if cache.count < 0 {
+		cache.count = 0
 	}
 	if cache.disk != nil {
 		cache.disk.invalidate(keys)
@@ -368,7 +380,10 @@ func (cache *HTTPCache) matchEntry(request *Request) (*cacheEntry, bool) {
 	if cache.disk != nil {
 		if entry := cache.disk.match(request); entry != nil {
 			cache.mu.Lock()
-			cache.entries[key] = append(cache.entries[key], entry)
+			if cache.count < maxMemoryCacheEntries && len(cache.entries[key]) < maxCacheVariantsPerKey {
+				cache.entries[key] = append(cache.entries[key], entry)
+				cache.count++
+			}
 			cache.mu.Unlock()
 			return entry, true
 		}
