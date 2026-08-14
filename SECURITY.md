@@ -6,7 +6,8 @@
 
 | Version | Supported |
 | --- | --- |
-| 0.7.x | Yes |
+| 0.8.x | Yes |
+| 0.7.x | No |
 | 0.6.x | No |
 | 0.5.x | No |
 | 0.4.x | No |
@@ -30,16 +31,18 @@
 
 ## WebGo Security Boundary
 
-Growse v0.7.0のYaegi Runtimeは、信頼できないGoコードを安全に実行するSandboxではありません。
+Growse v0.8.0のYaegi Runtimeは、信頼できないGoコードを安全に実行するSandboxではありません。
 プロセス分離、CPU時間制限、メモリ制限、およびGo標準ライブラリ全体に対する完全な制限は提供していません。
 
-WebGoの自動実行は`localhost`、`127.0.0.1`、`::1`のページと、同じく信頼済みOriginから取得したGoスクリプトに限定されます。ただし、ローカルで配信されるページやスクリプトを信頼できることは利用者自身が確認してください。
+WebGoの自動実行は`localhost`、`127.0.0.1`、`::1`のページと、同じく信頼済みOriginから取得したGoスクリプトに限定されます。ただし、ローカルで配信されるページやスクリプトを信頼できることは利用者自身が確認してください。WebGo FetchはSame-Origin PolicyとCORSを適用し、`omit`、`same-origin`、`include`のCredentials Modeに従います。禁止Header、CORS Response Headerの非公開化、preflightとそのcacheを実装していますが、Runtime自体をSandboxにはしません。
+
+Navigation、Form Submission、FetchはPage単位のメモリ内Cookie Jarを共有します。Domain、Path、Secure、HttpOnly、SameSite、expirationを検証し、WebGoからHttpOnly Cookieを参照できないようにします。Request Bodyは1 MiB、Headerは100件かつ64 KiB、Response Bodyは既定4 MiB、Redirectは10回を上限とし、Page終了時は進行中のFetchをcancelします。URLを含むErrorと表示にはuserinfoを残さず、CookieとAuthorizationの値をLogへ出力しません。
 
 信頼できないWebGoソースを開いたり、Growseを権限の高いユーザーで実行したりしないでください。
 
 ## Hoverとカーソル表示
 
-リンク先プレビューはURLの表示だけを行い、hoverを理由とするDNS問い合わせ、HTTPリクエスト、先読み、WebGo実行は行いません。URLにパスワードが含まれる場合は伏字にしますが、表示されたリンク先と接続先を利用者自身でも確認してください。
+リンク先プレビューはURLの表示だけを行い、hoverを理由とするDNS問い合わせ、HTTPリクエスト、先読み、WebGo実行は行いません。URLにuserinfoが含まれる場合は認証情報全体を除去しますが、表示されたリンク先と接続先を利用者自身でも確認してください。
 
 Gopherカーソルには`internal/ui/assets/blue.svg`から生成してビルドへ埋め込んだ`gopher-blue.png`だけを使用します。閲覧ページから取得したSVGをカーソルとして実行時に読み込む機能はありません。
 
