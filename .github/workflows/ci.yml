@@ -61,7 +61,9 @@ jobs:
         run: go mod tidy -diff
 
       - name: Test v0.8.0 installer
-        run: bash tests/install.sh
+        run: |
+          bash tests/install.sh
+          bash tests/install-platforms.sh
 
       - name: Validate release artifact matrix
         run: bash tests/release.sh
@@ -121,6 +123,67 @@ jobs:
 
       - name: Lint GitHub Actions workflows
         run: actionlint
+
+  gui-package:
+    name: GUI package (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS
+            runner: macos-15
+            goos: darwin
+            goarch: arm64
+            cgo_enabled: "1"
+          - name: Windows
+            runner: windows-2025
+            goos: windows
+            goarch: amd64
+            cgo_enabled: "0"
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go.sum
+
+      - name: Download modules
+        shell: bash
+        run: go mod download
+
+      - name: Build GUI package
+        shell: bash
+        env:
+          CGO_ENABLED: ${{ matrix.cgo_enabled }}
+          GOARCH: ${{ matrix.goarch }}
+          GOOS: ${{ matrix.goos }}
+        run: scripts/package-gui.sh dist/package v0.8.1 "$GITHUB_RUN_NUMBER"
+
+      - name: Verify GUI package
+        shell: bash
+        env:
+          GOOS: ${{ matrix.goos }}
+        run: |
+          case "$GOOS" in
+            darwin)
+              test -x dist/package/Growse.app/Contents/MacOS/growse
+              test -f dist/package/Growse.app/Contents/Info.plist
+              test -f dist/package/Growse.app/Contents/Resources/Growse.icns
+              codesign --verify --deep --strict dist/package/Growse.app
+              ;;
+            windows)
+              test -f dist/package/growse.exe
+              test -f dist/package/share/windows/Growse.ico
+              test -f dist/package/share/windows/install-shortcut.ps1
+              ;;
+          esac
 
   security:
     name: Vulnerability scan

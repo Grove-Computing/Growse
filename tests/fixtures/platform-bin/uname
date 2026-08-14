@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+case "${1:-}" in
+  -s)
+    printf '%s\n' "${GROWSE_TEST_UNAME_S:?}"
+    ;;
+  -m)
+    printf '%s\n' "${GROWSE_TEST_UNAME_M:?}"
+    ;;
+  *)
+    /usr/bin/uname "$@"
+    ;;
+esac
