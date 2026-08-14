@@ -139,6 +139,28 @@ func (api *API) SetInterval(interval time.Duration, callback func()) (TimerID, e
 	return api.schedule(interval, interval, true, callback)
 }
 
+// ClearTimer cancels a timeout or interval before its next callback starts.
+func (api *API) ClearTimer(id TimerID) bool {
+	if api == nil || id == 0 {
+		return false
+	}
+	api.mu.Lock()
+	entry, exists := api.timers[id]
+	if !exists || entry.canceled {
+		api.mu.Unlock()
+		return false
+	}
+	delete(api.timers, id)
+	entry.canceled = true
+	entry.callback = nil
+	if entry.index >= 0 {
+		heap.Remove(&api.queue, entry.index)
+	}
+	api.mu.Unlock()
+	api.signal()
+	return true
+}
+
 func (api *API) schedule(delay, interval time.Duration, repeat bool, callback func()) (TimerID, error) {
 	if api == nil || callback == nil {
 		return 0, errors.New("scheduler callback is required")

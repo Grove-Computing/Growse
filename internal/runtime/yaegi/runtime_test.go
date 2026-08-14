@@ -136,6 +136,29 @@ func main() {
 	}
 }
 
+func TestRuntimeExposesWebGoTimerCancellation(t *testing.T) {
+	runtime := New()
+	scripts := []runtimemodel.Script{{Source: `package main
+import "growse/scheduler"
+var Cleared bool
+func main() {
+	id, _ := scheduler.SetTimeout(scheduler.Second, func() {})
+	Cleared = scheduler.ClearTimer(id)
+}`}}
+	if err := runtime.Load(context.Background(), scripts, runtimemodel.Environment{}); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if !runtime.interpreter.Symbols("page")["page"]["Cleared"].Bool() {
+		t.Fatal("WebGo ClearTimer() did not cancel the active timeout")
+	}
+	if err := runtime.Stop(); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+}
+
 func TestRuntimeFetchSendsMethodRelativeURLHeadersAndTextBody(t *testing.T) {
 	runtime := New()
 	var captured *network.Request

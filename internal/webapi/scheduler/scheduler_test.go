@@ -61,3 +61,59 @@ func TestSchedulerRejectsMissingCallback(t *testing.T) {
 		t.Fatalf("SetTimeout(nil) = (%d, %v), want zero ID and error", id, err)
 	}
 }
+
+func TestClearTimerCancelsPendingTimeoutAndInterval(t *testing.T) {
+	start := time.Unix(100, 0)
+	clock := &fakeClock{current: start}
+	callbackCount := 0
+	api := newAPI(context.Background(), clock, func(callback func()) bool {
+		callback()
+		return true
+	}, false)
+	t.Cleanup(api.Close)
+
+	timeoutID, err := api.SetTimeout(time.Second, func() { callbackCount++ })
+	if err != nil {
+		t.Fatal(err)
+	}
+	intervalID, err := api.SetInterval(time.Second, func() { callbackCount++ })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !api.ClearTimer(timeoutID) || !api.ClearTimer(intervalID) {
+		t.Fatal("ClearTimer() rejected active timers")
+	}
+	if api.ClearTimer(timeoutID) || api.ClearTimer(0) {
+		t.Fatal("ClearTimer() accepted an inactive timer")
+	}
+
+	clock.current = start.Add(2 * time.Second)
+	api.runDue(clock.Now())
+	if callbackCount != 0 {
+		t.Fatalf("callback count = %d, want 0", callbackCount)
+	}
+}
+
+func TestIntervalCanClearItself(t *testing.T) {
+	start := time.Unix(100, 0)
+	clock := &fakeClock{current: start}
+	callbackCount := 0
+	api := newAPI(context.Background(), clock, func(callback func()) bool {
+		callback()
+		return true
+	}, false)
+	t.Cleanup(api.Close)
+
+	var intervalID TimerID
+	intervalID, _ = api.SetInterval(time.Millisecond, func() {
+		callbackCount++
+		api.ClearTimer(intervalID)
+	})
+	clock.current = start.Add(time.Millisecond)
+	api.runDue(clock.Now())
+	clock.current = start.Add(2 * time.Millisecond)
+	api.runDue(clock.Now())
+	if callbackCount != 1 {
+		t.Fatalf("callback count = %d, want 1", callbackCount)
+	}
+}

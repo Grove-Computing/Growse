@@ -118,6 +118,7 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 			"Response":              reflect.ValueOf((*fetchapi.Response)(nil)),
 		},
 		"growse/scheduler/scheduler": {
+			"ClearTimer":  reflect.ValueOf(scheduler.ClearTimer),
 			"Millisecond": reflect.ValueOf(schedulerapi.Millisecond),
 			"Second":      reflect.ValueOf(schedulerapi.Second),
 			"SetInterval": reflect.ValueOf(scheduler.SetInterval),
