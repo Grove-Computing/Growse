@@ -170,6 +170,44 @@ func TestInterpolateOpacity(t *testing.T) {
 	}
 }
 
+func TestInterpolateColorUsesPremultipliedSRGB(t *testing.T) {
+	tests := []struct {
+		name     string
+		from, to uint32
+		progress float64
+		want     uint32
+	}{
+		{name: "opaque midpoint", from: 0xff0000ff, to: 0x0000ffff, progress: 0.5, want: 0x800080ff},
+		{name: "transparent hidden red", from: 0xff000000, to: 0x0000ffff, progress: 0.5, want: 0x0000ff80},
+		{name: "transparent destination", from: 0xff0000ff, to: 0x0000ff00, progress: 0.5, want: 0xff000080},
+		{name: "both transparent", from: 0xff000000, to: 0x0000ff00, progress: 0.5, want: 0x00000000},
+		{name: "start", from: 0x12345678, to: 0xabcdef12, progress: 0, want: 0x12345678},
+		{name: "end", from: 0x12345678, to: 0xabcdef12, progress: 1, want: 0xabcdef12},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := InterpolateColor(test.from, test.to, test.progress); got != test.want {
+				t.Fatalf("InterpolateColor(%#08x, %#08x, %v) = %#08x, want %#08x", test.from, test.to, test.progress, got, test.want)
+			}
+		})
+	}
+}
+
+func TestRunningTransitionInterpolatesColor(t *testing.T) {
+	start := time.Unix(100, 0)
+	timing, _ := animation.NewTiming(time.Second, 0, animation.Linear{})
+	running := NewRunningTransition(StartedTransition{
+		Property: "color",
+		From:     TransitionValue{Kind: TransitionColor, Color: 0xff0000ff},
+		To:       TransitionValue{Kind: TransitionColor, Color: 0x0000ffff},
+		Timing:   timing,
+	}, start)
+	value, active := running.Advance(start.Add(500 * time.Millisecond))
+	if !active || value.Color != 0x800080ff {
+		t.Fatalf("midpoint color = (%#08x, %v), want (0x800080ff, true)", value.Color, active)
+	}
+}
+
 func abs32(value float32) float32 {
 	if value < 0 {
 		return -value

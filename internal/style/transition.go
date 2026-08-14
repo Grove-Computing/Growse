@@ -100,6 +100,8 @@ func interpolateTransitionValue(from, to TransitionValue, progress float64) Tran
 	switch from.Kind {
 	case TransitionNumber:
 		return TransitionValue{Kind: TransitionNumber, Number: InterpolateOpacity(from.Number, to.Number, progress)}
+	case TransitionColor:
+		return TransitionValue{Kind: TransitionColor, Color: InterpolateColor(from.Color, to.Color, progress)}
 	default:
 		if progress >= 1 {
 			return cloneTransitionValue(to)
@@ -114,6 +116,45 @@ func interpolateTransitionValue(from, to TransitionValue, progress float64) Tran
 func InterpolateOpacity(from, to float32, progress float64) float32 {
 	value := from + (to-from)*float32(progress)
 	return min(max(value, 0), 1)
+}
+
+// InterpolateColor blends packed RRGGBBAA colors in premultiplied sRGB space.
+func InterpolateColor(from, to uint32, progress float64) uint32 {
+	progress = min(max(progress, 0), 1)
+	fromChannels := colorChannels(from)
+	toChannels := colorChannels(to)
+	alpha := fromChannels[3] + (toChannels[3]-fromChannels[3])*progress
+	premultiplied := [3]float64{}
+	for index := range premultiplied {
+		fromPremultiplied := fromChannels[index] * fromChannels[3]
+		toPremultiplied := toChannels[index] * toChannels[3]
+		premultiplied[index] = fromPremultiplied + (toPremultiplied-fromPremultiplied)*progress
+	}
+	if alpha == 0 {
+		return 0
+	}
+	return packInterpolatedColor(
+		premultiplied[0]/alpha,
+		premultiplied[1]/alpha,
+		premultiplied[2]/alpha,
+		alpha,
+	)
+}
+
+func colorChannels(color uint32) [4]float64 {
+	return [4]float64{
+		float64(color>>24) / 255,
+		float64(color>>16&0xff) / 255,
+		float64(color>>8&0xff) / 255,
+		float64(color&0xff) / 255,
+	}
+}
+
+func packInterpolatedColor(red, green, blue, alpha float64) uint32 {
+	channel := func(value float64) uint32 {
+		return uint32(math.Round(min(max(value, 0), 1) * 255))
+	}
+	return channel(red)<<24 | channel(green)<<16 | channel(blue)<<8 | channel(alpha)
 }
 
 func cloneTransitionValue(value TransitionValue) TransitionValue {
