@@ -323,6 +323,40 @@ func TestCrossDocumentTraversalDispatchesPopStateToNewRuntime(t *testing.T) {
 	}
 }
 
+func TestNavigationSwitchesStorageByOrigin(t *testing.T) {
+	firstURL := mustParseURL(t, "http://localhost/storage-a")
+	sameOriginURL := mustParseURL(t, "http://localhost/storage-b?view=2")
+	otherOriginURL := mustParseURL(t, "http://127.0.0.1/storage-c")
+	script := `<script type="text/go">package main; func main() {}</script>`
+	loader := &routeLoader{responses: map[string]*network.Response{
+		firstURL.String():       {URL: firstURL, StatusCode: 200, ContentType: "text/html", Body: []byte(script)},
+		sameOriginURL.String():  {URL: sameOriginURL, StatusCode: 200, ContentType: "text/html", Body: []byte(script)},
+		otherOriginURL.String(): {URL: otherOriginURL, StatusCode: 200, ContentType: "text/html", Body: []byte(script)},
+	}}
+	var runtimes []*runtimeStub
+	browser := NewWithRuntimeFactory(loader, func() runtimemodel.Runtime {
+		runtime := &runtimeStub{}
+		runtimes = append(runtimes, runtime)
+		return runtime
+	})
+	if _, err := browser.Navigate(context.Background(), firstURL.String()); err != nil {
+		t.Fatal(err)
+	}
+	runtimes[0].environment.LocalStorage.Set("shared", "yes")
+	if _, err := browser.Navigate(context.Background(), sameOriginURL.String()); err != nil {
+		t.Fatal(err)
+	}
+	if got, found := runtimes[1].environment.LocalStorage.Get("shared"); !found || got != "yes" {
+		t.Fatalf("same-Origin Local Storage = (%q, %v)", got, found)
+	}
+	if _, err := browser.Navigate(context.Background(), otherOriginURL.String()); err != nil {
+		t.Fatal(err)
+	}
+	if got, found := runtimes[2].environment.LocalStorage.Get("shared"); found || got != "" {
+		t.Fatalf("cross-Origin Local Storage leaked = (%q, %v)", got, found)
+	}
+}
+
 func TestNavigateStartsRuntimeForTrustedOrigin(t *testing.T) {
 	pageURL := mustParseURL(t, "http://localhost/index.html")
 	loader := stubLoader{response: &network.Response{
