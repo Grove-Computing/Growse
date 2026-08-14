@@ -34,6 +34,8 @@ type blockStyle struct {
 	textShadows         []stylemodel.Shadow
 	outline             stylemodel.BorderSide
 	outlineOffset       float32
+	transform           []stylemodel.TransformFunction
+	transformOrigin     stylemodel.BackgroundPosition
 	radius              stylemodel.BorderRadii
 	decoration          stylemodel.TextDecorationLine
 	decorationColor     uint32
@@ -244,6 +246,7 @@ func (e *engine) addInput(node *dom.Node, style blockStyle, x, width, containing
 		Clip:        cloneRect(e.clip),
 		Opacity:     e.opacity * style.opacity,
 		TextShadows: append([]stylemodel.Shadow(nil), style.textShadows...),
+		Transform:   stylemodel.IdentityMatrix(),
 	})
 	e.y += usedHeight + style.margin.Bottom
 }
@@ -259,7 +262,7 @@ func isTextInput(node *dom.Node) bool {
 func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containingHeight float32, heightDefinite bool, topMargin *float32) {
 	geometryBoxStart, geometryDecorationStart := len(e.tree.Boxes), len(e.tree.Decorations)
 	previousStackingID := e.stackingID
-	if style.opacity < 1 || style.layoutPosition != stylemodel.PositionStatic && !style.zIndexAuto {
+	if style.opacity < 1 || len(style.transform) != 0 || style.layoutPosition != stylemodel.PositionStatic && !style.zIndexAuto {
 		e.stackingID = len(e.tree.StackingContexts)
 		e.tree.StackingContexts = append(e.tree.StackingContexts, StackingContext{Parent: previousStackingID, NodeID: node.ID, ZIndex: style.zIndex, Order: e.order})
 	}
@@ -311,6 +314,7 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 			Repeat: style.repeat, Position: style.position, Size: style.backgroundSize, Clip: cloneRect(e.clip),
 			Border: style.border, Opacity: e.opacity, BoxShadows: append([]stylemodel.Shadow(nil), style.boxShadows...),
 			Outline: style.outline, OutlineOffset: style.outlineOffset,
+			Transform: stylemodel.IdentityMatrix(),
 		})
 	}
 	e.y += style.border.Top.Width + style.padding.Top
@@ -434,9 +438,28 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 		}
 		translateFlexGeometry(e.tree, geometryBoxStart, geometryDecorationStart, dx, dy, nil)
 	}
+	if len(style.transform) != 0 {
+		originX := x + style.transformOrigin.X.Resolve(outerWidth)
+		originY := boxTop + style.transformOrigin.Y.Resolve(outerHeight)
+		local := stylemodel.Matrix{A: 1, D: 1, E: originX, F: originY}.Multiply(stylemodel.ResolveTransform(style.transform, outerWidth, outerHeight))
+		local = local.Multiply(stylemodel.Matrix{A: 1, D: 1, E: -originX, F: -originY})
+		for index := geometryBoxStart; index < len(e.tree.Boxes); index++ {
+			e.tree.Boxes[index].Transform = local.Multiply(normalizeMatrix(e.tree.Boxes[index].Transform))
+		}
+		for index := geometryDecorationStart; index < len(e.tree.Decorations); index++ {
+			e.tree.Decorations[index].Transform = local.Multiply(normalizeMatrix(e.tree.Decorations[index].Transform))
+		}
+	}
 	e.positionCB = previousPositionCB
 	e.stackingID = previousStackingID
 	e.opacity = previousOpacity
+}
+
+func normalizeMatrix(matrix stylemodel.Matrix) stylemodel.Matrix {
+	if matrix == (stylemodel.Matrix{}) {
+		return stylemodel.IdentityMatrix()
+	}
+	return matrix
 }
 
 func relativeOffset(inset stylemodel.Insets, width, height float32) (float32, float32) {
@@ -626,6 +649,7 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 			FontSize: container.fontSize, Bold: container.bold, Color: container.color,
 			Opacity: e.opacity, Decoration: container.decoration, DecorationColor: container.decorationColor,
 			TextShadows: append([]stylemodel.Shadow(nil), container.textShadows...),
+			Transform:   stylemodel.IdentityMatrix(),
 			Runs:        append([]TextRun(nil), lineRuns...),
 			Baseline:    e.y + lineAscent, Clip: cloneRect(e.clip),
 		})
@@ -974,6 +998,8 @@ func applyComputed(block blockStyle, computed stylemodel.ComputedStyle) blockSty
 	block.boxShadows = append([]stylemodel.Shadow(nil), computed.BoxShadows...)
 	block.textShadows = append([]stylemodel.Shadow(nil), computed.TextShadows...)
 	block.outline, block.outlineOffset = computed.Outline, computed.OutlineOffset
+	block.transform = append([]stylemodel.TransformFunction(nil), computed.Transform...)
+	block.transformOrigin = computed.TransformOrigin
 	block.radius = computed.BorderRadius
 	block.decoration = computed.TextDecoration
 	block.decorationColor = computed.DecorationColor

@@ -520,6 +520,27 @@ func TestBuildCreatesDeterministicStackingContextsAndPaintOrder(t *testing.T) {
 	}
 }
 
+func TestBuildAppliesTransformOriginToDisplayGeometry(t *testing.T) {
+	document := dom.NewDocument()
+	item := document.CreateElement("div", map[string]string{"class": "item"})
+	appendNodes(t, document, [2]*dom.Node{document.Root, item})
+	stylesheet, err := css.Parse(strings.NewReader(`.item { width:100px; height:50px; background-color:#ddd; transform:rotate(180deg); transform-origin:center }`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, style.Compute(document, stylesheet), 300)
+	decoration := decorationForNode(t, tree, item.ID)
+	want := style.Matrix{A: -1, D: -1, E: 164, F: 114}
+	for _, values := range [][2]float32{{decoration.Transform.A, want.A}, {decoration.Transform.B, want.B}, {decoration.Transform.C, want.C}, {decoration.Transform.D, want.D}, {decoration.Transform.E, want.E}, {decoration.Transform.F, want.F}} {
+		if difference := values[0] - values[1]; difference < -0.001 || difference > 0.001 {
+			t.Fatalf("transform matrix = %#v, want %#v", decoration.Transform, want)
+		}
+	}
+	if len(tree.StackingContexts) != 2 {
+		t.Fatalf("transform stacking context = %#v", tree.StackingContexts)
+	}
+}
+
 func appendNodes(t *testing.T, document *dom.Document, edges ...[2]*dom.Node) {
 	t.Helper()
 	for _, edge := range edges {

@@ -1015,6 +1015,31 @@ func TestComputeShadowsAndOutline(t *testing.T) {
 	}
 }
 
+func TestComputeAllTwoDimensionalTransformsAndOrigin(t *testing.T) {
+	document := dom.NewDocument()
+	item := document.CreateElement("div", map[string]string{"style": `transform:translate(10px, 20%) translateX(2px) translateY(3px) scale(2, 3) scaleX(4) scaleY(5) rotate(90deg) skew(10deg, 20deg) skewX(5deg) skewY(6deg) matrix(1, 2, 3, 4, 5, 6); transform-origin:left top`})
+	appendNode(t, document, document.Root, item)
+	computed, _ := Compute(document, nil).For(item)
+	if len(computed.Transform) != 11 {
+		t.Fatalf("transform functions = %#v", computed.Transform)
+	}
+	if computed.Transform[0].Kind != TransformTranslate || computed.Transform[0].Y.Percentage != 20 || computed.Transform[6].Kind != TransformRotate || computed.Transform[10].Kind != TransformMatrix {
+		t.Fatalf("parsed transforms = %#v", computed.Transform)
+	}
+	if computed.TransformOrigin.X != (LengthPercentage{}) || computed.TransformOrigin.Y != (LengthPercentage{}) {
+		t.Fatalf("transform origin = %#v", computed.TransformOrigin)
+	}
+
+	simple, valid := parseTransform("translate(10px, 20px) scale(2)", LengthContext{})
+	if !valid {
+		t.Fatal("simple transform did not parse")
+	}
+	matrix := ResolveTransform(simple, 100, 50)
+	if matrix != (Matrix{A: 2, D: 2, E: 10, F: 20}) {
+		t.Fatalf("composed matrix = %#v", matrix)
+	}
+}
+
 func parseTestSelector(t *testing.T, value string) css.Selector {
 	t.Helper()
 	stylesheet, err := css.Parse(strings.NewReader(value + " { color: red }"))

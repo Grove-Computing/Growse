@@ -403,6 +403,7 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 	computed = applyGridProperties(computed, parent, winners, computed.CustomProperties, lengthContext)
 	computed = applyPositionProperties(computed, parent, winners, computed.CustomProperties, lengthContext)
 	computed = applyShadowAndOutlineProperties(computed, parent, winners, computed.CustomProperties, lengthContext)
+	computed = applyTransformProperties(computed, parent, winners, computed.CustomProperties, lengthContext)
 	return computed
 }
 

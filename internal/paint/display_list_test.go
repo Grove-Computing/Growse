@@ -150,6 +150,15 @@ func TestBuildPreservesShadowsAndOutline(t *testing.T) {
 	}
 }
 
+func TestBuildPreservesTransformMatrix(t *testing.T) {
+	matrix := style.Matrix{A: 2, B: 1, C: .5, D: 3, E: 10, F: 20}
+	tree := &layout.Tree{Decorations: []layout.Decoration{{Transform: matrix}}, Boxes: []layout.Box{{Order: 1, Transform: matrix}}}
+	list := Build(tree)
+	if list.Commands[0].(DrawBox).Transform != matrix || list.Commands[1].(DrawText).Transform != matrix {
+		t.Fatalf("display-list transforms = %#v", list.Commands)
+	}
+}
+
 func TestBuildUsesExactLayoutDecorationGeometry(t *testing.T) {
 	tree := &layout.Tree{Decorations: []layout.Decoration{{
 		NodeID: 12, Rect: layout.Rect{X: 14, Y: 25, Width: 120, Height: 60},

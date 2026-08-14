@@ -43,6 +43,7 @@ type DrawText struct {
 	Opacity         float32
 	Runs            []TextRun
 	TextShadows     []stylemodel.Shadow
+	Transform       stylemodel.Matrix
 }
 
 func (DrawText) paintCommand() {}
@@ -85,6 +86,7 @@ type DrawBox struct {
 	BoxShadows    []stylemodel.Shadow
 	Outline       stylemodel.BorderSide
 	OutlineOffset float32
+	Transform     stylemodel.Matrix
 }
 
 func (DrawBox) paintCommand() {}
@@ -145,6 +147,7 @@ func Build(tree *layout.Tree) *DisplayList {
 				Position: decoration.Position, Size: decoration.Size, Clip: cloneLayoutRect(decoration.Clip),
 				Border: decoration.Border, Radius: decoration.Radius, Opacity: decoration.Opacity,
 				BoxShadows: append([]stylemodel.Shadow(nil), decoration.BoxShadows...), Outline: decoration.Outline, OutlineOffset: decoration.OutlineOffset,
+				Transform: decoration.Transform,
 			})
 			previousBottom += top
 			continue
@@ -185,6 +188,7 @@ func Build(tree *layout.Tree) *DisplayList {
 			Baseline:    box.Baseline - box.Y,
 			Clip:        cloneLayoutRect(box.Clip),
 			TextShadows: append([]stylemodel.Shadow(nil), box.TextShadows...),
+			Transform:   box.Transform,
 		}
 		command.Runs = make([]TextRun, 0, len(box.Runs))
 		for _, run := range box.Runs {

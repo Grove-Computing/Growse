@@ -107,6 +107,29 @@ type Shadow struct {
 	Color                  uint32
 }
 
+// Matrix is a CSS 2D affine matrix [A C E; B D F; 0 0 1].
+type Matrix struct {
+	A, B, C, D, E, F float32
+}
+
+// TransformFunctionKind identifies a parsed CSS 2D transform function.
+type TransformFunctionKind uint8
+
+const (
+	TransformTranslate TransformFunctionKind = iota
+	TransformScale
+	TransformRotate
+	TransformSkew
+	TransformMatrix
+)
+
+// TransformFunction retains percentage translations until box geometry is known.
+type TransformFunction struct {
+	Kind             TransformFunctionKind
+	X, Y             LengthPercentage
+	A, B, C, D, E, F float32
+}
+
 // BoxSizing controls whether declared sizes include padding and border.
 type BoxSizing uint8
 
@@ -380,6 +403,8 @@ type ComputedStyle struct {
 	TextShadows         []Shadow
 	Outline             BorderSide
 	OutlineOffset       float32
+	Transform           []TransformFunction
+	TransformOrigin     BackgroundPosition
 	AspectRatio         float32
 	BoxSizing           BoxSizing
 	Width               SizeValue

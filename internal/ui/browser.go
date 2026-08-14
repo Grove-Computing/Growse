@@ -619,6 +619,9 @@ func commandDocumentY(command paintmodel.Command) (float32, bool) {
 
 func layoutDrawBox(gtx layout.Context, command paintmodel.DrawBox, backgroundImages map[string]image.Image) layout.Dimensions {
 	return layout.Inset{Top: unit.Dp(command.Top), Left: unit.Dp(command.X)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		if command.Transform != (stylemodel.Matrix{}) && command.Transform != stylemodel.IdentityMatrix() {
+			defer pushCSSMatrix(gtx, command.Transform, command.X, command.Y).Pop()
+		}
 		if command.Clip != nil {
 			defer commandClip(gtx, command.Clip, command.X, command.Y).Push(gtx.Ops).Pop()
 		}
@@ -1013,6 +1016,9 @@ func (ui *BrowserUI) layoutDrawText(gtx layout.Context, command paintmodel.DrawT
 	}
 	right := unit.Dp(rightValue)
 	return layout.Inset{Top: unit.Dp(command.Top), Left: left, Right: right}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		if command.Transform != (stylemodel.Matrix{}) && command.Transform != stylemodel.IdentityMatrix() {
+			defer pushCSSMatrix(gtx, command.Transform, command.X, command.Y).Pop()
+		}
 		if command.Clip != nil {
 			defer commandClip(gtx, command.Clip, command.X, command.Y).Push(gtx.Ops).Pop()
 		}
@@ -1041,6 +1047,13 @@ func (ui *BrowserUI) layoutDrawText(gtx layout.Context, command paintmodel.DrawT
 
 		return ui.layoutShadowedText(gtx, command.Text, command.FontSize, command.Bold, command.Color, command.Decoration, command.DecorationColor, command.Baseline, command.TextShadows)
 	})
+}
+
+func pushCSSMatrix(gtx layout.Context, matrix stylemodel.Matrix, originX, originY float32) op.TransformStack {
+	translationX := matrix.A*originX + matrix.C*originY + matrix.E - originX
+	translationY := matrix.B*originX + matrix.D*originY + matrix.F - originY
+	affine := f32.NewAffine2D(matrix.A, matrix.C, float32(gtx.Dp(unit.Dp(translationX))), matrix.B, matrix.D, float32(gtx.Dp(unit.Dp(translationY))))
+	return op.Affine(affine).Push(gtx.Ops)
 }
 
 func commandClip(gtx layout.Context, rectangle *layoutengine.Rect, originX, originY float32) clip.Rect {
