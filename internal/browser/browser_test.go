@@ -773,6 +773,7 @@ func TestReloadIgnoringCacheRevalidatesDocumentAndSubresources(t *testing.T) {
 	if _, err := browser.Navigate(context.Background(), pageURL.String()); err != nil {
 		t.Fatal(err)
 	}
+	loader.requests = nil
 
 	if _, err := browser.ReloadIgnoringCache(context.Background()); err != nil {
 		t.Fatal(err)

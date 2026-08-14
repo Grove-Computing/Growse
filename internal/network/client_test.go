@@ -125,6 +125,36 @@ func TestClientRejects304WithoutStoredEntry(t *testing.T) {
 	}
 }
 
+func TestClientSharesCachePolicyAcrossRequestKinds(t *testing.T) {
+	counts := make(map[string]int)
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		counts[request.URL.Path]++
+		response.Header().Set("Cache-Control", "max-age=60")
+		response.Header().Set("Access-Control-Allow-Origin", "*")
+		_, _ = response.Write([]byte(request.URL.Path))
+	}))
+	defer server.Close()
+	client := NewClientWithLimits(server.Client(), 1024)
+	siteURL := mustParseURL(t, server.URL+"/page")
+	requests := []*Request{
+		{Method: http.MethodGet, URL: mustParseURL(t, server.URL+"/navigation"), Kind: RequestNavigation},
+		{Method: http.MethodGet, URL: mustParseURL(t, server.URL+"/stylesheet"), SiteURL: siteURL, Kind: RequestSubresource},
+		{Method: http.MethodGet, URL: mustParseURL(t, server.URL+"/image"), SiteURL: siteURL, Kind: RequestSubresource},
+		{Method: http.MethodGet, URL: mustParseURL(t, server.URL+"/webgo"), SiteURL: siteURL, Kind: RequestSubresource},
+		{Method: http.MethodGet, URL: mustParseURL(t, server.URL+"/fetch"), SiteURL: siteURL, Kind: RequestFetch, Credentials: CredentialsOmit},
+	}
+	for _, request := range requests {
+		for range 2 {
+			if _, err := client.Do(context.Background(), request); err != nil {
+				t.Fatalf("Do(%s) error = %v", request.URL.Path, err)
+			}
+		}
+		if counts[request.URL.Path] != 1 {
+			t.Fatalf("%s Network requests = %d, want 1", request.URL.Path, counts[request.URL.Path])
+		}
+	}
+}
+
 func TestClientDoSendsMethodHeadersAndBody(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		body, _ := io.ReadAll(request.Body)
