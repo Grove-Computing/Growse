@@ -44,3 +44,41 @@ func TestResolveSubmissionAppliesSubmitterOverridesAndDefaults(t *testing.T) {
 		t.Fatalf("default config = %#v, ok=%v", config, ok)
 	}
 }
+
+func TestCollectEntriesPreservesDOMOrderDuplicatesAndSuccessfulControls(t *testing.T) {
+	document := dom.NewDocument()
+	form := document.CreateElement("form", map[string]string{"id": "survey"})
+	first := document.CreateElement("input", map[string]string{"name": "tag", "value": "one"})
+	empty := document.CreateElement("input", map[string]string{"name": "empty", "value": ""})
+	checkbox := document.CreateElement("input", map[string]string{"type": "checkbox", "name": "agree", "checked": ""})
+	unchecked := document.CreateElement("input", map[string]string{"type": "checkbox", "name": "skip"})
+	textarea := document.CreateElement("textarea", map[string]string{"name": "note"})
+	selectNode := document.CreateElement("select", map[string]string{"name": "size"})
+	option := document.CreateElement("option", map[string]string{"value": "large", "selected": ""})
+	submit := document.CreateElement("button", map[string]string{"name": "intent", "value": "save"})
+	otherSubmit := document.CreateElement("button", map[string]string{"name": "intent", "value": "delete"})
+	external := document.CreateElement("input", map[string]string{"form": "survey", "name": "tag", "value": "two"})
+	appendNode(t, document, document.Root, form)
+	for _, node := range []*dom.Node{first, empty, checkbox, unchecked, textarea, selectNode, submit, otherSubmit} {
+		appendNode(t, document, form, node)
+	}
+	appendNode(t, document, textarea, document.CreateText("a\nb\r\nc"))
+	appendNode(t, document, selectNode, option)
+	appendNode(t, document, option, document.CreateText("Large"))
+	appendNode(t, document, document.Root, external)
+
+	want := []Entry{
+		{Name: "tag", Value: "one"}, {Name: "empty", Value: ""}, {Name: "agree", Value: "on"},
+		{Name: "note", Value: "a\r\nb\r\nc"}, {Name: "size", Value: "large"},
+		{Name: "intent", Value: "save"}, {Name: "tag", Value: "two"},
+	}
+	got := CollectEntries(document, form, submit)
+	if len(got) != len(want) {
+		t.Fatalf("entries = %#v, want %#v", got, want)
+	}
+	for index := range want {
+		if got[index] != want[index] {
+			t.Fatalf("entry %d = %#v, want %#v", index, got[index], want[index])
+		}
+	}
+}

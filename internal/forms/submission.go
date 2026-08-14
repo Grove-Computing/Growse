@@ -19,6 +19,87 @@ type SubmissionConfig struct {
 	NoValidate bool
 }
 
+// Entry is one successful control name/value pair.
+type Entry struct {
+	Name  string
+	Value string
+}
+
+// CollectEntries builds the successful-control entry list in document order.
+func CollectEntries(document *dom.Document, form, submitter *dom.Node) []Entry {
+	if document == nil || form == nil || form.TagName != "form" {
+		return nil
+	}
+	var entries []Entry
+	forEachElement(document.Root, func(node *dom.Node) {
+		if FormOwner(document, node) != form || Disabled(node) {
+			return
+		}
+		name, exists := node.Attribute("name")
+		if !exists || name == "" {
+			return
+		}
+		if entry, successful := successfulEntry(node, submitter); successful {
+			entry.Name = name
+			entries = append(entries, entry)
+		}
+	})
+	return entries
+}
+
+func successfulEntry(node, submitter *dom.Node) (Entry, bool) {
+	if node.TagName == "textarea" {
+		return Entry{Value: normalizeCRLF(CurrentValue(node))}, true
+	}
+	if node.TagName == "select" {
+		options := SelectOptions(node)
+		index := SelectedIndex(node, options)
+		if index < 0 {
+			return Entry{}, false
+		}
+		return Entry{Value: options[index].Value}, true
+	}
+	if node.TagName == "button" {
+		if node != submitter || !IsSubmitButton(node) {
+			return Entry{}, false
+		}
+		value, _ := node.Attribute("value")
+		return Entry{Value: value}, true
+	}
+	if node.TagName != "input" {
+		return Entry{}, false
+	}
+	typeValue, _ := node.Attribute("type")
+	typeValue = strings.ToLower(strings.TrimSpace(typeValue))
+	switch typeValue {
+	case "checkbox", "radio":
+		if !CurrentChecked(node) {
+			return Entry{}, false
+		}
+		value, exists := node.Attribute("value")
+		if !exists {
+			value = "on"
+		}
+		return Entry{Value: value}, true
+	case "submit":
+		if node != submitter {
+			return Entry{}, false
+		}
+		value, _ := node.Attribute("value")
+		return Entry{Value: value}, true
+	case "button", "reset", "file":
+		return Entry{}, false
+	default:
+		return Entry{Value: CurrentValue(node)}, true
+	}
+}
+
+func normalizeCRLF(value string) string {
+	value = strings.ReplaceAll(value, "\r\n", "\n")
+	value = strings.ReplaceAll(value, "\r", "\n")
+	return strings.ReplaceAll(value, "\n", "\r\n")
+}
+
 // FormOwner resolves an explicit form=id association before ancestor lookup.
 func FormOwner(document *dom.Document, control *dom.Node) *dom.Node {
 	if document == nil || control == nil || control.Type != dom.NodeElement {
