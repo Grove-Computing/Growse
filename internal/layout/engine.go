@@ -60,6 +60,12 @@ type blockStyle struct {
 	gridTemplateRows    []stylemodel.GridTrackSize
 	gridAutoColumns     []stylemodel.GridTrackSize
 	gridAutoRows        []stylemodel.GridTrackSize
+	gridColumnLines     map[string][]int
+	gridRowLines        map[string][]int
+	gridTemplateAreas   map[string]stylemodel.GridArea
+	gridColumn          stylemodel.GridPlacement
+	gridRow             stylemodel.GridPlacement
+	gridAreaName        string
 	marginAuto          stylemodel.AutoEdges
 	aspectRatio         float32
 }
@@ -858,6 +864,12 @@ func applyComputed(block blockStyle, computed stylemodel.ComputedStyle) blockSty
 	block.gridTemplateRows = append([]stylemodel.GridTrackSize(nil), computed.GridTemplateRows...)
 	block.gridAutoColumns = append([]stylemodel.GridTrackSize(nil), computed.GridAutoColumns...)
 	block.gridAutoRows = append([]stylemodel.GridTrackSize(nil), computed.GridAutoRows...)
+	block.gridColumnLines = computed.GridColumnLines
+	block.gridRowLines = computed.GridRowLines
+	block.gridTemplateAreas = computed.GridTemplateAreas
+	block.gridColumn = computed.GridColumn
+	block.gridRow = computed.GridRow
+	block.gridAreaName = computed.GridAreaName
 	block.marginAuto, block.aspectRatio = computed.MarginAuto, computed.AspectRatio
 	return block
 }

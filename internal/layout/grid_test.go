@@ -148,3 +148,43 @@ func TestBuildGridResolvesMinmaxFitContentAndRepeat(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildGridPlacesNamedLinesSpansAndTemplateAreas(t *testing.T) {
+	document := dom.NewDocument()
+	grid := document.CreateElement("div", map[string]string{"class": "grid"})
+	named := document.CreateElement("div", map[string]string{"class": "named"})
+	spanned := document.CreateElement("div", map[string]string{"class": "spanned"})
+	appendNodes(t, document, [2]*dom.Node{document.Root, grid}, [2]*dom.Node{grid, named}, [2]*dom.Node{grid, spanned})
+	stylesheet, err := css.Parse(strings.NewReader(`
+.grid { display:grid; width:200px; grid-template-columns:[left] 100px [middle] 100px [right]; grid-template-rows:[top] 30px [middle] 40px [bottom] }
+.named { grid-column:left / right; grid-row:top / middle; background-color:#ddd }
+.spanned { grid-column:1 / span 2; grid-row:2; background-color:#ccc }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, stylemodel.Compute(document, stylesheet), 400)
+	namedRect, spanRect := decorationForNode(t, tree, named.ID), decorationForNode(t, tree, spanned.ID)
+	if namedRect.Width != 200 || namedRect.Height != 30 || spanRect.X != namedRect.X || spanRect.Y != namedRect.Y+30 || spanRect.Width != 200 || spanRect.Height != 40 {
+		t.Fatalf("named/span placement = named %#v span %#v", namedRect.Rect, spanRect.Rect)
+	}
+
+	areaDocument := dom.NewDocument()
+	areaGrid := areaDocument.CreateElement("div", map[string]string{"class": "areas"})
+	hero := areaDocument.CreateElement("div", map[string]string{"class": "hero"})
+	main := areaDocument.CreateElement("div", map[string]string{"class": "main"})
+	appendNodes(t, areaDocument, [2]*dom.Node{areaDocument.Root, areaGrid}, [2]*dom.Node{areaGrid, hero}, [2]*dom.Node{areaGrid, main})
+	areaStyles, err := css.Parse(strings.NewReader(`
+.areas { display:grid; width:200px; grid-template-columns:80px 120px; grid-template-rows:20px 30px; grid-template-areas:"hero hero" "side main" }
+.hero { grid-area:hero; background-color:#ddd }
+.main { grid-area:main; background-color:#ccc }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	areaTree := Build(areaDocument, stylemodel.Compute(areaDocument, areaStyles), 400)
+	heroRect, mainRect := decorationForNode(t, areaTree, hero.ID), decorationForNode(t, areaTree, main.ID)
+	if heroRect.Width != 200 || heroRect.Height != 20 || mainRect.X != heroRect.X+80 || mainRect.Y != heroRect.Y+20 || mainRect.Width != 120 || mainRect.Height != 30 {
+		t.Fatalf("area placement = hero %#v main %#v", heroRect.Rect, mainRect.Rect)
+	}
+}

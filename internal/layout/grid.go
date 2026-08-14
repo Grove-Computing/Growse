@@ -12,8 +12,9 @@ import (
 // to block/inline formatting for direct grid items.
 func (e *engine) addGridChildren(container *dom.Node, containerStyle blockStyle, x, width, containingHeight float32, heightDefinite bool) {
 	type gridItem struct {
-		node  *dom.Node
-		style blockStyle
+		node                               *dom.Node
+		style                              blockStyle
+		rowStart, rowEnd, colStart, colEnd int
 	}
 	items := make([]gridItem, 0, len(container.Children))
 	for _, child := range container.Children {
@@ -44,35 +45,128 @@ func (e *engine) addGridChildren(container *dom.Node, containerStyle blockStyle,
 		return
 	}
 	columnCount := len(containerStyle.gridTemplateColumns)
+	for _, area := range containerStyle.gridTemplateAreas {
+		columnCount = max(columnCount, area.ColumnEnd)
+	}
 	if columnCount == 0 {
 		columnCount = 1
 	}
-	rowCount := max(len(containerStyle.gridTemplateRows), (len(items)+columnCount-1)/columnCount)
+	rowCount := len(containerStyle.gridTemplateRows)
+	occupied := make(map[[2]int]bool)
+	for index := range items {
+		item := &items[index]
+		if area, ok := containerStyle.gridTemplateAreas[item.style.gridAreaName]; ok {
+			item.rowStart, item.rowEnd, item.colStart, item.colEnd = area.RowStart, area.RowEnd, area.ColumnStart, area.ColumnEnd
+		} else {
+			item.colStart, item.colEnd = resolveGridAxis(item.style.gridColumn, containerStyle.gridColumnLines, columnCount)
+			item.rowStart, item.rowEnd = resolveGridAxis(item.style.gridRow, containerStyle.gridRowLines, max(rowCount, 1))
+		}
+		columnCount = max(columnCount, item.colEnd)
+		rowCount = max(rowCount, item.rowEnd)
+		if item.colStart >= 0 && item.rowStart >= 0 {
+			occupyGridCells(occupied, item.rowStart, item.rowEnd, item.colStart, item.colEnd)
+		}
+	}
+	cursor := 0
+	for index := range items {
+		item := &items[index]
+		if item.colStart >= 0 && item.rowStart >= 0 {
+			continue
+		}
+		colSpan, rowSpan := max(item.colEnd-item.colStart, 1), max(item.rowEnd-item.rowStart, 1)
+		for {
+			row, column := cursor/columnCount, cursor%columnCount
+			cursor++
+			if column+colSpan <= columnCount && gridCellsFree(occupied, row, row+rowSpan, column, column+colSpan) {
+				item.rowStart, item.rowEnd, item.colStart, item.colEnd = row, row+rowSpan, column, column+colSpan
+				occupyGridCells(occupied, item.rowStart, item.rowEnd, item.colStart, item.colEnd)
+				rowCount = max(rowCount, item.rowEnd)
+				break
+			}
+		}
+	}
 	columnMaxContent, columnMinContent := make([]float32, columnCount), make([]float32, columnCount)
-	for index, item := range items {
-		column := index % columnCount
+	for _, item := range items {
 		maxContent, _, minContent := e.flexIntrinsicSizes(item.node, item.style, flexAxis{horizontal: true}, width, width, containingHeight, heightDefinite)
 		horizontalMargin := item.style.margin.Left + item.style.margin.Right
-		columnMaxContent[column] = max(columnMaxContent[column], maxContent+horizontalMargin)
-		columnMinContent[column] = max(columnMinContent[column], minContent+horizontalMargin)
+		span := max(item.colEnd-item.colStart, 1)
+		for column := item.colStart; column < item.colEnd; column++ {
+			columnMaxContent[column] = max(columnMaxContent[column], (maxContent+horizontalMargin)/float32(span))
+			columnMinContent[column] = max(columnMinContent[column], (minContent+horizontalMargin)/float32(span))
+		}
 	}
 	columnGap := containerStyle.columnGap.Resolve(width)
 	rowGap := containerStyle.rowGap.Resolve(containingHeight)
 	columns := resolveGridTracks(containerStyle.gridTemplateColumns, containerStyle.gridAutoColumns, columnCount, width, true, columnGap, columnMinContent, columnMaxContent)
 	rowMaxContent := make([]float32, rowCount)
-	for index, item := range items {
-		row, column := index/columnCount, index%columnCount
-		_, intrinsicHeight, _ := e.flexIntrinsicSizes(item.node, item.style, flexAxis{horizontal: true}, columns[column], columns[column], containingHeight, heightDefinite)
-		rowMaxContent[row] = max(rowMaxContent[row], intrinsicHeight+item.style.margin.Top+item.style.margin.Bottom)
+	for _, item := range items {
+		itemWidth := trackSpanSize(columns, item.colStart, item.colEnd, columnGap)
+		_, intrinsicHeight, _ := e.flexIntrinsicSizes(item.node, item.style, flexAxis{horizontal: true}, itemWidth, itemWidth, containingHeight, heightDefinite)
+		rowSpan := max(item.rowEnd-item.rowStart, 1)
+		for row := item.rowStart; row < item.rowEnd; row++ {
+			rowMaxContent[row] = max(rowMaxContent[row], (intrinsicHeight+item.style.margin.Top+item.style.margin.Bottom)/float32(rowSpan))
+		}
 	}
 	rows := resolveGridTracks(containerStyle.gridTemplateRows, containerStyle.gridAutoRows, rowCount, containingHeight, heightDefinite, rowGap, rowMaxContent, rowMaxContent)
 	startY := e.y
-	for index, item := range items {
-		row, column := index/columnCount, index%columnCount
-		itemX, itemY := x+trackOffset(columns, column, columnGap), startY+trackOffset(rows, row, rowGap)
-		e.renderGridItem(item.node, item.style, itemX, itemY, columns[column], rows[row])
+	for _, item := range items {
+		itemX, itemY := x+trackOffset(columns, item.colStart, columnGap), startY+trackOffset(rows, item.rowStart, rowGap)
+		itemWidth, itemHeight := trackSpanSize(columns, item.colStart, item.colEnd, columnGap), trackSpanSize(rows, item.rowStart, item.rowEnd, rowGap)
+		e.renderGridItem(item.node, item.style, itemX, itemY, itemWidth, itemHeight)
 	}
 	e.y = startY + trackOffset(rows, len(rows), rowGap)
+}
+
+func resolveGridAxis(placement stylemodel.GridPlacement, named map[string][]int, explicitTracks int) (int, int) {
+	start, end := resolveGridLine(placement.Start, named, explicitTracks), resolveGridLine(placement.End, named, explicitTracks)
+	if start >= 0 && placement.End.Span > 0 {
+		end = start + placement.End.Span
+	}
+	if end >= 0 && placement.Start.Span > 0 {
+		start = max(end-placement.Start.Span, 0)
+	}
+	if start >= 0 && end < 0 {
+		end = start + 1
+	}
+	return start, end
+}
+
+func resolveGridLine(line stylemodel.GridLine, named map[string][]int, explicitTracks int) int {
+	if line.Name != "" {
+		if matches := named[line.Name]; len(matches) != 0 {
+			return matches[0]
+		}
+	}
+	if line.Index > 0 {
+		return line.Index - 1
+	}
+	if line.Index < 0 {
+		return max(explicitTracks+line.Index+1, 0)
+	}
+	return -1
+}
+
+func occupyGridCells(occupied map[[2]int]bool, rowStart, rowEnd, colStart, colEnd int) {
+	for row := rowStart; row < rowEnd; row++ {
+		for column := colStart; column < colEnd; column++ {
+			occupied[[2]int{row, column}] = true
+		}
+	}
+}
+
+func gridCellsFree(occupied map[[2]int]bool, rowStart, rowEnd, colStart, colEnd int) bool {
+	for row := rowStart; row < rowEnd; row++ {
+		for column := colStart; column < colEnd; column++ {
+			if occupied[[2]int{row, column}] {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func trackSpanSize(tracks []float32, start, end int, gap float32) float32 {
+	return trackOffset(tracks, end, gap) - trackOffset(tracks, start, gap) - gap
 }
 
 func resolveGridTracks(explicit, implicit []stylemodel.GridTrackSize, count int, basis float32, basisDefinite bool, gap float32, minContent, maxContent []float32) []float32 {

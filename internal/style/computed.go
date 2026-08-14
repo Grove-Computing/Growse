@@ -128,6 +128,24 @@ type GridTrackSize struct {
 	FitLimit *LengthPercentage
 }
 
+// GridLine selects a numbered/named line or spans tracks from the opposite edge.
+type GridLine struct {
+	Index int
+	Name  string
+	Span  int
+}
+
+// GridPlacement stores the two edges of one grid axis.
+type GridPlacement struct {
+	Start GridLine
+	End   GridLine
+}
+
+// GridArea is a zero-based half-open rectangle derived from grid-template-areas.
+type GridArea struct {
+	RowStart, RowEnd, ColumnStart, ColumnEnd int
+}
+
 // Edges contains resolved pixel values in CSS clockwise order.
 type Edges struct {
 	Top    float32
@@ -291,6 +309,12 @@ type ComputedStyle struct {
 	GridTemplateRows    []GridTrackSize
 	GridAutoColumns     []GridTrackSize
 	GridAutoRows        []GridTrackSize
+	GridColumnLines     map[string][]int
+	GridRowLines        map[string][]int
+	GridTemplateAreas   map[string]GridArea
+	GridColumn          GridPlacement
+	GridRow             GridPlacement
+	GridAreaName        string
 	AspectRatio         float32
 	BoxSizing           BoxSizing
 	Width               SizeValue

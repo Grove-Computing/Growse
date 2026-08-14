@@ -895,6 +895,26 @@ func TestComputeGridMinmaxFitContentAndRepeat(t *testing.T) {
 	}
 }
 
+func TestComputeGridNamedLinesSpanAndAreas(t *testing.T) {
+	document := dom.NewDocument()
+	grid := document.CreateElement("div", map[string]string{"style": `display:grid; grid-template-columns:[left] 100px [middle] 100px [right]; grid-template-areas:"hero hero" "side main"`})
+	item := document.CreateElement("div", map[string]string{"style": "grid-column:left / span 2; grid-row:1 / 2; grid-area:hero"})
+	appendNode(t, document, document.Root, grid)
+	appendNode(t, document, grid, item)
+	computed := Compute(document, nil)
+	containerStyle, _ := computed.For(grid)
+	itemStyle, _ := computed.For(item)
+	if len(containerStyle.GridColumnLines["left"]) != 1 || containerStyle.GridColumnLines["left"][0] != 0 || containerStyle.GridColumnLines["right"][0] != 2 {
+		t.Fatalf("named lines = %#v", containerStyle.GridColumnLines)
+	}
+	if area := containerStyle.GridTemplateAreas["main"]; area != (GridArea{RowStart: 1, RowEnd: 2, ColumnStart: 1, ColumnEnd: 2}) {
+		t.Fatalf("template area = %#v", area)
+	}
+	if itemStyle.GridColumn.Start.Name != "left" || itemStyle.GridColumn.End.Span != 2 || itemStyle.GridAreaName != "hero" {
+		t.Fatalf("item placement = %#v / %q", itemStyle.GridColumn, itemStyle.GridAreaName)
+	}
+}
+
 func parseTestSelector(t *testing.T, value string) css.Selector {
 	t.Helper()
 	stylesheet, err := css.Parse(strings.NewReader(value + " { color: red }"))
