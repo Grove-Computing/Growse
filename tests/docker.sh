@@ -23,12 +23,18 @@ require_pinned_base ubuntu
 require_file_value Dockerfile "go build -trimpath"
 require_file_value Dockerfile "https://deb.debian.org"
 require_file_value Dockerfile "https://archive.ubuntu.com"
-require_file_value Dockerfile "COPY --from=build /etc/ssl/certs/ca-certificates.crt"
 require_file_value Dockerfile "COPY --from=build /out/growse /usr/local/bin/growse"
 require_file_value Dockerfile "USER growse"
 require_file_value Dockerfile 'ENTRYPOINT ["growse"]'
 require_file_value .dockerignore ".git"
 require_file_value .dockerignore "dist"
+
+ubuntu_ca_line=$(grep -nF "apt-get install --no-install-recommends -y ca-certificates" Dockerfile | cut -d: -f1)
+ubuntu_https_line=$(grep -nF "s|http://archive.ubuntu.com|https://archive.ubuntu.com|g" Dockerfile | cut -d: -f1)
+if [[ -z "$ubuntu_ca_line" || -z "$ubuntu_https_line" || "$ubuntu_ca_line" -ge "$ubuntu_https_line" ]]; then
+    echo "Ubuntu自身のCA bundleをHTTPS切替前に導入していません" >&2
+    exit 1
+fi
 
 workflow=.github/workflows/release.yml
 require_file_value "$workflow" "needs: build"

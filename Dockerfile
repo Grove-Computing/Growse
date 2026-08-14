@@ -25,12 +25,11 @@ RUN CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
 
 FROM ubuntu:26.04@sha256:678c6550cc43645e08669028bc177f50be4e7c5b8cca677067b1914d4afc7a03
 
-COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
-
-RUN sed -i 's|http://archive.ubuntu.com|https://archive.ubuntu.com|g; s|http://security.ubuntu.com|https://security.ubuntu.com|g' /etc/apt/sources.list.d/ubuntu.sources \
+RUN apt-get update \
+    && apt-get install --no-install-recommends -y ca-certificates \
+    && sed -i 's|http://archive.ubuntu.com|https://archive.ubuntu.com|g; s|http://security.ubuntu.com|https://security.ubuntu.com|g' /etc/apt/sources.list.d/ubuntu.sources \
     && apt-get update \
     && apt-get install --no-install-recommends -y \
-        ca-certificates \
         libegl1 \
         libffi8 \
         libgles2 \
