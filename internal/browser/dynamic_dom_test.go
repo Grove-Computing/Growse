@@ -4,11 +4,13 @@ import (
 	"context"
 	"testing"
 
+	"github.com/saku0512/growse/internal/dom"
 	layoutengine "github.com/saku0512/growse/internal/layout"
 	"github.com/saku0512/growse/internal/network"
 	paintmodel "github.com/saku0512/growse/internal/paint"
 	runtimemodel "github.com/saku0512/growse/internal/runtime"
 	"github.com/saku0512/growse/internal/runtime/yaegi"
+	"github.com/saku0512/growse/internal/style"
 )
 
 func TestWebGoMutationRecomputesStyles(t *testing.T) {
@@ -119,6 +121,79 @@ button:hover { color: red; font-size: 24px; padding: 8px; }
 	if !ok || len(restored.Runs) != 1 || restored.Runs[0].Color == 0xff0000ff || restored.Runs[0].FontSize != 16 {
 		t.Fatalf("restored display command = %#v, want normal 16px text", restoredList.Commands[0])
 	}
+}
+
+func TestWebGoMutationAndHoverDiscardGridPositionAndTransformGeometry(t *testing.T) {
+	pageURL := mustParseURL(t, "http://localhost/grid-dynamic.html")
+	loader := stubLoader{response: &network.Response{
+		URL: pageURL, StatusCode: 200, ContentType: "text/html",
+		Body: []byte(`<!doctype html><html><head><style>
+.grid { display:grid; width:200px; grid-template-columns:100px 100px; grid-template-rows:40px; }
+.grid.changed { grid-template-columns:150px 50px; }
+.item { background-color:#ddd; }
+#second:hover { position:relative; left:10px; transform:translateX(25px); }
+</style></head><body>
+<div id="grid" class="grid"><button id="change" class="item">Change</button><div id="second" class="item">Second</div></div>
+<script type="text/go">package main
+import "growse/dom"
+func main() { dom.GetElementByID("change").OnClick(func() { dom.GetElementByID("grid").AddClass("changed") }) }
+</script></body></html>`),
+	}}
+	browserState := NewWithRuntimeFactory(loader, func() runtimemodel.Runtime { return yaegi.New() })
+	page, err := browserState.Navigate(context.Background(), pageURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	grid, _ := page.Document.GetElementByID("grid")
+	change, _ := page.Document.GetElementByID("change")
+	second, _ := page.Document.GetElementByID("second")
+	initialTree := layoutengine.Build(page.Document, page.ComputedStyles, 400)
+	initial := dynamicDecoration(t, initialTree, second.ID)
+	if !browserState.DispatchClick(change.ID, 0, 0) {
+		t.Fatal("WebGo class mutation was not dispatched")
+	}
+	mutatedTree := layoutengine.Build(page.Document, page.ComputedStyles, 400)
+	mutated := dynamicDecoration(t, mutatedTree, second.ID)
+	if mutated.X != initial.X+50 || mutated.Transform != style.IdentityMatrix() {
+		t.Fatalf("mutated grid geometry = initial %#v mutated %#v", initial, mutated)
+	}
+	if !browserState.UpdateHover(second.ID, mutated.X+1, mutated.Y+1) {
+		t.Fatal("hover state was not updated")
+	}
+	hoverStyle, _ := page.ComputedStyles.For(second)
+	if hoverStyle.Position != style.PositionRelative || len(hoverStyle.Transform) == 0 {
+		t.Fatalf("hover style was not recomputed: %#v", hoverStyle)
+	}
+	hoverTree := layoutengine.Build(page.Document, page.ComputedStyles, 400)
+	hovered := dynamicDecoration(t, hoverTree, second.ID)
+	if hovered.X != mutated.X+10 || hovered.Transform == style.IdentityMatrix() {
+		t.Fatalf("hover geometry = mutated %#v hovered %#v", mutated, hovered)
+	}
+	hitX, hitY := hovered.Transform.TransformPoint(hovered.X+1, hovered.Y+1)
+	if hit, ok := layoutengine.HitTest(hoverTree, hitX, hitY); !ok || hit != second.ID {
+		t.Fatalf("hover transformed hit = (%d, %v)", hit, ok)
+	}
+	if !browserState.ClearHover() {
+		t.Fatal("hover state was not cleared")
+	}
+	restored := dynamicDecoration(t, layoutengine.Build(page.Document, page.ComputedStyles, 400), second.ID)
+	if restored.X != mutated.X || restored.Transform != style.IdentityMatrix() {
+		t.Fatalf("stale hover geometry remained = %#v", restored)
+	}
+	if class, _ := grid.Attribute("class"); class != "grid changed" {
+		t.Fatalf("mutation state was lost: %q", class)
+	}
+}
+
+func dynamicDecoration(t *testing.T, tree *layoutengine.Tree, nodeID dom.NodeID) layoutengine.Decoration {
+	t.Helper()
+	for _, decoration := range tree.Decorations {
+		if decoration.NodeID == nodeID {
+			return decoration
+		}
+	}
+	t.Fatalf("decoration for node %d was not found", nodeID)
+	return layoutengine.Decoration{}
 }
 
 func displayListContainsText(list *paintmodel.DisplayList, text string) bool {
