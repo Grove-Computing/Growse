@@ -588,8 +588,8 @@ func TestFragmentNavigationReusesDocumentAndRuntimeWithoutNetwork(t *testing.T) 
 	if got := len(loader.requested); got != 1 {
 		t.Fatalf("loader requests = %d, want one document request", got)
 	}
-	if runtime.stopCalls != 0 || runtime.startCalls != 1 {
-		t.Fatalf("Runtime calls = start:%d stop:%d, want start:1 stop:0", runtime.startCalls, runtime.stopCalls)
+	if runtime.stopCalls.Load() != 0 || runtime.startCalls.Load() != 1 {
+		t.Fatalf("Runtime calls = start:%d stop:%d, want start:1 stop:0", runtime.startCalls.Load(), runtime.stopCalls.Load())
 	}
 	if got, want := len(browser.history.entries), 2; got != want {
 		t.Fatalf("history entries = %d, want %d", got, want)

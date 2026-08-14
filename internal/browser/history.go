@@ -55,17 +55,6 @@ func (h *history) pushEntry(entry *historyEntry) {
 	h.index = len(h.entries) - 1
 }
 
-func (h *history) replace(entry *url.URL) {
-	if entry == nil {
-		return
-	}
-	if h.index < 0 || h.index >= len(h.entries) {
-		h.push(entry)
-		return
-	}
-	h.entries[h.index].URL = cloneURL(entry)
-}
-
 func (h *history) replaceEntry(entry *historyEntry) {
 	if entry == nil || entry.URL == nil {
 		return
@@ -141,10 +130,4 @@ func (h *history) canBack() bool {
 
 func (h *history) canForward() bool {
 	return h.index >= 0 && h.index+1 < len(h.entries)
-}
-
-func (h *history) reset(entry *url.URL) {
-	h.entries = nil
-	h.index = -1
-	h.push(entry)
 }

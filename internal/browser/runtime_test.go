@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,9 +16,9 @@ import (
 )
 
 type runtimeStub struct {
-	loadCalls        int
-	startCalls       int
-	stopCalls        int
+	loadCalls        atomic.Int32
+	startCalls       atomic.Int32
+	stopCalls        atomic.Int32
 	loadErr          error
 	startErr         error
 	environment      runtimemodel.Environment
@@ -80,13 +81,13 @@ func main() {
 }
 
 func (runtime *runtimeStub) Load(_ context.Context, _ []runtimemodel.Script, environment runtimemodel.Environment) error {
-	runtime.loadCalls++
+	runtime.loadCalls.Add(1)
 	runtime.environment = environment
 	return runtime.loadErr
 }
 
 func (runtime *runtimeStub) Start(context.Context) error {
-	runtime.startCalls++
+	runtime.startCalls.Add(1)
 	if runtime.mutateOnStart && runtime.environment.OnMutation != nil {
 		runtime.environment.OnMutation()
 	}
@@ -103,7 +104,7 @@ func (runtime *runtimeStub) Start(context.Context) error {
 }
 
 func (runtime *runtimeStub) Stop() error {
-	runtime.stopCalls++
+	runtime.stopCalls.Add(1)
 	return nil
 }
 
@@ -130,7 +131,7 @@ func TestWebGoNavigationUsesBrowserLifecycleAfterPageActivation(t *testing.T) {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(time.Second)
-	for browser.Page().URL.String() != secondURL.String() && time.Now().Before(deadline) {
+	for (browser.Page().URL.String() != secondURL.String() || runtime.stopCalls.Load() != 1) && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
 	}
 	if got := browser.Page().URL.String(); got != secondURL.String() {
@@ -139,8 +140,8 @@ func TestWebGoNavigationUsesBrowserLifecycleAfterPageActivation(t *testing.T) {
 	if got, want := len(browser.history.entries), 2; got != want {
 		t.Fatalf("history entries = %d, want %d", got, want)
 	}
-	if runtime.stopCalls != 1 {
-		t.Fatalf("previous Runtime Stop() calls = %d, want 1", runtime.stopCalls)
+	if runtime.stopCalls.Load() != 1 {
+		t.Fatalf("previous Runtime Stop() calls = %d, want 1", runtime.stopCalls.Load())
 	}
 }
 
@@ -273,7 +274,7 @@ func TestWebGoHistoryTraversalUsesCrossDocumentLifecycle(t *testing.T) {
 		t.Fatalf("HistoryTraverse() error = %v", err)
 	}
 	deadline := time.Now().Add(time.Second)
-	for browser.Page().URL.String() != firstURL.String() && time.Now().Before(deadline) {
+	for (browser.Page().URL.String() != firstURL.String() || runtime.stopCalls.Load() != 1) && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
 	}
 	if got := browser.Page().URL.String(); got != firstURL.String() {
@@ -282,8 +283,8 @@ func TestWebGoHistoryTraversalUsesCrossDocumentLifecycle(t *testing.T) {
 	if got, want := len(browser.history.entries), 2; got != want {
 		t.Fatalf("history entries = %d, want %d", got, want)
 	}
-	if browser.history.index != 0 || runtime.stopCalls != 1 {
-		t.Fatalf("history index = %d, Runtime Stop calls = %d", browser.history.index, runtime.stopCalls)
+	if browser.history.index != 0 || runtime.stopCalls.Load() != 1 {
+		t.Fatalf("history index = %d, Runtime Stop calls = %d", browser.history.index, runtime.stopCalls.Load())
 	}
 }
 
@@ -340,8 +341,8 @@ func main() {}</script>`),
 	if !page.RuntimeStarted || page.RuntimeError != "" {
 		t.Fatalf("runtime state = started:%v error:%q", page.RuntimeStarted, page.RuntimeError)
 	}
-	if runtime.loadCalls != 1 || runtime.startCalls != 1 {
-		t.Fatalf("runtime calls = load:%d start:%d, want 1 each", runtime.loadCalls, runtime.startCalls)
+	if runtime.loadCalls.Load() != 1 || runtime.startCalls.Load() != 1 {
+		t.Fatalf("runtime calls = load:%d start:%d, want 1 each", runtime.loadCalls.Load(), runtime.startCalls.Load())
 	}
 	running, ok := page.Document.GetElementByID("running")
 	if !ok || page.Animations.Count(running.ID) != 1 {
@@ -350,8 +351,8 @@ func main() {}</script>`),
 	if err := browser.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
-	if runtime.stopCalls != 1 {
-		t.Fatalf("Stop() calls = %d, want 1", runtime.stopCalls)
+	if runtime.stopCalls.Load() != 1 {
+		t.Fatalf("Stop() calls = %d, want 1", runtime.stopCalls.Load())
 	}
 	if page.Animations.Count(running.ID) != 0 {
 		t.Fatalf("animation count after Runtime stop = %d, want zero", page.Animations.Count(running.ID))
@@ -397,8 +398,8 @@ func main() {}</script>`),
 	if browser.Page() != page || page.RuntimeStarted || !strings.Contains(page.RuntimeError, "compile failed") {
 		t.Fatalf("page runtime state = active:%v started:%v error:%q", browser.Page() == page, page.RuntimeStarted, page.RuntimeError)
 	}
-	if runtime.stopCalls != 1 {
-		t.Fatalf("Stop() calls = %d, want failed runtime cleanup", runtime.stopCalls)
+	if runtime.stopCalls.Load() != 1 {
+		t.Fatalf("Stop() calls = %d, want failed runtime cleanup", runtime.stopCalls.Load())
 	}
 }
 
@@ -443,14 +444,14 @@ func main() {}</script>`)
 	if _, err := browser.Navigate(context.Background(), secondURL.String()); err != nil {
 		t.Fatalf("second Navigate() error = %v", err)
 	}
-	if len(runtimes) != 2 || runtimes[0].stopCalls != 1 {
-		t.Fatalf("after navigation runtimes = %d first stops = %d", len(runtimes), runtimes[0].stopCalls)
+	if len(runtimes) != 2 || runtimes[0].stopCalls.Load() != 1 {
+		t.Fatalf("after navigation runtimes = %d first stops = %d", len(runtimes), runtimes[0].stopCalls.Load())
 	}
 	if _, err := browser.Reload(context.Background()); err != nil {
 		t.Fatalf("Reload() error = %v", err)
 	}
-	if len(runtimes) != 3 || runtimes[1].stopCalls != 1 {
-		t.Fatalf("after reload runtimes = %d second stops = %d", len(runtimes), runtimes[1].stopCalls)
+	if len(runtimes) != 3 || runtimes[1].stopCalls.Load() != 1 {
+		t.Fatalf("after reload runtimes = %d second stops = %d", len(runtimes), runtimes[1].stopCalls.Load())
 	}
 }
 
