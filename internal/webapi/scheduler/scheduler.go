@@ -17,6 +17,8 @@ type TimerID uint64
 const (
 	Millisecond = time.Millisecond
 	Second      = time.Second
+	// MaxTimerDuration bounds retained callbacks and deadline arithmetic.
+	MaxTimerDuration = 365 * 24 * time.Hour
 )
 
 // Clock supplies monotonic time to the scheduler.
@@ -38,6 +40,7 @@ type timerEntry struct {
 	callback func()
 	sequence uint64
 	index    int
+	nesting  int
 	canceled bool
 }
 
@@ -87,6 +90,7 @@ type API struct {
 	nextID   TimerID
 	sequence uint64
 	lastNow  time.Time
+	nesting  int
 	closed   bool
 
 	wake chan struct{}
@@ -175,6 +179,19 @@ func (api *API) schedule(delay, interval time.Duration, repeat bool, callback fu
 		api.mu.Unlock()
 		return 0, errors.New("scheduler is closed")
 	}
+	nesting := api.nesting + 1
+	delay, err := normalizeDelay(delay, nesting)
+	if err != nil {
+		api.mu.Unlock()
+		return 0, err
+	}
+	if repeat {
+		interval, err = normalizeDelay(interval, nesting)
+		if err != nil {
+			api.mu.Unlock()
+			return 0, err
+		}
+	}
 	api.nextID++
 	if api.nextID == 0 {
 		api.nextID++
@@ -188,6 +205,7 @@ func (api *API) schedule(delay, interval time.Duration, repeat bool, callback fu
 		callback: callback,
 		sequence: api.sequence,
 		index:    -1,
+		nesting:  nesting,
 	}
 	api.timers[entry.id] = entry
 	heap.Push(&api.queue, entry)
@@ -286,6 +304,8 @@ func (api *API) execute(entry *timerEntry) {
 		return
 	}
 	callback := entry.callback
+	previousNesting := api.nesting
+	api.nesting = entry.nesting
 	if !entry.repeat {
 		delete(api.timers, entry.id)
 		entry.canceled = true
@@ -298,16 +318,39 @@ func (api *API) execute(entry *timerEntry) {
 	}
 
 	api.mu.Lock()
+	api.nesting = previousNesting
 	if api.closed || entry.canceled || !entry.repeat {
 		api.mu.Unlock()
 		return
 	}
 	api.sequence++
 	entry.sequence = api.sequence
-	entry.deadline = api.nowLocked().Add(entry.interval)
+	entry.nesting++
+	interval, err := normalizeDelay(entry.interval, entry.nesting)
+	if err != nil {
+		delete(api.timers, entry.id)
+		entry.canceled = true
+		entry.callback = nil
+		api.mu.Unlock()
+		return
+	}
+	entry.deadline = api.nowLocked().Add(interval)
 	heap.Push(&api.queue, entry)
 	api.mu.Unlock()
 	api.signal()
+}
+
+func normalizeDelay(delay time.Duration, nesting int) (time.Duration, error) {
+	if delay < 0 {
+		delay = 0
+	}
+	if delay > MaxTimerDuration {
+		return 0, errors.New("scheduler duration exceeds the safety limit")
+	}
+	if nesting > 5 && delay < 4*time.Millisecond {
+		delay = 4 * time.Millisecond
+	}
+	return delay, nil
 }
 
 func (api *API) nowLocked() time.Time {

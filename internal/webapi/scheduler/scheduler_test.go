@@ -151,3 +151,68 @@ func TestSchedulerClampsRegressedClockAndKeepsRegistrationOrder(t *testing.T) {
 		t.Fatalf("regressed clock changed observed time to %v", got)
 	}
 }
+
+func TestSchedulerNormalizesNegativeDelayAndRejectsExtremeDuration(t *testing.T) {
+	start := time.Unix(100, 0)
+	clock := &fakeClock{current: start}
+	called := false
+	api := newAPI(context.Background(), clock, func(callback func()) bool {
+		callback()
+		return true
+	}, false)
+	t.Cleanup(api.Close)
+
+	if _, err := api.SetTimeout(-time.Second, func() { called = true }); err != nil {
+		t.Fatalf("SetTimeout(negative) error = %v", err)
+	}
+	api.runDue(start)
+	if !called {
+		t.Fatal("negative delay was not normalized to zero")
+	}
+	if id, err := api.SetTimeout(MaxTimerDuration+time.Nanosecond, func() {}); err == nil || id != 0 {
+		t.Fatalf("SetTimeout(extreme) = (%d, %v), want zero ID and error", id, err)
+	}
+}
+
+func TestSchedulerClampsDeeplyNestedTimers(t *testing.T) {
+	start := time.Unix(100, 0)
+	clock := &fakeClock{current: start}
+	api := newAPI(context.Background(), clock, func(callback func()) bool {
+		callback()
+		return true
+	}, false)
+	t.Cleanup(api.Close)
+
+	callbackCount := 0
+	var nested func()
+	nested = func() {
+		callbackCount++
+		if callbackCount < 7 {
+			if _, err := api.SetTimeout(0, nested); err != nil {
+				t.Fatalf("nested SetTimeout() error = %v", err)
+			}
+		}
+	}
+	if _, err := api.SetTimeout(0, nested); err != nil {
+		t.Fatal(err)
+	}
+	api.runDue(start)
+	if callbackCount != 5 {
+		t.Fatalf("callbacks before clamp = %d, want 5", callbackCount)
+	}
+	clock.current = start.Add(3 * time.Millisecond)
+	api.runDue(clock.Now())
+	if callbackCount != 5 {
+		t.Fatalf("callback ran before 4ms clamp: %d", callbackCount)
+	}
+	clock.current = start.Add(4 * time.Millisecond)
+	api.runDue(clock.Now())
+	if callbackCount != 6 {
+		t.Fatalf("callbacks after first clamp = %d, want 6", callbackCount)
+	}
+	clock.current = start.Add(8 * time.Millisecond)
+	api.runDue(clock.Now())
+	if callbackCount != 7 {
+		t.Fatalf("callbacks after second clamp = %d, want 7", callbackCount)
+	}
+}
