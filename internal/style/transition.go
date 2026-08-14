@@ -2,18 +2,114 @@ package style
 
 import (
 	"math"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/Grove-Computing/Growse/internal/animation"
+	"github.com/Grove-Computing/Growse/internal/dom"
 )
+
+// TransitionValueKind identifies the representation used for interpolation.
+type TransitionValueKind uint8
+
+const (
+	TransitionNumber TransitionValueKind = iota
+	TransitionColor
+	TransitionTransform
+)
+
+// TransitionValue is one supported computed value captured at a style change.
+type TransitionValue struct {
+	Kind      TransitionValueKind
+	Number    float32
+	Color     uint32
+	Transform []TransformFunction
+}
+
+// StartedTransition describes a transition created by a computed-style change.
+type StartedTransition struct {
+	NodeID   dom.NodeID
+	Property string
+	From     TransitionValue
+	To       TransitionValue
+	Timing   animation.Timing
+}
 
 type transitionLists struct {
 	properties []string
 	durations  []time.Duration
 	easings    []animation.EasingFunction
 	delays     []time.Duration
+}
+
+var transitionableProperties = []string{
+	"opacity", "transform", "color", "background-color",
+	"border-top-color", "border-right-color", "border-bottom-color", "border-left-color", "outline-color",
+}
+
+// StartTransitions compares two computed-style snapshots and creates the
+// transitions selected by the new snapshot. It does not mutate either map.
+func StartTransitions(previous, next Map) []StartedTransition {
+	var started []StartedTransition
+	for nodeID, nextStyle := range next {
+		previousStyle, exists := previous[nodeID]
+		if !exists {
+			continue
+		}
+		for _, property := range transitionableProperties {
+			timing, enabled := transitionTimingForProperty(nextStyle.Transitions, property)
+			if !enabled || timing.Duration <= 0 {
+				continue
+			}
+			from, fromOK := computedTransitionValue(previousStyle, property)
+			to, toOK := computedTransitionValue(nextStyle, property)
+			if !fromOK || !toOK || reflect.DeepEqual(from, to) {
+				continue
+			}
+			started = append(started, StartedTransition{
+				NodeID: nodeID, Property: property, From: from, To: to, Timing: timing,
+			})
+		}
+	}
+	return started
+}
+
+func transitionTimingForProperty(transitions []Transition, property string) (animation.Timing, bool) {
+	var selected animation.Timing
+	found := false
+	for _, transition := range transitions {
+		if transition.Property == "all" || transition.Property == property {
+			selected, found = transition.Timing, true
+		}
+	}
+	return selected, found
+}
+
+func computedTransitionValue(computed ComputedStyle, property string) (TransitionValue, bool) {
+	switch property {
+	case "opacity":
+		return TransitionValue{Kind: TransitionNumber, Number: computed.Opacity}, true
+	case "transform":
+		return TransitionValue{Kind: TransitionTransform, Transform: append([]TransformFunction(nil), computed.Transform...)}, true
+	case "color":
+		return TransitionValue{Kind: TransitionColor, Color: computed.Color}, true
+	case "background-color":
+		return TransitionValue{Kind: TransitionColor, Color: computed.BackgroundColor}, true
+	case "border-top-color":
+		return TransitionValue{Kind: TransitionColor, Color: computed.Border.Top.Color}, true
+	case "border-right-color":
+		return TransitionValue{Kind: TransitionColor, Color: computed.Border.Right.Color}, true
+	case "border-bottom-color":
+		return TransitionValue{Kind: TransitionColor, Color: computed.Border.Bottom.Color}, true
+	case "border-left-color":
+		return TransitionValue{Kind: TransitionColor, Color: computed.Border.Left.Color}, true
+	case "outline-color":
+		return TransitionValue{Kind: TransitionColor, Color: computed.Outline.Color}, true
+	default:
+		return TransitionValue{}, false
+	}
 }
 
 func defaultTransitions() []Transition {

@@ -54,6 +54,50 @@ func TestComputedTransitionNoneAndInvalidDuration(t *testing.T) {
 	assertTransition(t, computed.Transitions[0], "opacity", 0, 0)
 }
 
+func TestStartTransitionsFromComputedValueChange(t *testing.T) {
+	document := dom.NewDocument()
+	html := document.CreateElement("html", nil)
+	item := document.CreateElement("div", map[string]string{"class": "box"})
+	document.AppendChild(document.Root, html)
+	document.AppendChild(html, item)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.box { opacity: 0.2; color: red; transition: opacity 1s linear, color 1s linear }
+.box:hover { opacity: 0.8; color: blue }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := Compute(document, stylesheet)
+	after := ComputeWithState(document, stylesheet, InteractionState{Hovered: map[dom.NodeID]bool{item.ID: true}})
+
+	started := StartTransitions(before, after)
+	if got := len(started); got != 2 {
+		t.Fatalf("started transitions = %d, want opacity and color", got)
+	}
+	if started[0].NodeID != item.ID || started[0].Property != "opacity" || started[0].From.Number != 0.2 || started[0].To.Number != 0.8 {
+		t.Fatalf("opacity transition = %#v", started[0])
+	}
+	if started[1].Property != "color" || started[1].From.Color == started[1].To.Color {
+		t.Fatalf("color transition = %#v", started[1])
+	}
+	if got := StartTransitions(after, after); len(got) != 0 {
+		t.Fatalf("unchanged styles started %d transitions", len(got))
+	}
+}
+
+func TestStartTransitionsUsesLastMatchingEntryAndSkipsZeroDuration(t *testing.T) {
+	previous := Map{1: {Opacity: 0}}
+	zero, _ := animation.NewTiming(0, 0, animation.Linear{})
+	oneSecond, _ := animation.NewTiming(time.Second, 0, animation.Linear{})
+	next := Map{1: {Opacity: 1, Transitions: []Transition{
+		{Property: "opacity", Timing: oneSecond},
+		{Property: "all", Timing: zero},
+	}}}
+	if got := StartTransitions(previous, next); len(got) != 0 {
+		t.Fatalf("last zero-duration match started %d transitions", len(got))
+	}
+}
+
 func transitionTestStyle(t *testing.T, declarations string) ComputedStyle {
 	t.Helper()
 	document := dom.NewDocument()
