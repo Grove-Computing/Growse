@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/saku0512/growse/internal/dom"
+	"github.com/Grove-Computing/Growse/internal/dom"
 	xhtml "golang.org/x/net/html"
 )
 

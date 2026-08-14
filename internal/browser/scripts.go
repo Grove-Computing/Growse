@@ -7,7 +7,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/saku0512/growse/internal/dom"
+	"github.com/Grove-Computing/Growse/internal/dom"
 )
 
 const maxScriptBytes = 2 << 20

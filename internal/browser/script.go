@@ -3,7 +3,7 @@ package browser
 import (
 	"net/url"
 
-	runtimemodel "github.com/saku0512/growse/internal/runtime"
+	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 )
 
 // Script is one Go source discovered in document order.

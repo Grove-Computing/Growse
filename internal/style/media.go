@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/saku0512/growse/internal/css"
+	"github.com/Grove-Computing/Growse/internal/css"
 )
 
 func matchesMediaGroups(groups [][]css.MediaQuery, environment Environment) bool {

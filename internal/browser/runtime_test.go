@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/saku0512/growse/internal/events"
-	"github.com/saku0512/growse/internal/network"
-	runtimemodel "github.com/saku0512/growse/internal/runtime"
+	"github.com/Grove-Computing/Growse/internal/events"
+	"github.com/Grove-Computing/Growse/internal/network"
+	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 )
 
 type runtimeStub struct {

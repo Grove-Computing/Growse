@@ -4,13 +4,13 @@ import (
 	"context"
 	"testing"
 
-	"github.com/saku0512/growse/internal/dom"
-	layoutengine "github.com/saku0512/growse/internal/layout"
-	"github.com/saku0512/growse/internal/network"
-	paintmodel "github.com/saku0512/growse/internal/paint"
-	runtimemodel "github.com/saku0512/growse/internal/runtime"
-	"github.com/saku0512/growse/internal/runtime/yaegi"
-	"github.com/saku0512/growse/internal/style"
+	"github.com/Grove-Computing/Growse/internal/dom"
+	layoutengine "github.com/Grove-Computing/Growse/internal/layout"
+	"github.com/Grove-Computing/Growse/internal/network"
+	paintmodel "github.com/Grove-Computing/Growse/internal/paint"
+	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
+	"github.com/Grove-Computing/Growse/internal/runtime/yaegi"
+	"github.com/Grove-Computing/Growse/internal/style"
 )
 
 func TestWebGoMutationRecomputesStyles(t *testing.T) {

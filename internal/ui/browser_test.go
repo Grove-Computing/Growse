@@ -17,13 +17,13 @@ import (
 	"gioui.org/op"
 	"gioui.org/unit"
 
-	"github.com/saku0512/growse/internal/browser"
-	"github.com/saku0512/growse/internal/css"
-	"github.com/saku0512/growse/internal/dom"
-	"github.com/saku0512/growse/internal/events"
-	layoutengine "github.com/saku0512/growse/internal/layout"
-	paintmodel "github.com/saku0512/growse/internal/paint"
-	"github.com/saku0512/growse/internal/style"
+	"github.com/Grove-Computing/Growse/internal/browser"
+	"github.com/Grove-Computing/Growse/internal/css"
+	"github.com/Grove-Computing/Growse/internal/dom"
+	"github.com/Grove-Computing/Growse/internal/events"
+	layoutengine "github.com/Grove-Computing/Growse/internal/layout"
+	paintmodel "github.com/Grove-Computing/Growse/internal/paint"
+	"github.com/Grove-Computing/Growse/internal/style"
 )
 
 func TestCommandClipTranslatesDocumentCoordinatesToCommandCoordinates(t *testing.T) {

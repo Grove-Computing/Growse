@@ -11,9 +11,9 @@ import (
 	"gioui.org/op"
 	"gioui.org/unit"
 
-	"github.com/saku0512/growse/internal/browser"
-	"github.com/saku0512/growse/internal/dom"
-	"github.com/saku0512/growse/internal/style"
+	"github.com/Grove-Computing/Growse/internal/browser"
+	"github.com/Grove-Computing/Growse/internal/dom"
+	"github.com/Grove-Computing/Growse/internal/style"
 )
 
 func TestEmbeddedGopherCursorSVGCanBeRasterized(t *testing.T) {

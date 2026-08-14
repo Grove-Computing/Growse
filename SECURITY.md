@@ -15,7 +15,7 @@
 ## Reporting a Vulnerability
 
 脆弱性を発見した場合は、公開Issueへ詳細を投稿せず、GitHubの
-[Private vulnerability reporting](https://github.com/saku0512/growse/security/advisories/new)
+[Private vulnerability reporting](https://github.com/Grove-Computing/Growse/security/advisories/new)
 から報告してください。
 
 報告には、可能な範囲で次の情報を含めてください。

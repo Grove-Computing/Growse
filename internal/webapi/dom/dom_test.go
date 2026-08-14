@@ -4,8 +4,8 @@ import (
 	"reflect"
 	"testing"
 
-	dommodel "github.com/saku0512/growse/internal/dom"
-	"github.com/saku0512/growse/internal/events"
+	dommodel "github.com/Grove-Computing/Growse/internal/dom"
+	"github.com/Grove-Computing/Growse/internal/events"
 )
 
 func TestGetElementByIDReadsAndChangesText(t *testing.T) {

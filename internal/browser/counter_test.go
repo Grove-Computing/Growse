@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/saku0512/growse/internal/network"
-	runtimemodel "github.com/saku0512/growse/internal/runtime"
-	"github.com/saku0512/growse/internal/runtime/yaegi"
+	"github.com/Grove-Computing/Growse/internal/network"
+	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
+	"github.com/Grove-Computing/Growse/internal/runtime/yaegi"
 )
 
 func TestCounterDemoIncrementsThroughWebGoClick(t *testing.T) {

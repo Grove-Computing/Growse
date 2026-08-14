@@ -4,8 +4,8 @@ package dom
 import (
 	"strings"
 
-	dommodel "github.com/saku0512/growse/internal/dom"
-	"github.com/saku0512/growse/internal/events"
+	dommodel "github.com/Grove-Computing/Growse/internal/dom"
+	"github.com/Grove-Computing/Growse/internal/events"
 )
 
 // API は1ページのDocumentへアクセスする。

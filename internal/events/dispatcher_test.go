@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/saku0512/growse/internal/dom"
+	"github.com/Grove-Computing/Growse/internal/dom"
 )
 
 func TestDispatchCallsTargetListenersInRegistrationOrder(t *testing.T) {

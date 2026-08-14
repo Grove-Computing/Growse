@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/saku0512/growse/internal/html"
-	"github.com/saku0512/growse/internal/network"
+	"github.com/Grove-Computing/Growse/internal/html"
+	"github.com/Grove-Computing/Growse/internal/network"
 )
 
 func TestNavigateCollectsInlineAndExternalGoScripts(t *testing.T) {

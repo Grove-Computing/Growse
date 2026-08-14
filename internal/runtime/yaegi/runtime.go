@@ -14,10 +14,10 @@ import (
 	"sync"
 	"testing/fstest"
 
-	runtimemodel "github.com/saku0512/growse/internal/runtime"
-	consoleapi "github.com/saku0512/growse/internal/webapi/console"
-	domapi "github.com/saku0512/growse/internal/webapi/dom"
-	strconvapi "github.com/saku0512/growse/internal/webapi/strconv"
+	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
+	consoleapi "github.com/Grove-Computing/Growse/internal/webapi/console"
+	domapi "github.com/Grove-Computing/Growse/internal/webapi/dom"
+	strconvapi "github.com/Grove-Computing/Growse/internal/webapi/strconv"
 	"github.com/traefik/yaegi/interp"
 )
 

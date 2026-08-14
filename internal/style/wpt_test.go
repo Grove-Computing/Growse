@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/saku0512/growse/internal/css"
-	"github.com/saku0512/growse/internal/dom"
+	"github.com/Grove-Computing/Growse/internal/css"
+	"github.com/Grove-Computing/Growse/internal/dom"
 )
 
 // Adapted from WPT css/CSS2/cascade/specificity-001.xht at the revision

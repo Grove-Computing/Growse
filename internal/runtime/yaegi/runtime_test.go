@@ -7,9 +7,9 @@ import (
 	"testing"
 	"testing/fstest"
 
-	dommodel "github.com/saku0512/growse/internal/dom"
-	"github.com/saku0512/growse/internal/events"
-	runtimemodel "github.com/saku0512/growse/internal/runtime"
+	dommodel "github.com/Grove-Computing/Growse/internal/dom"
+	"github.com/Grove-Computing/Growse/internal/events"
+	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 )
 
 func TestRuntimeStartsMainAfterLoadingMultipleScripts(t *testing.T) {

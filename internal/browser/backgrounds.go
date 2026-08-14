@@ -10,7 +10,7 @@ import (
 	"mime"
 	"net/url"
 
-	"github.com/saku0512/growse/internal/style"
+	"github.com/Grove-Computing/Growse/internal/style"
 )
 
 const (

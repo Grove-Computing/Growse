@@ -61,19 +61,19 @@ WebGo Runtimeは、信頼できないGoコードを安全に実行するSandbox�
 Linux、macOS、Git Bashを利用できるWindowsでは、次のコマンドで最新版を`~/.local/bin`へインストールできます。ダウンロードしたアーカイブはインストール前にSHA-256チェックサムを検証します。
 
 ```sh
-wget -qO- https://github.com/Growse-Project/Growse/releases/latest/download/install.sh | bash
+wget -qO- https://github.com/Grove-Computing/Growse/releases/latest/download/install.sh | bash
 ```
 
 特定バージョンやインストール先を指定する場合は環境変数を利用します。
 
 ```sh
-wget -qO- https://github.com/Growse-Project/Growse/releases/latest/download/install.sh | GROWSE_VERSION=v0.6.0 GROWSE_INSTALL_DIR=/usr/local/bin bash
+wget -qO- https://github.com/Grove-Computing/Growse/releases/latest/download/install.sh | GROWSE_VERSION=v0.6.0 GROWSE_INSTALL_DIR=/usr/local/bin bash
 ```
 
 同時にLinux amd64のDockerイメージをGitHub Container Registryへ、バージョンタグと`latest`タグで公開します。
 
 ```sh
-docker pull ghcr.io/growse-project/growse:v0.6.0
+docker pull ghcr.io/grove-computing/growse:v0.6.0
 ```
 
 GrowseはGUIアプリケーションのため、コンテナから起動する場合はホストのディスプレイサーバーとGPUデバイスをコンテナへ接続する必要があります。
