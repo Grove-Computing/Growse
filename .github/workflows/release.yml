@@ -105,7 +105,7 @@ jobs:
           fi
           go build -trimpath -ldflags="$ldflags" -o "$output" ./cmd/growse
           cp README.md SECURITY.md LICENSE.md dist/package/
-          cp -R examples/counter examples/todo examples/css3-core dist/package/examples/
+          cp -R examples/counter examples/todo examples/css3-core examples/flexbox dist/package/examples/
 
       - name: Package Unix archive
         if: runner.os != 'Windows'
