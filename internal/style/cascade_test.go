@@ -3,7 +3,9 @@ package style
 import (
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/Grove-Computing/Growse/internal/animation"
 	"github.com/Grove-Computing/Growse/internal/css"
 	"github.com/Grove-Computing/Growse/internal/dom"
 )
@@ -62,5 +64,34 @@ func TestComputedStyleTracksExpandedImportantProperties(t *testing.T) {
 	}
 	if computed.Important("outline-color") {
 		t.Fatal("normal outline-color was marked important")
+	}
+}
+
+func TestAnimationEndUsesFillModeOrUnderlyingValue(t *testing.T) {
+	start := time.Unix(100, 0)
+	timing, _ := animation.NewTiming(time.Second, 0, animation.Linear{})
+	underlying := ComputedStyle{Opacity: 0.25, Color: 0xff0000ff}
+	effect := AnimatedValues{
+		"opacity": {Kind: TransitionNumber, Number: 0.9},
+		"color":   {Kind: TransitionColor, Color: 0x0000ffff},
+	}
+
+	withoutFill := CSSAnimation{
+		Name: "fade", Timing: timing, Iterations: 1, FillMode: AnimationFillNone,
+	}.Sample(start, start.Add(time.Second))
+	got := ApplyAnimationSample(underlying, effect, withoutFill)
+	if got.Opacity != underlying.Opacity || got.Color != underlying.Color {
+		t.Fatalf("no-fill result = opacity:%v color:%#08x, want underlying", got.Opacity, got.Color)
+	}
+
+	withFill := CSSAnimation{
+		Name: "fade", Timing: timing, Iterations: 1, FillMode: AnimationFillForwards,
+	}.Sample(start, start.Add(time.Second))
+	got = ApplyAnimationSample(underlying, effect, withFill)
+	if got.Opacity != 0.9 || got.Color != 0x0000ffff {
+		t.Fatalf("forwards-fill result = opacity:%v color:%#08x, want final effect", got.Opacity, got.Color)
+	}
+	if underlying.Opacity != 0.25 || underlying.Color != 0xff0000ff {
+		t.Fatalf("underlying style changed = %#v", underlying)
 	}
 }

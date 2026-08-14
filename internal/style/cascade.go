@@ -21,6 +21,15 @@ func ApplyAnimatedCascade(underlying ComputedStyle, animations, transitions Anim
 	return result
 }
 
+// ApplyAnimationSample applies an animation effect only while its timing and
+// fill mode say the effect participates in the cascade.
+func ApplyAnimationSample(underlying ComputedStyle, values AnimatedValues, sample AnimationSample) ComputedStyle {
+	if !sample.Applies {
+		return underlying
+	}
+	return ApplyAnimatedCascade(underlying, values, nil)
+}
+
 func applyAnimatedValue(computed ComputedStyle, property string, value TransitionValue) ComputedStyle {
 	switch property {
 	case "opacity":
