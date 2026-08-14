@@ -7,6 +7,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -148,6 +149,36 @@ func headerListContains(value, wanted string) bool {
 		}
 	}
 	return false
+}
+
+func filterFetchResponseHeaders(header http.Header, requestData *Request, finalURL *url.URL) http.Header {
+	result := header.Clone()
+	result.Del("Set-Cookie")
+	result.Del("Set-Cookie2")
+	if requestData == nil || requestData.Kind != RequestFetch || SameOrigin(requestData.SiteURL, finalURL) {
+		return result
+	}
+	exposed := make(map[string]bool)
+	for _, name := range []string{"cache-control", "content-language", "content-length", "content-type", "expires", "last-modified", "pragma"} {
+		exposed[name] = true
+	}
+	wildcard := false
+	for _, item := range strings.Split(header.Get("Access-Control-Expose-Headers"), ",") {
+		name := strings.ToLower(strings.TrimSpace(item))
+		if name == "*" && requestData.Credentials != CredentialsInclude {
+			wildcard = true
+		} else if name != "" {
+			exposed[name] = true
+		}
+	}
+	filtered := make(http.Header)
+	for name, values := range result {
+		lower := strings.ToLower(name)
+		if lower != "set-cookie" && lower != "set-cookie2" && (wildcard || exposed[lower]) {
+			filtered[name] = append([]string(nil), values...)
+		}
+	}
+	return filtered
 }
 
 func validateCORSResponse(response *http.Response, requestData *Request) error {

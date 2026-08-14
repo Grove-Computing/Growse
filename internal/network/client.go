@@ -234,12 +234,13 @@ func (c *Client) Do(ctx context.Context, requestData *Request) (*Response, error
 	if response.Request != nil && response.Request.URL != nil {
 		finalURL = response.Request.URL
 	}
+	responseHeader := filterFetchResponseHeaders(response.Header, requestData, finalURL)
 
 	return &Response{
 		URL:         cloneURL(finalURL),
 		StatusCode:  response.StatusCode,
 		Status:      http.StatusText(response.StatusCode),
-		Header:      response.Header.Clone(),
+		Header:      responseHeader,
 		ContentType: response.Header.Get("Content-Type"),
 		Body:        body,
 		Redirected:  finalURL.String() != requestData.URL.String(),

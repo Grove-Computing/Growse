@@ -113,3 +113,42 @@ func TestCORSPreflightValidatesAndCachesPermission(t *testing.T) {
 		t.Fatalf("request counts = OPTIONS:%d actual:%d, want 1 and 2", options, actual)
 	}
 }
+
+func TestCORSFiltersResponseHeadersAndHidesRejectedResponse(t *testing.T) {
+	allowedOrigin := "https://app.example.test"
+	allow := true
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		if allow {
+			response.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
+		}
+		response.Header().Set("Content-Type", "application/json")
+		response.Header().Set("X-Public", "visible")
+		response.Header().Set("X-Secret", "hidden")
+		response.Header().Set("Access-Control-Expose-Headers", "X-Public")
+		http.SetCookie(response, &http.Cookie{Name: "session", Value: "secret", Path: "/"})
+		_, _ = response.Write([]byte(`{"secret":true}`))
+	}))
+	defer server.Close()
+	client := NewClientWithLimits(server.Client(), 1024)
+	request := &Request{
+		Method: http.MethodGet, URL: parseOriginURL(t, server.URL), SiteURL: parseOriginURL(t, allowedOrigin+"/page"), Kind: RequestFetch,
+	}
+	response, err := client.Do(context.Background(), request)
+	if err != nil {
+		t.Fatalf("allowed CORS Do() error = %v", err)
+	}
+	if response.Header.Get("Content-Type") != "application/json" || response.Header.Get("X-Public") != "visible" {
+		t.Fatalf("public Response Header = %v", response.Header)
+	}
+	for _, hidden := range []string{"X-Secret", "Set-Cookie", "Access-Control-Allow-Origin", "Access-Control-Expose-Headers"} {
+		if value := response.Header.Get(hidden); value != "" {
+			t.Fatalf("hidden Response Header %s = %q", hidden, value)
+		}
+	}
+
+	allow = false
+	response, err = client.Do(context.Background(), request)
+	if !errors.Is(err, ErrCORS) || response != nil {
+		t.Fatalf("rejected CORS response = %#v error = %v", response, err)
+	}
+}
