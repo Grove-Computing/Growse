@@ -983,7 +983,8 @@ func (navigator *recordingNavigator) Navigate(_ context.Context, rawURL string) 
 
 type reloadRecordingNavigator struct {
 	stubNavigator
-	reloads chan bool
+	reloads  chan bool
+	complete <-chan struct{}
 }
 
 func TestKeyboardShortcutsCreateAndCloseTabWithoutKeyRepeat(t *testing.T) {
@@ -1070,13 +1071,23 @@ func TestKeyboardShortcutsCycleTabsForwardAndBackward(t *testing.T) {
 	}
 }
 
-func (navigator *reloadRecordingNavigator) Reload(context.Context) (*browser.Page, error) {
+func (navigator *reloadRecordingNavigator) Reload(ctx context.Context) (*browser.Page, error) {
 	navigator.reloads <- false
+	select {
+	case <-navigator.complete:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 	return navigator.page, navigator.err
 }
 
-func (navigator *reloadRecordingNavigator) ReloadIgnoringCache(context.Context) (*browser.Page, error) {
+func (navigator *reloadRecordingNavigator) ReloadIgnoringCache(ctx context.Context) (*browser.Page, error) {
 	navigator.reloads <- true
+	select {
+	case <-navigator.complete:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 	return navigator.page, navigator.err
 }
 
@@ -1096,12 +1107,15 @@ func TestKeyboardReloadShortcuts(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			complete := make(chan struct{})
 			navigator := &reloadRecordingNavigator{
 				stubNavigator: stubNavigator{page: &browser.Page{URL: pageURL}},
 				reloads:       make(chan bool, 1),
+				complete:      complete,
 			}
 			ui := NewBrowserUI(navigator, nil)
 			defer ui.Close()
+			defer close(complete)
 			router := new(input.Router)
 			gtx := layout.Context{
 				Ops:         new(op.Ops),
