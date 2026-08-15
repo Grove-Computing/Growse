@@ -5,8 +5,8 @@ GrowseはWeb Platform Tests（WPT）をブラウザで直接実行せず、対�
 - Upstream: `web-platform-tests/wpt`
 - Revision: `816bbf3ebae17dc6866deb65b2286b1a1c162819`
 - License: WPTリポジトリの`LICENSE.md`（3-Clause BSD）
-- 配置: `internal/style/wpt_test.go`、`internal/layout/wpt_test.go`、`internal/forms/wpt_test.go`、`internal/browser/wpt_v09_test.go`、`internal/network/wpt_test.go`、`internal/storage/wpt_test.go`、`internal/webapi/scheduler/wpt_test.go`
-- v0.9.0対象: v0.8.0までの範囲に加え、Timers、Session History、Web Storage、HTTP Cache
+- 配置: `internal/style/wpt_test.go`、`internal/layout/wpt_test.go`、`internal/forms/wpt_test.go`、`internal/browser/wpt_v09_test.go`、`internal/browser/wpt_v10_test.go`、`internal/network/wpt_test.go`、`internal/storage/wpt_test.go`、`internal/webapi/scheduler/wpt_test.go`
+- v0.10.0対象: v0.9.0までの範囲に加え、Top-level Browsing Context、close Lifecycle、Storage Event
 
 ## 対応表
 
@@ -33,6 +33,9 @@ GrowseはWeb Platform Tests（WPT）をブラウザで直接実行せず、対�
 | `TestWPTStorageKeyOrderSurvivesValueReplacement` | `webstorage/storage_key.window.js` | value更新でkey順が変わらず、範囲外indexが空になることを比較 | JavaScriptのunsigned long変換はv0.9.0のGo API対象外 |
 | `TestWPTHTTPCacheMaxAgeOverridesExpiresAndAgeCanMakeItStale` | `fetch/http-cache/freshness.any.js` | max-ageのExpires優先とAge超過によるstale判定をfake timestampで比較 | WPT HTTP server protocolをCache modelの直接入力へ縮約 |
 | `TestWPTFailedUnsafeRequestDoesNotInvalidateFreshEntry` | `fetch/http-cache/invalidate.any.js` | 失敗したPOSTがfresh GET entryを無効化しないことを比較 | WPT harnessを`httptest.Server`へ置換 |
+| `TestWPTTargetBlankCreatesDistinctTopLevelContext` | `html/semantics/links/links-created-by-a-and-area-elements/target_blank_implicit_noopener.html` | `_blank` submissionがsourceを維持して独立Top-level Contextを作ることを比較 | opener APIを提供しないためForm SubmissionとTab ID分離へ縮約 |
+| `TestWPTClosedBrowsingContextRejectsFutureWork` | `html/browsers/windows/auxiliary-browsing-contexts/opener-closed.html` | close後のBrowsing Contextを参照してもworkを配送できないことを比較 | WindowProxyの`closed` propertyをSession dispatch拒否へ縮約 |
+| `TestWPTLocalStorageEventCarriesCommittedOldAndNewValuesOnce` | `webstorage/event_basic.js` | 別Contextだけがcommitごとにold/new valueとURLを一度受信することを比較 | iframeとtestharnessを共有Storage Areaのsource-aware observerへ縮約 |
 
 Upstreamのファイル全体はコピーせず、assertionの意味と最小入力だけを移植する。ケースを追加または更新するときは、Revision、Source、適応内容、および意図的な差分をこの表へ記録する。
 
@@ -63,3 +66,9 @@ Upstreamのファイル全体はコピーせず、assertionの意味と最小入
 - Web Storageはkey順、更新、削除、quota、Origin分離を選定し、複数Window間Storage Eventは対象外とする。
 - HTTP CacheはFreshness、Age、Vary、Validation、304 merge、unsafe MethodによるInvalidationを選定し、Range、shared cache、`stale-if-error`は対象外とする。
 - RFC 9111 §4.2.1（Freshness Lifetime）、§4.2.3（Age Calculations）、§4.3.4（304 merge）、§4.4（Invalidation）の例は`internal/network/rfc9111_test.go`およびHTTP Cache testへtable-drivenで縮約し、WPTと同じfake timestamp / fake serverで実行する。
+
+## v0.10.0の選定範囲
+
+- Top-level Browsing Contextは`target="_blank"`による独立Context作成を選定し、iframe、named target再利用、opener API、およびBrowsing Context Groupは対象外とする。
+- Lifecycleはclose後のContextへworkを配送せずlive siblingを維持する範囲を選定し、`beforeunload` prompt、Page Visibility Event、およびBFCacheは対象外とする。
+- Storage Eventはsame-originの更新元以外へcommit順にkey、old/new value、URLを配送する範囲を選定し、複数Window Process間同期とSession Storage Eventは対象外とする。
