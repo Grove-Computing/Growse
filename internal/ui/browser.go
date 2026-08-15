@@ -622,6 +622,12 @@ func (ui *BrowserUI) closeTab(id browser.TabID) bool {
 		ui.reportTabOperationError("Tabを終了できません", err)
 		return false
 	}
+	delete(ui.tabRenderStates, id)
+	delete(ui.tabRowButtons, id)
+	delete(ui.tabCloseButtons, id)
+	if ui.displayedTabID == id {
+		ui.displayedTabID = 0
+	}
 	return true
 }
 

@@ -477,6 +477,41 @@ func TestVerticalTabPointerControlsCreateSelectAndCloseTabs(t *testing.T) {
 	}
 }
 
+func TestClosedTabRejectsDelayedNavigationResultAndReleasesUIState(t *testing.T) {
+	session := browser.NewSession()
+	first, _ := session.NewTab(nil)
+	second, _ := session.NewTab(nil)
+	ui := NewBrowserUIWithTabs(nil, session, nil)
+	canceled := false
+	ui.navigations[first.ID] = tabNavigation{id: 7, cancel: func() { canceled = true }}
+	ui.tabRenderStates[first.ID] = tabRenderState{inputEditors: map[dom.NodeID]*widget.Editor{1: new(widget.Editor)}}
+	ui.tabRowButton(first.ID)
+	ui.tabCloseButton(first.ID)
+	ui.displayedTabID = first.ID
+
+	if !ui.closeTab(first.ID) {
+		t.Fatal("active tab close failed")
+	}
+	closedURL, err := url.Parse("https://closed.example/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ui.results <- navigationResult{id: 7, tabID: first.ID, page: browser.NewPage(closedURL)}
+	ui.consumeNavigationResult()
+	if !canceled {
+		t.Fatal("closed tab navigation was not canceled")
+	}
+	if _, ok := ui.tabRenderStates[first.ID]; ok || ui.tabRowButtons[first.ID] != nil || ui.tabCloseButtons[first.ID] != nil {
+		t.Fatal("closed tab UI callback state remains reachable")
+	}
+	if tabs := session.Tabs(); len(tabs) != 1 || tabs[0].ID != second.ID || !tabs[0].Active {
+		t.Fatalf("tabs after delayed result = %+v", tabs)
+	}
+	if ui.address.Text() == "https://closed.example/" {
+		t.Fatal("closed tab result updated browser chrome")
+	}
+}
+
 func TestOverflowingTabRailScrollIsIndependentFromPageScroll(t *testing.T) {
 	session := browser.NewSession()
 	for index := 0; index < 12; index++ {
