@@ -8,12 +8,13 @@ import (
 )
 
 var (
-	ErrTabIDExhausted = errors.New("tab id space is exhausted")
-	ErrTabBrowser     = errors.New("tab browser factory returned nil")
-	ErrTabNotFound    = errors.New("tab was not found")
-	ErrTabLimit       = errors.New("tab limit was reached")
-	ErrTabURLTooLong  = errors.New("tab URL is too long")
-	ErrTabTitle       = errors.New("tab title is invalid")
+	ErrTabIDExhausted  = errors.New("tab id space is exhausted")
+	ErrTabBrowser      = errors.New("tab browser factory returned nil")
+	ErrTabBrowserReuse = errors.New("tab browser factory reused an existing browser")
+	ErrTabNotFound     = errors.New("tab was not found")
+	ErrTabLimit        = errors.New("tab limit was reached")
+	ErrTabURLTooLong   = errors.New("tab URL is too long")
+	ErrTabTitle        = errors.New("tab title is invalid")
 )
 
 const (
@@ -42,6 +43,10 @@ type Tab struct {
 	browser    *Browser
 	initialURL *url.URL
 	title      string
+	loading    bool
+	failed     bool
+	pending    bool
+	status     string
 }
 
 // TabSnapshot is an immutable view of a tab suitable for browser chrome.
@@ -55,6 +60,7 @@ type TabSnapshot struct {
 	Loading       bool
 	Error         bool
 	PendingUpdate bool
+	Status        string
 }
 
 // TabCloseResult reports the active tab selected after a close operation.
@@ -174,6 +180,56 @@ func (s *Session) SetTabTitle(id TabID, title string) (TabSnapshot, error) {
 	return TabSnapshot{}, ErrTabNotFound
 }
 
+// BeginTabNavigation marks one tab as loading without changing selection.
+func (s *Session) BeginTabNavigation(id TabID) (TabSnapshot, error) {
+	if s == nil {
+		return TabSnapshot{}, ErrTabNotFound
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for index, tab := range s.tabs {
+		if tab != nil && tab.id == id && tab.state != TabClosing && tab.state != TabClosed {
+			tab.loading = true
+			tab.failed = false
+			tab.pending = false
+			tab.status = "読み込み中"
+			return snapshotTab(tab, index, tab.id == s.activeID), nil
+		}
+	}
+	return TabSnapshot{}, ErrTabNotFound
+}
+
+// FinishTabNavigation publishes a result to its target tab without selecting it.
+func (s *Session) FinishTabNavigation(id TabID, failed bool) (TabSnapshot, error) {
+	if s == nil {
+		return TabSnapshot{}, ErrTabNotFound
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for index, tab := range s.tabs {
+		if tab == nil || tab.id != id || tab.state == TabClosing || tab.state == TabClosed {
+			continue
+		}
+		tab.loading = false
+		tab.failed = failed
+		tab.pending = tab.id != s.activeID
+		if failed {
+			tab.status = "読み込みエラー"
+		} else {
+			tab.status = "取得完了"
+		}
+		if tab.browser != nil {
+			if page := tab.browser.Page(); page != nil && page.Document != nil {
+				if title := page.Document.Title(); utf8.ValidString(title) && len(title) <= s.policy.MaxTitleBytes {
+					tab.title = title
+				}
+			}
+		}
+		return snapshotTab(tab, index, tab.id == s.activeID), nil
+	}
+	return TabSnapshot{}, ErrTabNotFound
+}
+
 func (s *Session) newTabLocked(initialURL *url.URL, state TabState) (*Tab, error) {
 	if s.factory == nil {
 		return nil, ErrTabBrowser
@@ -181,6 +237,11 @@ func (s *Session) newTabLocked(initialURL *url.URL, state TabState) (*Tab, error
 	browser := s.factory()
 	if browser == nil {
 		return nil, ErrTabBrowser
+	}
+	for _, existing := range s.tabs {
+		if existing != nil && existing.browser == browser && existing.state != TabClosed {
+			return nil, ErrTabBrowserReuse
+		}
 	}
 	id, err := s.allocateTabIDLocked()
 	if err != nil {
@@ -268,6 +329,7 @@ func (s *Session) selectTabLocked(position int) TabSnapshot {
 		}
 	}
 	target.state = TabActive
+	target.pending = false
 	s.activeID = target.id
 	return snapshotTab(target, position, true)
 }
@@ -372,11 +434,37 @@ func (s *Session) ActiveTab() (TabSnapshot, bool) {
 	return TabSnapshot{}, false
 }
 
+// ActiveBrowser returns the Browser currently selected by browser chrome.
+// Callers keep the returned pointer to pin an operation to this tab even if
+// another tab becomes active before the operation completes.
+func (s *Session) ActiveBrowser() (*Browser, bool) {
+	_, active, ok := s.ActiveBrowserTarget()
+	return active, ok
+}
+
+// ActiveBrowserTarget atomically returns the ID and Browser selected at the
+// start of a chrome operation.
+func (s *Session) ActiveBrowserTarget() (TabID, *Browser, bool) {
+	if s == nil {
+		return 0, nil, false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	tab, _, ok := s.activeTabLocked()
+	if !ok || tab.browser == nil {
+		return 0, nil, false
+	}
+	return tab.id, tab.browser, true
+}
+
 func snapshotTab(tab *Tab, position int, active bool) TabSnapshot {
 	if tab == nil {
 		return TabSnapshot{Position: position}
 	}
-	snapshot := TabSnapshot{ID: tab.id, Position: position, State: tab.state, Active: active, Title: tab.title}
+	snapshot := TabSnapshot{
+		ID: tab.id, Position: position, State: tab.state, Active: active, Title: tab.title,
+		Loading: tab.loading, Error: tab.failed, PendingUpdate: tab.pending, Status: tab.status,
+	}
 	if tab.initialURL != nil {
 		snapshot.URL = displayTabURL(tab.initialURL)
 	} else if tab.browser != nil {

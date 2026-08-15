@@ -59,10 +59,11 @@ type BrowserUI struct {
 	navigator        Navigator
 	invalidate       func()
 	results          chan navigationResult
-	cancelNavigation context.CancelFunc
-	navigationID     uint64
+	navigations      map[browser.TabID]tabNavigation
+	nextNavigationID uint64
 	loading          bool
 	tabs             TabController
+	displayedTabID   browser.TabID
 
 	backButton        widget.Clickable
 	forwardButton     widget.Clickable
@@ -153,6 +154,15 @@ type TabController interface {
 	CloseTab(id browser.TabID) (browser.TabCloseResult, error)
 }
 
+type activeBrowserSource interface {
+	ActiveBrowserTarget() (browser.TabID, *browser.Browser, bool)
+}
+
+type tabNavigationStateSink interface {
+	BeginTabNavigation(id browser.TabID) (browser.TabSnapshot, error)
+	FinishTabNavigation(id browser.TabID, failed bool) (browser.TabSnapshot, error)
+}
+
 type animationFrameNavigator interface {
 	RunAnimationFrame(time.Time) bool
 	HasAnimationFrameCallbacks() bool
@@ -163,9 +173,15 @@ type historyScrollNavigator interface {
 }
 
 type navigationResult struct {
-	id   uint64
-	page *browser.Page
-	err  error
+	id    uint64
+	tabID browser.TabID
+	page  *browser.Page
+	err   error
+}
+
+type tabNavigation struct {
+	id     uint64
+	cancel context.CancelFunc
 }
 
 // NewBrowserUI creates a browser toolbar and an empty viewport.
@@ -186,7 +202,8 @@ func NewBrowserUIWithTabs(navigator Navigator, tabs TabController, invalidate fu
 		navigator:        navigator,
 		tabs:             tabs,
 		invalidate:       invalidate,
-		results:          make(chan navigationResult, 1),
+		results:          make(chan navigationResult, browser.DefaultSessionPolicy().MaxTabs),
+		navigations:      make(map[browser.TabID]tabNavigation),
 		gopher:           paint.NewImageOp(gopherImage),
 		backIcon:         mustIcon(widget.NewIcon(icons.NavigationArrowBack)),
 		forwardIcon:      mustIcon(widget.NewIcon(icons.NavigationArrowForward)),
@@ -227,6 +244,7 @@ func (ui *BrowserUI) Layout(gtx layout.Context) layout.Dimensions {
 	ui.handlePointerEvents(gtx)
 	ui.handleKeyboardShortcuts(gtx)
 	ui.handleActions(gtx)
+	ui.syncActiveTabChrome()
 
 	geometry := calculateBrowserChromeGeometry(gtx.Constraints.Max, gtx.Dp(tabRailWidth), gtx.Dp(toolbarHeight))
 	layoutRegion(gtx, geometry.viewport, ui.layoutViewport)
@@ -445,14 +463,15 @@ func (ui *BrowserUI) handleKeyboardShortcuts(gtx layout.Context) {
 			return
 		}
 		keyEvent, ok := event.(key.Event)
-		if !ok || keyEvent.State != key.Press || ui.navigator == nil || ui.navigator.Page() == nil {
+		tabID, navigator := ui.activeNavigationTarget()
+		if !ok || keyEvent.State != key.Press || navigator == nil || navigator.Page() == nil {
 			continue
 		}
 		if keyEvent.Modifiers.Contain(key.ModShift) {
-			ui.startPageLoad("キャッシュを無視して再読み込み中", ui.navigator.ReloadIgnoringCache)
+			ui.startPageLoad(tabID, navigator, "キャッシュを無視して再読み込み中", navigator.ReloadIgnoringCache)
 			continue
 		}
-		ui.startPageLoad("ページを再読み込み中", ui.navigator.Reload)
+		ui.startPageLoad(tabID, navigator, "ページを再読み込み中", navigator.Reload)
 	}
 }
 
@@ -526,18 +545,18 @@ func (ui *BrowserUI) handleActions(gtx layout.Context) {
 		ui.startNavigation(ui.address.Text())
 	}
 	for ui.backButton.Clicked(gtx) {
-		if ui.navigator != nil && ui.navigator.CanBack() {
-			ui.startPageLoad("前のページを読み込み中", ui.navigator.Back)
+		if tabID, navigator := ui.activeNavigationTarget(); navigator != nil && navigator.CanBack() {
+			ui.startPageLoad(tabID, navigator, "前のページを読み込み中", navigator.Back)
 		}
 	}
 	for ui.forwardButton.Clicked(gtx) {
-		if ui.navigator != nil && ui.navigator.CanForward() {
-			ui.startPageLoad("次のページを読み込み中", ui.navigator.Forward)
+		if tabID, navigator := ui.activeNavigationTarget(); navigator != nil && navigator.CanForward() {
+			ui.startPageLoad(tabID, navigator, "次のページを読み込み中", navigator.Forward)
 		}
 	}
 	for ui.reloadButton.Clicked(gtx) {
-		if ui.navigator != nil && ui.navigator.Page() != nil {
-			ui.startPageLoad("ページを再読み込み中", ui.navigator.Reload)
+		if tabID, navigator := ui.activeNavigationTarget(); navigator != nil && navigator.Page() != nil {
+			ui.startPageLoad(tabID, navigator, "ページを再読み込み中", navigator.Reload)
 		}
 	}
 }
@@ -571,8 +590,13 @@ func (ui *BrowserUI) handleTabActions(gtx layout.Context) {
 }
 
 func (ui *BrowserUI) createTab(gtx layout.Context) {
-	if _, err := ui.tabs.NewTab(nil); err != nil {
+	tab, err := ui.tabs.NewTab(nil)
+	if err != nil {
 		ui.reportTabOperationError("新しいTabを作成できません", err)
+		return
+	}
+	if _, err := ui.tabs.SelectTab(tab.ID); err != nil {
+		ui.reportTabOperationError("新しいTabを選択できません", err)
 		return
 	}
 	gtx.Execute(key.FocusCmd{Tag: &ui.address})
@@ -592,49 +616,141 @@ func (ui *BrowserUI) reportTabOperationError(message string, err error) {
 }
 
 func (ui *BrowserUI) startNavigation(rawURL string) {
-	if ui.navigator == nil {
+	tabID, navigator := ui.activeNavigationTarget()
+	if navigator == nil {
 		ui.status = "Navigationを利用できません"
 		ui.statusHasError = true
 		return
 	}
-	ui.startPageLoad("読み込み中: "+rawURL, func(ctx context.Context) (*browser.Page, error) {
-		return ui.navigator.Navigate(ctx, rawURL)
+	ui.startPageLoad(tabID, navigator, "読み込み中: "+rawURL, func(ctx context.Context) (*browser.Page, error) {
+		return navigator.Navigate(ctx, rawURL)
 	})
 }
 
-func (ui *BrowserUI) startPageLoad(status string, load func(context.Context) (*browser.Page, error)) {
+func (ui *BrowserUI) startPageLoad(tabID browser.TabID, navigator Navigator, status string, load func(context.Context) (*browser.Page, error)) {
 	ui.persistHistoryScroll()
-	if ui.navigator != nil {
-		ui.navigator.ClearHover()
+	if navigator != nil {
+		navigator.ClearHover()
 	}
-	if ui.cancelNavigation != nil {
-		ui.cancelNavigation()
-	}
+	ui.cancelTabNavigation(tabID)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	ui.cancelNavigation = cancel
-	ui.navigationID++
-	navigationID := ui.navigationID
+	ui.nextNavigationID++
+	navigationID := ui.nextNavigationID
+	ui.navigations[tabID] = tabNavigation{id: navigationID, cancel: cancel}
+	if sink, ok := ui.tabs.(tabNavigationStateSink); ok && tabID != 0 {
+		if _, err := sink.BeginTabNavigation(tabID); err != nil {
+			cancel()
+			delete(ui.navigations, tabID)
+			ui.reportTabOperationError("TabのNavigation状態を更新できません", err)
+			return
+		}
+	}
 	ui.loading = true
 	ui.statusHasError = false
 	ui.status = status
 
 	go func() {
 		page, err := load(ctx)
-		ui.results <- navigationResult{id: navigationID, page: page, err: err}
+		ui.results <- navigationResult{id: navigationID, tabID: tabID, page: page, err: err}
 		ui.invalidate()
 	}()
+}
+
+func (ui *BrowserUI) cancelTabNavigation(tabID browser.TabID) bool {
+	navigation, ok := ui.navigations[tabID]
+	if !ok {
+		return false
+	}
+	navigation.cancel()
+	delete(ui.navigations, tabID)
+	return true
+}
+
+func (ui *BrowserUI) activeNavigator() Navigator {
+	_, navigator := ui.activeNavigationTarget()
+	return navigator
+}
+
+func (ui *BrowserUI) activeNavigationTarget() (browser.TabID, Navigator) {
+	if tabs, ok := ui.tabs.(activeBrowserSource); ok {
+		if tabID, navigator, ok := tabs.ActiveBrowserTarget(); ok {
+			return tabID, navigator
+		}
+	}
+	return 0, ui.navigator
+}
+
+func (ui *BrowserUI) syncActiveTabChrome() {
+	if ui.tabs == nil {
+		return
+	}
+	active, ok := ui.tabs.ActiveTab()
+	if !ok || active.ID == ui.displayedTabID {
+		return
+	}
+	tabID, navigator := ui.activeNavigationTarget()
+	if navigator == nil || tabID != active.ID {
+		return
+	}
+	ui.displayedTabID = active.ID
+	ui.navigator = navigator
+	ui.loading = active.Loading
+	ui.statusHasError = active.Error
+	ui.inputEditors = make(map[dom.NodeID]*widget.Editor)
+	ui.inputFocused = make(map[dom.NodeID]bool)
+	ui.inputCommitted = make(map[dom.NodeID]string)
+	ui.selectButtons = make(map[dom.NodeID]*widget.Clickable)
+	ui.checkableButtons = make(map[dom.NodeID]*widget.Clickable)
+	ui.formButtons = make(map[dom.NodeID]*widget.Clickable)
+	ui.layoutCache = documentLayoutCache{}
+	if page := navigator.Page(); page != nil {
+		if page.URL != nil {
+			ui.address.SetText(page.URL.String())
+		}
+		ui.pageList.Position = layout.Position{First: page.ScrollFirst, Offset: page.ScrollOffset}
+		ui.scrollRevision = page.ScrollRevision
+		ui.pageTitle = active.Title
+		if ui.pageTitle == "" && page.Document != nil {
+			ui.pageTitle = page.Document.Title()
+		}
+		if ui.pageTitle == "" && page.URL != nil {
+			ui.pageTitle = page.URL.Hostname()
+		}
+	} else {
+		ui.address.SetText(active.URL)
+		ui.pageList.Position = layout.Position{}
+		ui.scrollRevision = 0
+		ui.pageTitle = tabDisplayTitle(active)
+	}
+	if active.Status != "" {
+		ui.status = active.Status
+		ui.pageStatus = active.Status
+	} else if navigator.Page() == nil {
+		ui.status = "URLを入力して Gopher ボタンを押してください"
+		ui.pageStatus = ui.status
+	}
 }
 
 func (ui *BrowserUI) consumeNavigationResult() {
 	for {
 		select {
 		case result := <-ui.results:
-			if result.id != ui.navigationID {
+			navigation, ok := ui.navigations[result.tabID]
+			if !ok || result.id != navigation.id {
+				continue
+			}
+			delete(ui.navigations, result.tabID)
+			if sink, ok := ui.tabs.(tabNavigationStateSink); ok && result.tabID != 0 {
+				if _, err := sink.FinishTabNavigation(result.tabID, result.err != nil); err != nil {
+					ui.reportTabOperationError("TabのNavigation結果を更新できません", err)
+				}
+			}
+			if result.tabID != 0 && !ui.tabIsActive(result.tabID) {
+				ui.loading = false
 				continue
 			}
 			ui.loading = false
-			ui.cancelNavigation = nil
 			ui.inputEditors = make(map[dom.NodeID]*widget.Editor)
 			ui.inputFocused = make(map[dom.NodeID]bool)
 			ui.inputCommitted = make(map[dom.NodeID]string)
@@ -683,14 +799,21 @@ func (ui *BrowserUI) consumeNavigationResult() {
 	}
 }
 
+func (ui *BrowserUI) tabIsActive(id browser.TabID) bool {
+	if ui.tabs == nil {
+		return id == 0
+	}
+	active, ok := ui.tabs.ActiveTab()
+	return ok && active.ID == id
+}
+
 // Close cancels an in-flight navigation when the window closes.
 func (ui *BrowserUI) Close() {
-	ui.navigationID++
 	if ui.navigator != nil {
 		ui.navigator.ClearHover()
 	}
-	if ui.cancelNavigation != nil {
-		ui.cancelNavigation()
+	for tabID := range ui.navigations {
+		ui.cancelTabNavigation(tabID)
 	}
 }
 
@@ -710,9 +833,10 @@ func (ui *BrowserUI) layoutToolbar(gtx layout.Context) layout.Dimensions {
 	)
 
 	return layout.Inset{Top: unit.Dp(8), Right: unit.Dp(14), Bottom: unit.Dp(6), Left: unit.Dp(14)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-		canBack := ui.navigator != nil && ui.navigator.CanBack()
-		canForward := ui.navigator != nil && ui.navigator.CanForward()
-		canReload := ui.navigator != nil && ui.navigator.Page() != nil
+		navigator := ui.activeNavigator()
+		canBack := navigator != nil && navigator.CanBack()
+		canForward := navigator != nil && navigator.CanForward()
+		canReload := navigator != nil && navigator.Page() != nil
 		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
@@ -1031,12 +1155,42 @@ func (ui *BrowserUI) handleViewportClicks(gtx layout.Context, page *browser.Page
 		if ui.navigator.DispatchClick(nodeID, x, y) {
 			continue
 		}
-		linkURL, ok := page.LinkURL(nodeID)
+		linkURL, target, ok := page.LinkDestination(nodeID)
 		if !ok {
+			continue
+		}
+		if target == "_blank" {
+			ui.openURLInNewTab(linkURL)
 			continue
 		}
 		ui.startNavigation(linkURL.String())
 	}
+}
+
+func (ui *BrowserUI) openURLInNewTab(target *url.URL) {
+	if ui.tabs == nil || target == nil {
+		ui.status = "新しいTabでNavigationを開始できません"
+		ui.statusHasError = true
+		return
+	}
+	tab, err := ui.tabs.NewTab(target)
+	if err != nil {
+		ui.reportTabOperationError("新しいTabを作成できません", err)
+		return
+	}
+	if _, err := ui.tabs.SelectTab(tab.ID); err != nil {
+		ui.reportTabOperationError("新しいTabを選択できません", err)
+		return
+	}
+	tabID, navigator := ui.activeNavigationTarget()
+	if tabID != tab.ID || navigator == nil {
+		ui.status = "新しいTabのNavigationを開始できません"
+		ui.statusHasError = true
+		return
+	}
+	ui.startPageLoad(tabID, navigator, "読み込み中: "+target.String(), func(ctx context.Context) (*browser.Page, error) {
+		return navigator.Navigate(ctx, target.String())
+	})
 }
 
 func focusableNodeID(document *dom.Document, nodeID dom.NodeID) dom.NodeID {

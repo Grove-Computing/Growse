@@ -23,6 +23,7 @@ import (
 	"github.com/Grove-Computing/Growse/internal/events"
 	"github.com/Grove-Computing/Growse/internal/forms"
 	layoutengine "github.com/Grove-Computing/Growse/internal/layout"
+	"github.com/Grove-Computing/Growse/internal/network"
 	paintmodel "github.com/Grove-Computing/Growse/internal/paint"
 	"github.com/Grove-Computing/Growse/internal/style"
 )
@@ -565,6 +566,344 @@ func TestNavigationResultUpdatesAddressAndStatus(t *testing.T) {
 type recordingNavigator struct {
 	stubNavigator
 	navigated chan string
+}
+
+type controlledNavigationLoader struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+type supersedingNavigationLoader struct {
+	oldStarted  chan struct{}
+	oldCanceled chan struct{}
+	newFinished chan struct{}
+}
+
+type parallelNavigationLoader struct {
+	started  chan struct{}
+	release  chan struct{}
+	canceled chan struct{}
+}
+
+func (loader *parallelNavigationLoader) Get(ctx context.Context, resourceURL *url.URL) (*network.Response, error) {
+	close(loader.started)
+	select {
+	case <-loader.release:
+		return &network.Response{
+			URL: resourceURL, StatusCode: 200, ContentType: "text/html; charset=utf-8", Body: []byte("<title>Parallel</title>"),
+		}, nil
+	case <-ctx.Done():
+		close(loader.canceled)
+		return nil, ctx.Err()
+	}
+}
+
+func (loader *supersedingNavigationLoader) Get(ctx context.Context, resourceURL *url.URL) (*network.Response, error) {
+	if resourceURL.Path == "/old" {
+		close(loader.oldStarted)
+		<-ctx.Done()
+		close(loader.oldCanceled)
+		return nil, ctx.Err()
+	}
+	close(loader.newFinished)
+	return &network.Response{
+		URL: resourceURL, StatusCode: 200, ContentType: "text/html; charset=utf-8", Body: []byte("<title>New</title>"),
+	}, nil
+}
+
+func (loader *controlledNavigationLoader) Get(ctx context.Context, resourceURL *url.URL) (*network.Response, error) {
+	select {
+	case loader.started <- struct{}{}:
+	default:
+	}
+	select {
+	case <-loader.release:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	return &network.Response{
+		URL: resourceURL, StatusCode: 200, ContentType: "text/html; charset=utf-8", Body: []byte("<title>Pinned</title>"),
+	}, nil
+}
+
+func TestAddressNavigationIsPinnedToOperationStartTab(t *testing.T) {
+	loader := &controlledNavigationLoader{started: make(chan struct{}, 1), release: make(chan struct{})}
+	created := make([]*browser.Browser, 0, 2)
+	session := browser.NewSession(func() *browser.Browser {
+		var state *browser.Browser
+		if len(created) == 0 {
+			state = browser.New(loader)
+		} else {
+			state = browser.New(nil)
+		}
+		created = append(created, state)
+		return state
+	})
+	first, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invalidated := make(chan struct{}, 1)
+	ui := NewBrowserUIWithTabs(nil, session, func() { invalidated <- struct{}{} })
+	defer ui.Close()
+
+	ui.startNavigation("https://example.com/pinned")
+	select {
+	case <-loader.started:
+	case <-time.After(time.Second):
+		t.Fatal("navigation did not start")
+	}
+	if tabs := session.Tabs(); !tabs[0].Loading || tabs[0].ID != first.ID {
+		t.Fatalf("target tab did not enter loading state: %+v", tabs)
+	}
+	if _, err := session.SelectTab(second.ID); err != nil {
+		t.Fatal(err)
+	}
+	close(loader.release)
+	select {
+	case <-invalidated:
+	case <-time.After(time.Second):
+		t.Fatal("navigation did not finish")
+	}
+	ui.consumeNavigationResult()
+
+	if page := created[0].Page(); page == nil || page.URL.String() != "https://example.com/pinned" {
+		t.Fatalf("operation-start tab page = %+v, want pinned URL", page)
+	}
+	if page := created[1].Page(); page != nil {
+		t.Fatalf("new active tab received old navigation: %+v", page)
+	}
+	if got := ui.address.Text(); got == "https://example.com/pinned" {
+		t.Fatalf("background navigation overwrote active address bar: %q", got)
+	}
+	tabs := session.Tabs()
+	if tabs[0].ID != first.ID || tabs[0].Loading || tabs[0].Error || !tabs[0].PendingUpdate || tabs[0].Title != "Pinned" {
+		t.Fatalf("background tab row state = %+v, want completed pending update", tabs[0])
+	}
+	if !tabs[1].Active || tabs[1].ID != second.ID {
+		t.Fatalf("background completion changed active tab: %+v", tabs)
+	}
+}
+
+func TestNewNavigationCancelsOnlyPreviousOperationInSameTab(t *testing.T) {
+	loader := &supersedingNavigationLoader{
+		oldStarted: make(chan struct{}), oldCanceled: make(chan struct{}), newFinished: make(chan struct{}),
+	}
+	state := browser.New(loader)
+	session := browser.NewSession(func() *browser.Browser { return state })
+	if _, err := session.NewTab(nil); err != nil {
+		t.Fatal(err)
+	}
+	invalidated := make(chan struct{}, 2)
+	ui := NewBrowserUIWithTabs(nil, session, func() {
+		select {
+		case invalidated <- struct{}{}:
+		default:
+		}
+	})
+	defer ui.Close()
+
+	ui.startNavigation("https://example.com/old")
+	select {
+	case <-loader.oldStarted:
+	case <-time.After(time.Second):
+		t.Fatal("old navigation did not start")
+	}
+	ui.startNavigation("https://example.com/new")
+	select {
+	case <-loader.oldCanceled:
+	case <-time.After(time.Second):
+		t.Fatal("old navigation context was not canceled")
+	}
+	select {
+	case <-loader.newFinished:
+	case <-time.After(time.Second):
+		t.Fatal("new navigation did not finish")
+	}
+
+	deadline := time.After(time.Second)
+	for {
+		select {
+		case <-invalidated:
+			ui.consumeNavigationResult()
+			if page := state.Page(); page != nil && page.URL.Path == "/new" {
+				return
+			}
+		case <-deadline:
+			t.Fatalf("latest navigation was not committed: %+v", state.Page())
+		}
+	}
+}
+
+func TestNavigationsInDifferentTabsCompleteIndependently(t *testing.T) {
+	loaders := []*parallelNavigationLoader{
+		{started: make(chan struct{}), release: make(chan struct{}), canceled: make(chan struct{})},
+		{started: make(chan struct{}), release: make(chan struct{}), canceled: make(chan struct{})},
+	}
+	created := make([]*browser.Browser, 0, 2)
+	session := browser.NewSession(func() *browser.Browser {
+		state := browser.New(loaders[len(created)])
+		created = append(created, state)
+		return state
+	})
+	first, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invalidated := make(chan struct{}, 2)
+	ui := NewBrowserUIWithTabs(nil, session, func() { invalidated <- struct{}{} })
+	defer ui.Close()
+
+	ui.startNavigation("https://first.example/page")
+	select {
+	case <-loaders[0].started:
+	case <-time.After(time.Second):
+		t.Fatal("first tab navigation did not start")
+	}
+	if _, err := session.SelectTab(second.ID); err != nil {
+		t.Fatal(err)
+	}
+	ui.startNavigation("https://second.example/page")
+	select {
+	case <-loaders[1].started:
+	case <-time.After(time.Second):
+		t.Fatal("second tab navigation did not start")
+	}
+	for index, loader := range loaders {
+		select {
+		case <-loader.canceled:
+			t.Fatalf("tab %d navigation was canceled by another tab", index)
+		default:
+		}
+		close(loader.release)
+	}
+
+	deadline := time.After(time.Second)
+	for completed := 0; completed < 2; {
+		select {
+		case <-invalidated:
+			completed++
+		case <-deadline:
+			t.Fatalf("parallel pages were not committed: first=%+v second=%+v", created[0].Page(), created[1].Page())
+		}
+	}
+	if got := created[0].Page().URL.Hostname(); got != "first.example" {
+		t.Fatalf("first tab host = %q, want first.example", got)
+	}
+	if got := created[1].Page().URL.Hostname(); got != "second.example" {
+		t.Fatalf("second tab host = %q, want second.example", got)
+	}
+	if active, ok := session.ActiveTab(); !ok || active.ID != second.ID || active.ID == first.ID {
+		t.Fatalf("active tab changed after parallel completion: %+v, %v", active, ok)
+	}
+}
+
+func TestBlankLinkOpensActiveNewTab(t *testing.T) {
+	loader := &controlledNavigationLoader{started: make(chan struct{}, 1), release: make(chan struct{})}
+	close(loader.release)
+	created := make([]*browser.Browser, 0, 2)
+	session := browser.NewSession(func() *browser.Browser {
+		state := browser.New(nil)
+		if len(created) != 0 {
+			state = browser.New(loader)
+		}
+		created = append(created, state)
+		return state
+	})
+	first, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceURL, _ := url.Parse("https://source.example/")
+	created[0].SetPage(browser.NewPage(sourceURL))
+	invalidated := make(chan struct{}, 1)
+	ui := NewBrowserUIWithTabs(nil, session, func() { invalidated <- struct{}{} })
+	defer ui.Close()
+	target, _ := url.Parse("https://target.example/new")
+
+	ui.openURLInNewTab(target)
+	select {
+	case <-invalidated:
+	case <-time.After(time.Second):
+		t.Fatal("new tab navigation did not finish")
+	}
+	ui.consumeNavigationResult()
+
+	tabs := session.Tabs()
+	if len(tabs) != 2 || tabs[0].ID != first.ID || tabs[0].Active || !tabs[1].Active {
+		t.Fatalf("tabs after _blank navigation = %+v", tabs)
+	}
+	if got := created[0].Page().URL.String(); got != sourceURL.String() {
+		t.Fatalf("source page changed = %q, want %q", got, sourceURL)
+	}
+	if got := created[1].Page().URL.String(); got != target.String() {
+		t.Fatalf("new tab page = %q, want %q", got, target)
+	}
+}
+
+func TestTabSelectionSynchronizesActiveBrowserChrome(t *testing.T) {
+	newTitledPage := func(rawURL, title string) *browser.Page {
+		document := dom.NewDocument()
+		titleNode := document.CreateElement("title", nil)
+		if err := document.AppendChild(document.Root, titleNode); err != nil {
+			t.Fatal(err)
+		}
+		if err := document.AppendChild(titleNode, document.CreateText(title)); err != nil {
+			t.Fatal(err)
+		}
+		pageURL, err := url.Parse(rawURL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return &browser.Page{URL: pageURL, Document: document}
+	}
+	created := []*browser.Browser{browser.New(nil), browser.New(nil)}
+	created[0].SetPage(newTitledPage("https://one.example/first", "One"))
+	created[1].SetPage(newTitledPage("https://two.example/second", "Two"))
+	next := 0
+	session := browser.NewSession(func() *browser.Browser {
+		state := created[next]
+		next++
+		return state
+	})
+	first, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.BeginTabNavigation(second.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.FinishTabNavigation(second.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	ui := NewBrowserUIWithTabs(nil, session, nil)
+
+	ui.syncActiveTabChrome()
+	if ui.displayedTabID != first.ID || ui.navigator != created[0] || ui.address.Text() != "https://one.example/first" || ui.pageTitle != "One" {
+		t.Fatalf("first tab chrome was not synchronized: id=%d address=%q title=%q navigator=%p", ui.displayedTabID, ui.address.Text(), ui.pageTitle, ui.navigator)
+	}
+	if _, err := session.SelectTab(second.ID); err != nil {
+		t.Fatal(err)
+	}
+	ui.syncActiveTabChrome()
+	if ui.displayedTabID != second.ID || ui.navigator != created[1] || ui.address.Text() != "https://two.example/second" || ui.pageTitle != "Two" {
+		t.Fatalf("second tab chrome was not synchronized: id=%d address=%q title=%q navigator=%p", ui.displayedTabID, ui.address.Text(), ui.pageTitle, ui.navigator)
+	}
+	if ui.status != "読み込みエラー" || !ui.statusHasError {
+		t.Fatalf("second tab status = %q error=%v", ui.status, ui.statusHasError)
+	}
 }
 
 func (navigator *recordingNavigator) Navigate(_ context.Context, rawURL string) (*browser.Page, error) {

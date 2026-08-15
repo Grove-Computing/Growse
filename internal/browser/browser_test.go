@@ -1424,7 +1424,7 @@ func TestNewPageCopiesURL(t *testing.T) {
 
 func TestPageLinkURLResolvesNearestAnchor(t *testing.T) {
 	document := dom.NewDocument()
-	anchor := document.CreateElement("a", map[string]string{"href": "../next?q=1"})
+	anchor := document.CreateElement("a", map[string]string{"href": "../next?q=1", "target": " _BLANK "})
 	span := document.CreateElement("span", nil)
 	text := document.CreateText("Next")
 	for _, edge := range [][2]*dom.Node{{document.Root, anchor}, {anchor, span}, {span, text}} {
@@ -1437,6 +1437,10 @@ func TestPageLinkURLResolvesNearestAnchor(t *testing.T) {
 	resolved, ok := page.LinkURL(span.ID)
 	if !ok || resolved.String() != "https://example.com/next?q=1" {
 		t.Fatalf("LinkURL() = (%v, %v), want resolved relative URL", resolved, ok)
+	}
+	resolved, target, ok := page.LinkDestination(text.ID)
+	if !ok || resolved.String() != "https://example.com/next?q=1" || target != "_blank" {
+		t.Fatalf("LinkDestination() = (%v, %q, %v), want resolved URL and _blank", resolved, target, ok)
 	}
 }
 

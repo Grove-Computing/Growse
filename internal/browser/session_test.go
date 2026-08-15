@@ -1,9 +1,14 @@
 package browser
 
 import (
+	"context"
 	"errors"
 	"net/url"
 	"testing"
+
+	"github.com/Grove-Computing/Growse/internal/dom"
+	"github.com/Grove-Computing/Growse/internal/events"
+	"github.com/Grove-Computing/Growse/internal/network"
 )
 
 func TestSessionKeepsOrderedTabsAndOneActiveTab(t *testing.T) {
@@ -380,6 +385,149 @@ func TestDefaultSessionPolicyMatchesReleaseLimits(t *testing.T) {
 	policy := DefaultSessionPolicy()
 	if policy.MaxTabs != 64 || policy.MaxTitleBytes != 4*1024 || policy.MaxURLBytes != 8*1024 || policy.MaxTabID != ^uint64(0) {
 		t.Fatalf("DefaultSessionPolicy() = %#v", policy)
+	}
+}
+
+func TestSessionPublishesBackgroundNavigationStateWithoutSelectingTab(t *testing.T) {
+	session := NewSession()
+	first, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.BeginTabNavigation(first.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.SelectTab(second.ID); err != nil {
+		t.Fatal(err)
+	}
+	finished, err := session.FinishTabNavigation(first.ID, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if finished.Active || finished.Loading || !finished.Error || !finished.PendingUpdate {
+		t.Fatalf("background navigation state = %+v", finished)
+	}
+	if active, ok := session.ActiveTab(); !ok || active.ID != second.ID {
+		t.Fatalf("active tab = (%+v, %v), want %d", active, ok, second.ID)
+	}
+	selected, err := session.SelectTab(first.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected.PendingUpdate {
+		t.Fatalf("pending update remained after selection: %+v", selected)
+	}
+}
+
+func TestSessionSubmitsFormAndFormtargetBlankToNewTab(t *testing.T) {
+	tests := []struct {
+		name            string
+		formTarget      string
+		submitterTarget string
+		useSubmitter    bool
+	}{
+		{name: "form target", formTarget: "_blank"},
+		{name: "submitter formtarget", formTarget: "_self", submitterTarget: "_blank", useSubmitter: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			document := dom.NewDocument()
+			form := document.CreateElement("form", map[string]string{"action": "/result", "target": test.formTarget})
+			button := document.CreateElement("button", map[string]string{"type": "submit", "formtarget": test.submitterTarget})
+			if err := document.AppendChild(document.Root, form); err != nil {
+				t.Fatal(err)
+			}
+			if err := document.AppendChild(form, button); err != nil {
+				t.Fatal(err)
+			}
+			sourceURL := mustURL(t, "https://example.test/source")
+			targetURL := mustURL(t, "https://example.test/result")
+			source := New(nil)
+			source.SetPage(&Page{URL: sourceURL, Document: document, Events: events.NewDispatcher()})
+			loader := &routeLoader{responses: map[string]*network.Response{
+				targetURL.String(): {URL: targetURL, StatusCode: 200, ContentType: "text/html", Body: []byte("<title>Result</title>")},
+			}}
+			created := 0
+			session := NewSession(func() *Browser {
+				created++
+				if created == 1 {
+					return source
+				}
+				return New(loader)
+			})
+			sourceTab, err := session.NewTab(nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			submitterID := dom.NodeID(0)
+			if test.useSubmitter {
+				submitterID = button.ID
+			}
+			opened, page, err := session.SubmitFormToNewTab(context.Background(), sourceTab.ID, form.ID, submitterID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if page == nil || page.URL.String() != targetURL.String() {
+				t.Fatalf("submitted page = %+v, want %s", page, targetURL)
+			}
+			if active, ok := session.ActiveTab(); !ok || active.ID != opened.ID || opened.ID == sourceTab.ID {
+				t.Fatalf("active tab after submission = (%+v, %v), opened=%+v", active, ok, opened)
+			}
+			if source.Page().URL.String() != sourceURL.String() {
+				t.Fatalf("source tab navigated to %s", source.Page().URL)
+			}
+		})
+	}
+}
+
+func TestNewTabDoesNotInheritSourceDOMOrRuntimeReference(t *testing.T) {
+	source := New(nil)
+	sourceDocument := dom.NewDocument()
+	source.SetPage(&Page{URL: mustURL(t, "https://source.example/"), Document: sourceDocument})
+	sourceRuntime := new(runtimeStub)
+	source.activeRuntime = sourceRuntime
+	destination := New(nil)
+	created := 0
+	session := NewSession(func() *Browser {
+		created++
+		if created == 1 {
+			return source
+		}
+		return destination
+	})
+	if _, err := session.NewTab(nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.NewTab(mustURL(t, "https://target.example/")); err != nil {
+		t.Fatal(err)
+	}
+	if session.tabs[0].browser == session.tabs[1].browser {
+		t.Fatal("new tab reused the source Browser")
+	}
+	if destination.Page() != nil || destination.activeRuntime != nil {
+		t.Fatalf("new tab inherited source state: page=%+v runtime=%T", destination.Page(), destination.activeRuntime)
+	}
+	if source.Page().Document != sourceDocument || source.activeRuntime != sourceRuntime {
+		t.Fatal("source DOM or Runtime reference changed")
+	}
+}
+
+func TestSessionRejectsBrowserInstanceReuseAcrossTabs(t *testing.T) {
+	shared := New(nil)
+	session := NewSession(func() *Browser { return shared })
+	first, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.NewTab(nil); !errors.Is(err, ErrTabBrowserReuse) {
+		t.Fatalf("reused Browser error = %v, want %v", err, ErrTabBrowserReuse)
+	}
+	if tabs := session.Tabs(); len(tabs) != 1 || tabs[0].ID != first.ID || !tabs[0].Active {
+		t.Fatalf("tabs changed after Browser reuse rejection: %+v", tabs)
 	}
 }
 
