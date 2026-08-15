@@ -1,0 +1,18 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Workspace · Tasks</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main class="workspace tasks">
+    <header><p class="eyebrow">INDEPENDENT PAGE SESSION</p><h1>Tasks</h1><span id="status" class="pill ready">ready</span></header>
+    <nav><a href="/notes.html" target="_blank">Open Notes</a><a href="/activity.html" target="_blank">Open Activity</a></nav>
+    <form id="task-form"><label for="task-input">Tab-local draft</label><input id="task-input" name="task" placeholder="Only this tab keeps the draft"><button type="submit">Add</button></form>
+    <section><h2>Shared note from Notes</h2><p id="shared-note">Waiting for a Storage Event</p><p id="task-count">0 tasks in this tab</p></section>
+    <footer>Session Storage stays with this tab; background timers are clamped to one second.</footer>
+  </main>
+  <script type="text/go" src="/_tasks.go"></script>
+</body>
+</html>

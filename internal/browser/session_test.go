@@ -1,0 +1,1222 @@
+package browser
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/Grove-Computing/Growse/internal/dom"
+	"github.com/Grove-Computing/Growse/internal/events"
+	"github.com/Grove-Computing/Growse/internal/network"
+	storagecore "github.com/Grove-Computing/Growse/internal/storage"
+)
+
+type frameRuntimeStub struct {
+	runtimeStub
+	frames     int
+	timestamps []time.Time
+}
+
+type closeCancelLoader struct {
+	started  chan struct{}
+	canceled chan struct{}
+}
+
+func (loader *closeCancelLoader) Get(ctx context.Context, _ *url.URL) (*network.Response, error) {
+	close(loader.started)
+	<-ctx.Done()
+	close(loader.canceled)
+	return nil, ctx.Err()
+}
+
+func (runtime *frameRuntimeStub) RunAnimationFrame(current time.Time) bool {
+	runtime.frames++
+	runtime.timestamps = append(runtime.timestamps, current)
+	return true
+}
+
+func (runtime *frameRuntimeStub) HasAnimationFrameCallbacks() bool { return true }
+
+func TestSessionKeepsOrderedTabsAndOneActiveTab(t *testing.T) {
+	session := NewSession()
+	session.tabs = []*Tab{
+		{id: 11, state: TabBackground},
+		{id: 22, state: TabActive},
+		{id: 33, state: TabBackground},
+	}
+	session.activeID = 22
+
+	tabs := session.Tabs()
+	if len(tabs) != 3 {
+		t.Fatalf("len(Tabs()) = %d, want 3", len(tabs))
+	}
+	for index, wantID := range []TabID{11, 22, 33} {
+		if tabs[index].ID != wantID || tabs[index].Position != index {
+			t.Fatalf("Tabs()[%d] = %#v, want id %d at position %d", index, tabs[index], wantID, index)
+		}
+	}
+	if tabs[0].Active || !tabs[1].Active || tabs[2].Active {
+		t.Fatalf("active flags = %#v, want only the middle tab active", tabs)
+	}
+
+	active, ok := session.ActiveTab()
+	if !ok || active.ID != 22 || active.State != TabActive {
+		t.Fatalf("ActiveTab() = %#v, %t, want tab 22", active, ok)
+	}
+}
+
+func TestEmptySessionHasNoActiveTab(t *testing.T) {
+	session := NewSession()
+	if tabs := session.Tabs(); len(tabs) != 0 {
+		t.Fatalf("Tabs() = %#v, want empty", tabs)
+	}
+	if active, ok := session.ActiveTab(); ok {
+		t.Fatalf("ActiveTab() = %#v, true, want no active tab", active)
+	}
+}
+
+func TestSessionTabIDsAreNeverReusedForDelayedDispatch(t *testing.T) {
+	session := NewSession()
+
+	session.mu.Lock()
+	firstID, err := session.allocateTabIDLocked()
+	if err != nil {
+		session.mu.Unlock()
+		t.Fatal(err)
+	}
+	session.tabs = append(session.tabs, &Tab{id: firstID, state: TabActive})
+	session.activeID = firstID
+	session.tabs = nil // The first tab has been removed before delayed work completes.
+	secondID, err := session.allocateTabIDLocked()
+	if err != nil {
+		session.mu.Unlock()
+		t.Fatal(err)
+	}
+	second := &Tab{id: secondID, state: TabActive}
+	session.tabs = append(session.tabs, second)
+	session.activeID = secondID
+	session.mu.Unlock()
+
+	if firstID == secondID {
+		t.Fatalf("reused tab id %d", firstID)
+	}
+	called := false
+	if session.dispatchToTab(firstID, func(*Tab) { called = true }) || called {
+		t.Fatal("delayed work for a removed tab was dispatched")
+	}
+	if !session.dispatchToTab(secondID, func(tab *Tab) { called = tab == second }) || !called {
+		t.Fatal("live tab did not receive its work")
+	}
+}
+
+func TestSessionRejectsTabIDOverflow(t *testing.T) {
+	session := NewSession()
+	session.nextID = ^uint64(0)
+
+	session.mu.Lock()
+	_, err := session.allocateTabIDLocked()
+	session.mu.Unlock()
+	if !errors.Is(err, ErrTabIDExhausted) {
+		t.Fatalf("allocateTabIDLocked() error = %v, want %v", err, ErrTabIDExhausted)
+	}
+}
+
+func TestSessionCreatesEmptyAndURLTabs(t *testing.T) {
+	created := 0
+	session := NewSession(func() *Browser {
+		created++
+		return New(nil)
+	})
+
+	empty, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !empty.Active || empty.State != TabActive || empty.URL != "" {
+		t.Fatalf("empty tab = %#v", empty)
+	}
+
+	target, err := url.Parse("https://example.test/notes?q=go#today")
+	if err != nil {
+		t.Fatal(err)
+	}
+	withURL, err := session.NewTab(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target.Host = "mutated.test"
+	if withURL.Active || withURL.State != TabBackground || withURL.URL != "https://example.test/notes?q=go#today" {
+		t.Fatalf("URL tab = %#v", withURL)
+	}
+	if created != 2 {
+		t.Fatalf("browser factory calls = %d, want 2", created)
+	}
+	if tabs := session.Tabs(); len(tabs) != 2 || tabs[1].URL != withURL.URL {
+		t.Fatalf("Tabs() = %#v", tabs)
+	}
+}
+
+func TestSessionRejectsNilBrowserFromFactory(t *testing.T) {
+	session := NewSession(func() *Browser { return nil })
+	if _, err := session.NewTab(nil); !errors.Is(err, ErrTabBrowser) {
+		t.Fatalf("NewTab() error = %v, want %v", err, ErrTabBrowser)
+	}
+	if len(session.Tabs()) != 0 {
+		t.Fatal("failed tab creation changed the collection")
+	}
+}
+
+func TestSessionSelectsTabByIDAndPosition(t *testing.T) {
+	session := NewSession()
+	first, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	third, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	selected, err := session.SelectTab(second.ID)
+	if err != nil || selected.ID != second.ID || !selected.Active || selected.Position != 1 {
+		t.Fatalf("SelectTab() = %#v, %v", selected, err)
+	}
+	selected, err = session.SelectTabAt(2)
+	if err != nil || selected.ID != third.ID || !selected.Active {
+		t.Fatalf("SelectTabAt() = %#v, %v", selected, err)
+	}
+	active, ok := session.ActiveTab()
+	if !ok || active.ID != third.ID {
+		t.Fatalf("ActiveTab() = %#v, %t", active, ok)
+	}
+	tabs := session.Tabs()
+	if tabs[0].ID != first.ID || tabs[0].State != TabBackground || tabs[1].State != TabBackground || tabs[2].State != TabActive {
+		t.Fatalf("Tabs() = %#v", tabs)
+	}
+}
+
+func TestSessionRejectsInvalidTabSelectionWithoutChangingActiveTab(t *testing.T) {
+	session := NewSession()
+	first, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, selectInvalid := range []func() error{
+		func() error { _, err := session.SelectTab(999); return err },
+		func() error { _, err := session.SelectTabAt(-1); return err },
+		func() error { _, err := session.SelectTabAt(1); return err },
+	} {
+		if err := selectInvalid(); !errors.Is(err, ErrTabNotFound) {
+			t.Fatalf("selection error = %v, want %v", err, ErrTabNotFound)
+		}
+	}
+	active, ok := session.ActiveTab()
+	if !ok || active.ID != first.ID {
+		t.Fatalf("ActiveTab() = %#v, %t", active, ok)
+	}
+}
+
+func TestSessionSelectsNextAndPreviousTabsCyclically(t *testing.T) {
+	session := NewSession()
+	first, _ := session.NewTab(nil)
+	second, _ := session.NewTab(nil)
+	third, _ := session.NewTab(nil)
+
+	for _, want := range []TabID{second.ID, third.ID, first.ID} {
+		selected, err := session.SelectNext()
+		if err != nil || selected.ID != want {
+			t.Fatalf("SelectNext() = %#v, %v, want %d", selected, err, want)
+		}
+	}
+	for _, want := range []TabID{third.ID, second.ID, first.ID} {
+		selected, err := session.SelectPrevious()
+		if err != nil || selected.ID != want {
+			t.Fatalf("SelectPrevious() = %#v, %v, want %d", selected, err, want)
+		}
+	}
+}
+
+func TestEmptySessionCannotSelectRelativeTab(t *testing.T) {
+	session := NewSession()
+	if _, err := session.SelectNext(); !errors.Is(err, ErrTabNotFound) {
+		t.Fatalf("SelectNext() error = %v, want %v", err, ErrTabNotFound)
+	}
+	if _, err := session.SelectPrevious(); !errors.Is(err, ErrTabNotFound) {
+		t.Fatalf("SelectPrevious() error = %v, want %v", err, ErrTabNotFound)
+	}
+}
+
+func TestSessionClosingActiveTabSelectsRightThenLeftNeighbor(t *testing.T) {
+	session := NewSession()
+	first, _ := session.NewTab(nil)
+	second, _ := session.NewTab(nil)
+	third, _ := session.NewTab(nil)
+
+	closed, err := session.CloseTab(first.ID)
+	if err != nil || !closed.HasActive || closed.Active.ID != second.ID {
+		t.Fatalf("CloseTab(first) = %#v, %v", closed, err)
+	}
+	if tabs := session.Tabs(); len(tabs) != 2 || tabs[0].ID != second.ID || tabs[1].ID != third.ID {
+		t.Fatalf("Tabs() after closing first = %#v", tabs)
+	}
+
+	if _, err := session.SelectTab(third.ID); err != nil {
+		t.Fatal(err)
+	}
+	closed, err = session.CloseTab(third.ID)
+	if err != nil || !closed.HasActive || closed.Active.ID != second.ID {
+		t.Fatalf("CloseTab(third) = %#v, %v", closed, err)
+	}
+	if tabs := session.Tabs(); len(tabs) != 1 || tabs[0].ID != second.ID || !tabs[0].Active {
+		t.Fatalf("Tabs() after closing third = %#v", tabs)
+	}
+}
+
+func TestSessionClosingBackgroundTabKeepsCurrentActiveTab(t *testing.T) {
+	session := NewSession()
+	first, _ := session.NewTab(nil)
+	second, _ := session.NewTab(nil)
+
+	closed, err := session.CloseTab(second.ID)
+	if err != nil || !closed.HasActive || closed.Active.ID != first.ID {
+		t.Fatalf("CloseTab(background) = %#v, %v", closed, err)
+	}
+	if _, err := session.CloseTab(second.ID); !errors.Is(err, ErrTabNotFound) {
+		t.Fatalf("second CloseTab() error = %v, want %v", err, ErrTabNotFound)
+	}
+}
+
+func TestSessionClosingLastTabCreatesActiveBlankTab(t *testing.T) {
+	created := 0
+	session := NewSession(func() *Browser {
+		created++
+		return New(nil)
+	})
+	last, err := session.NewTab(mustURL(t, "https://example.test/current"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	closed, err := session.CloseTab(last.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !closed.HasActive || closed.Active.ID == last.ID || closed.Active.URL != "" || !closed.Active.Active {
+		t.Fatalf("CloseTab(last) = %#v", closed)
+	}
+	tabs := session.Tabs()
+	if len(tabs) != 1 || tabs[0].ID != closed.Active.ID || tabs[0].State != TabActive {
+		t.Fatalf("Tabs() = %#v", tabs)
+	}
+	if created != 2 {
+		t.Fatalf("browser factory calls = %d, want 2", created)
+	}
+	if session.dispatchToTab(last.ID, func(*Tab) { t.Fatal("closed tab received delayed work") }) {
+		t.Fatal("closed tab remains live")
+	}
+}
+
+func TestSessionKeepsLastTabWhenBlankReplacementCannotBeCreated(t *testing.T) {
+	created := 0
+	session := NewSession(func() *Browser {
+		created++
+		if created > 1 {
+			return nil
+		}
+		return New(nil)
+	})
+	last, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.CloseTab(last.ID); !errors.Is(err, ErrTabBrowser) {
+		t.Fatalf("CloseTab(last) error = %v, want %v", err, ErrTabBrowser)
+	}
+	active, ok := session.ActiveTab()
+	if !ok || active.ID != last.ID || active.State != TabActive {
+		t.Fatalf("ActiveTab() = %#v, %t", active, ok)
+	}
+}
+
+func TestSessionAppliesTabCountAndIDLimitsWithoutChangingExistingTabs(t *testing.T) {
+	policy := DefaultSessionPolicy()
+	policy.MaxTabs = 1
+	policy.MaxTabID = 1
+	session := NewSessionWithPolicy(func() *Browser { return New(nil) }, policy)
+	first, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.NewTab(nil); !errors.Is(err, ErrTabLimit) {
+		t.Fatalf("NewTab() error = %v, want %v", err, ErrTabLimit)
+	}
+	if tabs := session.Tabs(); len(tabs) != 1 || tabs[0].ID != first.ID || !tabs[0].Active {
+		t.Fatalf("Tabs() = %#v", tabs)
+	}
+
+	policy.MaxTabs = 2
+	idLimited := NewSessionWithPolicy(func() *Browser { return New(nil) }, policy)
+	if _, err := idLimited.NewTab(nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := idLimited.NewTab(nil); !errors.Is(err, ErrTabIDExhausted) {
+		t.Fatalf("ID-limited NewTab() error = %v, want %v", err, ErrTabIDExhausted)
+	}
+}
+
+func TestSessionAppliesURLAndTitleLimits(t *testing.T) {
+	policy := DefaultSessionPolicy()
+	policy.MaxURLBytes = 32
+	policy.MaxTitleBytes = len("Goタブ")
+	created := 0
+	session := NewSessionWithPolicy(func() *Browser {
+		created++
+		return New(nil)
+	}, policy)
+
+	if _, err := session.NewTab(mustURL(t, "https://example.test/this-path-is-too-long")); !errors.Is(err, ErrTabURLTooLong) {
+		t.Fatalf("long URL error = %v, want %v", err, ErrTabURLTooLong)
+	}
+	if created != 0 {
+		t.Fatalf("browser factory called %d times for rejected URL", created)
+	}
+	tab, err := session.NewTab(mustURL(t, "https://u:p@e.test/"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tab.URL != "https://e.test/" {
+		t.Fatalf("display URL = %q, want credentials removed", tab.URL)
+	}
+	updated, err := session.SetTabTitle(tab.ID, "Goタブ")
+	if err != nil || updated.Title != "Goタブ" {
+		t.Fatalf("SetTabTitle() = %#v, %v", updated, err)
+	}
+	if _, err := session.SetTabTitle(tab.ID, "Goタブ!"); !errors.Is(err, ErrTabTitle) {
+		t.Fatalf("long title error = %v, want %v", err, ErrTabTitle)
+	}
+	if _, err := session.SetTabTitle(tab.ID, string([]byte{0xff})); !errors.Is(err, ErrTabTitle) {
+		t.Fatalf("invalid title error = %v, want %v", err, ErrTabTitle)
+	}
+	if current := session.Tabs()[0].Title; current != "Goタブ" {
+		t.Fatalf("title after rejected updates = %q", current)
+	}
+}
+
+func TestDefaultSessionPolicyMatchesReleaseLimits(t *testing.T) {
+	policy := DefaultSessionPolicy()
+	if policy.MaxTabs != 64 || policy.MaxTitleBytes != 4*1024 || policy.MaxURLBytes != 8*1024 || policy.MaxTabID != ^uint64(0) {
+		t.Fatalf("DefaultSessionPolicy() = %#v", policy)
+	}
+}
+
+func TestSessionPublishesBackgroundNavigationStateWithoutSelectingTab(t *testing.T) {
+	session := NewSession()
+	first, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.BeginTabNavigation(first.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.SelectTab(second.ID); err != nil {
+		t.Fatal(err)
+	}
+	finished, err := session.FinishTabNavigation(first.ID, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if finished.Active || finished.Loading || !finished.Error || !finished.PendingUpdate {
+		t.Fatalf("background navigation state = %+v", finished)
+	}
+	if active, ok := session.ActiveTab(); !ok || active.ID != second.ID {
+		t.Fatalf("active tab = (%+v, %v), want %d", active, ok, second.ID)
+	}
+	selected, err := session.SelectTab(first.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected.PendingUpdate {
+		t.Fatalf("pending update remained after selection: %+v", selected)
+	}
+}
+
+func TestSessionSubmitsFormAndFormtargetBlankToNewTab(t *testing.T) {
+	tests := []struct {
+		name            string
+		formTarget      string
+		submitterTarget string
+		useSubmitter    bool
+	}{
+		{name: "form target", formTarget: "_blank"},
+		{name: "submitter formtarget", formTarget: "_self", submitterTarget: "_blank", useSubmitter: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			document := dom.NewDocument()
+			form := document.CreateElement("form", map[string]string{"action": "/result", "target": test.formTarget})
+			button := document.CreateElement("button", map[string]string{"type": "submit", "formtarget": test.submitterTarget})
+			if err := document.AppendChild(document.Root, form); err != nil {
+				t.Fatal(err)
+			}
+			if err := document.AppendChild(form, button); err != nil {
+				t.Fatal(err)
+			}
+			sourceURL := mustURL(t, "https://example.test/source")
+			targetURL := mustURL(t, "https://example.test/result")
+			source := New(nil)
+			source.SetPage(&Page{URL: sourceURL, Document: document, Events: events.NewDispatcher()})
+			loader := &routeLoader{responses: map[string]*network.Response{
+				targetURL.String(): {URL: targetURL, StatusCode: 200, ContentType: "text/html", Body: []byte("<title>Result</title>")},
+			}}
+			created := 0
+			session := NewSession(func() *Browser {
+				created++
+				if created == 1 {
+					return source
+				}
+				return New(loader)
+			})
+			sourceTab, err := session.NewTab(nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			submitterID := dom.NodeID(0)
+			if test.useSubmitter {
+				submitterID = button.ID
+			}
+			opened, page, err := session.SubmitFormToNewTab(context.Background(), sourceTab.ID, form.ID, submitterID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if page == nil || page.URL.String() != targetURL.String() {
+				t.Fatalf("submitted page = %+v, want %s", page, targetURL)
+			}
+			if active, ok := session.ActiveTab(); !ok || active.ID != opened.ID || opened.ID == sourceTab.ID {
+				t.Fatalf("active tab after submission = (%+v, %v), opened=%+v", active, ok, opened)
+			}
+			if source.Page().URL.String() != sourceURL.String() {
+				t.Fatalf("source tab navigated to %s", source.Page().URL)
+			}
+		})
+	}
+}
+
+func TestNewTabDoesNotInheritSourceDOMOrRuntimeReference(t *testing.T) {
+	source := New(nil)
+	sourceDocument := dom.NewDocument()
+	source.SetPage(&Page{URL: mustURL(t, "https://source.example/"), Document: sourceDocument})
+	sourceRuntime := new(runtimeStub)
+	source.activeRuntime = sourceRuntime
+	destination := New(nil)
+	created := 0
+	session := NewSession(func() *Browser {
+		created++
+		if created == 1 {
+			return source
+		}
+		return destination
+	})
+	if _, err := session.NewTab(nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.NewTab(mustURL(t, "https://target.example/")); err != nil {
+		t.Fatal(err)
+	}
+	if session.tabs[0].browser == session.tabs[1].browser {
+		t.Fatal("new tab reused the source Browser")
+	}
+	if destination.Page() != nil || destination.activeRuntime != nil {
+		t.Fatalf("new tab inherited source state: page=%+v runtime=%T", destination.Page(), destination.activeRuntime)
+	}
+	if source.Page().Document != sourceDocument || source.activeRuntime != sourceRuntime {
+		t.Fatal("source DOM or Runtime reference changed")
+	}
+}
+
+func TestSessionOwnsIndependentPageHistoryRuntimeAndEventStatePerTab(t *testing.T) {
+	created := []*Browser{New(nil), New(nil)}
+	next := 0
+	session := NewSession(func() *Browser {
+		state := created[next]
+		next++
+		return state
+	})
+	for range created {
+		if _, err := session.NewTab(nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for index, state := range created {
+		pageURL := mustURL(t, "https://example.test/tab"+string(rune('1'+index)))
+		state.page = &Page{URL: pageURL, Document: dom.NewDocument(), Events: events.NewDispatcher()}
+		state.activeRuntime = new(runtimeStub)
+		state.history.pushEntry(&historyEntry{URL: pageURL, PageID: uint64(index + 1)})
+	}
+	if created[0] == created[1] || created[0].page == created[1].page || created[0].page.Document == created[1].page.Document || created[0].page.Events == created[1].page.Events {
+		t.Fatal("tab page, DOM, or event state was shared")
+	}
+	if created[0].activeRuntime == created[1].activeRuntime || &created[0].history == &created[1].history {
+		t.Fatal("tab runtime or history state was shared")
+	}
+	created[0].history.pushEntry(&historyEntry{URL: mustURL(t, "https://example.test/only-first")})
+	if len(created[0].history.entries) != 2 || len(created[1].history.entries) != 1 {
+		t.Fatalf("history mutation crossed tabs: first=%d second=%d", len(created[0].history.entries), len(created[1].history.entries))
+	}
+}
+
+func TestBackgroundTabSuppressesFrameCallbacksUntilSelected(t *testing.T) {
+	browsers := []*Browser{New(nil), New(nil)}
+	runtimes := []*frameRuntimeStub{{}, {}}
+	next := 0
+	session := NewSession(func() *Browser {
+		state := browsers[next]
+		state.activeRuntime = runtimes[next]
+		next++
+		return state
+	})
+	first, _ := session.NewTab(nil)
+	second, _ := session.NewTab(nil)
+	now := time.Unix(100, 0)
+	if !browsers[0].RunAnimationFrame(now) || runtimes[0].frames != 1 {
+		t.Fatal("active tab frame was not delivered")
+	}
+	if browsers[1].RunAnimationFrame(now) || browsers[1].HasAnimationFrameCallbacks() || runtimes[1].frames != 0 {
+		t.Fatal("background tab delivered or requested a frame")
+	}
+	if _, err := session.SelectTab(second.ID); err != nil {
+		t.Fatal(err)
+	}
+	if browsers[0].RunAnimationFrame(now) || runtimes[0].frames != 1 {
+		t.Fatal("former active tab continued frame delivery")
+	}
+	if !browsers[1].RunAnimationFrame(now) || runtimes[1].frames != 1 {
+		t.Fatal("selected tab did not resume at current frame")
+	}
+	if active, _ := session.ActiveTab(); active.ID == first.ID {
+		t.Fatal("frame delivery changed tab selection unexpectedly")
+	}
+}
+
+func TestReselectedTabReceivesOnlyCurrentFrameTimestamp(t *testing.T) {
+	browsers := []*Browser{New(nil), New(nil)}
+	runtimes := []*frameRuntimeStub{{}, {}}
+	next := 0
+	session := NewSession(func() *Browser {
+		state := browsers[next]
+		state.activeRuntime = runtimes[next]
+		next++
+		return state
+	})
+	first, _ := session.NewTab(nil)
+	second, _ := session.NewTab(nil)
+	start := time.Unix(200, 0)
+	browsers[0].RunAnimationFrame(start)
+	session.SelectTab(second.ID)
+	browsers[0].RunAnimationFrame(start.Add(time.Second))
+	browsers[0].RunAnimationFrame(start.Add(2 * time.Second))
+	session.SelectTab(first.ID)
+	current := start.Add(10 * time.Second)
+	browsers[0].RunAnimationFrame(current)
+	if got := runtimes[0].timestamps; len(got) != 2 || !got[0].Equal(start) || !got[1].Equal(current) {
+		t.Fatalf("delivered frame timestamps = %v, want only start and current", got)
+	}
+}
+
+func TestBackgroundMutationMarksTabWithoutInvalidatingActiveViewport(t *testing.T) {
+	browsers := []*Browser{New(nil), New(nil)}
+	next := 0
+	session := NewSession(func() *Browser {
+		state := browsers[next]
+		next++
+		return state
+	})
+	first, _ := session.NewTab(nil)
+	second, _ := session.NewTab(nil)
+	invalidations := 0
+	session.SetOnActiveMutation(func() { invalidations++ })
+
+	browsers[1].onMutation()
+	if invalidations != 0 {
+		t.Fatalf("background mutation invalidated active viewport %d times", invalidations)
+	}
+	if tabs := session.Tabs(); !tabs[1].PendingUpdate || tabs[0].ID != first.ID {
+		t.Fatalf("background mutation state = %+v", tabs)
+	}
+	browsers[0].onMutation()
+	if invalidations != 1 {
+		t.Fatalf("active mutation invalidations = %d, want 1", invalidations)
+	}
+	if _, err := session.SelectTab(second.ID); err != nil {
+		t.Fatal(err)
+	}
+	if session.Tabs()[1].PendingUpdate {
+		t.Fatal("pending mutation remained after tab selection")
+	}
+	browsers[1].onMutation()
+	if invalidations != 2 {
+		t.Fatalf("selected tab mutation invalidations = %d, want 2", invalidations)
+	}
+}
+
+func TestClosingTabCancelsNavigationAndStopsRuntimeResources(t *testing.T) {
+	loader := &closeCancelLoader{started: make(chan struct{}), canceled: make(chan struct{})}
+	state := New(loader)
+	runtime := new(runtimeStub)
+	state.activeRuntime = runtime
+	created := 0
+	session := NewSession(func() *Browser {
+		created++
+		if created == 1 {
+			return state
+		}
+		return New(nil)
+	})
+	tab, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := state.Navigate(context.Background(), "https://example.test/slow")
+		done <- err
+	}()
+	select {
+	case <-loader.started:
+	case <-time.After(time.Second):
+		t.Fatal("navigation did not start")
+	}
+	if _, err := session.CloseTab(tab.ID); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-loader.canceled:
+	case <-time.After(time.Second):
+		t.Fatal("closing tab did not cancel navigation")
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("canceled navigation did not return")
+	}
+	if runtime.stopCalls.Load() != 1 || state.Page() != nil {
+		t.Fatalf("closed tab resources remain: stops=%d page=%+v", runtime.stopCalls.Load(), state.Page())
+	}
+}
+
+func TestRuntimeAndNavigationErrorsRemainScopedToOwningTabs(t *testing.T) {
+	browsers := []*Browser{New(nil), New(nil)}
+	browsers[0].SetPage(&Page{URL: mustURL(t, "https://runtime-error.test/"), RuntimeError: "panic isolated"})
+	browsers[1].SetPage(&Page{URL: mustURL(t, "https://healthy.test/")})
+	next := 0
+	session := NewSession(func() *Browser {
+		state := browsers[next]
+		next++
+		return state
+	})
+	first, _ := session.NewTab(nil)
+	second, _ := session.NewTab(nil)
+	if _, err := session.FinishTabNavigation(first.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.FinishTabNavigation(second.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	tabs := session.Tabs()
+	if !tabs[0].Error || tabs[0].Status != "Runtimeエラー" {
+		t.Fatalf("runtime error state = %+v", tabs[0])
+	}
+	if !tabs[1].Error || tabs[1].Status != "読み込みエラー" {
+		t.Fatalf("navigation error state = %+v", tabs[1])
+	}
+	if browsers[0].Page().URL.Hostname() == browsers[1].Page().URL.Hostname() || browsers[1].Page().RuntimeError != "" {
+		t.Fatalf("error crossed Browser boundary: first=%+v second=%+v", browsers[0].Page(), browsers[1].Page())
+	}
+}
+
+func TestSessionCloseReleasesAllTabGoroutinesCallbacksAndPages(t *testing.T) {
+	loaders := []*closeCancelLoader{
+		{started: make(chan struct{}), canceled: make(chan struct{})},
+		{started: make(chan struct{}), canceled: make(chan struct{})},
+	}
+	browsers := []*Browser{New(loaders[0]), New(loaders[1])}
+	runtimes := []*runtimeStub{{}, {}}
+	next := 0
+	session := NewSession(func() *Browser {
+		state := browsers[next]
+		state.SetPage(&Page{URL: mustURL(t, "https://example.test/held"), Source: []byte("held response body")})
+		state.activeRuntime = runtimes[next]
+		next++
+		return state
+	})
+	tabs := make([]TabSnapshot, 2)
+	done := []chan struct{}{make(chan struct{}), make(chan struct{})}
+	for index := range tabs {
+		var err error
+		tabs[index], err = session.NewTab(nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		go func(index int) {
+			defer close(done[index])
+			_, _ = browsers[index].Navigate(context.Background(), "https://example.test/slow")
+		}(index)
+		select {
+		case <-loaders[index].started:
+		case <-time.After(time.Second):
+			t.Fatalf("tab %d navigation did not start", index)
+		}
+	}
+	callbackHeld := true
+	session.SetOnActiveMutation(func() { callbackHeld = false })
+	if err := session.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for index := range browsers {
+		select {
+		case <-loaders[index].canceled:
+		case <-time.After(time.Second):
+			t.Fatalf("tab %d goroutine was not canceled", index)
+		}
+		select {
+		case <-done[index]:
+		case <-time.After(time.Second):
+			t.Fatalf("tab %d goroutine did not exit", index)
+		}
+		if runtimes[index].stopCalls.Load() != 1 || browsers[index].Page() != nil || browsers[index].client != nil || browsers[index].onMutation != nil {
+			t.Fatalf("tab %d resources remain: stops=%d page=%+v client=%T callback=%v", index, runtimes[index].stopCalls.Load(), browsers[index].Page(), browsers[index].client, browsers[index].onMutation != nil)
+		}
+	}
+	if len(session.Tabs()) != 0 || session.factory != nil || session.onActiveMutation != nil || !callbackHeld {
+		t.Fatalf("session retained resources: tabs=%+v factory=%v callback=%v", session.Tabs(), session.factory != nil, session.onActiveMutation != nil)
+	}
+}
+
+func TestSessionRejectsBrowserInstanceReuseAcrossTabs(t *testing.T) {
+	shared := New(nil)
+	session := NewSession(func() *Browser { return shared })
+	first, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.NewTab(nil); !errors.Is(err, ErrTabBrowserReuse) {
+		t.Fatalf("reused Browser error = %v, want %v", err, ErrTabBrowserReuse)
+	}
+	if tabs := session.Tabs(); len(tabs) != 1 || tabs[0].ID != first.ID || !tabs[0].Active {
+		t.Fatalf("tabs changed after Browser reuse rejection: %+v", tabs)
+	}
+}
+
+func TestConcurrentCloseAllowsExactlyOneWinner(t *testing.T) {
+	session := NewSession()
+	if _, err := session.NewTab(nil); err != nil {
+		t.Fatal(err)
+	}
+	target, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const attempts = 16
+	results := make(chan error, attempts)
+	var wait sync.WaitGroup
+	for range attempts {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			_, err := session.CloseTab(target.ID)
+			results <- err
+		}()
+	}
+	wait.Wait()
+	close(results)
+	successes, rejected := 0, 0
+	for err := range results {
+		switch {
+		case err == nil:
+			successes++
+		case errors.Is(err, ErrTabNotFound):
+			rejected++
+		default:
+			t.Fatalf("concurrent close error = %v", err)
+		}
+	}
+	if successes != 1 || rejected != attempts-1 || len(session.Tabs()) != 1 {
+		t.Fatalf("concurrent close results = success:%d rejected:%d tabs:%d", successes, rejected, len(session.Tabs()))
+	}
+}
+
+func TestCloseTabDiscardsOnlyItsSessionStorage(t *testing.T) {
+	profile := storagecore.NewManager()
+	var pageSessions []*storagecore.Manager
+	session := NewSession(func() *Browser {
+		manager := profile.NewPageSession()
+		pageSessions = append(pageSessions, manager)
+		return NewWithRuntimeFactoryAndStorage(nil, nil, manager)
+	})
+	defer session.Close()
+	first, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.NewTab(nil); err != nil {
+		t.Fatal(err)
+	}
+	documentURL := mustURL(t, "https://example.test/app")
+	firstLocal, firstSession, err := pageSessions[0].Areas(documentURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondLocal, secondSession, err := pageSessions[1].Areas(documentURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstSession == secondSession || firstLocal != secondLocal {
+		t.Fatal("page session isolation or local profile sharing is incorrect")
+	}
+	if err := firstLocal.Set("theme", "shared"); err != nil {
+		t.Fatal(err)
+	}
+	if err := firstSession.Set("draft", "discard me"); err != nil {
+		t.Fatal(err)
+	}
+	if err := secondSession.Set("draft", "keep me"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := session.CloseTab(first.ID); err != nil {
+		t.Fatal(err)
+	}
+	if firstSession.Len() != 0 {
+		t.Fatalf("closed tab Session Storage length = %d", firstSession.Len())
+	}
+	if value, found := secondSession.Get("draft"); !found || value != "keep me" {
+		t.Fatalf("live tab Session Storage = (%q, %v)", value, found)
+	}
+	if value, found := secondLocal.Get("theme"); !found || value != "shared" {
+		t.Fatalf("shared Local Storage after close = (%q, %v)", value, found)
+	}
+}
+
+func TestSessionTabsShareCookiesAcrossNavigationFormAndFetch(t *testing.T) {
+	var failures []string
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Content-Type", "text/html")
+		switch request.URL.Path {
+		case "/navigation":
+			http.SetCookie(response, &http.Cookie{Name: "navigation", Value: "shared", Path: "/"})
+		case "/form-page":
+			_, _ = response.Write([]byte(`<form id="shared-form" action="/form" method="post"><input name="message" value="hello"></form>`))
+			return
+		case "/form":
+			if cookie, err := request.Cookie("navigation"); err != nil || cookie.Value != "shared" {
+				failures = append(failures, "form did not receive navigation cookie")
+			}
+			http.SetCookie(response, &http.Cookie{Name: "form", Value: "shared", Path: "/"})
+		case "/fetch":
+			for _, name := range []string{"navigation", "form"} {
+				if cookie, err := request.Cookie(name); err != nil || cookie.Value != "shared" {
+					failures = append(failures, "fetch did not receive "+name+" cookie")
+				}
+			}
+		}
+		_, _ = response.Write([]byte("<!doctype html><title>Shared Cookie</title>"))
+	}))
+	defer server.Close()
+
+	client := network.NewClientWithLimits(server.Client(), 1024)
+	session := NewSession(func() *Browser { return New(client) })
+	defer session.Close()
+	if _, err := session.NewTab(nil); err != nil {
+		t.Fatal(err)
+	}
+	first := session.tabs[0].browser
+	if _, err := first.Navigate(context.Background(), server.URL+"/navigation"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.NewTab(nil); err != nil {
+		t.Fatal(err)
+	}
+	second := session.tabs[1].browser
+	page, err := second.Navigate(context.Background(), server.URL+"/form-page")
+	if err != nil {
+		t.Fatal(err)
+	}
+	form, found := page.Document.GetElementByID("shared-form")
+	if !found {
+		t.Fatal("form was not parsed")
+	}
+	if _, err := second.SubmitPOST(context.Background(), form.ID, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.NewTab(nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Do(context.Background(), &network.Request{
+		Method: http.MethodGet, URL: mustURL(t, server.URL+"/fetch"), SiteURL: mustURL(t, server.URL+"/page"),
+		Kind: network.RequestFetch, Credentials: network.CredentialsSameOrigin,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(failures) != 0 {
+		t.Fatal(strings.Join(failures, "; "))
+	}
+}
+
+func TestSessionTabsShareHTTPCacheAcrossNavigationResourcesWebGoAndFetch(t *testing.T) {
+	counts := make(map[string]int)
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		counts[request.URL.Path]++
+		response.Header().Set("Cache-Control", "max-age=60")
+		switch request.URL.Path {
+		case "/style.css":
+			response.Header().Set("Content-Type", "text/css")
+			_, _ = response.Write([]byte("body { color: #123456; }"))
+		case "/app.go":
+			response.Header().Set("Content-Type", "text/go")
+			_, _ = response.Write([]byte("package main\nfunc main() {}"))
+		case "/fetch":
+			response.Header().Set("Content-Type", "text/plain")
+			_, _ = response.Write([]byte("shared fetch"))
+		default:
+			response.Header().Set("Content-Type", "text/html")
+			if strings.HasPrefix(request.URL.Path, "/workspace-") {
+				_, _ = response.Write([]byte(`<!doctype html><link rel="stylesheet" href="/style.css"><script type="text/go" src="/app.go"></script>`))
+			} else {
+				_, _ = response.Write([]byte("<!doctype html><title>Cached Navigation</title>"))
+			}
+		}
+	}))
+	defer server.Close()
+
+	client := network.NewClientWithLimits(server.Client(), 4096)
+	session := NewSession(func() *Browser { return New(client) })
+	defer session.Close()
+	for index := 0; index < 2; index++ {
+		if _, err := session.NewTab(nil); err != nil {
+			t.Fatal(err)
+		}
+		state := session.tabs[index].browser
+		if _, err := state.Navigate(context.Background(), server.URL+"/navigation"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := state.Navigate(context.Background(), server.URL+fmt.Sprintf("/workspace-%d", index)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := client.Do(context.Background(), &network.Request{
+			Method: http.MethodGet, URL: mustURL(t, server.URL+"/fetch"), SiteURL: mustURL(t, server.URL+"/workspace"),
+			Kind: network.RequestFetch, Credentials: network.CredentialsOmit,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, path := range []string{"/navigation", "/style.css", "/app.go", "/fetch"} {
+		if counts[path] != 1 {
+			t.Fatalf("%s network requests = %d, want shared cache hit", path, counts[path])
+		}
+	}
+}
+
+func TestSharedCacheReevaluatesMIMEOriginCORSAndCredentialsPerTab(t *testing.T) {
+	counts := make(map[string]int)
+	var policyOrigins []string
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		counts[request.URL.Path]++
+		response.Header().Set("Cache-Control", "max-age=60")
+		response.Header().Set("Access-Control-Allow-Origin", "*")
+		if request.URL.Path == "/policy" || request.URL.Path == "/origin" {
+			policyOrigins = append(policyOrigins, request.Header.Get("Origin"))
+		}
+		response.Header().Set("Content-Type", "text/plain")
+		_, _ = response.Write([]byte("cached"))
+	}))
+	defer server.Close()
+
+	client := network.NewClientWithLimits(server.Client(), 1024)
+	mimeURL := mustURL(t, server.URL+"/mime")
+	if _, err := client.Do(context.Background(), &network.Request{
+		Method: http.MethodGet, URL: mimeURL, SiteURL: mustURL(t, server.URL+"/tab-a"), Kind: network.RequestFetch, Credentials: network.CredentialsOmit,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := New(client).Navigate(context.Background(), mimeURL.String()); err == nil || !strings.Contains(err.Error(), "unsupported Content-Type") {
+		t.Fatalf("cached navigation MIME error = %v", err)
+	}
+	if counts["/mime"] != 1 {
+		t.Fatalf("MIME check bypassed cache: requests = %d", counts["/mime"])
+	}
+
+	policyURL := mustURL(t, server.URL+"/policy")
+	policySite := mustURL(t, "https://app.example.test/tab-a")
+	request := &network.Request{Method: http.MethodGet, URL: policyURL, SiteURL: policySite, Kind: network.RequestFetch, Credentials: network.CredentialsOmit}
+	if _, err := client.Do(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	credentialed := *request
+	credentialed.Credentials = network.CredentialsInclude
+	if _, err := client.Do(context.Background(), &credentialed); !errors.Is(err, network.ErrCORS) {
+		t.Fatalf("credentialed cache hit error = %v, want ErrCORS", err)
+	}
+	if counts["/policy"] != 1 {
+		t.Fatalf("CORS policy cache requests = %d, want 1", counts["/policy"])
+	}
+
+	originURL := mustURL(t, server.URL+"/origin")
+	if _, err := client.Get(context.Background(), originURL); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Do(context.Background(), &network.Request{
+		Method: http.MethodGet, URL: originURL, SiteURL: mustURL(t, "https://other.example.test/tab-b"), Kind: network.RequestFetch, Credentials: network.CredentialsOmit,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if counts["/origin"] != 2 {
+		t.Fatalf("cross-origin tab reused another partition: requests = %d", counts["/origin"])
+	}
+	if len(policyOrigins) != 3 || policyOrigins[0] != "https://app.example.test" || policyOrigins[1] != "" || policyOrigins[2] != "https://other.example.test" {
+		t.Fatalf("evaluated request origins = %q", policyOrigins)
+	}
+}
+
+func TestCloseTabKeepsSharedLocalStorageCookiesAndHTTPCache(t *testing.T) {
+	cacheRequests := 0
+	cookieReceived := false
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Content-Type", "text/html")
+		switch request.URL.Path {
+		case "/auth/set":
+			http.SetCookie(response, &http.Cookie{Name: "session", Value: "survives", Path: "/auth"})
+		case "/auth/check":
+			cookie, err := request.Cookie("session")
+			cookieReceived = err == nil && cookie.Value == "survives"
+		case "/cache":
+			cacheRequests++
+			response.Header().Set("Cache-Control", "max-age=60")
+		}
+		_, _ = response.Write([]byte("<!doctype html><title>Shared Profile</title>"))
+	}))
+	defer server.Close()
+
+	profile := storagecore.NewManager()
+	client := network.NewClientWithLimits(server.Client(), 4096)
+	var pageSessions []*storagecore.Manager
+	session := NewSession(func() *Browser {
+		manager := profile.NewPageSession()
+		pageSessions = append(pageSessions, manager)
+		return NewWithRuntimeFactoryAndStorage(client, nil, manager)
+	})
+	defer session.Close()
+	first, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.NewTab(nil); err != nil {
+		t.Fatal(err)
+	}
+	originURL := mustURL(t, server.URL+"/app")
+	local, _, err := pageSessions[0].Areas(originURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := local.Set("workspace", "kept"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.tabs[0].browser.Navigate(context.Background(), server.URL+"/auth/set"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.tabs[0].browser.Navigate(context.Background(), server.URL+"/cache"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := session.CloseTab(first.ID); err != nil {
+		t.Fatal(err)
+	}
+	secondLocal, _, err := pageSessions[1].Areas(originURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value, found := secondLocal.Get("workspace"); !found || value != "kept" {
+		t.Fatalf("Local Storage after close = (%q, %v)", value, found)
+	}
+	if _, err := session.tabs[0].browser.Navigate(context.Background(), server.URL+"/auth/check"); err != nil {
+		t.Fatal(err)
+	}
+	if !cookieReceived {
+		t.Fatal("shared Cookie was removed with closed tab")
+	}
+	if _, err := session.tabs[0].browser.Navigate(context.Background(), server.URL+"/cache"); err != nil {
+		t.Fatal(err)
+	}
+	if cacheRequests != 1 {
+		t.Fatalf("shared cache requests after close = %d, want 1", cacheRequests)
+	}
+}
+
+func TestTabChromeDoesNotExposeURLCookieOrStorageCredentials(t *testing.T) {
+	const cookieSecret = "cookie-top-secret"
+	const storageSecret = "storage-top-secret"
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		http.SetCookie(response, &http.Cookie{Name: "session", Value: cookieSecret, Path: "/", HttpOnly: true})
+		response.Header().Set("Content-Type", "text/html")
+		_, _ = response.Write([]byte("<!doctype html><title>Private Workspace</title>"))
+	}))
+	defer server.Close()
+
+	profile := storagecore.NewManager()
+	pageProfile := profile.NewPageSession()
+	client := network.NewClientWithLimits(server.Client(), 4096)
+	state := NewWithRuntimeFactoryAndStorage(client, nil, pageProfile)
+	session := NewSession(func() *Browser { return state })
+	defer session.Close()
+	credentialURL := strings.Replace(server.URL, "http://", "http://tab-user:tab-password@", 1) + "/workspace"
+	tab, err := session.NewTab(mustURL(t, credentialURL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := state.Navigate(context.Background(), credentialURL); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.FinishTabNavigation(tab.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	local, _, err := pageProfile.Areas(mustURL(t, credentialURL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := local.Set("credential", storageSecret); err != nil {
+		t.Fatal(err)
+	}
+
+	chrome := fmt.Sprintf("%+v", session.Tabs())
+	for _, secret := range []string{"tab-user", "tab-password", cookieSecret, storageSecret} {
+		if strings.Contains(chrome, secret) {
+			t.Fatalf("Tab chrome exposed %q: %s", secret, chrome)
+		}
+	}
+	if !strings.Contains(chrome, "Private Workspace") || !strings.Contains(chrome, server.URL+"/workspace") {
+		t.Fatalf("redacted Tab chrome lost safe label data: %s", chrome)
+	}
+}
+
+func mustURL(t *testing.T, raw string) *url.URL {
+	t.Helper()
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return parsed
+}

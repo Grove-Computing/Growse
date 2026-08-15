@@ -40,6 +40,7 @@ type Runtime struct {
 	fetchAPI      *fetchapi.API
 	navigationAPI *navigationapi.API
 	schedulerAPI  *schedulerapi.API
+	storageAPI    *storageapi.API
 	loaded        bool
 	started       bool
 	stopped       bool
@@ -107,7 +108,8 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 	scheduler := schedulerapi.NewPage(r.runtimeCtx, r.enqueueCallback, environment.RequestFrame)
 	scheduler.SetFrameScope(environment.FrameScope)
 	r.schedulerAPI = scheduler
-	storage := storageapi.New(environment.LocalStorage, environment.SessionStorage)
+	storage := storageapi.NewPage(environment.LocalStorage, environment.SessionStorage, environment.StorageSource, r.enqueueCallback)
+	r.storageAPI = storage
 	if err := r.interpreter.Use(interp.Exports{
 		"growse/console/console": {
 			"Log": reflect.ValueOf(console.Log),
@@ -159,9 +161,11 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 			"Timestamp":             reflect.ValueOf((*schedulerapi.Timestamp)(nil)),
 		},
 		"growse/storage/storage": {
-			"Local":   reflect.ValueOf(storage.Local),
-			"Session": reflect.ValueOf(storage.Session),
-			"Storage": reflect.ValueOf((*storageapi.Storage)(nil)),
+			"Event":    reflect.ValueOf((*storageapi.Event)(nil)),
+			"Local":    reflect.ValueOf(storage.Local),
+			"OnChange": reflect.ValueOf(storage.OnChange),
+			"Session":  reflect.ValueOf(storage.Session),
+			"Storage":  reflect.ValueOf((*storageapi.Storage)(nil)),
 		},
 		"growse/strconv/strconv": {
 			"Itoa": reflect.ValueOf(strconvapi.Itoa),
@@ -232,6 +236,16 @@ func (r *Runtime) HasAnimationFrameCallbacks() bool {
 	scheduler := r.schedulerAPI
 	r.mu.Unlock()
 	return scheduler != nil && scheduler.HasAnimationFrameCallbacks()
+}
+
+// SetBackground applies hidden-tab scheduling policy to this page runtime.
+func (r *Runtime) SetBackground(background bool) {
+	r.mu.Lock()
+	scheduler := r.schedulerAPI
+	r.mu.Unlock()
+	if scheduler != nil {
+		scheduler.SetBackground(background)
+	}
 }
 
 // DispatchPageEvent runs a browser-originated DOM event on the page queue and
@@ -310,6 +324,7 @@ func (r *Runtime) Stop() error {
 	done := r.callbackDone
 	fetch := r.fetchAPI
 	scheduler := r.schedulerAPI
+	storage := r.storageAPI
 	r.mu.Unlock()
 	if cancel != nil {
 		cancel()
@@ -319,6 +334,9 @@ func (r *Runtime) Stop() error {
 	}
 	if scheduler != nil {
 		scheduler.Close()
+	}
+	if storage != nil {
+		storage.Close()
 	}
 	if done != nil {
 		<-done
@@ -332,6 +350,7 @@ func (r *Runtime) Stop() error {
 	r.fetchAPI = nil
 	r.navigationAPI = nil
 	r.schedulerAPI = nil
+	r.storageAPI = nil
 	r.loaded = false
 	r.mu.Unlock()
 	r.executionMu.Unlock()

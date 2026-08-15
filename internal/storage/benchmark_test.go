@@ -32,3 +32,29 @@ func BenchmarkLookupAndUpdate10000StorageEntries(b *testing.B) {
 		}
 	}
 }
+
+func BenchmarkDispatchLocalStorageUpdatesAcross16Tabs(b *testing.B) {
+	area := NewArea()
+	unsubscribes := make([]func(), 16)
+	for index := range unsubscribes {
+		unsubscribes[index] = area.Subscribe(uint64(index+1), func(Change) {})
+	}
+	defer func() {
+		for _, unsubscribe := range unsubscribes {
+			unsubscribe()
+		}
+	}()
+	b.ReportAllocs()
+	b.ReportMetric(16, "updates/op")
+	iteration := 0
+	b.ResetTimer()
+	for b.Loop() {
+		for source := 0; source < 16; source++ {
+			value := fmt.Sprintf("%d-%d", iteration, source)
+			if err := area.SetFrom(MutationSource{ID: uint64(source + 1)}, "shared", value); err != nil {
+				b.Fatal(err)
+			}
+		}
+		iteration++
+	}
+}

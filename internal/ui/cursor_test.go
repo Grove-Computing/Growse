@@ -153,7 +153,7 @@ func TestGopherCursorOverlayDoesNotStealInputFocus(t *testing.T) {
 		Buttons:  pointer.ButtonPrimary,
 		Kind:     pointer.Press,
 		Source:   pointer.Mouse,
-		Position: f32.Pt(40, float32(toolbarHeight)+40),
+		Position: f32.Pt(float32(tabRailWidth)+40, float32(toolbarHeight)+40),
 	})
 	gtx.Reset()
 	ui.Layout(gtx)

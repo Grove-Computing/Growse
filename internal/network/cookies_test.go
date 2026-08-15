@@ -43,6 +43,52 @@ func TestCookiePolicyAppliesSecureHTTPOnlyAndSameSite(t *testing.T) {
 	}
 }
 
+func TestSharedCookieJarReevaluatesPolicyForEachTabRequest(t *testing.T) {
+	jar := newPolicyCookieJar()
+	target := parseCookieURL(t, "https://api.example.com/data")
+	jar.SetCookies(target, []*http.Cookie{
+		{Name: "strict", Value: "yes", Path: "/", Secure: true, SameSite: http.SameSiteStrictMode},
+		{Name: "lax", Value: "yes", Path: "/", Secure: true, SameSite: http.SameSiteLaxMode},
+		{Name: "none", Value: "yes", Path: "/", Secure: true, SameSite: http.SameSiteNoneMode},
+	})
+
+	tests := []struct {
+		name        string
+		siteURL     string
+		kind        RequestKind
+		method      string
+		credentials CredentialsMode
+		want        map[string]string
+	}{
+		{name: "same origin fetch", siteURL: "https://api.example.com/page", kind: RequestFetch, method: http.MethodGet, credentials: CredentialsSameOrigin, want: map[string]string{"strict": "yes", "lax": "yes", "none": "yes"}},
+		{name: "same site cross origin fetch", siteURL: "https://www.example.com/page", kind: RequestFetch, method: http.MethodGet, credentials: CredentialsSameOrigin, want: map[string]string{}},
+		{name: "cross site included fetch", siteURL: "https://other.test/page", kind: RequestFetch, method: http.MethodGet, credentials: CredentialsInclude, want: map[string]string{"none": "yes"}},
+		{name: "cross site navigation", siteURL: "https://other.test/page", kind: RequestNavigation, method: http.MethodGet, want: map[string]string{"lax": "yes", "none": "yes"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request, err := http.NewRequest(test.method, target.String(), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			addRequestCookies(request, jar, &Request{
+				Method: test.method, URL: target, SiteURL: parseCookieURL(t, test.siteURL), Kind: test.kind, Credentials: test.credentials,
+			})
+			if got := cookieHeaderValues(request.Cookies()); !reflect.DeepEqual(got, test.want) {
+				t.Fatalf("request Cookies = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
+func cookieHeaderValues(cookies []*http.Cookie) map[string]string {
+	values := make(map[string]string, len(cookies))
+	for _, cookie := range cookies {
+		values[cookie.Name] = cookie.Value
+	}
+	return values
+}
+
 func TestCookieJarEnforcesSizeTotalAndPerDomainLimits(t *testing.T) {
 	jar := newPolicyCookieJarWithLimits(cookieLimits{maxCookies: 2, maxCookiesPerDomain: 1, maxCookieBytes: 8})
 	first := parseCookieURL(t, "https://first.example/path")

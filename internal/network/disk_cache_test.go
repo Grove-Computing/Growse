@@ -3,10 +3,12 @@ package network
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -129,6 +131,37 @@ func TestDiskCacheSchemaMismatchRemovesOnlyIncompatibleEntry(t *testing.T) {
 	}
 	if response, ok := restarted.Match(healthy); !ok || string(response.Body) != "current" {
 		t.Fatalf("healthy sibling entry = (%v, %v)", response, ok)
+	}
+}
+
+func TestConcurrentDiskCacheWritesKeepMetadataAndBodyTogether(t *testing.T) {
+	root := t.TempDir()
+	limits := diskCacheLimits{maxEntries: 8, maxEntryBytes: 1024, maxOriginBytes: 8192, maxTotalBytes: 8192}
+	cache := newTestPersistentCache(t, root, limits)
+	request := &Request{Method: http.MethodGet, URL: mustParseURL(t, "https://example.test/shared")}
+
+	var wait sync.WaitGroup
+	for index := 0; index < 32; index++ {
+		wait.Add(1)
+		go func(index int) {
+			defer wait.Done()
+			value := fmt.Sprintf("response-%02d", index)
+			cache.Store(request, &Response{
+				URL: request.URL, StatusCode: http.StatusOK, ContentType: "text/plain",
+				Header: http.Header{"Cache-Control": []string{"max-age=3600"}, "X-Body-ID": []string{value}},
+				Body:   []byte(value),
+			})
+		}(index)
+	}
+	wait.Wait()
+
+	restarted := newTestPersistentCache(t, root, limits)
+	response, found := restarted.Match(request)
+	if !found {
+		t.Fatal("concurrently written entry was not restored")
+	}
+	if metadata, body := headerValue(response.Header, "X-Body-ID"), string(response.Body); metadata != body {
+		t.Fatalf("cache metadata/body mismatch = %q/%q", metadata, body)
 	}
 }
 

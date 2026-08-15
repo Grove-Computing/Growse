@@ -8,6 +8,7 @@ examples=(
   dashboard
   data-app
   flexbox
+  persistent-app
   todo
 )
 
@@ -26,6 +27,7 @@ go test \
   ./examples/dashboard \
   ./examples/data-app \
   ./examples/flexbox \
+  ./examples/persistent-app \
   ./examples/todo
 
-echo "v0.8.0 Demo回帰検証成功: ${examples[*]}"
+echo "v0.9.4 Demo回帰検証成功: ${examples[*]}"

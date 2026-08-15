@@ -36,6 +36,22 @@ type requestRouteLoader struct {
 	requests []*network.Request
 }
 
+type supersedingNavigationLoader struct {
+	started map[string]chan struct{}
+	release map[string]chan struct{}
+}
+
+func (loader *supersedingNavigationLoader) Get(ctx context.Context, resourceURL *url.URL) (*network.Response, error) {
+	path := resourceURL.Path
+	close(loader.started[path])
+	select {
+	case <-loader.release[path]:
+		return &network.Response{URL: resourceURL, StatusCode: http.StatusOK, ContentType: "text/html", Body: []byte("<title>" + path + "</title>")}, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
 func (loader *requestRouteLoader) Do(_ context.Context, request *network.Request) (*network.Response, error) {
 	copy := *request
 	copy.Body = append([]byte(nil), request.Body...)
@@ -1361,6 +1377,36 @@ func TestSubmitPOSTSendsEncodedBodyAndNavigatesToResponse(t *testing.T) {
 	}
 }
 
+func TestSupersedingNavigationCancelsStaleResult(t *testing.T) {
+	loader := &supersedingNavigationLoader{
+		started: map[string]chan struct{}{"/first": make(chan struct{}), "/second": make(chan struct{})},
+		release: map[string]chan struct{}{"/first": make(chan struct{}), "/second": make(chan struct{})},
+	}
+	state := New(loader)
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := state.Navigate(context.Background(), "https://example.test/first")
+		firstDone <- err
+	}()
+	<-loader.started["/first"]
+	secondDone := make(chan error, 1)
+	go func() {
+		_, err := state.Navigate(context.Background(), "https://example.test/second")
+		secondDone <- err
+	}()
+	<-loader.started["/second"]
+	close(loader.release["/second"])
+	if err := <-secondDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-firstDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("superseded navigation error = %v", err)
+	}
+	if page := state.Page(); page == nil || page.URL.Path != "/second" {
+		t.Fatalf("committed page after navigation competition = %+v", page)
+	}
+}
+
 func TestSubmitHonorsValidationPreventDefaultAndNoValidate(t *testing.T) {
 	newBrowser := func(t *testing.T, formAttributes, buttonAttributes map[string]string) (*Browser, *routeLoader, *Page, *dom.Node, *dom.Node) {
 		t.Helper()
@@ -1424,7 +1470,7 @@ func TestNewPageCopiesURL(t *testing.T) {
 
 func TestPageLinkURLResolvesNearestAnchor(t *testing.T) {
 	document := dom.NewDocument()
-	anchor := document.CreateElement("a", map[string]string{"href": "../next?q=1"})
+	anchor := document.CreateElement("a", map[string]string{"href": "../next?q=1", "target": " _BLANK "})
 	span := document.CreateElement("span", nil)
 	text := document.CreateText("Next")
 	for _, edge := range [][2]*dom.Node{{document.Root, anchor}, {anchor, span}, {span, text}} {
@@ -1437,6 +1483,10 @@ func TestPageLinkURLResolvesNearestAnchor(t *testing.T) {
 	resolved, ok := page.LinkURL(span.ID)
 	if !ok || resolved.String() != "https://example.com/next?q=1" {
 		t.Fatalf("LinkURL() = (%v, %v), want resolved relative URL", resolved, ok)
+	}
+	resolved, target, ok := page.LinkDestination(text.ID)
+	if !ok || resolved.String() != "https://example.com/next?q=1" || target != "_blank" {
+		t.Fatalf("LinkDestination() = (%v, %q, %v), want resolved URL and _blank", resolved, target, ok)
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Grove-Computing/Growse/internal/browser"
 	"github.com/Grove-Computing/Growse/internal/network"
 	storagecore "github.com/Grove-Computing/Growse/internal/storage"
 	"github.com/Grove-Computing/Growse/internal/webapi/scheduler"
@@ -16,6 +17,91 @@ import (
 
 type fakeClock struct {
 	current time.Time
+}
+
+type fakeNavigator struct {
+	session *browser.Session
+}
+
+func (navigator fakeNavigator) Open(ctx context.Context, rawURL string) (browser.TabSnapshot, error) {
+	target, err := url.Parse(rawURL)
+	if err != nil {
+		return browser.TabSnapshot{}, err
+	}
+	tab, err := navigator.session.NewTab(target)
+	if err != nil {
+		return browser.TabSnapshot{}, err
+	}
+	if _, err := navigator.session.SelectTab(tab.ID); err != nil {
+		return browser.TabSnapshot{}, err
+	}
+	_, state, ok := navigator.session.ActiveBrowserTarget()
+	if !ok {
+		return browser.TabSnapshot{}, browser.ErrTabNotFound
+	}
+	if _, err := state.Navigate(ctx, rawURL); err != nil {
+		return browser.TabSnapshot{}, err
+	}
+	active, ok := navigator.session.ActiveTab()
+	if !ok {
+		return browser.TabSnapshot{}, browser.ErrTabNotFound
+	}
+	return active, nil
+}
+
+func TestMultipleTabsUseOnlyDeterministicInjectedDependencies(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		requests++
+		response.Header().Set("Content-Type", "text/html")
+		response.Header().Set("Cache-Control", "max-age=3600")
+		_, _ = response.Write([]byte("<!doctype html><title>Deterministic</title>"))
+	}))
+	t.Cleanup(server.Close)
+
+	profile, err := storagecore.NewPersistentManager(filepath.Join(t.TempDir(), "profile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := network.NewClientWithLimits(server.Client(), 4096)
+	clock := &fakeClock{current: time.Date(2026, time.August, 15, 12, 0, 0, 0, time.UTC)}
+	var pageProfiles []*storagecore.Manager
+	session := browser.NewSession(func() *browser.Browser {
+		pageProfile := profile.NewPageSession()
+		pageProfiles = append(pageProfiles, pageProfile)
+		state := browser.NewWithRuntimeFactoryAndStorage(client, nil, pageProfile)
+		state.SetAnimationClock(clock)
+		return state
+	})
+	t.Cleanup(func() { _ = session.Close() })
+	navigator := fakeNavigator{session: session}
+
+	first, err := navigator.Open(context.Background(), server.URL+"/workspace")
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock.current = clock.current.Add(16 * time.Millisecond)
+	second, err := navigator.Open(context.Background(), server.URL+"/workspace")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ID == second.ID || len(session.Tabs()) != 2 || requests != 1 {
+		t.Fatalf("deterministic tabs/cache = ids:%d/%d tabs:%d requests:%d", first.ID, second.ID, len(session.Tabs()), requests)
+	}
+	local, _, err := pageProfiles[0].Areas(parseURL(t, server.URL+"/workspace"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := local.Set("shared", "yes"); err != nil {
+		t.Fatal(err)
+	}
+	peerLocal, _, err := pageProfiles[1].Areas(parseURL(t, server.URL+"/workspace"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value, found := peerLocal.Get("shared"); !found || value != "yes" {
+		t.Fatalf("temporary profile sharing = (%q, %v)", value, found)
+	}
 }
 
 func (clock *fakeClock) Now() time.Time { return clock.current }

@@ -24,3 +24,30 @@ func TestWPTStorageKeyOrderSurvivesValueReplacement(t *testing.T) {
 		}
 	}
 }
+
+// WPT source: webstorage/event_basic.js.
+func TestWPTLocalStorageEventCarriesCommittedOldAndNewValuesOnce(t *testing.T) {
+	area := NewArea()
+	var sourceEvents, targetEvents []Change
+	stopSource := area.Subscribe(1, func(change Change) { sourceEvents = append(sourceEvents, change) })
+	defer stopSource()
+	stopTarget := area.Subscribe(2, func(change Change) { targetEvents = append(targetEvents, change) })
+	defer stopTarget()
+	source := MutationSource{ID: 1, URL: "https://example.test/source"}
+	if err := area.SetFrom(source, "name", "first"); err != nil {
+		t.Fatal(err)
+	}
+	if err := area.SetFrom(source, "name", "second"); err != nil {
+		t.Fatal(err)
+	}
+	if len(sourceEvents) != 0 || len(targetEvents) != 2 {
+		t.Fatalf("source/target Storage Events = %d/%d", len(sourceEvents), len(targetEvents))
+	}
+	first, second := targetEvents[0], targetEvents[1]
+	if first.HasOldValue || first.NewValue != "first" || !second.HasOldValue || second.OldValue != "first" || second.NewValue != "second" {
+		t.Fatalf("Storage Event payloads = %+v / %+v", first, second)
+	}
+	if first.Sequence != 1 || second.Sequence != 2 || second.SourceURL != source.URL {
+		t.Fatalf("Storage Event order/source = %+v / %+v", first, second)
+	}
+}
