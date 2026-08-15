@@ -1,6 +1,6 @@
 # Form / Fetch / Cookie対応表
 
-この表はGrowse v0.8.0の実装を基準とする。「部分対応」は主要な利用経路を扱えるが、Web標準の全機能を実装していない項目を表す。
+この表はGrowse v0.9.0の実装を基準とする。「部分対応」は主要な利用経路を扱えるが、Web標準の全機能を実装していない項目を表す。
 
 ## Form Controls
 
@@ -39,7 +39,8 @@ WebGoは`growse/fetch`の`Fetch(Request, success, failure)`を利用する。相
 | Body helper | 対応 | Bytes、Text、JSON。二重消費はErrorになる |
 | Credentials Mode | 対応 | `omit`、`same-origin`、`include` |
 | safety limit | 対応 | Request 1 MiB、Header 100件/64 KiB、Response既定4 MiB |
-| 対象外 | 非対応 | Promise、ReadableStream、AbortController、Service Worker、HTTP cache |
+| HTTP Cache | 対応 | Navigation、Resource Loading、WebGo Source、Fetchで共通のprivate cacheを使用する |
+| 対象外 | 非対応 | Promise、ReadableStream、AbortController、Service Worker |
 
 ## Cookie
 
@@ -68,3 +69,4 @@ HTTP(S)のscheme、host、正規化したportでOriginを比較する。WebGo Fe
 | 対象外 | 非対応 | opaque Origin、Private Network Access、CORB、CSP、Mixed Content |
 
 WPT由来テストの固定revision、出典、適応差分は[Web Platform Tests由来テスト](wpt.md)を参照する。
+HTTP Cacheのdirective、永続化、quota、および対象外は[Storage / Cache対応表](storage-cache-support.md)を参照する。

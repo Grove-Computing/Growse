@@ -138,7 +138,7 @@ jobs:
           mkdir -p dist/package/examples
           scripts/package-gui.sh dist/package "$RELEASE_TAG" "$GITHUB_RUN_NUMBER"
           cp README.md SECURITY.md LICENSE.md dist/package/
-          cp -R examples/counter examples/todo examples/css3-core examples/flexbox examples/dashboard examples/animation examples/data-app dist/package/examples/
+          cp -R examples/counter examples/todo examples/css3-core examples/flexbox examples/dashboard examples/animation examples/data-app examples/persistent-app dist/package/examples/
 
       - name: Package Unix archive
         if: runner.os != 'Windows'

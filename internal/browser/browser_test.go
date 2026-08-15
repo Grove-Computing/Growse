@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"reflect"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"github.com/Grove-Computing/Growse/internal/events"
 	"github.com/Grove-Computing/Growse/internal/forms"
 	"github.com/Grove-Computing/Growse/internal/network"
+	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 	"github.com/Grove-Computing/Growse/internal/style"
 )
 
@@ -561,6 +563,59 @@ func TestNavigatePreservesPageOnFailure(t *testing.T) {
 	}
 }
 
+func TestFragmentNavigationReusesDocumentAndRuntimeWithoutNetwork(t *testing.T) {
+	pageURL := mustParseURL(t, "http://localhost/notes")
+	loader := &routeLoader{responses: map[string]*network.Response{
+		pageURL.String(): {URL: pageURL, StatusCode: 200, ContentType: "text/html", Body: []byte(`<script type="text/go">package main; func main() {}</script><p>Notes</p>`)},
+	}}
+	runtime := &runtimeStub{}
+	browser := NewWithRuntimeFactory(loader, func() runtimemodel.Runtime { return runtime })
+	page, err := browser.Navigate(context.Background(), pageURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fragmentURL := pageURL.String() + "#details"
+	updated, err := browser.Navigate(context.Background(), fragmentURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated != page || browser.Page() != page {
+		t.Fatal("fragment Navigation replaced the active Page")
+	}
+	if got := page.URL.String(); got != fragmentURL {
+		t.Fatalf("Page URL = %q, want %q", got, fragmentURL)
+	}
+	if got := len(loader.requested); got != 1 {
+		t.Fatalf("loader requests = %d, want one document request", got)
+	}
+	if runtime.stopCalls.Load() != 0 || runtime.startCalls.Load() != 1 {
+		t.Fatalf("Runtime calls = start:%d stop:%d, want start:1 stop:0", runtime.startCalls.Load(), runtime.stopCalls.Load())
+	}
+	if got, want := len(browser.history.entries), 2; got != want {
+		t.Fatalf("history entries = %d, want %d", got, want)
+	}
+	if len(runtime.hashChanges) != 1 || runtime.hashChanges[0] != [2]string{pageURL.String(), fragmentURL} {
+		t.Fatalf("hashchange events = %v", runtime.hashChanges)
+	}
+	if len(runtime.popStates) != 0 {
+		t.Fatalf("popstate events = %v, want none", runtime.popStates)
+	}
+	if _, err := browser.Back(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(runtime.popStates) != 1 || runtime.popStates[0] != "" {
+		t.Fatalf("traversal popstate events = %v", runtime.popStates)
+	}
+	if len(runtime.hashChanges) != 2 || runtime.hashChanges[1] != [2]string{fragmentURL, pageURL.String()} {
+		t.Fatalf("traversal hashchange events = %v", runtime.hashChanges)
+	}
+	wantOrder := []string{"hashchange", "popstate", "hashchange"}
+	if !reflect.DeepEqual(runtime.navigationEvents, wantOrder) {
+		t.Fatalf("Navigation Event order = %v, want %v", runtime.navigationEvents, wantOrder)
+	}
+}
+
 func TestBackAndForwardLoadHistoryEntries(t *testing.T) {
 	firstURL := mustParseURL(t, "https://example.com/first")
 	secondURL := mustParseURL(t, "https://example.com/second")
@@ -590,6 +645,74 @@ func TestBackAndForwardLoadHistoryEntries(t *testing.T) {
 	page, err = browser.Forward(context.Background())
 	if err != nil || page.URL.String() != secondURL.String() {
 		t.Fatalf("Forward() = (%v, %v), want second page", page, err)
+	}
+}
+
+func TestSameDocumentTraversalRestoresURLStateAndScrollWithoutNetwork(t *testing.T) {
+	pageURL := mustParseURL(t, "http://localhost/notes")
+	loader := &routeLoader{responses: map[string]*network.Response{
+		pageURL.String(): {URL: pageURL, StatusCode: 200, ContentType: "text/html", Body: []byte(`<p>Notes</p>`)},
+	}}
+	browser := New(loader)
+	page, err := browser.Navigate(context.Background(), pageURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	browser.UpdateHistoryScroll(2, -10)
+	detailURL := mustParseURL(t, "http://localhost/notes?view=detail")
+	if err := browser.pushHistoryState(page, detailURL, `{"view":"detail"}`); err != nil {
+		t.Fatal(err)
+	}
+	browser.UpdateHistoryScroll(5, -24)
+
+	back, err := browser.Back(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if back != page || page.URL.String() != pageURL.String() || page.HistoryState != "" || page.ScrollFirst != 2 || page.ScrollOffset != -10 {
+		t.Fatalf("Back restored Page = %p URL=%v state=%q scroll=(%d,%d)", back, page.URL, page.HistoryState, page.ScrollFirst, page.ScrollOffset)
+	}
+	forward, err := browser.Forward(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if forward != page || page.URL.String() != detailURL.String() || page.HistoryState != `{"view":"detail"}` || page.ScrollFirst != 5 || page.ScrollOffset != -24 {
+		t.Fatalf("Forward restored Page = %p URL=%v state=%q scroll=(%d,%d)", forward, page.URL, page.HistoryState, page.ScrollFirst, page.ScrollOffset)
+	}
+	if got := len(loader.requested); got != 1 {
+		t.Fatalf("network requests = %d, want 1", got)
+	}
+}
+
+func TestCrossDocumentTraversalRestoresStateAndScroll(t *testing.T) {
+	firstURL := mustParseURL(t, "https://example.com/first")
+	secondURL := mustParseURL(t, "https://example.com/second")
+	loader := &routeLoader{responses: map[string]*network.Response{
+		firstURL.String():  {URL: firstURL, StatusCode: 200, ContentType: "text/html", Body: []byte(`<p>First</p>`)},
+		secondURL.String(): {URL: secondURL, StatusCode: 200, ContentType: "text/html", Body: []byte(`<p>Second</p>`)},
+	}}
+	browser := New(loader)
+	first, err := browser.Navigate(context.Background(), firstURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := browser.replaceHistoryState(first, firstURL, `{"document":1}`); err != nil {
+		t.Fatal(err)
+	}
+	browser.UpdateHistoryScroll(4, -16)
+	if _, err := browser.Navigate(context.Background(), secondURL.String()); err != nil {
+		t.Fatal(err)
+	}
+
+	restored, err := browser.Back(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restored == first || restored.URL.String() != firstURL.String() || restored.HistoryState != `{"document":1}` || restored.ScrollFirst != 4 || restored.ScrollOffset != -16 {
+		t.Fatalf("restored Page = %p URL=%v state=%q scroll=(%d,%d)", restored, restored.URL, restored.HistoryState, restored.ScrollFirst, restored.ScrollOffset)
+	}
+	if got := len(loader.requested); got != 3 {
+		t.Fatalf("network requests = %d, want 3", got)
 	}
 }
 
@@ -651,6 +774,7 @@ func TestReloadIgnoringCacheRevalidatesDocumentAndSubresources(t *testing.T) {
 	if _, err := browser.Navigate(context.Background(), pageURL.String()); err != nil {
 		t.Fatal(err)
 	}
+	loader.requests = nil
 
 	if _, err := browser.ReloadIgnoringCache(context.Background()); err != nil {
 		t.Fatal(err)
@@ -666,6 +790,49 @@ func TestReloadIgnoringCacheRevalidatesDocumentAndSubresources(t *testing.T) {
 	}
 	if got, want := len(browser.history.entries), 1; got != want {
 		t.Fatalf("history entries after ReloadIgnoringCache = %d, want %d", got, want)
+	}
+}
+
+func TestNavigationReloadAndForcedReloadUseDistinctCacheModes(t *testing.T) {
+	documentRequests := 0
+	stylesheetRequests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Cache-Control", "max-age=60")
+		switch request.URL.Path {
+		case "/page":
+			documentRequests++
+			response.Header().Set("Content-Type", "text/html")
+			_, _ = response.Write([]byte(`<link rel="stylesheet" href="/app.css"><p>Page</p>`))
+		case "/app.css":
+			stylesheetRequests++
+			response.Header().Set("Content-Type", "text/css")
+			_, _ = response.Write([]byte(`p { color: blue; }`))
+		default:
+			http.NotFound(response, request)
+		}
+	}))
+	defer server.Close()
+
+	browser := New(network.NewClientWithLimits(server.Client(), 1<<20))
+	for range 2 {
+		if _, err := browser.Navigate(context.Background(), server.URL+"/page"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if documentRequests != 1 || stylesheetRequests != 1 {
+		t.Fatalf("normal Navigation requests = document:%d stylesheet:%d, want 1:1", documentRequests, stylesheetRequests)
+	}
+	if _, err := browser.Reload(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if documentRequests != 2 || stylesheetRequests != 1 {
+		t.Fatalf("Reload requests = document:%d stylesheet:%d, want 2:1", documentRequests, stylesheetRequests)
+	}
+	if _, err := browser.ReloadIgnoringCache(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if documentRequests != 3 || stylesheetRequests != 2 {
+		t.Fatalf("forced Reload requests = document:%d stylesheet:%d, want 3:2", documentRequests, stylesheetRequests)
 	}
 }
 
@@ -749,6 +916,70 @@ func TestNavigateRejectsUnsupportedContentType(t *testing.T) {
 
 	if _, err := browser.Navigate(context.Background(), "https://example.com/image.png"); err == nil {
 		t.Fatal("Navigate() error = nil, want unsupported Content-Type error")
+	}
+}
+
+func TestCachedNavigationStillValidatesDocumentMIMEType(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		requests++
+		response.Header().Set("Cache-Control", "max-age=60")
+		response.Header().Set("Content-Type", "image/png")
+		_, _ = response.Write([]byte("not-html"))
+	}))
+	defer server.Close()
+	client := network.NewClientWithLimits(server.Client(), 1024)
+	target := mustParseURL(t, server.URL+"/image")
+	if _, err := client.Get(context.Background(), target); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := New(client).Navigate(context.Background(), target.String()); err == nil || !strings.Contains(err.Error(), "unsupported Content-Type") {
+		t.Fatalf("cached Navigate error = %v, want unsupported Content-Type", err)
+	}
+	if requests != 1 {
+		t.Fatalf("Network requests = %d, want cached Navigation", requests)
+	}
+}
+
+func TestCachedStylesheetRedirectStillValidatesFinalOrigin(t *testing.T) {
+	externalRequests := 0
+	external := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		externalRequests++
+		response.Header().Set("Cache-Control", "max-age=60")
+		response.Header().Set("Content-Type", "text/css")
+		_, _ = response.Write([]byte(`h1 { color: red; }`))
+	}))
+	defer external.Close()
+	stylesheetRequests := 0
+	pageServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/style.css":
+			stylesheetRequests++
+			http.Redirect(response, request, external.URL+"/style.css", http.StatusFound)
+		case "/page":
+			response.Header().Set("Content-Type", "text/html")
+			_, _ = response.Write([]byte(`<link rel="stylesheet" href="/style.css"><h1>Safe</h1>`))
+		default:
+			http.NotFound(response, request)
+		}
+	}))
+	defer pageServer.Close()
+	client := network.NewClientWithLimits(pageServer.Client(), 1<<20)
+	stylesheetURL := mustParseURL(t, pageServer.URL+"/style.css")
+	if _, err := client.Get(context.Background(), stylesheetURL); err != nil {
+		t.Fatal(err)
+	}
+	page, err := New(client).Navigate(context.Background(), pageServer.URL+"/page")
+	if err != nil {
+		t.Fatal(err)
+	}
+	heading, _ := page.Document.QuerySelector("h1")
+	computed, _ := page.ComputedStyles.For(heading)
+	if computed.Color == 0xff0000ff {
+		t.Fatal("cross-origin final stylesheet was applied from Cache")
+	}
+	if stylesheetRequests != 1 || externalRequests != 1 {
+		t.Fatalf("stylesheet Network requests = redirect:%d external:%d, want cached 1:1", stylesheetRequests, externalRequests)
 	}
 }
 

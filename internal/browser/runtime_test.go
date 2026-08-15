@@ -3,41 +3,472 @@ package browser
 import (
 	"context"
 	"errors"
+	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/Grove-Computing/Growse/internal/events"
 	"github.com/Grove-Computing/Growse/internal/network"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
+	runtimeyaegi "github.com/Grove-Computing/Growse/internal/runtime/yaegi"
+	storagecore "github.com/Grove-Computing/Growse/internal/storage"
 )
 
 type runtimeStub struct {
-	loadCalls     int
-	startCalls    int
-	stopCalls     int
-	loadErr       error
-	startErr      error
-	environment   runtimemodel.Environment
-	mutateOnStart bool
+	loadCalls        atomic.Int32
+	startCalls       atomic.Int32
+	stopCalls        atomic.Int32
+	loadErr          error
+	startErr         error
+	environment      runtimemodel.Environment
+	mutateOnStart    bool
+	navigateOnStart  string
+	popStates        []string
+	hashChanges      [][2]string
+	navigationEvents []string
+}
+
+func TestAnimationFrameMutationUsesSharedFrameTimestamp(t *testing.T) {
+	pageURL := mustParseURL(t, "http://localhost/frame.html")
+	loader := stubLoader{response: &network.Response{
+		URL: pageURL, StatusCode: 200, ContentType: "text/html",
+		Body: []byte(`<style>
+#box { opacity: 0; transition: opacity 1s linear; }
+#box.active { opacity: 1; }
+</style>
+<div id="box"></div>
+<script type="text/go">package main
+import (
+	"growse/dom"
+	"growse/scheduler"
+)
+func main() {
+	_, _ = scheduler.RequestAnimationFrame(func(timestamp scheduler.Timestamp) {
+		_ = timestamp
+		dom.GetElementByID("box").AddClass("active")
+	})
+}</script>`),
+	}}
+	start := time.Date(2026, time.August, 14, 12, 0, 0, 0, time.UTC)
+	clock := &browserFakeClock{current: start}
+	browserState := NewWithRuntimeFactory(loader, func() runtimemodel.Runtime { return runtimeyaegi.New() })
+	browserState.SetAnimationClock(clock)
+
+	page, err := browserState.Navigate(context.Background(), pageURL.String())
+	if err != nil {
+		t.Fatalf("Navigate() error = %v", err)
+	}
+	frameTime := start.Add(100 * time.Millisecond)
+	if !browserState.RunAnimationFrame(frameTime) {
+		t.Fatal("RunAnimationFrame() did not deliver WebGo callback")
+	}
+	box, ok := page.Document.GetElementByID("box")
+	if !ok {
+		t.Fatal("box element was not found")
+	}
+	atFrame, _ := page.AnimatedStyles(frameTime).For(box)
+	if atFrame.Opacity != 0 {
+		t.Fatalf("opacity at frame = %v, want transition start value 0", atFrame.Opacity)
+	}
+	midpoint, _ := page.AnimatedStyles(frameTime.Add(500 * time.Millisecond)).For(box)
+	if midpoint.Opacity != 0.5 {
+		t.Fatalf("opacity at shared timestamp midpoint = %v, want 0.5", midpoint.Opacity)
+	}
+	if err := browserState.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestBrowserCloseReleasesPageClientStorageAndRuntimeReferences(t *testing.T) {
+	pageURL := mustParseURL(t, "http://localhost/page")
+	runtime := &runtimeStub{}
+	browserState := NewWithRuntimeFactoryAndStorage(stubLoader{response: &network.Response{
+		URL: pageURL, StatusCode: 200, ContentType: "text/html",
+		Body: []byte(`<script type="text/go">package main; func main() {}</script><p>Page</p>`),
+	}}, func() runtimemodel.Runtime { return runtime }, storagecore.NewManager())
+	browserState.SetOnMutation(func() {})
+	if _, err := browserState.Navigate(context.Background(), pageURL.String()); err != nil {
+		t.Fatal(err)
+	}
+	if err := browserState.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if browserState.page != nil || browserState.client != nil || browserState.storage != nil || browserState.activeRuntime != nil ||
+		browserState.runtimeFactory != nil || browserState.onMutation != nil || len(browserState.history.entries) != 0 {
+		t.Fatal("Browser Close retained Page-owned references")
+	}
+	if runtime.stopCalls.Load() != 1 {
+		t.Fatalf("Runtime Stop calls = %d, want 1", runtime.stopCalls.Load())
+	}
+	if err := browserState.Close(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func (runtime *runtimeStub) Load(_ context.Context, _ []runtimemodel.Script, environment runtimemodel.Environment) error {
-	runtime.loadCalls++
+	runtime.loadCalls.Add(1)
 	runtime.environment = environment
 	return runtime.loadErr
 }
 
 func (runtime *runtimeStub) Start(context.Context) error {
-	runtime.startCalls++
+	runtime.startCalls.Add(1)
 	if runtime.mutateOnStart && runtime.environment.OnMutation != nil {
 		runtime.environment.OnMutation()
+	}
+	if runtime.navigateOnStart != "" && runtime.environment.Navigate != nil {
+		target, err := url.Parse(runtime.navigateOnStart)
+		if err != nil {
+			return err
+		}
+		if err := runtime.environment.Navigate(target); err != nil {
+			return err
+		}
 	}
 	return runtime.startErr
 }
 
 func (runtime *runtimeStub) Stop() error {
-	runtime.stopCalls++
+	runtime.stopCalls.Add(1)
 	return nil
+}
+
+func (runtime *runtimeStub) DispatchPopState(state string) {
+	runtime.popStates = append(runtime.popStates, state)
+	runtime.navigationEvents = append(runtime.navigationEvents, "popstate")
+}
+
+func (runtime *runtimeStub) DispatchHashChange(oldURL, newURL string) {
+	runtime.hashChanges = append(runtime.hashChanges, [2]string{oldURL, newURL})
+	runtime.navigationEvents = append(runtime.navigationEvents, "hashchange")
+}
+
+func TestWebGoNavigationUsesBrowserLifecycleAfterPageActivation(t *testing.T) {
+	firstURL := mustParseURL(t, "http://localhost/app/index.html")
+	secondURL := mustParseURL(t, "http://localhost/next")
+	loader := &routeLoader{responses: map[string]*network.Response{
+		firstURL.String():  {URL: firstURL, StatusCode: 200, ContentType: "text/html", Body: []byte(`<script type="text/go">package main; func main() {}</script><p>First</p>`)},
+		secondURL.String(): {URL: secondURL, StatusCode: 200, ContentType: "text/html", Body: []byte(`<p>Second</p>`)},
+	}}
+	runtime := &runtimeStub{navigateOnStart: secondURL.String()}
+	browser := NewWithRuntimeFactory(loader, func() runtimemodel.Runtime { return runtime })
+	if _, err := browser.Navigate(context.Background(), firstURL.String()); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for (browser.Page().URL.String() != secondURL.String() || runtime.stopCalls.Load() != 1) && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if got := browser.Page().URL.String(); got != secondURL.String() {
+		t.Fatalf("active URL = %q, want %q", got, secondURL)
+	}
+	if got, want := len(browser.history.entries), 2; got != want {
+		t.Fatalf("history entries = %d, want %d", got, want)
+	}
+	if runtime.stopCalls.Load() != 1 {
+		t.Fatalf("previous Runtime Stop() calls = %d, want 1", runtime.stopCalls.Load())
+	}
+}
+
+func TestWebGoPushStateAddsSameDocumentHistoryEntry(t *testing.T) {
+	pageURL := mustParseURL(t, "http://localhost/notes")
+	loader := &routeLoader{responses: map[string]*network.Response{
+		pageURL.String(): {URL: pageURL, StatusCode: 200, ContentType: "text/html", Body: []byte(`<script type="text/go">package main; func main() {}</script>`)},
+	}}
+	runtime := &runtimeStub{}
+	browser := NewWithRuntimeFactory(loader, func() runtimemodel.Runtime { return runtime })
+	page, err := browser.Navigate(context.Background(), pageURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := mustParseURL(t, "http://localhost/notes/7?mode=edit")
+	if err := runtime.environment.HistoryPush(`{"note":7}`, target); err != nil {
+		t.Fatalf("HistoryPush() error = %v", err)
+	}
+	if browser.Page() != page || page.URL.String() != target.String() {
+		t.Fatalf("same-document Page = %p URL = %v", browser.Page(), page.URL)
+	}
+	if got := len(loader.requested); got != 1 {
+		t.Fatalf("network requests = %d, want 1", got)
+	}
+	if got, want := len(browser.history.entries), 2; got != want {
+		t.Fatalf("history entries = %d, want %d", got, want)
+	}
+	entry := browser.history.entries[browser.history.index]
+	if entry.State != `{"note":7}` || !entry.SameDocument || entry.PageID != page.HistoryID {
+		t.Fatalf("history entry = %#v", entry)
+	}
+	if len(runtime.popStates) != 0 || len(runtime.hashChanges) != 0 {
+		t.Fatalf("PushState dispatched events: pop=%v hash=%v", runtime.popStates, runtime.hashChanges)
+	}
+	if _, err := browser.Back(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := browser.Forward(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(runtime.popStates) != 2 || runtime.popStates[0] != "" || runtime.popStates[1] != `{"note":7}` {
+		t.Fatalf("traversal popstate events = %v", runtime.popStates)
+	}
+	if len(runtime.hashChanges) != 0 {
+		t.Fatalf("History API traversal hashchange events = %v, want none", runtime.hashChanges)
+	}
+}
+
+func TestWebGoReplaceStateDoesNotAddHistoryEntry(t *testing.T) {
+	pageURL := mustParseURL(t, "http://localhost/notes")
+	loader := &routeLoader{responses: map[string]*network.Response{
+		pageURL.String(): {URL: pageURL, StatusCode: 200, ContentType: "text/html", Body: []byte(`<script type="text/go">package main; func main() {}</script>`)},
+	}}
+	runtime := &runtimeStub{}
+	browser := NewWithRuntimeFactory(loader, func() runtimemodel.Runtime { return runtime })
+	page, err := browser.Navigate(context.Background(), pageURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := mustParseURL(t, "http://localhost/notes?filter=open")
+	if err := runtime.environment.HistoryReplace(`{"filter":"open"}`, target); err != nil {
+		t.Fatalf("HistoryReplace() error = %v", err)
+	}
+	if browser.Page() != page || page.URL.String() != target.String() {
+		t.Fatalf("active Page or URL changed unexpectedly: %p %v", browser.Page(), page.URL)
+	}
+	if got, want := len(browser.history.entries), 1; got != want {
+		t.Fatalf("history entries = %d, want %d", got, want)
+	}
+	entry := browser.history.entries[0]
+	if entry.State != `{"filter":"open"}` || !entry.SameDocument {
+		t.Fatalf("history entry = %#v", entry)
+	}
+	if got := len(loader.requested); got != 1 {
+		t.Fatalf("network requests = %d, want 1", got)
+	}
+	if len(runtime.popStates) != 0 || len(runtime.hashChanges) != 0 {
+		t.Fatalf("ReplaceState dispatched events: pop=%v hash=%v", runtime.popStates, runtime.hashChanges)
+	}
+}
+
+func TestBrowserRejectsUnvalidatedHistoryInputWithoutMutation(t *testing.T) {
+	pageURL := mustParseURL(t, "http://localhost/safe")
+	loader := &routeLoader{responses: map[string]*network.Response{
+		pageURL.String(): {URL: pageURL, StatusCode: 200, ContentType: "text/html", Body: []byte(`<p>Safe</p>`)},
+	}}
+	browser := New(loader)
+	page, err := browser.Navigate(context.Background(), pageURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	credentialURL := mustParseURL(t, "http://alice:super-secret@localhost/private")
+	for _, test := range []struct {
+		state  string
+		target *url.URL
+	}{
+		{state: `{`, target: pageURL},
+		{state: `"` + strings.Repeat("x", maxHistoryStateBytes) + `"`, target: pageURL},
+		{state: `null`, target: credentialURL},
+	} {
+		err := browser.pushHistoryState(page, test.target, test.state)
+		if err == nil {
+			t.Fatal("pushHistoryState() accepted unsafe input")
+		}
+		if strings.Contains(err.Error(), "super-secret") || strings.Contains(err.Error(), test.state) {
+			t.Fatalf("error exposed unsafe input: %q", err)
+		}
+	}
+	if len(browser.history.entries) != 1 || page.URL.String() != pageURL.String() {
+		t.Fatalf("rejected input mutated History or URL: entries=%d URL=%v", len(browser.history.entries), page.URL)
+	}
+}
+
+func TestWebGoHistoryTraversalUsesCrossDocumentLifecycle(t *testing.T) {
+	firstURL := mustParseURL(t, "http://localhost/first")
+	secondURL := mustParseURL(t, "http://localhost/second")
+	loader := &routeLoader{responses: map[string]*network.Response{
+		firstURL.String():  {URL: firstURL, StatusCode: 200, ContentType: "text/html", Body: []byte(`<p>First</p>`)},
+		secondURL.String(): {URL: secondURL, StatusCode: 200, ContentType: "text/html", Body: []byte(`<script type="text/go">package main; func main() {}</script><p>Second</p>`)},
+	}}
+	runtime := &runtimeStub{}
+	browser := NewWithRuntimeFactory(loader, func() runtimemodel.Runtime { return runtime })
+	if _, err := browser.Navigate(context.Background(), firstURL.String()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := browser.Navigate(context.Background(), secondURL.String()); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.environment.HistoryTraverse(-1); err != nil {
+		t.Fatalf("HistoryTraverse() error = %v", err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for (browser.Page().URL.String() != firstURL.String() || runtime.stopCalls.Load() != 1) && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if got := browser.Page().URL.String(); got != firstURL.String() {
+		t.Fatalf("active URL = %q, want %q", got, firstURL)
+	}
+	if got, want := len(browser.history.entries), 2; got != want {
+		t.Fatalf("history entries = %d, want %d", got, want)
+	}
+	if browser.history.index != 0 || runtime.stopCalls.Load() != 1 {
+		t.Fatalf("history index = %d, Runtime Stop calls = %d", browser.history.index, runtime.stopCalls.Load())
+	}
+}
+
+func TestCrossDocumentTraversalDispatchesPopStateToNewRuntime(t *testing.T) {
+	firstURL := mustParseURL(t, "http://localhost/first-state")
+	secondURL := mustParseURL(t, "http://localhost/second-state")
+	script := `<script type="text/go">package main; func main() {}</script>`
+	loader := &routeLoader{responses: map[string]*network.Response{
+		firstURL.String():  {URL: firstURL, StatusCode: 200, ContentType: "text/html", Body: []byte(script)},
+		secondURL.String(): {URL: secondURL, StatusCode: 200, ContentType: "text/html", Body: []byte(script)},
+	}}
+	var runtimes []*runtimeStub
+	browser := NewWithRuntimeFactory(loader, func() runtimemodel.Runtime {
+		runtime := &runtimeStub{}
+		runtimes = append(runtimes, runtime)
+		return runtime
+	})
+	first, err := browser.Navigate(context.Background(), firstURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := browser.replaceHistoryState(first, firstURL, `{"document":"first"}`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := browser.Navigate(context.Background(), secondURL.String()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := browser.Back(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(runtimes) != 3 {
+		t.Fatalf("Runtime count = %d, want 3", len(runtimes))
+	}
+	if got := runtimes[2].popStates; len(got) != 1 || got[0] != `{"document":"first"}` {
+		t.Fatalf("new Runtime popstate events = %v", got)
+	}
+}
+
+func TestNavigationSwitchesStorageByOrigin(t *testing.T) {
+	firstURL := mustParseURL(t, "http://localhost/storage-a")
+	sameOriginURL := mustParseURL(t, "http://localhost/storage-b?view=2")
+	otherOriginURL := mustParseURL(t, "http://127.0.0.1/storage-c")
+	script := `<script type="text/go">package main; func main() {}</script>`
+	loader := &routeLoader{responses: map[string]*network.Response{
+		firstURL.String():       {URL: firstURL, StatusCode: 200, ContentType: "text/html", Body: []byte(script)},
+		sameOriginURL.String():  {URL: sameOriginURL, StatusCode: 200, ContentType: "text/html", Body: []byte(script)},
+		otherOriginURL.String(): {URL: otherOriginURL, StatusCode: 200, ContentType: "text/html", Body: []byte(script)},
+	}}
+	var runtimes []*runtimeStub
+	browser := NewWithRuntimeFactory(loader, func() runtimemodel.Runtime {
+		runtime := &runtimeStub{}
+		runtimes = append(runtimes, runtime)
+		return runtime
+	})
+	if _, err := browser.Navigate(context.Background(), firstURL.String()); err != nil {
+		t.Fatal(err)
+	}
+	runtimes[0].environment.LocalStorage.Set("shared", "yes")
+	if _, err := browser.Navigate(context.Background(), sameOriginURL.String()); err != nil {
+		t.Fatal(err)
+	}
+	if got, found := runtimes[1].environment.LocalStorage.Get("shared"); !found || got != "yes" {
+		t.Fatalf("same-Origin Local Storage = (%q, %v)", got, found)
+	}
+	if _, err := browser.Navigate(context.Background(), otherOriginURL.String()); err != nil {
+		t.Fatal(err)
+	}
+	if got, found := runtimes[2].environment.LocalStorage.Get("shared"); found || got != "" {
+		t.Fatalf("cross-Origin Local Storage leaked = (%q, %v)", got, found)
+	}
+}
+
+func TestSessionStorageSurvivesSameDocumentNavigationAndReload(t *testing.T) {
+	pageURL := mustParseURL(t, "http://localhost/session-storage")
+	script := `<script type="text/go">package main; func main() {}</script>`
+	loader := &routeLoader{responses: map[string]*network.Response{
+		pageURL.String(): {URL: pageURL, StatusCode: 200, ContentType: "text/html", Body: []byte(script)},
+	}}
+	var runtimes []*runtimeStub
+	browser := NewWithRuntimeFactory(loader, func() runtimemodel.Runtime {
+		runtime := &runtimeStub{}
+		runtimes = append(runtimes, runtime)
+		return runtime
+	})
+	page, err := browser.Navigate(context.Background(), pageURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtimes[0].environment.SessionStorage.Set("draft", "kept"); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtimes[0].environment.HistoryPush(`{"route":2}`, pageURL); err != nil {
+		t.Fatal(err)
+	}
+	if browser.Page() != page || len(runtimes) != 1 {
+		t.Fatal("same-document Navigation replaced Page or Runtime")
+	}
+	if got, found := runtimes[0].environment.SessionStorage.Get("draft"); !found || got != "kept" {
+		t.Fatalf("same-document Session Storage = (%q, %v)", got, found)
+	}
+
+	reloaded, err := browser.Reload(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded == page || len(runtimes) != 2 {
+		t.Fatal("reload did not rebuild Page and Runtime")
+	}
+	if got, found := runtimes[1].environment.SessionStorage.Get("draft"); !found || got != "kept" {
+		t.Fatalf("reloaded Session Storage = (%q, %v)", got, found)
+	}
+	if runtimes[0].environment.SessionStorage != runtimes[1].environment.SessionStorage {
+		t.Fatal("reload switched Session Storage Area")
+	}
+}
+
+func TestNewBrowserSessionDoesNotInheritSessionStorage(t *testing.T) {
+	pageURL := mustParseURL(t, "http://localhost/new-session")
+	script := `<script type="text/go">package main; func main() {}</script>`
+	loader := &routeLoader{responses: map[string]*network.Response{
+		pageURL.String(): {URL: pageURL, StatusCode: 200, ContentType: "text/html", Body: []byte(script)},
+	}}
+	root := t.TempDir()
+	firstManager, err := storagecore.NewPersistentManager(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstRuntime := &runtimeStub{}
+	firstBrowser := NewWithRuntimeFactoryAndStorage(loader, func() runtimemodel.Runtime { return firstRuntime }, firstManager)
+	if _, err := firstBrowser.Navigate(context.Background(), pageURL.String()); err != nil {
+		t.Fatal(err)
+	}
+	if err := firstRuntime.environment.LocalStorage.Set("local", "persisted"); err != nil {
+		t.Fatal(err)
+	}
+	if err := firstRuntime.environment.SessionStorage.Set("session", "temporary"); err != nil {
+		t.Fatal(err)
+	}
+	if err := firstBrowser.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	secondManager, err := storagecore.NewPersistentManager(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondRuntime := &runtimeStub{}
+	secondBrowser := NewWithRuntimeFactoryAndStorage(loader, func() runtimemodel.Runtime { return secondRuntime }, secondManager)
+	if _, err := secondBrowser.Navigate(context.Background(), pageURL.String()); err != nil {
+		t.Fatal(err)
+	}
+	if got, found := secondRuntime.environment.LocalStorage.Get("local"); !found || got != "persisted" {
+		t.Fatalf("new Browser Local Storage = (%q, %v)", got, found)
+	}
+	if got, found := secondRuntime.environment.SessionStorage.Get("session"); found || got != "" {
+		t.Fatalf("new Browser inherited Session Storage = (%q, %v)", got, found)
+	}
 }
 
 func TestNavigateStartsRuntimeForTrustedOrigin(t *testing.T) {
@@ -58,8 +489,8 @@ func main() {}</script>`),
 	if !page.RuntimeStarted || page.RuntimeError != "" {
 		t.Fatalf("runtime state = started:%v error:%q", page.RuntimeStarted, page.RuntimeError)
 	}
-	if runtime.loadCalls != 1 || runtime.startCalls != 1 {
-		t.Fatalf("runtime calls = load:%d start:%d, want 1 each", runtime.loadCalls, runtime.startCalls)
+	if runtime.loadCalls.Load() != 1 || runtime.startCalls.Load() != 1 {
+		t.Fatalf("runtime calls = load:%d start:%d, want 1 each", runtime.loadCalls.Load(), runtime.startCalls.Load())
 	}
 	running, ok := page.Document.GetElementByID("running")
 	if !ok || page.Animations.Count(running.ID) != 1 {
@@ -68,8 +499,8 @@ func main() {}</script>`),
 	if err := browser.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
-	if runtime.stopCalls != 1 {
-		t.Fatalf("Stop() calls = %d, want 1", runtime.stopCalls)
+	if runtime.stopCalls.Load() != 1 {
+		t.Fatalf("Stop() calls = %d, want 1", runtime.stopCalls.Load())
 	}
 	if page.Animations.Count(running.ID) != 0 {
 		t.Fatalf("animation count after Runtime stop = %d, want zero", page.Animations.Count(running.ID))
@@ -115,8 +546,8 @@ func main() {}</script>`),
 	if browser.Page() != page || page.RuntimeStarted || !strings.Contains(page.RuntimeError, "compile failed") {
 		t.Fatalf("page runtime state = active:%v started:%v error:%q", browser.Page() == page, page.RuntimeStarted, page.RuntimeError)
 	}
-	if runtime.stopCalls != 1 {
-		t.Fatalf("Stop() calls = %d, want failed runtime cleanup", runtime.stopCalls)
+	if runtime.stopCalls.Load() != 1 {
+		t.Fatalf("Stop() calls = %d, want failed runtime cleanup", runtime.stopCalls.Load())
 	}
 }
 
@@ -161,14 +592,14 @@ func main() {}</script>`)
 	if _, err := browser.Navigate(context.Background(), secondURL.String()); err != nil {
 		t.Fatalf("second Navigate() error = %v", err)
 	}
-	if len(runtimes) != 2 || runtimes[0].stopCalls != 1 {
-		t.Fatalf("after navigation runtimes = %d first stops = %d", len(runtimes), runtimes[0].stopCalls)
+	if len(runtimes) != 2 || runtimes[0].stopCalls.Load() != 1 {
+		t.Fatalf("after navigation runtimes = %d first stops = %d", len(runtimes), runtimes[0].stopCalls.Load())
 	}
 	if _, err := browser.Reload(context.Background()); err != nil {
 		t.Fatalf("Reload() error = %v", err)
 	}
-	if len(runtimes) != 3 || runtimes[1].stopCalls != 1 {
-		t.Fatalf("after reload runtimes = %d second stops = %d", len(runtimes), runtimes[1].stopCalls)
+	if len(runtimes) != 3 || runtimes[1].stopCalls.Load() != 1 {
+		t.Fatalf("after reload runtimes = %d second stops = %d", len(runtimes), runtimes[1].stopCalls.Load())
 	}
 }
 

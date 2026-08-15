@@ -17,6 +17,11 @@ import (
 // Runtimeの状態はスクリプト取得エラーと分けて保持し、Goコードを実行できない場合も
 // ページの表示を継続できるようにする。
 type Page struct {
+	HistoryID        uint64
+	HistoryState     string
+	ScrollFirst      int
+	ScrollOffset     int
+	ScrollRevision   uint64
 	URL              *url.URL
 	StatusCode       int
 	ContentType      string

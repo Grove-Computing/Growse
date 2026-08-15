@@ -1,6 +1,10 @@
 package browser
 
-import "testing"
+import (
+	"math"
+	"strings"
+	"testing"
+)
 
 func TestHistoryPushTruncatesForwardEntries(t *testing.T) {
 	history := newHistory()
@@ -33,5 +37,44 @@ func TestHistoryTargetDoesNotMoveIndex(t *testing.T) {
 	}
 	if history.index != 1 {
 		t.Fatalf("history index moved before navigation succeeded: %d", history.index)
+	}
+}
+
+func TestHistoryRebindPageUpdatesRelatedEntries(t *testing.T) {
+	history := newHistory()
+	history.pushEntry(&historyEntry{URL: mustParseURL(t, "https://example.com/one"), PageID: 7})
+	history.pushEntry(&historyEntry{URL: mustParseURL(t, "https://example.com/two"), PageID: 7, SameDocument: true})
+	history.pushEntry(&historyEntry{URL: mustParseURL(t, "https://example.com/other"), PageID: 8})
+
+	history.rebindPage(7, 9)
+	if history.entries[0].PageID != 9 || history.entries[1].PageID != 9 || history.entries[2].PageID != 8 {
+		t.Fatalf("page IDs = %d, %d, %d", history.entries[0].PageID, history.entries[1].PageID, history.entries[2].PageID)
+	}
+}
+
+func TestHistoryCapsEntriesAndRejectsExtremeDeltaWithoutOverflow(t *testing.T) {
+	history := newHistory()
+	for index := 0; index < maxHistoryEntries+10; index++ {
+		history.push(mustParseURL(t, "https://example.com/"+strings.Repeat("x", index%8)))
+	}
+	if got := len(history.entries); got != maxHistoryEntries {
+		t.Fatalf("history entries = %d, want cap %d", got, maxHistoryEntries)
+	}
+	if _, _, ok := history.targetEntry(math.MaxInt); ok {
+		t.Fatal("extreme positive delta unexpectedly resolved")
+	}
+	if _, _, ok := history.targetEntry(math.MinInt); ok {
+		t.Fatal("extreme negative delta unexpectedly resolved")
+	}
+}
+
+func TestHistoryStateByteProjectionAccountsForForwardTruncation(t *testing.T) {
+	history := newHistory()
+	history.pushEntry(&historyEntry{URL: mustParseURL(t, "https://example.com/one"), State: "123"})
+	history.pushEntry(&historyEntry{URL: mustParseURL(t, "https://example.com/two"), State: "4567"})
+	history.pushEntry(&historyEntry{URL: mustParseURL(t, "https://example.com/three"), State: "ignored"})
+	history.index = 1
+	if got, want := history.stateBytesAfterPush("89"), 9; got != want {
+		t.Fatalf("state bytes after push = %d, want %d", got, want)
 	}
 }

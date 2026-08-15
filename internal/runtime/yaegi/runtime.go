@@ -9,16 +9,21 @@ import (
 	"go/parser"
 	"go/token"
 	"io/fs"
+	"net/url"
 	"reflect"
 	"strings"
 	"sync"
 	"testing/fstest"
+	"time"
 
 	"github.com/Grove-Computing/Growse/internal/network"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 	consoleapi "github.com/Grove-Computing/Growse/internal/webapi/console"
 	domapi "github.com/Grove-Computing/Growse/internal/webapi/dom"
 	fetchapi "github.com/Grove-Computing/Growse/internal/webapi/fetch"
+	navigationapi "github.com/Grove-Computing/Growse/internal/webapi/navigation"
+	schedulerapi "github.com/Grove-Computing/Growse/internal/webapi/scheduler"
+	storageapi "github.com/Grove-Computing/Growse/internal/webapi/storage"
 	strconvapi "github.com/Grove-Computing/Growse/internal/webapi/strconv"
 	"github.com/traefik/yaegi/interp"
 )
@@ -33,6 +38,8 @@ type Runtime struct {
 	callbackQueue chan func()
 	callbackDone  chan struct{}
 	fetchAPI      *fetchapi.API
+	navigationAPI *navigationapi.API
+	schedulerAPI  *schedulerapi.API
 	loaded        bool
 	started       bool
 	stopped       bool
@@ -91,7 +98,16 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 	console := consoleapi.New(environment.ConsoleLog)
 	dom := domapi.New(environment.Document, environment.Events, environment.OnMutation)
 	fetch := fetchapi.NewPage(r.runtimeCtx, environment.BaseURL, environment.Fetch, r.enqueueCallback)
+	navigation := navigationapi.NewPage(environment.BaseURL, environment.Navigate)
+	navigation.SetPushStateHandler(environment.HistoryPush)
+	navigation.SetReplaceStateHandler(environment.HistoryReplace)
+	navigation.SetTraversalHandler(environment.HistoryTraverse, environment.HistoryInfo)
 	r.fetchAPI = fetch
+	r.navigationAPI = navigation
+	scheduler := schedulerapi.NewPage(r.runtimeCtx, r.enqueueCallback, environment.RequestFrame)
+	scheduler.SetFrameScope(environment.FrameScope)
+	r.schedulerAPI = scheduler
+	storage := storageapi.New(environment.LocalStorage, environment.SessionStorage)
 	if err := r.interpreter.Use(interp.Exports{
 		"growse/console/console": {
 			"Log": reflect.ValueOf(console.Log),
@@ -113,6 +129,40 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 			"Request":               reflect.ValueOf((*fetchapi.Request)(nil)),
 			"Response":              reflect.ValueOf((*fetchapi.Response)(nil)),
 		},
+		"growse/navigation/navigation": {
+			"Back":            reflect.ValueOf(navigation.Back),
+			"Current":         reflect.ValueOf(navigation.Current),
+			"Forward":         reflect.ValueOf(navigation.Forward),
+			"Go":              reflect.ValueOf(navigation.Go),
+			"HashChangeEvent": reflect.ValueOf((*navigationapi.HashChangeEvent)(nil)),
+			"HistoryLength":   reflect.ValueOf(navigation.HistoryLength),
+			"HistoryState":    reflect.ValueOf(navigation.HistoryState),
+			"Location":        reflect.ValueOf((*navigationapi.Location)(nil)),
+			"Navigate":        reflect.ValueOf(navigation.Navigate),
+			"OnHashChange":    reflect.ValueOf(navigation.OnHashChange),
+			"OnPopState":      reflect.ValueOf(navigation.OnPopState),
+			"PopStateEvent":   reflect.ValueOf((*navigationapi.PopStateEvent)(nil)),
+			"PushState":       reflect.ValueOf(navigation.PushState),
+			"ReplaceState":    reflect.ValueOf(navigation.ReplaceState),
+			"Resolve":         reflect.ValueOf(navigation.Resolve),
+		},
+		"growse/scheduler/scheduler": {
+			"CancelAnimationFrame":  reflect.ValueOf(scheduler.CancelAnimationFrame),
+			"ClearTimer":            reflect.ValueOf(scheduler.ClearTimer),
+			"FrameID":               reflect.ValueOf((*schedulerapi.FrameID)(nil)),
+			"Millisecond":           reflect.ValueOf(schedulerapi.Millisecond),
+			"RequestAnimationFrame": reflect.ValueOf(scheduler.RequestAnimationFrame),
+			"Second":                reflect.ValueOf(schedulerapi.Second),
+			"SetInterval":           reflect.ValueOf(scheduler.SetInterval),
+			"SetTimeout":            reflect.ValueOf(scheduler.SetTimeout),
+			"TimerID":               reflect.ValueOf((*schedulerapi.TimerID)(nil)),
+			"Timestamp":             reflect.ValueOf((*schedulerapi.Timestamp)(nil)),
+		},
+		"growse/storage/storage": {
+			"Local":   reflect.ValueOf(storage.Local),
+			"Session": reflect.ValueOf(storage.Session),
+			"Storage": reflect.ValueOf((*storageapi.Storage)(nil)),
+		},
 		"growse/strconv/strconv": {
 			"Itoa": reflect.ValueOf(strconvapi.Itoa),
 		},
@@ -121,6 +171,93 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 	}
 	r.loaded = true
 	return nil
+}
+
+// UpdateLocation はsame-document Navigation後のURLをWebGo APIへ反映する。
+func (r *Runtime) UpdateLocation(documentURL *url.URL) {
+	r.mu.Lock()
+	navigation := r.navigationAPI
+	r.mu.Unlock()
+	if navigation != nil {
+		navigation.UpdateCurrent(documentURL)
+	}
+}
+
+// DispatchPopState はpopstate相当EventをPage callback queueへ追加する。
+func (r *Runtime) DispatchPopState(state string) {
+	r.mu.Lock()
+	navigation := r.navigationAPI
+	r.mu.Unlock()
+	if navigation != nil {
+		r.enqueueCallback(func() { navigation.DispatchPopState(state) })
+	}
+}
+
+// DispatchHashChange はhashchange相当EventをPage callback queueへ追加する。
+func (r *Runtime) DispatchHashChange(oldURL, newURL string) {
+	r.mu.Lock()
+	navigation := r.navigationAPI
+	r.mu.Unlock()
+	if navigation != nil {
+		r.enqueueCallback(func() { navigation.DispatchHashChange(oldURL, newURL) })
+	}
+}
+
+// RunAnimationFrame synchronously delivers one frame through the page queue.
+func (r *Runtime) RunAnimationFrame(current time.Time) bool {
+	r.mu.Lock()
+	scheduler := r.schedulerAPI
+	ctx := r.runtimeCtx
+	r.mu.Unlock()
+	if scheduler == nil || ctx == nil || !scheduler.HasAnimationFrameCallbacks() {
+		return false
+	}
+	result := make(chan bool, 1)
+	if !r.enqueueCallback(func() {
+		result <- scheduler.RunAnimationFrame(current)
+	}) {
+		return false
+	}
+	select {
+	case ran := <-result:
+		return ran
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// HasAnimationFrameCallbacks reports whether the page requested another frame.
+func (r *Runtime) HasAnimationFrameCallbacks() bool {
+	r.mu.Lock()
+	scheduler := r.schedulerAPI
+	r.mu.Unlock()
+	return scheduler != nil && scheduler.HasAnimationFrameCallbacks()
+}
+
+// DispatchPageEvent runs a browser-originated DOM event on the page queue and
+// waits for cancelation/default-action state to become observable.
+func (r *Runtime) DispatchPageEvent(callback func() bool) bool {
+	if callback == nil {
+		return false
+	}
+	r.mu.Lock()
+	ctx := r.runtimeCtx
+	r.mu.Unlock()
+	if ctx == nil {
+		return false
+	}
+	result := make(chan bool, 1)
+	if !r.enqueueCallback(func() {
+		result <- callback()
+	}) {
+		return false
+	}
+	select {
+	case handled := <-result:
+		return handled
+	case <-ctx.Done():
+		return false
+	}
 }
 
 // portableFS はOS固有の区切り文字をio/fs形式へ正規化する。
@@ -172,6 +309,7 @@ func (r *Runtime) Stop() error {
 	r.stopped = true
 	done := r.callbackDone
 	fetch := r.fetchAPI
+	scheduler := r.schedulerAPI
 	r.mu.Unlock()
 	if cancel != nil {
 		cancel()
@@ -179,9 +317,24 @@ func (r *Runtime) Stop() error {
 	if fetch != nil {
 		fetch.Close()
 	}
+	if scheduler != nil {
+		scheduler.Close()
+	}
 	if done != nil {
 		<-done
 	}
+	r.executionMu.Lock()
+	r.mu.Lock()
+	r.interpreter = nil
+	r.runtimeCtx = nil
+	r.callbackQueue = nil
+	r.callbackDone = nil
+	r.fetchAPI = nil
+	r.navigationAPI = nil
+	r.schedulerAPI = nil
+	r.loaded = false
+	r.mu.Unlock()
+	r.executionMu.Unlock()
 	return nil
 }
 

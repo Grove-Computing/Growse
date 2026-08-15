@@ -12,6 +12,7 @@ import (
 	"github.com/Grove-Computing/Growse/internal/network"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 	"github.com/Grove-Computing/Growse/internal/runtime/yaegi"
+	storagecore "github.com/Grove-Computing/Growse/internal/storage"
 	"github.com/Grove-Computing/Growse/internal/ui"
 )
 
@@ -34,9 +35,29 @@ func Run() {
 
 func runWindow(window *gioapp.Window) error {
 	var ops op.Ops
-	browserState := browser.NewWithRuntimeFactory(network.NewClient(), func() runtimemodel.Runtime {
+	storageManager := storagecore.NewManager()
+	if dataRoot, err := storagecore.DefaultDataRoot(); err == nil {
+		if persistent, persistentErr := storagecore.NewPersistentManager(dataRoot); persistentErr == nil {
+			storageManager = persistent
+		} else {
+			log.Printf("Local Storage profileを初期化できませんでした: %v", persistentErr)
+		}
+	} else {
+		log.Printf("Local Storage data directoryを解決できませんでした: %v", err)
+	}
+	networkClient := network.NewClient()
+	if cacheRoot, err := network.DefaultCacheRoot(); err == nil {
+		if persistent, persistentErr := network.NewClientWithCacheRoot(nil, 0, cacheRoot); persistentErr == nil {
+			networkClient = persistent
+		} else {
+			log.Printf("HTTP Cache profileを初期化できませんでした: %v", persistentErr)
+		}
+	} else {
+		log.Printf("HTTP Cache directoryを解決できませんでした: %v", err)
+	}
+	browserState := browser.NewWithRuntimeFactoryAndStorage(networkClient, func() runtimemodel.Runtime {
 		return yaegi.New()
-	})
+	}, storageManager)
 	browserState.SetOnMutation(window.Invalidate)
 	defer browserState.Close()
 	browserUI := ui.NewBrowserUI(browserState, window.Invalidate)

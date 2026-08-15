@@ -60,3 +60,23 @@ go test ./internal/style -run '^$' \
 | Benchmark | 同時Animation数 | 中央値 | Memory | Allocations |
 |---|---:|---:|---:|---:|
 | `BenchmarkSample100ElementAnimations-16` | 100 | 5,908 ns/op | 4,800 B/op | 100 allocs/op |
+
+## v0.9.0 Scheduler、History、Storage、HTTP Cache workload
+
+2026-08-15にLinux amd64、AMD Ryzen 7 8745HS、Go 1.26.6で5回測定し、中央値を記録した。
+
+```sh
+go test ./internal/webapi/scheduler ./internal/browser ./internal/storage ./internal/network \
+  -run '^$' \
+  -bench 'Benchmark(RegisterAndClear10000Timers|Traverse1000HistoryEntries|LookupAndUpdate10000StorageEntries|HitAndRevalidate1000HTTPCacheEntries)$' \
+  -benchmem -count=5
+```
+
+| Benchmark | Workload | 中央値 | Memory | Allocations |
+|---|---:|---:|---:|---:|
+| `BenchmarkRegisterAndClear10000Timers-16` | 10,000 Timer登録・解除 | 3,139,391 ns/op | 1,944,645 B/op | 10,107 allocs/op |
+| `BenchmarkTraverse1000HistoryEntries-16` | 1,000 entryのBack / Forward往復 | 121,285 ns/op | 415,586 B/op | 3,996 allocs/op |
+| `BenchmarkLookupAndUpdate10000StorageEntries-16` | 10,000 lookup・1 update | 414,763 ns/op | 327,680 B/op | 1 alloc/op |
+| `BenchmarkHitAndRevalidate1000HTTPCacheEntries-16` | 500 fresh hit・500 validator生成 | 641,991 ns/op | 676,012 B/op | 7,500 allocs/op |
+
+Timerは手動Clock、Historyはmemory entry、Storageはmemory Area、HTTP Cacheはmemory frontを使用し、Disk I/O・Network・実時間待機を含めない。これらの値は同じmachine上でrelease間の傾向を比較するbaselineであり、異なるhostの合否判定には使用しない。
