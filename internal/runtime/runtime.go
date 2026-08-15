@@ -32,6 +32,7 @@ type Environment struct {
 	HistoryInfo     func() (int, string)
 	LocalStorage    *storagecore.Area
 	SessionStorage  *storagecore.Area
+	StorageSource   storagecore.MutationSource
 	OnMutation      func()
 	RequestFrame    func()
 	FrameScope      func(time.Time, func())

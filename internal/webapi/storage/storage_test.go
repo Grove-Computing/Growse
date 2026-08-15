@@ -7,6 +7,35 @@ import (
 	storagecore "github.com/Grove-Computing/Growse/internal/storage"
 )
 
+func TestLocalStorageCommitNotifiesOtherPage(t *testing.T) {
+	local := storagecore.NewArea()
+	source := NewPage(local, storagecore.NewArea(), storagecore.MutationSource{ID: 1, URL: "https://example.test/source"}, nil)
+	defer source.Close()
+	target := NewPage(local, storagecore.NewArea(), storagecore.MutationSource{ID: 2, URL: "https://example.test/target"}, nil)
+	defer target.Close()
+
+	var sourceEvents, targetEvents []Event
+	source.OnChange(func(event Event) { sourceEvents = append(sourceEvents, event) })
+	target.OnChange(func(event Event) { targetEvents = append(targetEvents, event) })
+	if err := source.Local().Set("theme", "dark"); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(sourceEvents) != 0 {
+		t.Fatalf("updating page received %d events", len(sourceEvents))
+	}
+	if len(targetEvents) != 1 {
+		t.Fatalf("other page received %d events, want 1", len(targetEvents))
+	}
+	event := targetEvents[0]
+	if event.Key != "theme" || event.HasOldValue || !event.HasNewValue || event.NewValue != "dark" || event.Cleared {
+		t.Fatalf("event = %+v", event)
+	}
+	if event.SourceURL != "https://example.test/source" || event.Sequence != 1 {
+		t.Fatalf("event source/order = (%q, %d)", event.SourceURL, event.Sequence)
+	}
+}
+
 func TestAPIDistinguishesLocalAndSessionStorage(t *testing.T) {
 	api := New(storagecore.NewArea(), storagecore.NewArea())
 	if err := api.Local().Set("mode", "local"); err != nil {
