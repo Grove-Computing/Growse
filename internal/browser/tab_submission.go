@@ -33,7 +33,7 @@ func (b *Browser) prepareBlankFormSubmission(formID, submitterID dom.NodeID) (pr
 		b.mu.RUnlock()
 		return preparedFormSubmission{}, errors.New("no active page for form submission")
 	}
-	form, submitter, config, err := resolveSubmissionNodes(page, formID, submitterID)
+	form, _, config, err := resolveSubmissionNodes(page, formID, submitterID)
 	if err != nil {
 		b.mu.RUnlock()
 		return preparedFormSubmission{}, err
@@ -58,7 +58,7 @@ func (b *Browser) prepareBlankFormSubmission(formID, submitterID dom.NodeID) (pr
 	if b.page != page {
 		return preparedFormSubmission{}, context.Canceled
 	}
-	form, submitter, config, err = resolveSubmissionNodes(page, formID, submitterID)
+	form, submitter, config, err := resolveSubmissionNodes(page, formID, submitterID)
 	if err != nil {
 		return preparedFormSubmission{}, err
 	}
