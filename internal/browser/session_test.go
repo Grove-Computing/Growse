@@ -259,3 +259,64 @@ func TestSessionClosingBackgroundTabKeepsCurrentActiveTab(t *testing.T) {
 		t.Fatalf("second CloseTab() error = %v, want %v", err, ErrTabNotFound)
 	}
 }
+
+func TestSessionClosingLastTabCreatesActiveBlankTab(t *testing.T) {
+	created := 0
+	session := NewSession(func() *Browser {
+		created++
+		return New(nil)
+	})
+	last, err := session.NewTab(mustURL(t, "https://example.test/current"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	closed, err := session.CloseTab(last.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !closed.HasActive || closed.Active.ID == last.ID || closed.Active.URL != "" || !closed.Active.Active {
+		t.Fatalf("CloseTab(last) = %#v", closed)
+	}
+	tabs := session.Tabs()
+	if len(tabs) != 1 || tabs[0].ID != closed.Active.ID || tabs[0].State != TabActive {
+		t.Fatalf("Tabs() = %#v", tabs)
+	}
+	if created != 2 {
+		t.Fatalf("browser factory calls = %d, want 2", created)
+	}
+	if session.dispatchToTab(last.ID, func(*Tab) { t.Fatal("closed tab received delayed work") }) {
+		t.Fatal("closed tab remains live")
+	}
+}
+
+func TestSessionKeepsLastTabWhenBlankReplacementCannotBeCreated(t *testing.T) {
+	created := 0
+	session := NewSession(func() *Browser {
+		created++
+		if created > 1 {
+			return nil
+		}
+		return New(nil)
+	})
+	last, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.CloseTab(last.ID); !errors.Is(err, ErrTabBrowser) {
+		t.Fatalf("CloseTab(last) error = %v, want %v", err, ErrTabBrowser)
+	}
+	active, ok := session.ActiveTab()
+	if !ok || active.ID != last.ID || active.State != TabActive {
+		t.Fatalf("ActiveTab() = %#v, %t", active, ok)
+	}
+}
+
+func mustURL(t *testing.T, raw string) *url.URL {
+	t.Helper()
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return parsed
+}

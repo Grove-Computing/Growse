@@ -79,22 +79,35 @@ func (s *Session) NewTab(initialURL *url.URL) (TabSnapshot, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	browser := s.factory()
-	if browser == nil {
-		return TabSnapshot{}, ErrTabBrowser
-	}
-	id, err := s.allocateTabIDLocked()
-	if err != nil {
-		return TabSnapshot{}, err
-	}
 	state := TabBackground
 	if len(s.tabs) == 0 {
 		state = TabActive
-		s.activeID = id
 	}
-	tab := &Tab{id: id, state: state, browser: browser, initialURL: cloneURL(initialURL)}
+	tab, err := s.newTabLocked(initialURL, state)
+	if err != nil {
+		return TabSnapshot{}, err
+	}
+	if state == TabActive {
+		s.activeID = tab.id
+	}
 	s.tabs = append(s.tabs, tab)
 	return snapshotTab(tab, len(s.tabs)-1, state == TabActive), nil
+}
+
+func (s *Session) newTabLocked(initialURL *url.URL, state TabState) (*Tab, error) {
+	if s.factory == nil {
+		return nil, ErrTabBrowser
+	}
+	browser := s.factory()
+	if browser == nil {
+		return nil, ErrTabBrowser
+	}
+	id, err := s.allocateTabIDLocked()
+	if err != nil {
+		_ = browser.Close()
+		return nil, err
+	}
+	return &Tab{id: id, state: state, browser: browser, initialURL: cloneURL(initialURL)}, nil
 }
 
 // SelectTab makes the identified live tab active.
@@ -200,13 +213,27 @@ func (s *Session) CloseTab(id TabID) (TabCloseResult, error) {
 		return TabCloseResult{}, ErrTabNotFound
 	}
 	wasActive := closing.id == s.activeID && closing.state == TabActive
+	var replacement *Tab
+	if wasActive && len(s.tabs) == 1 {
+		var err error
+		replacement, err = s.newTabLocked(nil, TabActive)
+		if err != nil {
+			s.mu.Unlock()
+			return TabCloseResult{}, err
+		}
+	}
 	closing.state = TabClosing
 	s.tabs = append(s.tabs[:position], s.tabs[position+1:]...)
 	closing.state = TabClosed
 	result := TabCloseResult{Closed: id}
 	if wasActive {
 		s.activeID = 0
-		if len(s.tabs) != 0 {
+		if replacement != nil {
+			s.tabs = append(s.tabs, replacement)
+			s.activeID = replacement.id
+			result.Active = snapshotTab(replacement, 0, true)
+			result.HasActive = true
+		} else if len(s.tabs) != 0 {
 			selection := position
 			if selection >= len(s.tabs) {
 				selection = len(s.tabs) - 1
