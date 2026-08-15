@@ -102,8 +102,11 @@ python3 -m http.server 8080 --directory examples/data-app
 | Animation Showcase | `examples/animation` | hover Transition、複数Keyframes Animation |
 | Data App Showcase | `examples/data-app` | Form、WebGo Fetch、Session Cookie、DOM更新、Animation |
 | Persistent App Showcase | `examples/persistent-app` | Scheduler、same-document Routing、Local / Session Storage、Fetch、HTTP Cache、offline状態 |
+| Multi-Tab Workspace | `go run ./examples/multi-tab-workspace` | Vertical Tab、Storage Event、共有Cookie / Cache、Tab別Session / Scheduler |
 
 WebGoソースは通常のGo build対象から除外するため、各Demoでは`_app.go`として配置しています。
+
+Multi-Tab Workspaceは専用のlocal fixture serverを起動し、Growseで`http://localhost:8080`を開きます。Notes画面のリンクからTasksとActivityを新しいVertical Tabへ開けます。外部ServiceやAPI keyは不要です。
 
 ## ブラウザの仕組み
 

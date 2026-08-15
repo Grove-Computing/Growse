@@ -1,0 +1,18 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Workspace · Notes</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main class="workspace notes">
+    <header><p class="eyebrow">MULTI-TAB WORKSPACE</p><h1>Notes</h1><span id="status" class="pill dirty">ready</span></header>
+    <nav><a href="/tasks.html" target="_blank">Open Tasks</a><a href="/activity.html" target="_blank">Open Activity</a></nav>
+    <form id="note-form"><label for="note-input">Shared note</label><input id="note-input" name="note" placeholder="Write for every tab"><button type="submit">Share</button></form>
+    <section><h2>Profile state</h2><p id="shared-note">No shared note yet</p></section>
+    <footer>Local Storage commit sends a Storage Event to the other same-origin tabs.</footer>
+  </main>
+  <script type="text/go" src="/_notes.go"></script>
+</body>
+</html>
