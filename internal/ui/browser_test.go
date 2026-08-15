@@ -308,6 +308,20 @@ func TestToolbarHasFixedHeight(t *testing.T) {
 	}
 }
 
+func TestVerticalTabRailUsesLeftSideFixedWidth(t *testing.T) {
+	ui := NewBrowserUI(nil, nil)
+	gtx := layout.Context{
+		Ops:         new(op.Ops),
+		Constraints: layout.Exact(image.Pt(1280, 800)),
+		Metric:      unit.Metric{PxPerDp: 1, PxPerSp: 1},
+	}
+
+	dims := ui.layoutTabRail(gtx)
+	if got, want := dims.Size, image.Pt(224, 800); got != want {
+		t.Fatalf("vertical tab rail size = %v, want %v", got, want)
+	}
+}
+
 func TestBrowserUILayoutFillsViewport(t *testing.T) {
 	ui := NewBrowserUI(nil, nil)
 	gtx := layout.Context{

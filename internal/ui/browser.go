@@ -43,6 +43,7 @@ var gopherPNG []byte
 
 const (
 	defaultURL         = "http://localhost:8080"
+	tabRailWidth       = unit.Dp(224)
 	toolbarHeight      = unit.Dp(92)
 	controlHeight      = unit.Dp(44)
 	addressBarHeight   = unit.Dp(48)
@@ -181,17 +182,55 @@ func NewBrowserUI(navigator Navigator, invalidate func()) *BrowserUI {
 	return ui
 }
 
-// Layout draws the browser toolbar and page viewport.
+// Layout draws the vertical tab rail, browser toolbar, and page viewport.
 func (ui *BrowserUI) Layout(gtx layout.Context) layout.Dimensions {
 	ui.handlePointerEvents(gtx)
 	ui.handleKeyboardShortcuts(gtx)
 	ui.handleActions(gtx)
 
-	viewport := layout.Inset{Top: toolbarHeight}.Layout(gtx, ui.layoutViewport)
-	ui.layoutToolbar(gtx)
+	viewport := layout.Flex{Axis: layout.Horizontal}.Layout(gtx,
+		layout.Rigid(ui.layoutTabRail),
+		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+			viewport := layout.Inset{Top: toolbarHeight}.Layout(gtx, ui.layoutViewport)
+			ui.layoutToolbar(gtx)
+			return viewport
+		}),
+	)
 	ui.layoutGopherCursor(gtx)
 	ui.registerPointerTracker(gtx)
 	return viewport
+}
+
+func (ui *BrowserUI) layoutTabRail(gtx layout.Context) layout.Dimensions {
+	width := gtx.Dp(tabRailWidth)
+	if width > gtx.Constraints.Max.X {
+		width = gtx.Constraints.Max.X
+	}
+	gtx.Constraints.Min.X = width
+	gtx.Constraints.Max.X = width
+
+	defer clip.Rect{Max: gtx.Constraints.Max}.Push(gtx.Ops).Pop()
+	paint.Fill(gtx.Ops, color.NRGBA{R: 31, G: 41, B: 55, A: 255})
+	paint.FillShape(gtx.Ops,
+		color.NRGBA{R: 55, G: 65, B: 81, A: 255},
+		clip.Rect{Min: image.Pt(width-1, 0), Max: image.Pt(width, gtx.Constraints.Max.Y)}.Op(),
+	)
+
+	return layout.Inset{Top: unit.Dp(18), Right: unit.Dp(14), Bottom: unit.Dp(14), Left: unit.Dp(14)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				label := material.H6(ui.theme, "Growse")
+				label.Color = color.NRGBA{R: 248, G: 250, B: 252, A: 255}
+				return label.Layout(gtx)
+			}),
+			layout.Rigid(layout.Spacer{Height: unit.Dp(18)}.Layout),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				label := material.Body1(ui.theme, "＋  新しいタブ")
+				label.Color = color.NRGBA{R: 203, G: 213, B: 225, A: 255}
+				return label.Layout(gtx)
+			}),
+		)
+	})
 }
 
 func (ui *BrowserUI) handleKeyboardShortcuts(gtx layout.Context) {
