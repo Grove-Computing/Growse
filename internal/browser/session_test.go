@@ -189,3 +189,33 @@ func TestSessionRejectsInvalidTabSelectionWithoutChangingActiveTab(t *testing.T)
 		t.Fatalf("ActiveTab() = %#v, %t", active, ok)
 	}
 }
+
+func TestSessionSelectsNextAndPreviousTabsCyclically(t *testing.T) {
+	session := NewSession()
+	first, _ := session.NewTab(nil)
+	second, _ := session.NewTab(nil)
+	third, _ := session.NewTab(nil)
+
+	for _, want := range []TabID{second.ID, third.ID, first.ID} {
+		selected, err := session.SelectNext()
+		if err != nil || selected.ID != want {
+			t.Fatalf("SelectNext() = %#v, %v, want %d", selected, err, want)
+		}
+	}
+	for _, want := range []TabID{third.ID, second.ID, first.ID} {
+		selected, err := session.SelectPrevious()
+		if err != nil || selected.ID != want {
+			t.Fatalf("SelectPrevious() = %#v, %v, want %d", selected, err, want)
+		}
+	}
+}
+
+func TestEmptySessionCannotSelectRelativeTab(t *testing.T) {
+	session := NewSession()
+	if _, err := session.SelectNext(); !errors.Is(err, ErrTabNotFound) {
+		t.Fatalf("SelectNext() error = %v, want %v", err, ErrTabNotFound)
+	}
+	if _, err := session.SelectPrevious(); !errors.Is(err, ErrTabNotFound) {
+		t.Fatalf("SelectPrevious() error = %v, want %v", err, ErrTabNotFound)
+	}
+}

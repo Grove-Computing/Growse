@@ -118,6 +118,48 @@ func (s *Session) SelectTabAt(position int) (TabSnapshot, error) {
 	return s.selectTabLocked(position), nil
 }
 
+// SelectNext selects the next live tab, wrapping at the end.
+func (s *Session) SelectNext() (TabSnapshot, error) {
+	return s.selectRelative(1)
+}
+
+// SelectPrevious selects the previous live tab, wrapping at the beginning.
+func (s *Session) SelectPrevious() (TabSnapshot, error) {
+	return s.selectRelative(-1)
+}
+
+func (s *Session) selectRelative(step int) (TabSnapshot, error) {
+	if s == nil {
+		return TabSnapshot{}, ErrTabNotFound
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.tabs) == 0 {
+		return TabSnapshot{}, ErrTabNotFound
+	}
+	activeIndex := -1
+	for index, tab := range s.tabs {
+		if tab != nil && tab.id == s.activeID && tab.state == TabActive {
+			activeIndex = index
+			break
+		}
+	}
+	if activeIndex < 0 {
+		return TabSnapshot{}, ErrTabNotFound
+	}
+	for offset := 1; offset <= len(s.tabs); offset++ {
+		position := (activeIndex + step*offset) % len(s.tabs)
+		if position < 0 {
+			position += len(s.tabs)
+		}
+		tab := s.tabs[position]
+		if tab != nil && tab.state != TabClosing && tab.state != TabClosed {
+			return s.selectTabLocked(position), nil
+		}
+	}
+	return TabSnapshot{}, ErrTabNotFound
+}
+
 func (s *Session) selectTabLocked(position int) TabSnapshot {
 	target := s.tabs[position]
 	for _, tab := range s.tabs {
