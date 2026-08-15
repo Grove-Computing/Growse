@@ -80,3 +80,22 @@ go test ./internal/webapi/scheduler ./internal/browser ./internal/storage ./inte
 | `BenchmarkHitAndRevalidate1000HTTPCacheEntries-16` | 500 fresh hit・500 validator生成 | 641,991 ns/op | 676,012 B/op | 7,500 allocs/op |
 
 Timerは手動Clock、Historyはmemory entry、Storageはmemory Area、HTTP Cacheはmemory frontを使用し、Disk I/O・Network・実時間待機を含めない。これらの値は同じmachine上でrelease間の傾向を比較するbaselineであり、異なるhostの合否判定には使用しない。
+
+## v0.10.0 Multi-Tab workload
+
+2026-08-15にLinux amd64、AMD Ryzen 7 8745HS、Go 1.26.6で5回測定し、中央値を記録した。
+
+```sh
+go test ./internal/browser ./internal/storage ./internal/network \
+  -run '^$' \
+  -bench 'Benchmark(CreateSwitchAndClose64Tabs|DispatchLocalStorageUpdatesAcross16Tabs|SharedHTTPCacheHitAcross64Tabs)$' \
+  -benchmem -count=5
+```
+
+| Benchmark | Workload | 中央値 | Memory | Allocations |
+|---|---:|---:|---:|---:|
+| `BenchmarkCreateSwitchAndClose64Tabs-16` | 64 Tab作成・全Tab切替・終了 | 27,465 ns/op | 33,896 B/op | 520 allocs/op |
+| `BenchmarkDispatchLocalStorageUpdatesAcross16Tabs-16` | 16 TabからのLocal Storage更新とpeer配送 | 6,749 ns/op | 4,375 B/op | 47 allocs/op |
+| `BenchmarkSharedHTTPCacheHitAcross64Tabs-16` | 64 Tab相当のfresh Cache hit | 35,966 ns/op | 51,200 B/op | 576 allocs/op |
+
+Tab lifecycleはNetworkやPage parseを含まないSession model、Storage Eventは16 subscriberを持つmemory Area、HTTP Cacheは共有memory frontを使用する。baselineは同一machine上のrelease間比較に使い、異なるhostの合否判定には使用しない。
