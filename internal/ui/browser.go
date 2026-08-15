@@ -59,8 +59,8 @@ type BrowserUI struct {
 	navigator        Navigator
 	invalidate       func()
 	results          chan navigationResult
-	cancelNavigation context.CancelFunc
-	navigationID     uint64
+	navigations      map[browser.TabID]tabNavigation
+	nextNavigationID uint64
 	loading          bool
 	tabs             TabController
 
@@ -173,6 +173,11 @@ type navigationResult struct {
 	err   error
 }
 
+type tabNavigation struct {
+	id     uint64
+	cancel context.CancelFunc
+}
+
 // NewBrowserUI creates a browser toolbar and an empty viewport.
 func NewBrowserUI(navigator Navigator, invalidate func()) *BrowserUI {
 	return NewBrowserUIWithTabs(navigator, nil, invalidate)
@@ -191,7 +196,8 @@ func NewBrowserUIWithTabs(navigator Navigator, tabs TabController, invalidate fu
 		navigator:        navigator,
 		tabs:             tabs,
 		invalidate:       invalidate,
-		results:          make(chan navigationResult, 1),
+		results:          make(chan navigationResult, browser.DefaultSessionPolicy().MaxTabs),
+		navigations:      make(map[browser.TabID]tabNavigation),
 		gopher:           paint.NewImageOp(gopherImage),
 		backIcon:         mustIcon(widget.NewIcon(icons.NavigationArrowBack)),
 		forwardIcon:      mustIcon(widget.NewIcon(icons.NavigationArrowForward)),
@@ -614,14 +620,14 @@ func (ui *BrowserUI) startPageLoad(tabID browser.TabID, navigator Navigator, sta
 	if navigator != nil {
 		navigator.ClearHover()
 	}
-	if ui.cancelNavigation != nil {
-		ui.cancelNavigation()
+	if previous, ok := ui.navigations[tabID]; ok {
+		previous.cancel()
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	ui.cancelNavigation = cancel
-	ui.navigationID++
-	navigationID := ui.navigationID
+	ui.nextNavigationID++
+	navigationID := ui.nextNavigationID
+	ui.navigations[tabID] = tabNavigation{id: navigationID, cancel: cancel}
 	ui.loading = true
 	ui.statusHasError = false
 	ui.status = status
@@ -651,16 +657,16 @@ func (ui *BrowserUI) consumeNavigationResult() {
 	for {
 		select {
 		case result := <-ui.results:
-			if result.id != ui.navigationID {
+			navigation, ok := ui.navigations[result.tabID]
+			if !ok || result.id != navigation.id {
 				continue
 			}
+			delete(ui.navigations, result.tabID)
 			if result.tabID != 0 && !ui.tabIsActive(result.tabID) {
 				ui.loading = false
-				ui.cancelNavigation = nil
 				continue
 			}
 			ui.loading = false
-			ui.cancelNavigation = nil
 			ui.inputEditors = make(map[dom.NodeID]*widget.Editor)
 			ui.inputFocused = make(map[dom.NodeID]bool)
 			ui.inputCommitted = make(map[dom.NodeID]string)
@@ -719,12 +725,12 @@ func (ui *BrowserUI) tabIsActive(id browser.TabID) bool {
 
 // Close cancels an in-flight navigation when the window closes.
 func (ui *BrowserUI) Close() {
-	ui.navigationID++
 	if ui.navigator != nil {
 		ui.navigator.ClearHover()
 	}
-	if ui.cancelNavigation != nil {
-		ui.cancelNavigation()
+	for tabID, navigation := range ui.navigations {
+		navigation.cancel()
+		delete(ui.navigations, tabID)
 	}
 }
 

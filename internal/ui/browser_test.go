@@ -573,6 +573,25 @@ type controlledNavigationLoader struct {
 	release chan struct{}
 }
 
+type supersedingNavigationLoader struct {
+	oldStarted  chan struct{}
+	oldCanceled chan struct{}
+	newFinished chan struct{}
+}
+
+func (loader *supersedingNavigationLoader) Get(ctx context.Context, resourceURL *url.URL) (*network.Response, error) {
+	if resourceURL.Path == "/old" {
+		close(loader.oldStarted)
+		<-ctx.Done()
+		close(loader.oldCanceled)
+		return nil, ctx.Err()
+	}
+	close(loader.newFinished)
+	return &network.Response{
+		URL: resourceURL, StatusCode: 200, ContentType: "text/html; charset=utf-8", Body: []byte("<title>New</title>"),
+	}, nil
+}
+
 func (loader *controlledNavigationLoader) Get(ctx context.Context, resourceURL *url.URL) (*network.Response, error) {
 	select {
 	case loader.started <- struct{}{}:
@@ -637,6 +656,56 @@ func TestAddressNavigationIsPinnedToOperationStartTab(t *testing.T) {
 	}
 	if got := ui.address.Text(); got == "https://example.com/pinned" {
 		t.Fatalf("background navigation overwrote active address bar: %q", got)
+	}
+}
+
+func TestNewNavigationCancelsOnlyPreviousOperationInSameTab(t *testing.T) {
+	loader := &supersedingNavigationLoader{
+		oldStarted: make(chan struct{}), oldCanceled: make(chan struct{}), newFinished: make(chan struct{}),
+	}
+	state := browser.New(loader)
+	session := browser.NewSession(func() *browser.Browser { return state })
+	if _, err := session.NewTab(nil); err != nil {
+		t.Fatal(err)
+	}
+	invalidated := make(chan struct{}, 2)
+	ui := NewBrowserUIWithTabs(nil, session, func() {
+		select {
+		case invalidated <- struct{}{}:
+		default:
+		}
+	})
+	defer ui.Close()
+
+	ui.startNavigation("https://example.com/old")
+	select {
+	case <-loader.oldStarted:
+	case <-time.After(time.Second):
+		t.Fatal("old navigation did not start")
+	}
+	ui.startNavigation("https://example.com/new")
+	select {
+	case <-loader.oldCanceled:
+	case <-time.After(time.Second):
+		t.Fatal("old navigation context was not canceled")
+	}
+	select {
+	case <-loader.newFinished:
+	case <-time.After(time.Second):
+		t.Fatal("new navigation did not finish")
+	}
+
+	deadline := time.After(time.Second)
+	for {
+		select {
+		case <-invalidated:
+			ui.consumeNavigationResult()
+			if page := state.Page(); page != nil && page.URL.Path == "/new" {
+				return
+			}
+		case <-deadline:
+			t.Fatalf("latest navigation was not committed: %+v", state.Page())
+		}
 	}
 }
 
