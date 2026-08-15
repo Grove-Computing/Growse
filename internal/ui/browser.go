@@ -887,14 +887,12 @@ func (ui *BrowserUI) updateViewportHover(gtx layout.Context, page *browser.Page,
 	if ui.navigator == nil {
 		return
 	}
-	viewportX := ui.pointer.position.X - float32(gtx.Dp(tabRailWidth))
-	viewportY := ui.pointer.position.Y - float32(gtx.Dp(toolbarHeight))
-	if !ui.pointer.inside || viewportX < 0 || viewportX >= float32(gtx.Constraints.Max.X) || viewportY < 0 || viewportY >= float32(gtx.Constraints.Max.Y) {
+	position, inside := viewportPointerPosition(gtx, ui.pointer.position, ui.pointer.inside)
+	if !inside {
 		ui.navigator.ClearHover()
 		ui.updateLinkPreview(page, 0)
 		return
 	}
-	position := image.Pt(int(math.Round(float64(viewportX))), int(math.Round(float64(viewportY))))
 	x, y, ok := ui.documentPoint(position, displayList, gtx.Metric.PxPerDp)
 	if !ok {
 		ui.navigator.ClearHover()
@@ -909,6 +907,15 @@ func (ui *BrowserUI) updateViewportHover(gtx layout.Context, page *browser.Page,
 	}
 	ui.navigator.UpdateHover(nodeID, x, y)
 	ui.updateLinkPreview(page, nodeID)
+}
+
+func viewportPointerPosition(gtx layout.Context, position f32.Point, insideWindow bool) (image.Point, bool) {
+	viewportX := position.X - float32(gtx.Dp(tabRailWidth))
+	viewportY := position.Y - float32(gtx.Dp(toolbarHeight))
+	if !insideWindow || viewportX < 0 || viewportX >= float32(gtx.Constraints.Max.X) || viewportY < 0 || viewportY >= float32(gtx.Constraints.Max.Y) {
+		return image.Point{}, false
+	}
+	return image.Pt(int(math.Round(float64(viewportX))), int(math.Round(float64(viewportY)))), true
 }
 
 func (ui *BrowserUI) updateLinkPreview(page *browser.Page, nodeID dom.NodeID) {

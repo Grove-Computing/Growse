@@ -339,6 +339,31 @@ func TestBrowserChromeHasNoHorizontalTabStrip(t *testing.T) {
 	}
 }
 
+func TestTabRailCoordinatesAreExcludedFromPageHitTesting(t *testing.T) {
+	gtx := layout.Context{
+		Constraints: layout.Exact(image.Pt(576, 708)),
+		Metric:      unit.Metric{PxPerDp: 1, PxPerSp: 1},
+	}
+	tests := []struct {
+		name     string
+		position f32.Point
+		want     image.Point
+		inside   bool
+	}{
+		{name: "tab rail", position: f32.Pt(100, 200), inside: false},
+		{name: "toolbar", position: f32.Pt(244, 40), inside: false},
+		{name: "page viewport", position: f32.Pt(244, 112), want: image.Pt(20, 20), inside: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, inside := viewportPointerPosition(gtx, test.position, true)
+			if got != test.want || inside != test.inside {
+				t.Fatalf("viewport pointer = (%v, %v), want (%v, %v)", got, inside, test.want, test.inside)
+			}
+		})
+	}
+}
+
 func TestTabRowDisplaysTitleFallbackAndLifecycleState(t *testing.T) {
 	tests := []struct {
 		name      string
