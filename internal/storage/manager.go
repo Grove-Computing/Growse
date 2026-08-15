@@ -41,6 +41,24 @@ func (manager *Manager) NewPageSession() *Manager {
 	}
 }
 
+// DiscardSession destroys this top-level tab's Session Storage namespaces
+// without affecting Local Storage shared by the browser profile.
+func (manager *Manager) DiscardSession() {
+	if manager == nil {
+		return
+	}
+	manager.mu.Lock()
+	areas := make([]*Area, 0, len(manager.session))
+	for _, area := range manager.session {
+		areas = append(areas, area)
+	}
+	manager.session = make(map[string]*Area)
+	manager.mu.Unlock()
+	for _, area := range areas {
+		area.discard()
+	}
+}
+
 // NewPersistentManager はdataRoot配下へLocal Storageを永続化するManagerを生成する。
 func NewPersistentManager(dataRoot string) (*Manager, error) {
 	if dataRoot == "" || !filepath.IsAbs(dataRoot) {

@@ -10,6 +10,7 @@ import (
 	"github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/events"
 	"github.com/Grove-Computing/Growse/internal/network"
+	storagecore "github.com/Grove-Computing/Growse/internal/storage"
 )
 
 type frameRuntimeStub struct {
@@ -813,6 +814,58 @@ func TestSessionRejectsBrowserInstanceReuseAcrossTabs(t *testing.T) {
 	}
 	if tabs := session.Tabs(); len(tabs) != 1 || tabs[0].ID != first.ID || !tabs[0].Active {
 		t.Fatalf("tabs changed after Browser reuse rejection: %+v", tabs)
+	}
+}
+
+func TestCloseTabDiscardsOnlyItsSessionStorage(t *testing.T) {
+	profile := storagecore.NewManager()
+	var pageSessions []*storagecore.Manager
+	session := NewSession(func() *Browser {
+		manager := profile.NewPageSession()
+		pageSessions = append(pageSessions, manager)
+		return NewWithRuntimeFactoryAndStorage(nil, nil, manager)
+	})
+	defer session.Close()
+	first, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.NewTab(nil); err != nil {
+		t.Fatal(err)
+	}
+	documentURL := mustURL(t, "https://example.test/app")
+	firstLocal, firstSession, err := pageSessions[0].Areas(documentURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondLocal, secondSession, err := pageSessions[1].Areas(documentURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstSession == secondSession || firstLocal != secondLocal {
+		t.Fatal("page session isolation or local profile sharing is incorrect")
+	}
+	if err := firstLocal.Set("theme", "shared"); err != nil {
+		t.Fatal(err)
+	}
+	if err := firstSession.Set("draft", "discard me"); err != nil {
+		t.Fatal(err)
+	}
+	if err := secondSession.Set("draft", "keep me"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := session.CloseTab(first.ID); err != nil {
+		t.Fatal(err)
+	}
+	if firstSession.Len() != 0 {
+		t.Fatalf("closed tab Session Storage length = %d", firstSession.Len())
+	}
+	if value, found := secondSession.Get("draft"); !found || value != "keep me" {
+		t.Fatalf("live tab Session Storage = (%q, %v)", value, found)
+	}
+	if value, found := secondLocal.Get("theme"); !found || value != "shared" {
+		t.Fatalf("shared Local Storage after close = (%q, %v)", value, found)
 	}
 }
 

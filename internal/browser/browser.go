@@ -621,6 +621,7 @@ func (b *Browser) Close() error {
 		b.navigationCancel = nil
 	}
 	activeRuntime := b.activeRuntime
+	storageManager := b.storage
 	page := b.page
 	b.activeRuntime = nil
 	if page != nil && page.Animations != nil {
@@ -636,10 +637,14 @@ func (b *Browser) Close() error {
 	b.history = newHistory()
 	b.storage = nil
 	b.mu.Unlock()
+	var closeErr error
 	if activeRuntime != nil {
-		return activeRuntime.Stop()
+		closeErr = activeRuntime.Stop()
 	}
-	return nil
+	if storageManager != nil {
+		storageManager.DiscardSession()
+	}
+	return closeErr
 }
 
 // Navigate retrieves an HTML document and makes it the active page. The

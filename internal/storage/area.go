@@ -319,6 +319,18 @@ func (area *Area) restoreLocked(entries []Entry) {
 	}
 }
 
+func (area *Area) discard() {
+	if area == nil {
+		return
+	}
+	area.mutationMu.Lock()
+	area.mu.Lock()
+	area.values = make(map[string]string)
+	area.ordered = nil
+	area.mu.Unlock()
+	area.mutationMu.Unlock()
+}
+
 // Len はentry数を返す。
 func (area *Area) Len() int {
 	if area == nil {
