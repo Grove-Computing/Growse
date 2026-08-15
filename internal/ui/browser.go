@@ -71,6 +71,7 @@ type BrowserUI struct {
 	newTabButton      widget.Clickable
 	tabRowButtons     map[browser.TabID]*widget.Clickable
 	tabCloseButtons   map[browser.TabID]*widget.Clickable
+	tabShortcutDown   map[key.Name]bool
 	pageList          widget.List
 	tabList           widget.List
 	viewportClick     gesture.Click
@@ -144,6 +145,7 @@ type TabSource interface {
 // TabController performs operations requested by the browser chrome.
 type TabController interface {
 	TabSource
+	ActiveTab() (browser.TabSnapshot, bool)
 	NewTab(initialURL *url.URL) (browser.TabSnapshot, error)
 	SelectTab(id browser.TabID) (browser.TabSnapshot, error)
 	CloseTab(id browser.TabID) (browser.TabCloseResult, error)
@@ -198,6 +200,7 @@ func NewBrowserUIWithTabs(navigator Navigator, tabs TabController, invalidate fu
 		formButtons:      make(map[dom.NodeID]*widget.Clickable),
 		tabRowButtons:    make(map[browser.TabID]*widget.Clickable),
 		tabCloseButtons:  make(map[browser.TabID]*widget.Clickable),
+		tabShortcutDown:  make(map[key.Name]bool),
 		layoutBuild:      layoutengine.BuildWithScroll,
 	}
 	if cursorErr != nil {
@@ -433,6 +436,7 @@ func tabStateColor(tab browser.TabSnapshot) color.NRGBA {
 }
 
 func (ui *BrowserUI) handleKeyboardShortcuts(gtx layout.Context) {
+	ui.handleTabKeyboardShortcuts(gtx)
 	for {
 		event, ok := gtx.Event(key.Filter{Name: "R", Required: key.ModShortcut, Optional: key.ModShift})
 		if !ok {
@@ -447,6 +451,40 @@ func (ui *BrowserUI) handleKeyboardShortcuts(gtx layout.Context) {
 			continue
 		}
 		ui.startPageLoad("ページを再読み込み中", ui.navigator.Reload)
+	}
+}
+
+func (ui *BrowserUI) handleTabKeyboardShortcuts(gtx layout.Context) {
+	if ui.tabs == nil {
+		return
+	}
+	for _, name := range []key.Name{"T", "W"} {
+		for {
+			event, ok := gtx.Event(key.Filter{Name: name, Required: key.ModShortcut})
+			if !ok {
+				break
+			}
+			keyEvent, ok := event.(key.Event)
+			if !ok {
+				continue
+			}
+			if keyEvent.State == key.Release {
+				delete(ui.tabShortcutDown, name)
+				continue
+			}
+			if keyEvent.State != key.Press || ui.tabShortcutDown[name] {
+				continue
+			}
+			ui.tabShortcutDown[name] = true
+			switch name {
+			case "T":
+				ui.createTab(gtx)
+			case "W":
+				if active, ok := ui.tabs.ActiveTab(); ok {
+					ui.closeTab(active.ID)
+				}
+			}
+		}
 	}
 }
 
@@ -488,15 +526,12 @@ func (ui *BrowserUI) handleTabActions(gtx layout.Context) {
 		return
 	}
 	for ui.newTabButton.Clicked(gtx) {
-		if _, err := ui.tabs.NewTab(nil); err != nil {
-			ui.reportTabOperationError("新しいTabを作成できません", err)
-		}
+		ui.createTab(gtx)
 	}
 	closed := make(map[browser.TabID]bool)
 	for id, button := range ui.tabCloseButtons {
 		for button.Clicked(gtx) {
-			if _, err := ui.tabs.CloseTab(id); err != nil {
-				ui.reportTabOperationError("Tabを終了できません", err)
+			if !ui.closeTab(id) {
 				continue
 			}
 			closed[id] = true
@@ -512,6 +547,22 @@ func (ui *BrowserUI) handleTabActions(gtx layout.Context) {
 			}
 		}
 	}
+}
+
+func (ui *BrowserUI) createTab(gtx layout.Context) {
+	if _, err := ui.tabs.NewTab(nil); err != nil {
+		ui.reportTabOperationError("新しいTabを作成できません", err)
+		return
+	}
+	gtx.Execute(key.FocusCmd{Tag: &ui.address})
+}
+
+func (ui *BrowserUI) closeTab(id browser.TabID) bool {
+	if _, err := ui.tabs.CloseTab(id); err != nil {
+		ui.reportTabOperationError("Tabを終了できません", err)
+		return false
+	}
+	return true
 }
 
 func (ui *BrowserUI) reportTabOperationError(message string, err error) {

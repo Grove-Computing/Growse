@@ -577,6 +577,50 @@ type reloadRecordingNavigator struct {
 	reloads chan bool
 }
 
+func TestKeyboardShortcutsCreateAndCloseTabWithoutKeyRepeat(t *testing.T) {
+	session := browser.NewSession()
+	if _, err := session.NewTab(nil); err != nil {
+		t.Fatal(err)
+	}
+	ui := NewBrowserUIWithTabs(nil, session, nil)
+	router := new(input.Router)
+	gtx := layout.Context{
+		Ops:         new(op.Ops),
+		Source:      router.Source(),
+		Constraints: layout.Exact(image.Pt(800, 600)),
+		Metric:      unit.Metric{PxPerDp: 1, PxPerSp: 1},
+	}
+	ui.Layout(gtx)
+
+	router.Frame(gtx.Ops)
+	router.Queue(key.Event{Name: "T", Modifiers: key.ModShortcut, State: key.Press})
+	gtx.Reset()
+	ui.Layout(gtx)
+	if got := len(session.Tabs()); got != 2 {
+		t.Fatalf("tab count after Ctrl/Command+T = %d, want 2", got)
+	}
+
+	router.Frame(gtx.Ops)
+	router.Queue(key.Event{Name: "T", Modifiers: key.ModShortcut, State: key.Press})
+	gtx.Reset()
+	ui.Layout(gtx)
+	if got := len(session.Tabs()); got != 2 {
+		t.Fatalf("repeated shortcut created tabs: count = %d, want 2", got)
+	}
+
+	router.Frame(gtx.Ops)
+	router.Queue(key.Event{Name: "T", Modifiers: key.ModShortcut, State: key.Release})
+	gtx.Reset()
+	ui.Layout(gtx)
+	router.Frame(gtx.Ops)
+	router.Queue(key.Event{Name: "W", Modifiers: key.ModShortcut, State: key.Press})
+	gtx.Reset()
+	ui.Layout(gtx)
+	if got := len(session.Tabs()); got != 1 {
+		t.Fatalf("tab count after Ctrl/Command+W = %d, want 1", got)
+	}
+}
+
 func (navigator *reloadRecordingNavigator) Reload(context.Context) (*browser.Page, error) {
 	navigator.reloads <- false
 	return navigator.page, navigator.err
