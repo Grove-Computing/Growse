@@ -83,7 +83,7 @@ jobs:
       - name: Validate repository skills
         run: bash tests/skills.sh
 
-      - name: Validate v0.9.0 documentation
+      - name: Validate v0.10.0 documentation
         run: bash tests/docs.sh
 
       - name: Run race tests with coverage

@@ -1,6 +1,6 @@
 # Form / Fetch / Cookie対応表
 
-この表はGrowse v0.9.0の実装を基準とする。「部分対応」は主要な利用経路を扱えるが、Web標準の全機能を実装していない項目を表す。
+この表はGrowse v0.10.0の実装を基準とする。「部分対応」は主要な利用経路を扱えるが、Web標準の全機能を実装していない項目を表す。
 
 ## Form Controls
 
@@ -46,13 +46,15 @@ WebGoは`growse/fetch`の`Fetch(Request, success, failure)`を利用する。相
 
 | 機能 | 対応 | 補足 |
 | --- | --- | --- |
-| Cookie Jar共有 | 対応 | Navigation、Form Submission、FetchがPage単位のメモリ内Jarを共有する |
+| Cookie Jar共有 | 対応 | Browser Session内のTabでNavigation、Form Submission、Fetchがメモリ内Jarを共有する |
 | Domain / Path | 対応 | host-only、domain-match、path-matchを適用する |
 | Secure / HttpOnly | 対応 | SecureはHTTPSだけへ送信し、HttpOnlyはWebGoへ公開しない |
 | SameSite | 対応 | Strict、Lax、NoneをRequest種別・method・siteで判定し、NoneにはSecureを要求する |
 | expiration | 対応 | Max-AgeとExpiresを扱い、期限切れを除去する |
 | safety limit | 対応 | Cookie 1件4 KiB、domainごと180件、Jar全体3,000件 |
 | 対象外 | 非対応 | 永続化、Partitioned Cookie、Public Suffix List全体 |
+
+共有後も各RequestのDomain、Path、Secure、SameSite、Origin、Credentials Modeを再評価する。Tab終了ではBrowser SessionのCookie Jarを削除しない。
 
 ## Same-OriginとCORS
 
