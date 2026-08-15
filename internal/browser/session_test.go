@@ -713,6 +713,36 @@ func TestClosingTabCancelsNavigationAndStopsRuntimeResources(t *testing.T) {
 	}
 }
 
+func TestRuntimeAndNavigationErrorsRemainScopedToOwningTabs(t *testing.T) {
+	browsers := []*Browser{New(nil), New(nil)}
+	browsers[0].SetPage(&Page{URL: mustURL(t, "https://runtime-error.test/"), RuntimeError: "panic isolated"})
+	browsers[1].SetPage(&Page{URL: mustURL(t, "https://healthy.test/")})
+	next := 0
+	session := NewSession(func() *Browser {
+		state := browsers[next]
+		next++
+		return state
+	})
+	first, _ := session.NewTab(nil)
+	second, _ := session.NewTab(nil)
+	if _, err := session.FinishTabNavigation(first.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.FinishTabNavigation(second.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	tabs := session.Tabs()
+	if !tabs[0].Error || tabs[0].Status != "Runtimeエラー" {
+		t.Fatalf("runtime error state = %+v", tabs[0])
+	}
+	if !tabs[1].Error || tabs[1].Status != "読み込みエラー" {
+		t.Fatalf("navigation error state = %+v", tabs[1])
+	}
+	if browsers[0].Page().URL.Hostname() == browsers[1].Page().URL.Hostname() || browsers[1].Page().RuntimeError != "" {
+		t.Fatalf("error crossed Browser boundary: first=%+v second=%+v", browsers[0].Page(), browsers[1].Page())
+	}
+}
+
 func TestSessionRejectsBrowserInstanceReuseAcrossTabs(t *testing.T) {
 	shared := New(nil)
 	session := NewSession(func() *Browser { return shared })

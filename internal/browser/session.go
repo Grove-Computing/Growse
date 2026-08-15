@@ -213,9 +213,17 @@ func (s *Session) FinishTabNavigation(id TabID, failed bool) (TabSnapshot, error
 			continue
 		}
 		tab.loading = false
-		tab.failed = failed
+		runtimeFailed := false
+		if tab.browser != nil {
+			if page := tab.browser.Page(); page != nil {
+				runtimeFailed = page.RuntimeError != ""
+			}
+		}
+		tab.failed = failed || runtimeFailed
 		tab.pending = tab.id != s.activeID
-		if failed {
+		if runtimeFailed {
+			tab.status = "Runtimeエラー"
+		} else if failed {
 			tab.status = "読み込みエラー"
 		} else {
 			tab.status = "取得完了"
