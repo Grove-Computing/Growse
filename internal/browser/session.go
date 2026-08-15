@@ -2,10 +2,14 @@ package browser
 
 import (
 	"errors"
+	"net/url"
 	"sync"
 )
 
-var ErrTabIDExhausted = errors.New("tab id space is exhausted")
+var (
+	ErrTabIDExhausted = errors.New("tab id space is exhausted")
+	ErrTabBrowser     = errors.New("tab browser factory returned nil")
+)
 
 // TabID identifies one tab for the lifetime of a browser session.
 type TabID uint64
@@ -22,9 +26,10 @@ const (
 
 // Tab is one top-level page owned by a browser session.
 type Tab struct {
-	id      TabID
-	state   TabState
-	browser *Browser
+	id         TabID
+	state      TabState
+	browser    *Browser
+	initialURL *url.URL
 }
 
 // TabSnapshot is an immutable view of a tab suitable for browser chrome.
@@ -33,7 +38,11 @@ type TabSnapshot struct {
 	Position int
 	State    TabState
 	Active   bool
+	URL      string
 }
+
+// BrowserFactory creates the isolated Browser owned by a new tab.
+type BrowserFactory func() *Browser
 
 // Session owns an ordered collection of tabs and at most one active tab.
 type Session struct {
@@ -41,11 +50,43 @@ type Session struct {
 	tabs     []*Tab
 	activeID TabID
 	nextID   uint64
+	factory  BrowserFactory
 }
 
 // NewSession creates an empty browser session.
-func NewSession() *Session {
-	return &Session{}
+func NewSession(factory ...BrowserFactory) *Session {
+	createBrowser := BrowserFactory(func() *Browser { return New(nil) })
+	if len(factory) != 0 && factory[0] != nil {
+		createBrowser = factory[0]
+	}
+	return &Session{factory: createBrowser}
+}
+
+// NewTab adds an empty tab or a tab with a requested initial URL. Navigation
+// is performed separately so callers can control its context and lifecycle.
+func (s *Session) NewTab(initialURL *url.URL) (TabSnapshot, error) {
+	if s == nil {
+		return TabSnapshot{}, ErrTabBrowser
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	browser := s.factory()
+	if browser == nil {
+		return TabSnapshot{}, ErrTabBrowser
+	}
+	id, err := s.allocateTabIDLocked()
+	if err != nil {
+		return TabSnapshot{}, err
+	}
+	state := TabBackground
+	if len(s.tabs) == 0 {
+		state = TabActive
+		s.activeID = id
+	}
+	tab := &Tab{id: id, state: state, browser: browser, initialURL: cloneURL(initialURL)}
+	s.tabs = append(s.tabs, tab)
+	return snapshotTab(tab, len(s.tabs)-1, state == TabActive), nil
 }
 
 // Tabs returns the tabs in their display order.
@@ -82,7 +123,13 @@ func snapshotTab(tab *Tab, position int, active bool) TabSnapshot {
 	if tab == nil {
 		return TabSnapshot{Position: position}
 	}
-	return TabSnapshot{ID: tab.id, Position: position, State: tab.state, Active: active}
+	snapshot := TabSnapshot{ID: tab.id, Position: position, State: tab.state, Active: active}
+	if tab.initialURL != nil {
+		snapshot.URL = tab.initialURL.String()
+	} else if tab.browser != nil && tab.browser.Page() != nil && tab.browser.Page().URL != nil {
+		snapshot.URL = tab.browser.Page().URL.String()
+	}
+	return snapshot
 }
 
 func (s *Session) allocateTabIDLocked() (TabID, error) {

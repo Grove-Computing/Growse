@@ -2,6 +2,7 @@ package browser
 
 import (
 	"errors"
+	"net/url"
 	"testing"
 )
 
@@ -86,5 +87,50 @@ func TestSessionRejectsTabIDOverflow(t *testing.T) {
 	session.mu.Unlock()
 	if !errors.Is(err, ErrTabIDExhausted) {
 		t.Fatalf("allocateTabIDLocked() error = %v, want %v", err, ErrTabIDExhausted)
+	}
+}
+
+func TestSessionCreatesEmptyAndURLTabs(t *testing.T) {
+	created := 0
+	session := NewSession(func() *Browser {
+		created++
+		return New(nil)
+	})
+
+	empty, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !empty.Active || empty.State != TabActive || empty.URL != "" {
+		t.Fatalf("empty tab = %#v", empty)
+	}
+
+	target, err := url.Parse("https://example.test/notes?q=go#today")
+	if err != nil {
+		t.Fatal(err)
+	}
+	withURL, err := session.NewTab(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target.Host = "mutated.test"
+	if withURL.Active || withURL.State != TabBackground || withURL.URL != "https://example.test/notes?q=go#today" {
+		t.Fatalf("URL tab = %#v", withURL)
+	}
+	if created != 2 {
+		t.Fatalf("browser factory calls = %d, want 2", created)
+	}
+	if tabs := session.Tabs(); len(tabs) != 2 || tabs[1].URL != withURL.URL {
+		t.Fatalf("Tabs() = %#v", tabs)
+	}
+}
+
+func TestSessionRejectsNilBrowserFromFactory(t *testing.T) {
+	session := NewSession(func() *Browser { return nil })
+	if _, err := session.NewTab(nil); !errors.Is(err, ErrTabBrowser) {
+		t.Fatalf("NewTab() error = %v, want %v", err, ErrTabBrowser)
+	}
+	if len(session.Tabs()) != 0 {
+		t.Fatal("failed tab creation changed the collection")
 	}
 }
