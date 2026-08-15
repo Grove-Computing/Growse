@@ -1,6 +1,9 @@
 package browser
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 func TestSessionKeepsOrderedTabsAndOneActiveTab(t *testing.T) {
 	session := NewSession()
@@ -37,5 +40,51 @@ func TestEmptySessionHasNoActiveTab(t *testing.T) {
 	}
 	if active, ok := session.ActiveTab(); ok {
 		t.Fatalf("ActiveTab() = %#v, true, want no active tab", active)
+	}
+}
+
+func TestSessionTabIDsAreNeverReusedForDelayedDispatch(t *testing.T) {
+	session := NewSession()
+
+	session.mu.Lock()
+	firstID, err := session.allocateTabIDLocked()
+	if err != nil {
+		session.mu.Unlock()
+		t.Fatal(err)
+	}
+	session.tabs = append(session.tabs, &Tab{id: firstID, state: TabActive})
+	session.activeID = firstID
+	session.tabs = nil // The first tab has been removed before delayed work completes.
+	secondID, err := session.allocateTabIDLocked()
+	if err != nil {
+		session.mu.Unlock()
+		t.Fatal(err)
+	}
+	second := &Tab{id: secondID, state: TabActive}
+	session.tabs = append(session.tabs, second)
+	session.activeID = secondID
+	session.mu.Unlock()
+
+	if firstID == secondID {
+		t.Fatalf("reused tab id %d", firstID)
+	}
+	called := false
+	if session.dispatchToTab(firstID, func(*Tab) { called = true }) || called {
+		t.Fatal("delayed work for a removed tab was dispatched")
+	}
+	if !session.dispatchToTab(secondID, func(tab *Tab) { called = tab == second }) || !called {
+		t.Fatal("live tab did not receive its work")
+	}
+}
+
+func TestSessionRejectsTabIDOverflow(t *testing.T) {
+	session := NewSession()
+	session.nextID = ^uint64(0)
+
+	session.mu.Lock()
+	_, err := session.allocateTabIDLocked()
+	session.mu.Unlock()
+	if !errors.Is(err, ErrTabIDExhausted) {
+		t.Fatalf("allocateTabIDLocked() error = %v, want %v", err, ErrTabIDExhausted)
 	}
 }

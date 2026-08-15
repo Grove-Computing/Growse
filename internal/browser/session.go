@@ -1,6 +1,11 @@
 package browser
 
-import "sync"
+import (
+	"errors"
+	"sync"
+)
+
+var ErrTabIDExhausted = errors.New("tab id space is exhausted")
 
 // TabID identifies one tab for the lifetime of a browser session.
 type TabID uint64
@@ -35,6 +40,7 @@ type Session struct {
 	mu       sync.RWMutex
 	tabs     []*Tab
 	activeID TabID
+	nextID   uint64
 }
 
 // NewSession creates an empty browser session.
@@ -77,4 +83,40 @@ func snapshotTab(tab *Tab, position int, active bool) TabSnapshot {
 		return TabSnapshot{Position: position}
 	}
 	return TabSnapshot{ID: tab.id, Position: position, State: tab.state, Active: active}
+}
+
+func (s *Session) allocateTabIDLocked() (TabID, error) {
+	if s.nextID == ^uint64(0) {
+		return 0, ErrTabIDExhausted
+	}
+	s.nextID++
+	return TabID(s.nextID), nil
+}
+
+func (s *Session) tabByIDLocked(id TabID) (*Tab, bool) {
+	if id == 0 {
+		return nil, false
+	}
+	for _, tab := range s.tabs {
+		if tab != nil && tab.id == id && tab.state != TabClosing && tab.state != TabClosed {
+			return tab, true
+		}
+	}
+	return nil, false
+}
+
+// dispatchToTab validates a delayed operation's destination while holding the
+// session lock. Removing a tab makes every outstanding operation for its ID stale.
+func (s *Session) dispatchToTab(id TabID, dispatch func(*Tab)) bool {
+	if s == nil || dispatch == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tab, ok := s.tabByIDLocked(id)
+	if !ok {
+		return false
+	}
+	dispatch(tab)
+	return true
 }
