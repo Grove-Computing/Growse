@@ -3,6 +3,7 @@ package browser
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -934,6 +935,60 @@ func TestSessionTabsShareCookiesAcrossNavigationFormAndFetch(t *testing.T) {
 	}
 	if len(failures) != 0 {
 		t.Fatal(strings.Join(failures, "; "))
+	}
+}
+
+func TestSessionTabsShareHTTPCacheAcrossNavigationResourcesWebGoAndFetch(t *testing.T) {
+	counts := make(map[string]int)
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		counts[request.URL.Path]++
+		response.Header().Set("Cache-Control", "max-age=60")
+		switch request.URL.Path {
+		case "/style.css":
+			response.Header().Set("Content-Type", "text/css")
+			_, _ = response.Write([]byte("body { color: #123456; }"))
+		case "/app.go":
+			response.Header().Set("Content-Type", "text/go")
+			_, _ = response.Write([]byte("package main\nfunc main() {}"))
+		case "/fetch":
+			response.Header().Set("Content-Type", "text/plain")
+			_, _ = response.Write([]byte("shared fetch"))
+		default:
+			response.Header().Set("Content-Type", "text/html")
+			if strings.HasPrefix(request.URL.Path, "/workspace-") {
+				_, _ = response.Write([]byte(`<!doctype html><link rel="stylesheet" href="/style.css"><script type="text/go" src="/app.go"></script>`))
+			} else {
+				_, _ = response.Write([]byte("<!doctype html><title>Cached Navigation</title>"))
+			}
+		}
+	}))
+	defer server.Close()
+
+	client := network.NewClientWithLimits(server.Client(), 4096)
+	session := NewSession(func() *Browser { return New(client) })
+	defer session.Close()
+	for index := 0; index < 2; index++ {
+		if _, err := session.NewTab(nil); err != nil {
+			t.Fatal(err)
+		}
+		state := session.tabs[index].browser
+		if _, err := state.Navigate(context.Background(), server.URL+"/navigation"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := state.Navigate(context.Background(), server.URL+fmt.Sprintf("/workspace-%d", index)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := client.Do(context.Background(), &network.Request{
+			Method: http.MethodGet, URL: mustURL(t, server.URL+"/fetch"), SiteURL: mustURL(t, server.URL+"/workspace"),
+			Kind: network.RequestFetch, Credentials: network.CredentialsOmit,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, path := range []string{"/navigation", "/style.css", "/app.go", "/fetch"} {
+		if counts[path] != 1 {
+			t.Fatalf("%s network requests = %d, want shared cache hit", path, counts[path])
+		}
 	}
 }
 
