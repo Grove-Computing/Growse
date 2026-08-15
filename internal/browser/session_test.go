@@ -134,3 +134,58 @@ func TestSessionRejectsNilBrowserFromFactory(t *testing.T) {
 		t.Fatal("failed tab creation changed the collection")
 	}
 }
+
+func TestSessionSelectsTabByIDAndPosition(t *testing.T) {
+	session := NewSession()
+	first, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	third, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	selected, err := session.SelectTab(second.ID)
+	if err != nil || selected.ID != second.ID || !selected.Active || selected.Position != 1 {
+		t.Fatalf("SelectTab() = %#v, %v", selected, err)
+	}
+	selected, err = session.SelectTabAt(2)
+	if err != nil || selected.ID != third.ID || !selected.Active {
+		t.Fatalf("SelectTabAt() = %#v, %v", selected, err)
+	}
+	active, ok := session.ActiveTab()
+	if !ok || active.ID != third.ID {
+		t.Fatalf("ActiveTab() = %#v, %t", active, ok)
+	}
+	tabs := session.Tabs()
+	if tabs[0].ID != first.ID || tabs[0].State != TabBackground || tabs[1].State != TabBackground || tabs[2].State != TabActive {
+		t.Fatalf("Tabs() = %#v", tabs)
+	}
+}
+
+func TestSessionRejectsInvalidTabSelectionWithoutChangingActiveTab(t *testing.T) {
+	session := NewSession()
+	first, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, selectInvalid := range []func() error{
+		func() error { _, err := session.SelectTab(999); return err },
+		func() error { _, err := session.SelectTabAt(-1); return err },
+		func() error { _, err := session.SelectTabAt(1); return err },
+	} {
+		if err := selectInvalid(); !errors.Is(err, ErrTabNotFound) {
+			t.Fatalf("selection error = %v, want %v", err, ErrTabNotFound)
+		}
+	}
+	active, ok := session.ActiveTab()
+	if !ok || active.ID != first.ID {
+		t.Fatalf("ActiveTab() = %#v, %t", active, ok)
+	}
+}

@@ -9,6 +9,7 @@ import (
 var (
 	ErrTabIDExhausted = errors.New("tab id space is exhausted")
 	ErrTabBrowser     = errors.New("tab browser factory returned nil")
+	ErrTabNotFound    = errors.New("tab was not found")
 )
 
 // TabID identifies one tab for the lifetime of a browser session.
@@ -87,6 +88,46 @@ func (s *Session) NewTab(initialURL *url.URL) (TabSnapshot, error) {
 	tab := &Tab{id: id, state: state, browser: browser, initialURL: cloneURL(initialURL)}
 	s.tabs = append(s.tabs, tab)
 	return snapshotTab(tab, len(s.tabs)-1, state == TabActive), nil
+}
+
+// SelectTab makes the identified live tab active.
+func (s *Session) SelectTab(id TabID) (TabSnapshot, error) {
+	if s == nil {
+		return TabSnapshot{}, ErrTabNotFound
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for index, tab := range s.tabs {
+		if tab != nil && tab.id == id && tab.state != TabClosing && tab.state != TabClosed {
+			return s.selectTabLocked(index), nil
+		}
+	}
+	return TabSnapshot{}, ErrTabNotFound
+}
+
+// SelectTabAt makes the live tab at position active.
+func (s *Session) SelectTabAt(position int) (TabSnapshot, error) {
+	if s == nil {
+		return TabSnapshot{}, ErrTabNotFound
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if position < 0 || position >= len(s.tabs) || s.tabs[position] == nil || s.tabs[position].state == TabClosing || s.tabs[position].state == TabClosed {
+		return TabSnapshot{}, ErrTabNotFound
+	}
+	return s.selectTabLocked(position), nil
+}
+
+func (s *Session) selectTabLocked(position int) TabSnapshot {
+	target := s.tabs[position]
+	for _, tab := range s.tabs {
+		if tab != nil && tab.state == TabActive {
+			tab.state = TabBackground
+		}
+	}
+	target.state = TabActive
+	s.activeID = target.id
+	return snapshotTab(target, position, true)
 }
 
 // Tabs returns the tabs in their display order.
