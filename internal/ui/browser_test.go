@@ -627,12 +627,16 @@ func TestAddressNavigationIsPinnedToOperationStartTab(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("navigation did not finish")
 	}
+	ui.consumeNavigationResult()
 
 	if page := created[0].Page(); page == nil || page.URL.String() != "https://example.com/pinned" {
 		t.Fatalf("operation-start tab page = %+v, want pinned URL", page)
 	}
 	if page := created[1].Page(); page != nil {
 		t.Fatalf("new active tab received old navigation: %+v", page)
+	}
+	if got := ui.address.Text(); got == "https://example.com/pinned" {
+		t.Fatalf("background navigation overwrote active address bar: %q", got)
 	}
 }
 

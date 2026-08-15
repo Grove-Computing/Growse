@@ -376,16 +376,23 @@ func (s *Session) ActiveTab() (TabSnapshot, bool) {
 // Callers keep the returned pointer to pin an operation to this tab even if
 // another tab becomes active before the operation completes.
 func (s *Session) ActiveBrowser() (*Browser, bool) {
+	_, active, ok := s.ActiveBrowserTarget()
+	return active, ok
+}
+
+// ActiveBrowserTarget atomically returns the ID and Browser selected at the
+// start of a chrome operation.
+func (s *Session) ActiveBrowserTarget() (TabID, *Browser, bool) {
 	if s == nil {
-		return nil, false
+		return 0, nil, false
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	tab, _, ok := s.activeTabLocked()
 	if !ok || tab.browser == nil {
-		return nil, false
+		return 0, nil, false
 	}
-	return tab.browser, true
+	return tab.id, tab.browser, true
 }
 
 func snapshotTab(tab *Tab, position int, active bool) TabSnapshot {

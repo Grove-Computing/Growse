@@ -154,7 +154,7 @@ type TabController interface {
 }
 
 type activeBrowserSource interface {
-	ActiveBrowser() (*browser.Browser, bool)
+	ActiveBrowserTarget() (browser.TabID, *browser.Browser, bool)
 }
 
 type animationFrameNavigator interface {
@@ -167,9 +167,10 @@ type historyScrollNavigator interface {
 }
 
 type navigationResult struct {
-	id   uint64
-	page *browser.Page
-	err  error
+	id    uint64
+	tabID browser.TabID
+	page  *browser.Page
+	err   error
 }
 
 // NewBrowserUI creates a browser toolbar and an empty viewport.
@@ -449,15 +450,15 @@ func (ui *BrowserUI) handleKeyboardShortcuts(gtx layout.Context) {
 			return
 		}
 		keyEvent, ok := event.(key.Event)
-		navigator := ui.activeNavigator()
+		tabID, navigator := ui.activeNavigationTarget()
 		if !ok || keyEvent.State != key.Press || navigator == nil || navigator.Page() == nil {
 			continue
 		}
 		if keyEvent.Modifiers.Contain(key.ModShift) {
-			ui.startPageLoad(navigator, "キャッシュを無視して再読み込み中", navigator.ReloadIgnoringCache)
+			ui.startPageLoad(tabID, navigator, "キャッシュを無視して再読み込み中", navigator.ReloadIgnoringCache)
 			continue
 		}
-		ui.startPageLoad(navigator, "ページを再読み込み中", navigator.Reload)
+		ui.startPageLoad(tabID, navigator, "ページを再読み込み中", navigator.Reload)
 	}
 }
 
@@ -531,18 +532,18 @@ func (ui *BrowserUI) handleActions(gtx layout.Context) {
 		ui.startNavigation(ui.address.Text())
 	}
 	for ui.backButton.Clicked(gtx) {
-		if navigator := ui.activeNavigator(); navigator != nil && navigator.CanBack() {
-			ui.startPageLoad(navigator, "前のページを読み込み中", navigator.Back)
+		if tabID, navigator := ui.activeNavigationTarget(); navigator != nil && navigator.CanBack() {
+			ui.startPageLoad(tabID, navigator, "前のページを読み込み中", navigator.Back)
 		}
 	}
 	for ui.forwardButton.Clicked(gtx) {
-		if navigator := ui.activeNavigator(); navigator != nil && navigator.CanForward() {
-			ui.startPageLoad(navigator, "次のページを読み込み中", navigator.Forward)
+		if tabID, navigator := ui.activeNavigationTarget(); navigator != nil && navigator.CanForward() {
+			ui.startPageLoad(tabID, navigator, "次のページを読み込み中", navigator.Forward)
 		}
 	}
 	for ui.reloadButton.Clicked(gtx) {
-		if navigator := ui.activeNavigator(); navigator != nil && navigator.Page() != nil {
-			ui.startPageLoad(navigator, "ページを再読み込み中", navigator.Reload)
+		if tabID, navigator := ui.activeNavigationTarget(); navigator != nil && navigator.Page() != nil {
+			ui.startPageLoad(tabID, navigator, "ページを再読み込み中", navigator.Reload)
 		}
 	}
 }
@@ -597,18 +598,18 @@ func (ui *BrowserUI) reportTabOperationError(message string, err error) {
 }
 
 func (ui *BrowserUI) startNavigation(rawURL string) {
-	navigator := ui.activeNavigator()
+	tabID, navigator := ui.activeNavigationTarget()
 	if navigator == nil {
 		ui.status = "Navigationを利用できません"
 		ui.statusHasError = true
 		return
 	}
-	ui.startPageLoad(navigator, "読み込み中: "+rawURL, func(ctx context.Context) (*browser.Page, error) {
+	ui.startPageLoad(tabID, navigator, "読み込み中: "+rawURL, func(ctx context.Context) (*browser.Page, error) {
 		return navigator.Navigate(ctx, rawURL)
 	})
 }
 
-func (ui *BrowserUI) startPageLoad(navigator Navigator, status string, load func(context.Context) (*browser.Page, error)) {
+func (ui *BrowserUI) startPageLoad(tabID browser.TabID, navigator Navigator, status string, load func(context.Context) (*browser.Page, error)) {
 	ui.persistHistoryScroll()
 	if navigator != nil {
 		navigator.ClearHover()
@@ -627,18 +628,23 @@ func (ui *BrowserUI) startPageLoad(navigator Navigator, status string, load func
 
 	go func() {
 		page, err := load(ctx)
-		ui.results <- navigationResult{id: navigationID, page: page, err: err}
+		ui.results <- navigationResult{id: navigationID, tabID: tabID, page: page, err: err}
 		ui.invalidate()
 	}()
 }
 
 func (ui *BrowserUI) activeNavigator() Navigator {
+	_, navigator := ui.activeNavigationTarget()
+	return navigator
+}
+
+func (ui *BrowserUI) activeNavigationTarget() (browser.TabID, Navigator) {
 	if tabs, ok := ui.tabs.(activeBrowserSource); ok {
-		if navigator, ok := tabs.ActiveBrowser(); ok {
-			return navigator
+		if tabID, navigator, ok := tabs.ActiveBrowserTarget(); ok {
+			return tabID, navigator
 		}
 	}
-	return ui.navigator
+	return 0, ui.navigator
 }
 
 func (ui *BrowserUI) consumeNavigationResult() {
@@ -646,6 +652,11 @@ func (ui *BrowserUI) consumeNavigationResult() {
 		select {
 		case result := <-ui.results:
 			if result.id != ui.navigationID {
+				continue
+			}
+			if result.tabID != 0 && !ui.tabIsActive(result.tabID) {
+				ui.loading = false
+				ui.cancelNavigation = nil
 				continue
 			}
 			ui.loading = false
@@ -696,6 +707,14 @@ func (ui *BrowserUI) consumeNavigationResult() {
 			return
 		}
 	}
+}
+
+func (ui *BrowserUI) tabIsActive(id browser.TabID) bool {
+	if ui.tabs == nil {
+		return id == 0
+	}
+	active, ok := ui.tabs.ActiveTab()
+	return ok && active.ID == id
 }
 
 // Close cancels an in-flight navigation when the window closes.
