@@ -620,9 +620,7 @@ func (ui *BrowserUI) startPageLoad(tabID browser.TabID, navigator Navigator, sta
 	if navigator != nil {
 		navigator.ClearHover()
 	}
-	if previous, ok := ui.navigations[tabID]; ok {
-		previous.cancel()
-	}
+	ui.cancelTabNavigation(tabID)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	ui.nextNavigationID++
@@ -637,6 +635,16 @@ func (ui *BrowserUI) startPageLoad(tabID browser.TabID, navigator Navigator, sta
 		ui.results <- navigationResult{id: navigationID, tabID: tabID, page: page, err: err}
 		ui.invalidate()
 	}()
+}
+
+func (ui *BrowserUI) cancelTabNavigation(tabID browser.TabID) bool {
+	navigation, ok := ui.navigations[tabID]
+	if !ok {
+		return false
+	}
+	navigation.cancel()
+	delete(ui.navigations, tabID)
+	return true
 }
 
 func (ui *BrowserUI) activeNavigator() Navigator {
@@ -728,9 +736,8 @@ func (ui *BrowserUI) Close() {
 	if ui.navigator != nil {
 		ui.navigator.ClearHover()
 	}
-	for tabID, navigation := range ui.navigations {
-		navigation.cancel()
-		delete(ui.navigations, tabID)
+	for tabID := range ui.navigations {
+		ui.cancelTabNavigation(tabID)
 	}
 }
 

@@ -579,6 +579,25 @@ type supersedingNavigationLoader struct {
 	newFinished chan struct{}
 }
 
+type parallelNavigationLoader struct {
+	started  chan struct{}
+	release  chan struct{}
+	canceled chan struct{}
+}
+
+func (loader *parallelNavigationLoader) Get(ctx context.Context, resourceURL *url.URL) (*network.Response, error) {
+	close(loader.started)
+	select {
+	case <-loader.release:
+		return &network.Response{
+			URL: resourceURL, StatusCode: 200, ContentType: "text/html; charset=utf-8", Body: []byte("<title>Parallel</title>"),
+		}, nil
+	case <-ctx.Done():
+		close(loader.canceled)
+		return nil, ctx.Err()
+	}
+}
+
 func (loader *supersedingNavigationLoader) Get(ctx context.Context, resourceURL *url.URL) (*network.Response, error) {
 	if resourceURL.Path == "/old" {
 		close(loader.oldStarted)
@@ -706,6 +725,73 @@ func TestNewNavigationCancelsOnlyPreviousOperationInSameTab(t *testing.T) {
 		case <-deadline:
 			t.Fatalf("latest navigation was not committed: %+v", state.Page())
 		}
+	}
+}
+
+func TestNavigationsInDifferentTabsCompleteIndependently(t *testing.T) {
+	loaders := []*parallelNavigationLoader{
+		{started: make(chan struct{}), release: make(chan struct{}), canceled: make(chan struct{})},
+		{started: make(chan struct{}), release: make(chan struct{}), canceled: make(chan struct{})},
+	}
+	created := make([]*browser.Browser, 0, 2)
+	session := browser.NewSession(func() *browser.Browser {
+		state := browser.New(loaders[len(created)])
+		created = append(created, state)
+		return state
+	})
+	first, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invalidated := make(chan struct{}, 2)
+	ui := NewBrowserUIWithTabs(nil, session, func() { invalidated <- struct{}{} })
+	defer ui.Close()
+
+	ui.startNavigation("https://first.example/page")
+	select {
+	case <-loaders[0].started:
+	case <-time.After(time.Second):
+		t.Fatal("first tab navigation did not start")
+	}
+	if _, err := session.SelectTab(second.ID); err != nil {
+		t.Fatal(err)
+	}
+	ui.startNavigation("https://second.example/page")
+	select {
+	case <-loaders[1].started:
+	case <-time.After(time.Second):
+		t.Fatal("second tab navigation did not start")
+	}
+	for index, loader := range loaders {
+		select {
+		case <-loader.canceled:
+			t.Fatalf("tab %d navigation was canceled by another tab", index)
+		default:
+		}
+		close(loader.release)
+	}
+
+	deadline := time.After(time.Second)
+	for completed := 0; completed < 2; {
+		select {
+		case <-invalidated:
+			completed++
+		case <-deadline:
+			t.Fatalf("parallel pages were not committed: first=%+v second=%+v", created[0].Page(), created[1].Page())
+		}
+	}
+	if got := created[0].Page().URL.Hostname(); got != "first.example" {
+		t.Fatalf("first tab host = %q, want first.example", got)
+	}
+	if got := created[1].Page().URL.Hostname(); got != "second.example" {
+		t.Fatalf("second tab host = %q, want second.example", got)
+	}
+	if active, ok := session.ActiveTab(); !ok || active.ID != second.ID || active.ID == first.ID {
+		t.Fatalf("active tab changed after parallel completion: %+v, %v", active, ok)
 	}
 }
 
