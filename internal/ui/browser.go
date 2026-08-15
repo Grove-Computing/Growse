@@ -153,6 +153,10 @@ type TabController interface {
 	CloseTab(id browser.TabID) (browser.TabCloseResult, error)
 }
 
+type activeBrowserSource interface {
+	ActiveBrowser() (*browser.Browser, bool)
+}
+
 type animationFrameNavigator interface {
 	RunAnimationFrame(time.Time) bool
 	HasAnimationFrameCallbacks() bool
@@ -445,14 +449,15 @@ func (ui *BrowserUI) handleKeyboardShortcuts(gtx layout.Context) {
 			return
 		}
 		keyEvent, ok := event.(key.Event)
-		if !ok || keyEvent.State != key.Press || ui.navigator == nil || ui.navigator.Page() == nil {
+		navigator := ui.activeNavigator()
+		if !ok || keyEvent.State != key.Press || navigator == nil || navigator.Page() == nil {
 			continue
 		}
 		if keyEvent.Modifiers.Contain(key.ModShift) {
-			ui.startPageLoad("キャッシュを無視して再読み込み中", ui.navigator.ReloadIgnoringCache)
+			ui.startPageLoad(navigator, "キャッシュを無視して再読み込み中", navigator.ReloadIgnoringCache)
 			continue
 		}
-		ui.startPageLoad("ページを再読み込み中", ui.navigator.Reload)
+		ui.startPageLoad(navigator, "ページを再読み込み中", navigator.Reload)
 	}
 }
 
@@ -526,18 +531,18 @@ func (ui *BrowserUI) handleActions(gtx layout.Context) {
 		ui.startNavigation(ui.address.Text())
 	}
 	for ui.backButton.Clicked(gtx) {
-		if ui.navigator != nil && ui.navigator.CanBack() {
-			ui.startPageLoad("前のページを読み込み中", ui.navigator.Back)
+		if navigator := ui.activeNavigator(); navigator != nil && navigator.CanBack() {
+			ui.startPageLoad(navigator, "前のページを読み込み中", navigator.Back)
 		}
 	}
 	for ui.forwardButton.Clicked(gtx) {
-		if ui.navigator != nil && ui.navigator.CanForward() {
-			ui.startPageLoad("次のページを読み込み中", ui.navigator.Forward)
+		if navigator := ui.activeNavigator(); navigator != nil && navigator.CanForward() {
+			ui.startPageLoad(navigator, "次のページを読み込み中", navigator.Forward)
 		}
 	}
 	for ui.reloadButton.Clicked(gtx) {
-		if ui.navigator != nil && ui.navigator.Page() != nil {
-			ui.startPageLoad("ページを再読み込み中", ui.navigator.Reload)
+		if navigator := ui.activeNavigator(); navigator != nil && navigator.Page() != nil {
+			ui.startPageLoad(navigator, "ページを再読み込み中", navigator.Reload)
 		}
 	}
 }
@@ -592,20 +597,21 @@ func (ui *BrowserUI) reportTabOperationError(message string, err error) {
 }
 
 func (ui *BrowserUI) startNavigation(rawURL string) {
-	if ui.navigator == nil {
+	navigator := ui.activeNavigator()
+	if navigator == nil {
 		ui.status = "Navigationを利用できません"
 		ui.statusHasError = true
 		return
 	}
-	ui.startPageLoad("読み込み中: "+rawURL, func(ctx context.Context) (*browser.Page, error) {
-		return ui.navigator.Navigate(ctx, rawURL)
+	ui.startPageLoad(navigator, "読み込み中: "+rawURL, func(ctx context.Context) (*browser.Page, error) {
+		return navigator.Navigate(ctx, rawURL)
 	})
 }
 
-func (ui *BrowserUI) startPageLoad(status string, load func(context.Context) (*browser.Page, error)) {
+func (ui *BrowserUI) startPageLoad(navigator Navigator, status string, load func(context.Context) (*browser.Page, error)) {
 	ui.persistHistoryScroll()
-	if ui.navigator != nil {
-		ui.navigator.ClearHover()
+	if navigator != nil {
+		navigator.ClearHover()
 	}
 	if ui.cancelNavigation != nil {
 		ui.cancelNavigation()
@@ -624,6 +630,15 @@ func (ui *BrowserUI) startPageLoad(status string, load func(context.Context) (*b
 		ui.results <- navigationResult{id: navigationID, page: page, err: err}
 		ui.invalidate()
 	}()
+}
+
+func (ui *BrowserUI) activeNavigator() Navigator {
+	if tabs, ok := ui.tabs.(activeBrowserSource); ok {
+		if navigator, ok := tabs.ActiveBrowser(); ok {
+			return navigator
+		}
+	}
+	return ui.navigator
 }
 
 func (ui *BrowserUI) consumeNavigationResult() {
@@ -710,9 +725,10 @@ func (ui *BrowserUI) layoutToolbar(gtx layout.Context) layout.Dimensions {
 	)
 
 	return layout.Inset{Top: unit.Dp(8), Right: unit.Dp(14), Bottom: unit.Dp(6), Left: unit.Dp(14)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-		canBack := ui.navigator != nil && ui.navigator.CanBack()
-		canForward := ui.navigator != nil && ui.navigator.CanForward()
-		canReload := ui.navigator != nil && ui.navigator.Page() != nil
+		navigator := ui.activeNavigator()
+		canBack := navigator != nil && navigator.CanBack()
+		canForward := navigator != nil && navigator.CanForward()
+		canReload := navigator != nil && navigator.Page() != nil
 		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				return layout.Flex{Alignment: layout.Middle}.Layout(gtx,

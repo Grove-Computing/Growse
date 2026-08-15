@@ -23,6 +23,7 @@ import (
 	"github.com/Grove-Computing/Growse/internal/events"
 	"github.com/Grove-Computing/Growse/internal/forms"
 	layoutengine "github.com/Grove-Computing/Growse/internal/layout"
+	"github.com/Grove-Computing/Growse/internal/network"
 	paintmodel "github.com/Grove-Computing/Growse/internal/paint"
 	"github.com/Grove-Computing/Growse/internal/style"
 )
@@ -565,6 +566,74 @@ func TestNavigationResultUpdatesAddressAndStatus(t *testing.T) {
 type recordingNavigator struct {
 	stubNavigator
 	navigated chan string
+}
+
+type controlledNavigationLoader struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (loader *controlledNavigationLoader) Get(ctx context.Context, resourceURL *url.URL) (*network.Response, error) {
+	select {
+	case loader.started <- struct{}{}:
+	default:
+	}
+	select {
+	case <-loader.release:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	return &network.Response{
+		URL: resourceURL, StatusCode: 200, ContentType: "text/html; charset=utf-8", Body: []byte("<title>Pinned</title>"),
+	}, nil
+}
+
+func TestAddressNavigationIsPinnedToOperationStartTab(t *testing.T) {
+	loader := &controlledNavigationLoader{started: make(chan struct{}, 1), release: make(chan struct{})}
+	created := make([]*browser.Browser, 0, 2)
+	session := browser.NewSession(func() *browser.Browser {
+		var state *browser.Browser
+		if len(created) == 0 {
+			state = browser.New(loader)
+		} else {
+			state = browser.New(nil)
+		}
+		created = append(created, state)
+		return state
+	})
+	if _, err := session.NewTab(nil); err != nil {
+		t.Fatal(err)
+	}
+	second, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invalidated := make(chan struct{}, 1)
+	ui := NewBrowserUIWithTabs(nil, session, func() { invalidated <- struct{}{} })
+	defer ui.Close()
+
+	ui.startNavigation("https://example.com/pinned")
+	select {
+	case <-loader.started:
+	case <-time.After(time.Second):
+		t.Fatal("navigation did not start")
+	}
+	if _, err := session.SelectTab(second.ID); err != nil {
+		t.Fatal(err)
+	}
+	close(loader.release)
+	select {
+	case <-invalidated:
+	case <-time.After(time.Second):
+		t.Fatal("navigation did not finish")
+	}
+
+	if page := created[0].Page(); page == nil || page.URL.String() != "https://example.com/pinned" {
+		t.Fatalf("operation-start tab page = %+v, want pinned URL", page)
+	}
+	if page := created[1].Page(); page != nil {
+		t.Fatalf("new active tab received old navigation: %+v", page)
+	}
 }
 
 func (navigator *recordingNavigator) Navigate(_ context.Context, rawURL string) (*browser.Page, error) {

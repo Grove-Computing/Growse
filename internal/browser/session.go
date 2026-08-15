@@ -372,6 +372,22 @@ func (s *Session) ActiveTab() (TabSnapshot, bool) {
 	return TabSnapshot{}, false
 }
 
+// ActiveBrowser returns the Browser currently selected by browser chrome.
+// Callers keep the returned pointer to pin an operation to this tab even if
+// another tab becomes active before the operation completes.
+func (s *Session) ActiveBrowser() (*Browser, bool) {
+	if s == nil {
+		return nil, false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	tab, _, ok := s.activeTabLocked()
+	if !ok || tab.browser == nil {
+		return nil, false
+	}
+	return tab.browser, true
+}
+
 func snapshotTab(tab *Tab, position int, active bool) TabSnapshot {
 	if tab == nil {
 		return TabSnapshot{Position: position}
