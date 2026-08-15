@@ -484,6 +484,53 @@ func TestSessionSubmitsFormAndFormtargetBlankToNewTab(t *testing.T) {
 	}
 }
 
+func TestNewTabDoesNotInheritSourceDOMOrRuntimeReference(t *testing.T) {
+	source := New(nil)
+	sourceDocument := dom.NewDocument()
+	source.SetPage(&Page{URL: mustURL(t, "https://source.example/"), Document: sourceDocument})
+	sourceRuntime := new(runtimeStub)
+	source.activeRuntime = sourceRuntime
+	destination := New(nil)
+	created := 0
+	session := NewSession(func() *Browser {
+		created++
+		if created == 1 {
+			return source
+		}
+		return destination
+	})
+	if _, err := session.NewTab(nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.NewTab(mustURL(t, "https://target.example/")); err != nil {
+		t.Fatal(err)
+	}
+	if session.tabs[0].browser == session.tabs[1].browser {
+		t.Fatal("new tab reused the source Browser")
+	}
+	if destination.Page() != nil || destination.activeRuntime != nil {
+		t.Fatalf("new tab inherited source state: page=%+v runtime=%T", destination.Page(), destination.activeRuntime)
+	}
+	if source.Page().Document != sourceDocument || source.activeRuntime != sourceRuntime {
+		t.Fatal("source DOM or Runtime reference changed")
+	}
+}
+
+func TestSessionRejectsBrowserInstanceReuseAcrossTabs(t *testing.T) {
+	shared := New(nil)
+	session := NewSession(func() *Browser { return shared })
+	first, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.NewTab(nil); !errors.Is(err, ErrTabBrowserReuse) {
+		t.Fatalf("reused Browser error = %v, want %v", err, ErrTabBrowserReuse)
+	}
+	if tabs := session.Tabs(); len(tabs) != 1 || tabs[0].ID != first.ID || !tabs[0].Active {
+		t.Fatalf("tabs changed after Browser reuse rejection: %+v", tabs)
+	}
+}
+
 func mustURL(t *testing.T, raw string) *url.URL {
 	t.Helper()
 	parsed, err := url.Parse(raw)

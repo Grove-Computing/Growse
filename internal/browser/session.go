@@ -8,12 +8,13 @@ import (
 )
 
 var (
-	ErrTabIDExhausted = errors.New("tab id space is exhausted")
-	ErrTabBrowser     = errors.New("tab browser factory returned nil")
-	ErrTabNotFound    = errors.New("tab was not found")
-	ErrTabLimit       = errors.New("tab limit was reached")
-	ErrTabURLTooLong  = errors.New("tab URL is too long")
-	ErrTabTitle       = errors.New("tab title is invalid")
+	ErrTabIDExhausted  = errors.New("tab id space is exhausted")
+	ErrTabBrowser      = errors.New("tab browser factory returned nil")
+	ErrTabBrowserReuse = errors.New("tab browser factory reused an existing browser")
+	ErrTabNotFound     = errors.New("tab was not found")
+	ErrTabLimit        = errors.New("tab limit was reached")
+	ErrTabURLTooLong   = errors.New("tab URL is too long")
+	ErrTabTitle        = errors.New("tab title is invalid")
 )
 
 const (
@@ -228,6 +229,11 @@ func (s *Session) newTabLocked(initialURL *url.URL, state TabState) (*Tab, error
 	browser := s.factory()
 	if browser == nil {
 		return nil, ErrTabBrowser
+	}
+	for _, existing := range s.tabs {
+		if existing != nil && existing.browser == browser && existing.state != TabClosed {
+			return nil, ErrTabBrowserReuse
+		}
 	}
 	id, err := s.allocateTabIDLocked()
 	if err != nil {
