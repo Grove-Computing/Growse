@@ -1,0 +1,4 @@
+interface:
+  display_name: "Growse Release Train"
+  short_description: "Growseのリリース定義・直列実装・PRを一貫管理"
+  default_prompt: "Use $growse-release-train to define and deliver the next Growse release."

@@ -80,6 +80,9 @@ jobs:
       - name: Validate developer supply chain security
         run: bash tests/developer-security.sh
 
+      - name: Validate repository skills
+        run: bash tests/skills.sh
+
       - name: Validate v0.9.0 documentation
         run: bash tests/docs.sh
 
