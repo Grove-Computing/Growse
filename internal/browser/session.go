@@ -46,12 +46,15 @@ type Tab struct {
 
 // TabSnapshot is an immutable view of a tab suitable for browser chrome.
 type TabSnapshot struct {
-	ID       TabID
-	Position int
-	State    TabState
-	Active   bool
-	URL      string
-	Title    string
+	ID            TabID
+	Position      int
+	State         TabState
+	Active        bool
+	URL           string
+	Title         string
+	Loading       bool
+	Error         bool
+	PendingUpdate bool
 }
 
 // TabCloseResult reports the active tab selected after a close operation.

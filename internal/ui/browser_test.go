@@ -308,6 +308,201 @@ func TestToolbarHasFixedHeight(t *testing.T) {
 	}
 }
 
+func TestVerticalTabRailUsesLeftSideFixedWidth(t *testing.T) {
+	ui := NewBrowserUI(nil, nil)
+	gtx := layout.Context{
+		Ops:         new(op.Ops),
+		Constraints: layout.Exact(image.Pt(1280, 800)),
+		Metric:      unit.Metric{PxPerDp: 1, PxPerSp: 1},
+	}
+
+	dims := ui.layoutTabRail(gtx)
+	if got, want := dims.Size, image.Pt(224, 800); got != want {
+		t.Fatalf("vertical tab rail size = %v, want %v", got, want)
+	}
+}
+
+func TestBrowserChromeHasNoHorizontalTabStrip(t *testing.T) {
+	geometry := calculateBrowserChromeGeometry(image.Pt(1280, 800), 224, 92)
+
+	if got, want := geometry.tabRail, image.Rect(0, 0, 224, 800); got != want {
+		t.Fatalf("tab rail = %v, want %v", got, want)
+	}
+	if got, want := geometry.toolbar, image.Rect(224, 0, 1280, 92); got != want {
+		t.Fatalf("toolbar = %v, want %v", got, want)
+	}
+	if got, want := geometry.viewport, image.Rect(224, 92, 1280, 800); got != want {
+		t.Fatalf("viewport = %v, want %v", got, want)
+	}
+	if geometry.toolbar.Min.Y != 0 {
+		t.Fatalf("toolbar must touch the window top; an unexpected horizontal tab strip may have been inserted: %v", geometry.toolbar)
+	}
+}
+
+func TestTabRailCoordinatesAreExcludedFromPageHitTesting(t *testing.T) {
+	gtx := layout.Context{
+		Constraints: layout.Exact(image.Pt(576, 708)),
+		Metric:      unit.Metric{PxPerDp: 1, PxPerSp: 1},
+	}
+	tests := []struct {
+		name     string
+		position f32.Point
+		want     image.Point
+		inside   bool
+	}{
+		{name: "tab rail", position: f32.Pt(100, 200), inside: false},
+		{name: "toolbar", position: f32.Pt(244, 40), inside: false},
+		{name: "page viewport", position: f32.Pt(244, 112), want: image.Pt(20, 20), inside: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, inside := viewportPointerPosition(gtx, test.position, true)
+			if got != test.want || inside != test.inside {
+				t.Fatalf("viewport pointer = (%v, %v), want (%v, %v)", got, inside, test.want, test.inside)
+			}
+		})
+	}
+}
+
+func TestNarrowWindowKeepsChromeRegionsSafeAndDisjoint(t *testing.T) {
+	sizes := []image.Point{
+		{},
+		image.Pt(1, 1),
+		image.Pt(160, 80),
+		image.Pt(223, 91),
+		image.Pt(224, 92),
+		image.Pt(300, 180),
+	}
+	for _, size := range sizes {
+		t.Run(size.String(), func(t *testing.T) {
+			geometry := calculateBrowserChromeGeometry(size, 224, 92)
+			window := image.Rectangle{Max: size}
+			for name, region := range map[string]image.Rectangle{
+				"tab rail": geometry.tabRail,
+				"toolbar":  geometry.toolbar,
+				"viewport": geometry.viewport,
+			} {
+				if region.Dx() < 0 || region.Dy() < 0 || !region.In(window) {
+					t.Fatalf("%s region %v is invalid for window %v", name, region, window)
+				}
+			}
+			if geometry.tabRail.Overlaps(geometry.toolbar) || geometry.tabRail.Overlaps(geometry.viewport) || geometry.toolbar.Overlaps(geometry.viewport) {
+				t.Fatalf("chrome regions overlap for window %v: %+v", size, geometry)
+			}
+
+			ui := NewBrowserUI(nil, nil)
+			gtx := layout.Context{Ops: new(op.Ops), Constraints: layout.Exact(size), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}}
+			if got := ui.Layout(gtx).Size; got != size {
+				t.Fatalf("narrow browser UI size = %v, want %v", got, size)
+			}
+		})
+	}
+}
+
+func TestTabRowDisplaysTitleFallbackAndLifecycleState(t *testing.T) {
+	tests := []struct {
+		name      string
+		tab       browser.TabSnapshot
+		wantTitle string
+		wantState string
+	}{
+		{name: "title", tab: browser.TabSnapshot{Title: "Dashboard", URL: "https://example.com/", Active: true}, wantTitle: "Dashboard", wantState: "選択中"},
+		{name: "host fallback", tab: browser.TabSnapshot{URL: "https://docs.example.com/path", Loading: true}, wantTitle: "docs.example.com", wantState: "読込中"},
+		{name: "blank fallback", tab: browser.TabSnapshot{Error: true}, wantTitle: "新しいタブ", wantState: "エラー"},
+		{name: "pending update", tab: browser.TabSnapshot{PendingUpdate: true}, wantTitle: "新しいタブ", wantState: "更新あり"},
+		{name: "combined", tab: browser.TabSnapshot{Active: true, Loading: true, Error: true, PendingUpdate: true}, wantTitle: "新しいタブ", wantState: "選択中 · 読込中 · エラー · 更新あり"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := tabDisplayTitle(test.tab); got != test.wantTitle {
+				t.Fatalf("tab title = %q, want %q", got, test.wantTitle)
+			}
+			if got := tabStateLabel(test.tab); got != test.wantState {
+				t.Fatalf("tab state = %q, want %q", got, test.wantState)
+			}
+		})
+	}
+}
+
+func TestActiveTabRowHasVisibleFixedHeight(t *testing.T) {
+	ui := NewBrowserUI(nil, nil)
+	gtx := layout.Context{
+		Ops:         new(op.Ops),
+		Constraints: layout.Constraints{Max: image.Pt(204, 400)},
+		Metric:      unit.Metric{PxPerDp: 1, PxPerSp: 1},
+	}
+
+	dims := ui.layoutTabRow(gtx, browser.TabSnapshot{Active: true, Title: "Dashboard"})
+	if got, want := dims.Size, image.Pt(204, 64); got != want {
+		t.Fatalf("active tab row size = %v, want %v", got, want)
+	}
+}
+
+func TestVerticalTabPointerControlsCreateSelectAndCloseTabs(t *testing.T) {
+	session := browser.NewSession()
+	first, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ui := NewBrowserUIWithTabs(nil, session, nil)
+	gtx := layout.Context{
+		Ops:         new(op.Ops),
+		Constraints: layout.Exact(image.Pt(224, 400)),
+		Metric:      unit.Metric{PxPerDp: 1, PxPerSp: 1},
+	}
+	ui.layoutTabRail(gtx)
+
+	ui.tabRowButtons[second.ID].Click()
+	ui.handleTabActions(gtx)
+	if active, ok := session.ActiveTab(); !ok || active.ID != second.ID {
+		t.Fatalf("active tab after row click = (%+v, %v), want %d", active, ok, second.ID)
+	}
+
+	ui.tabCloseButtons[first.ID].Click()
+	ui.handleTabActions(gtx)
+	if tabs := session.Tabs(); len(tabs) != 1 || tabs[0].ID != second.ID {
+		t.Fatalf("tabs after close click = %+v, want only tab %d", tabs, second.ID)
+	}
+
+	ui.newTabButton.Click()
+	ui.handleTabActions(gtx)
+	if got := len(session.Tabs()); got != 2 {
+		t.Fatalf("tab count after new tab click = %d, want 2", got)
+	}
+}
+
+func TestOverflowingTabRailScrollIsIndependentFromPageScroll(t *testing.T) {
+	session := browser.NewSession()
+	for index := 0; index < 12; index++ {
+		if _, err := session.NewTab(nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ui := NewBrowserUIWithTabs(nil, session, nil)
+	ui.tabList.Position = layout.Position{First: 5, Offset: 3}
+	ui.pageList.Position = layout.Position{First: 2, Offset: 17}
+	gtx := layout.Context{
+		Ops:         new(op.Ops),
+		Constraints: layout.Exact(image.Pt(204, 128)),
+		Metric:      unit.Metric{PxPerDp: 1, PxPerSp: 1},
+	}
+
+	dims := ui.layoutTabList(gtx, session.Tabs())
+	if got, want := dims.Size, image.Pt(204, 128); got != want {
+		t.Fatalf("overflowing tab list size = %v, want %v", got, want)
+	}
+	if ui.tabList.Position.First == 0 {
+		t.Fatalf("tab list scroll position was reset: %+v", ui.tabList.Position)
+	}
+	if got, want := ui.pageList.Position, (layout.Position{First: 2, Offset: 17}); got != want {
+		t.Fatalf("page scroll changed with tab rail: %+v, want %+v", got, want)
+	}
+}
+
 func TestBrowserUILayoutFillsViewport(t *testing.T) {
 	ui := NewBrowserUI(nil, nil)
 	gtx := layout.Context{
@@ -380,6 +575,90 @@ func (navigator *recordingNavigator) Navigate(_ context.Context, rawURL string) 
 type reloadRecordingNavigator struct {
 	stubNavigator
 	reloads chan bool
+}
+
+func TestKeyboardShortcutsCreateAndCloseTabWithoutKeyRepeat(t *testing.T) {
+	session := browser.NewSession()
+	if _, err := session.NewTab(nil); err != nil {
+		t.Fatal(err)
+	}
+	ui := NewBrowserUIWithTabs(nil, session, nil)
+	router := new(input.Router)
+	gtx := layout.Context{
+		Ops:         new(op.Ops),
+		Source:      router.Source(),
+		Constraints: layout.Exact(image.Pt(800, 600)),
+		Metric:      unit.Metric{PxPerDp: 1, PxPerSp: 1},
+	}
+	ui.Layout(gtx)
+
+	router.Frame(gtx.Ops)
+	router.Queue(key.Event{Name: "T", Modifiers: key.ModShortcut, State: key.Press})
+	gtx.Reset()
+	ui.Layout(gtx)
+	if got := len(session.Tabs()); got != 2 {
+		t.Fatalf("tab count after Ctrl/Command+T = %d, want 2", got)
+	}
+
+	router.Frame(gtx.Ops)
+	router.Queue(key.Event{Name: "T", Modifiers: key.ModShortcut, State: key.Press})
+	gtx.Reset()
+	ui.Layout(gtx)
+	if got := len(session.Tabs()); got != 2 {
+		t.Fatalf("repeated shortcut created tabs: count = %d, want 2", got)
+	}
+
+	router.Frame(gtx.Ops)
+	router.Queue(key.Event{Name: "T", Modifiers: key.ModShortcut, State: key.Release})
+	gtx.Reset()
+	ui.Layout(gtx)
+	router.Frame(gtx.Ops)
+	router.Queue(key.Event{Name: "W", Modifiers: key.ModShortcut, State: key.Press})
+	gtx.Reset()
+	ui.Layout(gtx)
+	if got := len(session.Tabs()); got != 1 {
+		t.Fatalf("tab count after Ctrl/Command+W = %d, want 1", got)
+	}
+}
+
+func TestKeyboardShortcutsCycleTabsForwardAndBackward(t *testing.T) {
+	session := browser.NewSession()
+	first, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.NewTab(nil); err != nil {
+		t.Fatal(err)
+	}
+	ui := NewBrowserUIWithTabs(nil, session, nil)
+	router := new(input.Router)
+	gtx := layout.Context{
+		Ops:         new(op.Ops),
+		Source:      router.Source(),
+		Constraints: layout.Exact(image.Pt(800, 600)),
+		Metric:      unit.Metric{PxPerDp: 1, PxPerSp: 1},
+	}
+	ui.Layout(gtx)
+
+	router.Frame(gtx.Ops)
+	router.Queue(key.Event{Name: key.NameTab, Modifiers: key.ModShortcut, State: key.Press})
+	gtx.Reset()
+	ui.Layout(gtx)
+	if active, ok := session.ActiveTab(); !ok || active.ID != second.ID {
+		t.Fatalf("active tab after Ctrl+Tab = (%+v, %v), want %d", active, ok, second.ID)
+	}
+
+	router.Frame(gtx.Ops)
+	router.Queue(key.Event{Name: key.NameTab, Modifiers: key.ModShortcut | key.ModShift, State: key.Press})
+	gtx.Reset()
+	ui.Layout(gtx)
+	if active, ok := session.ActiveTab(); !ok || active.ID != first.ID {
+		t.Fatalf("active tab after Ctrl+Shift+Tab = (%+v, %v), want %d", active, ok, first.ID)
+	}
 }
 
 func (navigator *reloadRecordingNavigator) Reload(context.Context) (*browser.Page, error) {
@@ -538,7 +817,7 @@ func TestPointerMoveAppliesAndClearsHoverStyle(t *testing.T) {
 
 	ui.Layout(gtx)
 	router.Frame(gtx.Ops)
-	router.Queue(pointer.Event{Kind: pointer.Move, Source: pointer.Mouse, Position: f32.Pt(40, float32(toolbarHeight)+40)})
+	router.Queue(pointer.Event{Kind: pointer.Move, Source: pointer.Mouse, Position: f32.Pt(float32(tabRailWidth)+40, float32(toolbarHeight)+40)})
 	gtx.Reset()
 	ui.Layout(gtx)
 
@@ -683,7 +962,7 @@ func TestPointerHoveringLinkDoesNotStartNavigation(t *testing.T) {
 
 	ui.Layout(gtx)
 	router.Frame(gtx.Ops)
-	router.Queue(pointer.Event{Kind: pointer.Move, Source: pointer.Mouse, Position: f32.Pt(40, float32(toolbarHeight)+40)})
+	router.Queue(pointer.Event{Kind: pointer.Move, Source: pointer.Mouse, Position: f32.Pt(float32(tabRailWidth)+40, float32(toolbarHeight)+40)})
 	gtx.Reset()
 	ui.Layout(gtx)
 

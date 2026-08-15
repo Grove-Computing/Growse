@@ -12,6 +12,8 @@ import (
 	"image/png"
 	"log/slog"
 	"math"
+	"net/url"
+	"strings"
 	"time"
 
 	"gioui.org/f32"
@@ -43,6 +45,7 @@ var gopherPNG []byte
 
 const (
 	defaultURL         = "http://localhost:8080"
+	tabRailWidth       = unit.Dp(224)
 	toolbarHeight      = unit.Dp(92)
 	controlHeight      = unit.Dp(44)
 	addressBarHeight   = unit.Dp(48)
@@ -59,12 +62,18 @@ type BrowserUI struct {
 	cancelNavigation context.CancelFunc
 	navigationID     uint64
 	loading          bool
+	tabs             TabController
 
 	backButton        widget.Clickable
 	forwardButton     widget.Clickable
 	reloadButton      widget.Clickable
 	goButton          widget.Clickable
+	newTabButton      widget.Clickable
+	tabRowButtons     map[browser.TabID]*widget.Clickable
+	tabCloseButtons   map[browser.TabID]*widget.Clickable
+	tabShortcutDown   map[key.Name]bool
 	pageList          widget.List
+	tabList           widget.List
 	viewportClick     gesture.Click
 	address           widget.Editor
 	gopher            paint.ImageOp
@@ -99,6 +108,12 @@ type documentLayoutCache struct {
 	tree                  *layoutengine.Tree
 }
 
+type browserChromeGeometry struct {
+	tabRail  image.Rectangle
+	toolbar  image.Rectangle
+	viewport image.Rectangle
+}
+
 // Navigator is the browser capability used by the UI.
 type Navigator interface {
 	Navigate(ctx context.Context, rawURL string) (*browser.Page, error)
@@ -122,6 +137,22 @@ type Navigator interface {
 	UpdateViewport(width, height float32) bool
 }
 
+// TabSource provides immutable browser-session state to the vertical tab rail.
+type TabSource interface {
+	Tabs() []browser.TabSnapshot
+}
+
+// TabController performs operations requested by the browser chrome.
+type TabController interface {
+	TabSource
+	ActiveTab() (browser.TabSnapshot, bool)
+	NewTab(initialURL *url.URL) (browser.TabSnapshot, error)
+	SelectTab(id browser.TabID) (browser.TabSnapshot, error)
+	SelectNext() (browser.TabSnapshot, error)
+	SelectPrevious() (browser.TabSnapshot, error)
+	CloseTab(id browser.TabID) (browser.TabCloseResult, error)
+}
+
 type animationFrameNavigator interface {
 	RunAnimationFrame(time.Time) bool
 	HasAnimationFrameCallbacks() bool
@@ -139,6 +170,11 @@ type navigationResult struct {
 
 // NewBrowserUI creates a browser toolbar and an empty viewport.
 func NewBrowserUI(navigator Navigator, invalidate func()) *BrowserUI {
+	return NewBrowserUIWithTabs(navigator, nil, invalidate)
+}
+
+// NewBrowserUIWithTabs creates browser chrome backed by a tab source.
+func NewBrowserUIWithTabs(navigator Navigator, tabs TabController, invalidate func()) *BrowserUI {
 	gopherImage, err := png.Decode(bytes.NewReader(gopherPNG))
 	if err != nil {
 		panic("decode embedded Go Gopher image: " + err.Error())
@@ -148,6 +184,7 @@ func NewBrowserUI(navigator Navigator, invalidate func()) *BrowserUI {
 	ui := &BrowserUI{
 		theme:            material.NewTheme(),
 		navigator:        navigator,
+		tabs:             tabs,
 		invalidate:       invalidate,
 		results:          make(chan navigationResult, 1),
 		gopher:           paint.NewImageOp(gopherImage),
@@ -163,6 +200,9 @@ func NewBrowserUI(navigator Navigator, invalidate func()) *BrowserUI {
 		selectButtons:    make(map[dom.NodeID]*widget.Clickable),
 		checkableButtons: make(map[dom.NodeID]*widget.Clickable),
 		formButtons:      make(map[dom.NodeID]*widget.Clickable),
+		tabRowButtons:    make(map[browser.TabID]*widget.Clickable),
+		tabCloseButtons:  make(map[browser.TabID]*widget.Clickable),
+		tabShortcutDown:  make(map[key.Name]bool),
 		layoutBuild:      layoutengine.BuildWithScroll,
 	}
 	if cursorErr != nil {
@@ -178,23 +218,227 @@ func NewBrowserUI(navigator Navigator, invalidate func()) *BrowserUI {
 	ui.address.Submit = true
 	ui.address.SetText(defaultURL)
 	ui.pageList.Axis = layout.Vertical
+	ui.tabList.Axis = layout.Vertical
 	return ui
 }
 
-// Layout draws the browser toolbar and page viewport.
+// Layout draws the vertical tab rail, browser toolbar, and page viewport.
 func (ui *BrowserUI) Layout(gtx layout.Context) layout.Dimensions {
 	ui.handlePointerEvents(gtx)
 	ui.handleKeyboardShortcuts(gtx)
 	ui.handleActions(gtx)
 
-	viewport := layout.Inset{Top: toolbarHeight}.Layout(gtx, ui.layoutViewport)
-	ui.layoutToolbar(gtx)
+	geometry := calculateBrowserChromeGeometry(gtx.Constraints.Max, gtx.Dp(tabRailWidth), gtx.Dp(toolbarHeight))
+	layoutRegion(gtx, geometry.viewport, ui.layoutViewport)
+	layoutRegion(gtx, geometry.toolbar, ui.layoutToolbar)
+	layoutRegion(gtx, geometry.tabRail, ui.layoutTabRail)
 	ui.layoutGopherCursor(gtx)
 	ui.registerPointerTracker(gtx)
-	return viewport
+	return layout.Dimensions{Size: gtx.Constraints.Max}
+}
+
+func calculateBrowserChromeGeometry(size image.Point, railWidth, toolbarHeight int) browserChromeGeometry {
+	railWidth = min(max(railWidth, 0), max(size.X, 0))
+	contentHeight := max(size.Y, 0)
+	toolbarHeight = min(max(toolbarHeight, 0), contentHeight)
+	contentLeft := railWidth
+	contentRight := max(size.X, contentLeft)
+	return browserChromeGeometry{
+		tabRail:  image.Rect(0, 0, railWidth, contentHeight),
+		toolbar:  image.Rect(contentLeft, 0, contentRight, toolbarHeight),
+		viewport: image.Rect(contentLeft, toolbarHeight, contentRight, contentHeight),
+	}
+}
+
+func layoutRegion(gtx layout.Context, region image.Rectangle, widget layout.Widget) layout.Dimensions {
+	if region.Empty() {
+		return layout.Dimensions{Size: region.Size()}
+	}
+	defer op.Offset(region.Min).Push(gtx.Ops).Pop()
+	gtx.Constraints = layout.Exact(region.Size())
+	return widget(gtx)
+}
+
+func (ui *BrowserUI) layoutTabRail(gtx layout.Context) layout.Dimensions {
+	width := gtx.Dp(tabRailWidth)
+	if width > gtx.Constraints.Max.X {
+		width = gtx.Constraints.Max.X
+	}
+	gtx.Constraints.Min.X = width
+	gtx.Constraints.Max.X = width
+
+	defer clip.Rect{Max: gtx.Constraints.Max}.Push(gtx.Ops).Pop()
+	paint.Fill(gtx.Ops, color.NRGBA{R: 31, G: 41, B: 55, A: 255})
+	paint.FillShape(gtx.Ops,
+		color.NRGBA{R: 55, G: 65, B: 81, A: 255},
+		clip.Rect{Min: image.Pt(width-1, 0), Max: image.Pt(width, gtx.Constraints.Max.Y)}.Op(),
+	)
+
+	return layout.Inset{Top: unit.Dp(18), Right: unit.Dp(10), Bottom: unit.Dp(14), Left: unit.Dp(10)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		tabs := ui.tabSnapshots()
+		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return layout.Inset{Left: unit.Dp(4)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					label := material.H6(ui.theme, "Growse")
+					label.Color = color.NRGBA{R: 248, G: 250, B: 252, A: 255}
+					return label.Layout(gtx)
+				})
+			}),
+			layout.Rigid(layout.Spacer{Height: unit.Dp(18)}.Layout),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return ui.newTabButton.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					gtx.Constraints.Min.X = gtx.Constraints.Max.X
+					return layout.Inset{Top: unit.Dp(8), Bottom: unit.Dp(8), Left: unit.Dp(4)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+						label := material.Body1(ui.theme, "＋  新しいタブ")
+						label.Color = color.NRGBA{R: 203, G: 213, B: 225, A: 255}
+						return label.Layout(gtx)
+					})
+				})
+			}),
+			layout.Rigid(layout.Spacer{Height: unit.Dp(12)}.Layout),
+			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions { return ui.layoutTabList(gtx, tabs) }),
+		)
+	})
+}
+
+func (ui *BrowserUI) layoutTabList(gtx layout.Context, tabs []browser.TabSnapshot) layout.Dimensions {
+	defer clip.Rect{Max: gtx.Constraints.Max}.Push(gtx.Ops).Pop()
+	return material.List(ui.theme, &ui.tabList).Layout(gtx, len(tabs), func(gtx layout.Context, index int) layout.Dimensions {
+		return ui.layoutTabRow(gtx, tabs[index])
+	})
+}
+
+func (ui *BrowserUI) tabSnapshots() []browser.TabSnapshot {
+	if ui.tabs != nil {
+		return ui.tabs.Tabs()
+	}
+	return []browser.TabSnapshot{{
+		Active: true, Title: ui.pageTitle, Loading: ui.loading, Error: ui.statusHasError,
+	}}
+}
+
+func (ui *BrowserUI) layoutTabRow(gtx layout.Context, tab browser.TabSnapshot) layout.Dimensions {
+	height := gtx.Dp(unit.Dp(64))
+	if height > gtx.Constraints.Max.Y {
+		height = gtx.Constraints.Max.Y
+	}
+	gtx.Constraints.Min.X = gtx.Constraints.Max.X
+	gtx.Constraints.Min.Y = height
+	gtx.Constraints.Max.Y = height
+	background := color.NRGBA{R: 31, G: 41, B: 55, A: 255}
+	if tab.Active {
+		background = color.NRGBA{R: 51, G: 65, B: 85, A: 255}
+	}
+	return layout.Stack{}.Layout(gtx,
+		layout.Expanded(func(gtx layout.Context) layout.Dimensions {
+			paint.FillShape(gtx.Ops, background, clip.UniformRRect(image.Rectangle{Max: gtx.Constraints.Min}, gtx.Dp(unit.Dp(9))).Op(gtx.Ops))
+			if tab.Active {
+				paint.FillShape(gtx.Ops, color.NRGBA{R: 56, G: 189, B: 248, A: 255}, clip.Rect{Max: image.Pt(gtx.Dp(unit.Dp(3)), gtx.Constraints.Min.Y)}.Op())
+			}
+			return layout.Dimensions{Size: gtx.Constraints.Min}
+		}),
+		layout.Stacked(func(gtx layout.Context) layout.Dimensions {
+			return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+				layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+					return ui.tabRowButton(tab.ID).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+						gtx.Constraints.Min = gtx.Constraints.Max
+						return layout.Inset{Top: unit.Dp(9), Bottom: unit.Dp(7), Left: unit.Dp(12)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+							return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+								layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+									label := material.Body1(ui.theme, tabDisplayTitle(tab))
+									label.Color = color.NRGBA{R: 248, G: 250, B: 252, A: 255}
+									label.MaxLines = 1
+									return label.Layout(gtx)
+								}),
+								layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+									label := material.Caption(ui.theme, tabStateLabel(tab))
+									label.Color = tabStateColor(tab)
+									label.MaxLines = 1
+									return label.Layout(gtx)
+								}),
+							)
+						})
+					})
+				}),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					width := gtx.Dp(unit.Dp(36))
+					gtx.Constraints = layout.Exact(image.Pt(width, height))
+					return ui.tabCloseButton(tab.ID).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+						return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+							label := material.Body1(ui.theme, "×")
+							label.Color = color.NRGBA{R: 203, G: 213, B: 225, A: 255}
+							return label.Layout(gtx)
+						})
+					})
+				}),
+			)
+		}),
+	)
+}
+
+func (ui *BrowserUI) tabRowButton(id browser.TabID) *widget.Clickable {
+	button := ui.tabRowButtons[id]
+	if button == nil {
+		button = new(widget.Clickable)
+		ui.tabRowButtons[id] = button
+	}
+	return button
+}
+
+func (ui *BrowserUI) tabCloseButton(id browser.TabID) *widget.Clickable {
+	button := ui.tabCloseButtons[id]
+	if button == nil {
+		button = new(widget.Clickable)
+		ui.tabCloseButtons[id] = button
+	}
+	return button
+}
+
+func tabDisplayTitle(tab browser.TabSnapshot) string {
+	if title := strings.TrimSpace(tab.Title); title != "" {
+		return title
+	}
+	if parsed, err := url.Parse(tab.URL); err == nil && parsed.Hostname() != "" {
+		return parsed.Hostname()
+	}
+	return "新しいタブ"
+}
+
+func tabStateLabel(tab browser.TabSnapshot) string {
+	states := make([]string, 0, 3)
+	if tab.Active {
+		states = append(states, "選択中")
+	}
+	if tab.Loading {
+		states = append(states, "読込中")
+	}
+	if tab.Error {
+		states = append(states, "エラー")
+	}
+	if tab.PendingUpdate {
+		states = append(states, "更新あり")
+	}
+	if len(states) == 0 {
+		return "待機中"
+	}
+	return strings.Join(states, " · ")
+}
+
+func tabStateColor(tab browser.TabSnapshot) color.NRGBA {
+	switch {
+	case tab.Error:
+		return color.NRGBA{R: 253, G: 164, B: 175, A: 255}
+	case tab.Loading:
+		return color.NRGBA{R: 125, G: 211, B: 252, A: 255}
+	case tab.PendingUpdate:
+		return color.NRGBA{R: 253, G: 224, B: 71, A: 255}
+	default:
+		return color.NRGBA{R: 148, G: 163, B: 184, A: 255}
+	}
 }
 
 func (ui *BrowserUI) handleKeyboardShortcuts(gtx layout.Context) {
+	ui.handleTabKeyboardShortcuts(gtx)
 	for {
 		event, ok := gtx.Event(key.Filter{Name: "R", Required: key.ModShortcut, Optional: key.ModShift})
 		if !ok {
@@ -212,8 +456,62 @@ func (ui *BrowserUI) handleKeyboardShortcuts(gtx layout.Context) {
 	}
 }
 
+func (ui *BrowserUI) handleTabKeyboardShortcuts(gtx layout.Context) {
+	if ui.tabs == nil {
+		return
+	}
+	for _, name := range []key.Name{"T", "W"} {
+		for {
+			event, ok := gtx.Event(key.Filter{Name: name, Required: key.ModShortcut})
+			if !ok {
+				break
+			}
+			keyEvent, ok := event.(key.Event)
+			if !ok {
+				continue
+			}
+			if keyEvent.State == key.Release {
+				delete(ui.tabShortcutDown, name)
+				continue
+			}
+			if keyEvent.State != key.Press || ui.tabShortcutDown[name] {
+				continue
+			}
+			ui.tabShortcutDown[name] = true
+			switch name {
+			case "T":
+				ui.createTab(gtx)
+			case "W":
+				if active, ok := ui.tabs.ActiveTab(); ok {
+					ui.closeTab(active.ID)
+				}
+			}
+		}
+	}
+	for {
+		event, ok := gtx.Event(key.Filter{Name: key.NameTab, Required: key.ModShortcut, Optional: key.ModShift})
+		if !ok {
+			break
+		}
+		keyEvent, ok := event.(key.Event)
+		if !ok || keyEvent.State != key.Press {
+			continue
+		}
+		var err error
+		if keyEvent.Modifiers.Contain(key.ModShift) {
+			_, err = ui.tabs.SelectPrevious()
+		} else {
+			_, err = ui.tabs.SelectNext()
+		}
+		if err != nil {
+			ui.reportTabOperationError("Tabを切り替えられません", err)
+		}
+	}
+}
+
 func (ui *BrowserUI) handleActions(gtx layout.Context) {
 	ui.consumeNavigationResult()
+	ui.handleTabActions(gtx)
 
 	for {
 		event, ok := ui.address.Update(gtx)
@@ -242,6 +540,55 @@ func (ui *BrowserUI) handleActions(gtx layout.Context) {
 			ui.startPageLoad("ページを再読み込み中", ui.navigator.Reload)
 		}
 	}
+}
+
+func (ui *BrowserUI) handleTabActions(gtx layout.Context) {
+	if ui.tabs == nil {
+		return
+	}
+	for ui.newTabButton.Clicked(gtx) {
+		ui.createTab(gtx)
+	}
+	closed := make(map[browser.TabID]bool)
+	for id, button := range ui.tabCloseButtons {
+		for button.Clicked(gtx) {
+			if !ui.closeTab(id) {
+				continue
+			}
+			closed[id] = true
+		}
+	}
+	for id, button := range ui.tabRowButtons {
+		for button.Clicked(gtx) {
+			if closed[id] {
+				continue
+			}
+			if _, err := ui.tabs.SelectTab(id); err != nil {
+				ui.reportTabOperationError("Tabを選択できません", err)
+			}
+		}
+	}
+}
+
+func (ui *BrowserUI) createTab(gtx layout.Context) {
+	if _, err := ui.tabs.NewTab(nil); err != nil {
+		ui.reportTabOperationError("新しいTabを作成できません", err)
+		return
+	}
+	gtx.Execute(key.FocusCmd{Tag: &ui.address})
+}
+
+func (ui *BrowserUI) closeTab(id browser.TabID) bool {
+	if _, err := ui.tabs.CloseTab(id); err != nil {
+		ui.reportTabOperationError("Tabを終了できません", err)
+		return false
+	}
+	return true
+}
+
+func (ui *BrowserUI) reportTabOperationError(message string, err error) {
+	ui.status = message + ": " + err.Error()
+	ui.statusHasError = true
 }
 
 func (ui *BrowserUI) startNavigation(rawURL string) {
@@ -618,13 +965,12 @@ func (ui *BrowserUI) updateViewportHover(gtx layout.Context, page *browser.Page,
 	if ui.navigator == nil {
 		return
 	}
-	viewportY := ui.pointer.position.Y - float32(gtx.Dp(toolbarHeight))
-	if !ui.pointer.inside || viewportY < 0 || viewportY >= float32(gtx.Constraints.Max.Y) {
+	position, inside := viewportPointerPosition(gtx, ui.pointer.position, ui.pointer.inside)
+	if !inside {
 		ui.navigator.ClearHover()
 		ui.updateLinkPreview(page, 0)
 		return
 	}
-	position := image.Pt(int(math.Round(float64(ui.pointer.position.X))), int(math.Round(float64(viewportY))))
 	x, y, ok := ui.documentPoint(position, displayList, gtx.Metric.PxPerDp)
 	if !ok {
 		ui.navigator.ClearHover()
@@ -639,6 +985,15 @@ func (ui *BrowserUI) updateViewportHover(gtx layout.Context, page *browser.Page,
 	}
 	ui.navigator.UpdateHover(nodeID, x, y)
 	ui.updateLinkPreview(page, nodeID)
+}
+
+func viewportPointerPosition(gtx layout.Context, position f32.Point, insideWindow bool) (image.Point, bool) {
+	viewportX := position.X - float32(gtx.Dp(tabRailWidth))
+	viewportY := position.Y - float32(gtx.Dp(toolbarHeight))
+	if !insideWindow || viewportX < 0 || viewportX >= float32(gtx.Constraints.Max.X) || viewportY < 0 || viewportY >= float32(gtx.Constraints.Max.Y) {
+		return image.Point{}, false
+	}
+	return image.Pt(int(math.Round(float64(viewportX))), int(math.Round(float64(viewportY)))), true
 }
 
 func (ui *BrowserUI) updateLinkPreview(page *browser.Page, nodeID dom.NodeID) {
