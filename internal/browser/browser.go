@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -76,7 +77,10 @@ type Browser struct {
 	active           bool
 	lastFrame        time.Time
 	navigationCancel context.CancelFunc
+	storageSourceID  uint64
 }
+
+var nextStorageSourceID atomic.Uint64
 
 var (
 	ErrFormValidation      = errors.New("form validation failed")
@@ -98,7 +102,7 @@ func NewWithRuntimeFactoryAndStorage(client ResourceLoader, factory runtimemodel
 	if manager == nil {
 		manager = storagecore.NewManager()
 	}
-	return &Browser{client: client, runtimeFactory: factory, history: newHistory(), clock: animationmodel.SystemClock{}, storage: manager, active: true}
+	return &Browser{client: client, runtimeFactory: factory, history: newHistory(), clock: animationmodel.SystemClock{}, storage: manager, active: true, storageSourceID: nextStorageSourceID.Add(1)}
 }
 
 // SetTabActive controls whether frame-driven page work may run for this Browser.
@@ -617,6 +621,7 @@ func (b *Browser) Close() error {
 		b.navigationCancel = nil
 	}
 	activeRuntime := b.activeRuntime
+	storageManager := b.storage
 	page := b.page
 	b.activeRuntime = nil
 	if page != nil && page.Animations != nil {
@@ -632,10 +637,14 @@ func (b *Browser) Close() error {
 	b.history = newHistory()
 	b.storage = nil
 	b.mu.Unlock()
+	var closeErr error
 	if activeRuntime != nil {
-		return activeRuntime.Stop()
+		closeErr = activeRuntime.Stop()
 	}
-	return nil
+	if storageManager != nil {
+		storageManager.DiscardSession()
+	}
+	return closeErr
 }
 
 // Navigate retrieves an HTML document and makes it the active page. The
@@ -1087,7 +1096,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	}
 	page.Animations.Reconcile(computedStyles, b.currentTime())
 	navigationReady := make(chan struct{})
-	pageRuntime := startRuntime(ctx, runtimeFactory, page, runtimeClient, storageManager, onMutation, b.currentTime, func(target *url.URL) error {
+	pageRuntime := startRuntime(ctx, runtimeFactory, page, runtimeClient, storageManager, b.storageSourceID, onMutation, b.currentTime, func(target *url.URL) error {
 		resolved := cloneURL(target)
 		go func() {
 			<-navigationReady
@@ -1368,7 +1377,7 @@ func (b *Browser) traverseFromRuntime(source *Page, delta int) {
 	}
 }
 
-func startRuntime(ctx context.Context, factory runtimemodel.Factory, page *Page, client ResourceLoader, storageManager *storagecore.Manager, onMutation func(), now func() time.Time, navigate func(*url.URL) error, historyPush, historyReplace func(string, *url.URL) error, historyTraverse func(int) error, historyInfo func() (int, string)) runtimemodel.Runtime {
+func startRuntime(ctx context.Context, factory runtimemodel.Factory, page *Page, client ResourceLoader, storageManager *storagecore.Manager, storageSourceID uint64, onMutation func(), now func() time.Time, navigate func(*url.URL) error, historyPush, historyReplace func(string, *url.URL) error, historyTraverse func(int) error, historyInfo func() (int, string)) runtimemodel.Runtime {
 	if factory == nil || page == nil || len(page.Scripts) == 0 {
 		return nil
 	}
@@ -1442,6 +1451,7 @@ func startRuntime(ctx context.Context, factory runtimemodel.Factory, page *Page,
 	if local, session, _ := storageManager.Areas(page.URL); local != nil || session != nil {
 		environment.LocalStorage = local
 		environment.SessionStorage = session
+		environment.StorageSource = storagecore.MutationSource{ID: storageSourceID, URL: network.RedactedURL(page.URL)}
 	}
 	if loader, ok := client.(requestLoader); ok {
 		environment.Fetch = loader.Do

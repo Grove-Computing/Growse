@@ -9,7 +9,7 @@ require (
 	github.com/tdewolff/parse/v2 v2.8.15
 	github.com/traefik/yaegi v0.16.1
 	golang.org/x/exp/shiny v0.0.0-20250408133849-7e4ce0ab07d0
-	golang.org/x/image v0.44.0
+	golang.org/x/image v0.45.0
 	golang.org/x/net v0.57.0
 )
 
@@ -17,5 +17,5 @@ require (
 	gioui.org/shader v1.0.9 // indirect
 	github.com/go-text/typesetting v0.3.4 // indirect
 	golang.org/x/sys v0.47.0 // indirect
-	golang.org/x/text v0.40.0 // indirect
+	golang.org/x/text v0.41.0 // indirect
 )

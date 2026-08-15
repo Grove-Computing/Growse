@@ -3,13 +3,18 @@ package browser
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/events"
 	"github.com/Grove-Computing/Growse/internal/network"
+	storagecore "github.com/Grove-Computing/Growse/internal/storage"
 )
 
 type frameRuntimeStub struct {
@@ -813,6 +818,312 @@ func TestSessionRejectsBrowserInstanceReuseAcrossTabs(t *testing.T) {
 	}
 	if tabs := session.Tabs(); len(tabs) != 1 || tabs[0].ID != first.ID || !tabs[0].Active {
 		t.Fatalf("tabs changed after Browser reuse rejection: %+v", tabs)
+	}
+}
+
+func TestCloseTabDiscardsOnlyItsSessionStorage(t *testing.T) {
+	profile := storagecore.NewManager()
+	var pageSessions []*storagecore.Manager
+	session := NewSession(func() *Browser {
+		manager := profile.NewPageSession()
+		pageSessions = append(pageSessions, manager)
+		return NewWithRuntimeFactoryAndStorage(nil, nil, manager)
+	})
+	defer session.Close()
+	first, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.NewTab(nil); err != nil {
+		t.Fatal(err)
+	}
+	documentURL := mustURL(t, "https://example.test/app")
+	firstLocal, firstSession, err := pageSessions[0].Areas(documentURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondLocal, secondSession, err := pageSessions[1].Areas(documentURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstSession == secondSession || firstLocal != secondLocal {
+		t.Fatal("page session isolation or local profile sharing is incorrect")
+	}
+	if err := firstLocal.Set("theme", "shared"); err != nil {
+		t.Fatal(err)
+	}
+	if err := firstSession.Set("draft", "discard me"); err != nil {
+		t.Fatal(err)
+	}
+	if err := secondSession.Set("draft", "keep me"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := session.CloseTab(first.ID); err != nil {
+		t.Fatal(err)
+	}
+	if firstSession.Len() != 0 {
+		t.Fatalf("closed tab Session Storage length = %d", firstSession.Len())
+	}
+	if value, found := secondSession.Get("draft"); !found || value != "keep me" {
+		t.Fatalf("live tab Session Storage = (%q, %v)", value, found)
+	}
+	if value, found := secondLocal.Get("theme"); !found || value != "shared" {
+		t.Fatalf("shared Local Storage after close = (%q, %v)", value, found)
+	}
+}
+
+func TestSessionTabsShareCookiesAcrossNavigationFormAndFetch(t *testing.T) {
+	var failures []string
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Content-Type", "text/html")
+		switch request.URL.Path {
+		case "/navigation":
+			http.SetCookie(response, &http.Cookie{Name: "navigation", Value: "shared", Path: "/"})
+		case "/form-page":
+			_, _ = response.Write([]byte(`<form id="shared-form" action="/form" method="post"><input name="message" value="hello"></form>`))
+			return
+		case "/form":
+			if cookie, err := request.Cookie("navigation"); err != nil || cookie.Value != "shared" {
+				failures = append(failures, "form did not receive navigation cookie")
+			}
+			http.SetCookie(response, &http.Cookie{Name: "form", Value: "shared", Path: "/"})
+		case "/fetch":
+			for _, name := range []string{"navigation", "form"} {
+				if cookie, err := request.Cookie(name); err != nil || cookie.Value != "shared" {
+					failures = append(failures, "fetch did not receive "+name+" cookie")
+				}
+			}
+		}
+		_, _ = response.Write([]byte("<!doctype html><title>Shared Cookie</title>"))
+	}))
+	defer server.Close()
+
+	client := network.NewClientWithLimits(server.Client(), 1024)
+	session := NewSession(func() *Browser { return New(client) })
+	defer session.Close()
+	if _, err := session.NewTab(nil); err != nil {
+		t.Fatal(err)
+	}
+	first := session.tabs[0].browser
+	if _, err := first.Navigate(context.Background(), server.URL+"/navigation"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.NewTab(nil); err != nil {
+		t.Fatal(err)
+	}
+	second := session.tabs[1].browser
+	page, err := second.Navigate(context.Background(), server.URL+"/form-page")
+	if err != nil {
+		t.Fatal(err)
+	}
+	form, found := page.Document.GetElementByID("shared-form")
+	if !found {
+		t.Fatal("form was not parsed")
+	}
+	if _, err := second.SubmitPOST(context.Background(), form.ID, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.NewTab(nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Do(context.Background(), &network.Request{
+		Method: http.MethodGet, URL: mustURL(t, server.URL+"/fetch"), SiteURL: mustURL(t, server.URL+"/page"),
+		Kind: network.RequestFetch, Credentials: network.CredentialsSameOrigin,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(failures) != 0 {
+		t.Fatal(strings.Join(failures, "; "))
+	}
+}
+
+func TestSessionTabsShareHTTPCacheAcrossNavigationResourcesWebGoAndFetch(t *testing.T) {
+	counts := make(map[string]int)
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		counts[request.URL.Path]++
+		response.Header().Set("Cache-Control", "max-age=60")
+		switch request.URL.Path {
+		case "/style.css":
+			response.Header().Set("Content-Type", "text/css")
+			_, _ = response.Write([]byte("body { color: #123456; }"))
+		case "/app.go":
+			response.Header().Set("Content-Type", "text/go")
+			_, _ = response.Write([]byte("package main\nfunc main() {}"))
+		case "/fetch":
+			response.Header().Set("Content-Type", "text/plain")
+			_, _ = response.Write([]byte("shared fetch"))
+		default:
+			response.Header().Set("Content-Type", "text/html")
+			if strings.HasPrefix(request.URL.Path, "/workspace-") {
+				_, _ = response.Write([]byte(`<!doctype html><link rel="stylesheet" href="/style.css"><script type="text/go" src="/app.go"></script>`))
+			} else {
+				_, _ = response.Write([]byte("<!doctype html><title>Cached Navigation</title>"))
+			}
+		}
+	}))
+	defer server.Close()
+
+	client := network.NewClientWithLimits(server.Client(), 4096)
+	session := NewSession(func() *Browser { return New(client) })
+	defer session.Close()
+	for index := 0; index < 2; index++ {
+		if _, err := session.NewTab(nil); err != nil {
+			t.Fatal(err)
+		}
+		state := session.tabs[index].browser
+		if _, err := state.Navigate(context.Background(), server.URL+"/navigation"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := state.Navigate(context.Background(), server.URL+fmt.Sprintf("/workspace-%d", index)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := client.Do(context.Background(), &network.Request{
+			Method: http.MethodGet, URL: mustURL(t, server.URL+"/fetch"), SiteURL: mustURL(t, server.URL+"/workspace"),
+			Kind: network.RequestFetch, Credentials: network.CredentialsOmit,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, path := range []string{"/navigation", "/style.css", "/app.go", "/fetch"} {
+		if counts[path] != 1 {
+			t.Fatalf("%s network requests = %d, want shared cache hit", path, counts[path])
+		}
+	}
+}
+
+func TestSharedCacheReevaluatesMIMEOriginCORSAndCredentialsPerTab(t *testing.T) {
+	counts := make(map[string]int)
+	var policyOrigins []string
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		counts[request.URL.Path]++
+		response.Header().Set("Cache-Control", "max-age=60")
+		response.Header().Set("Access-Control-Allow-Origin", "*")
+		if request.URL.Path == "/policy" || request.URL.Path == "/origin" {
+			policyOrigins = append(policyOrigins, request.Header.Get("Origin"))
+		}
+		response.Header().Set("Content-Type", "text/plain")
+		_, _ = response.Write([]byte("cached"))
+	}))
+	defer server.Close()
+
+	client := network.NewClientWithLimits(server.Client(), 1024)
+	mimeURL := mustURL(t, server.URL+"/mime")
+	if _, err := client.Do(context.Background(), &network.Request{
+		Method: http.MethodGet, URL: mimeURL, SiteURL: mustURL(t, server.URL+"/tab-a"), Kind: network.RequestFetch, Credentials: network.CredentialsOmit,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := New(client).Navigate(context.Background(), mimeURL.String()); err == nil || !strings.Contains(err.Error(), "unsupported Content-Type") {
+		t.Fatalf("cached navigation MIME error = %v", err)
+	}
+	if counts["/mime"] != 1 {
+		t.Fatalf("MIME check bypassed cache: requests = %d", counts["/mime"])
+	}
+
+	policyURL := mustURL(t, server.URL+"/policy")
+	policySite := mustURL(t, "https://app.example.test/tab-a")
+	request := &network.Request{Method: http.MethodGet, URL: policyURL, SiteURL: policySite, Kind: network.RequestFetch, Credentials: network.CredentialsOmit}
+	if _, err := client.Do(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	credentialed := *request
+	credentialed.Credentials = network.CredentialsInclude
+	if _, err := client.Do(context.Background(), &credentialed); !errors.Is(err, network.ErrCORS) {
+		t.Fatalf("credentialed cache hit error = %v, want ErrCORS", err)
+	}
+	if counts["/policy"] != 1 {
+		t.Fatalf("CORS policy cache requests = %d, want 1", counts["/policy"])
+	}
+
+	originURL := mustURL(t, server.URL+"/origin")
+	if _, err := client.Get(context.Background(), originURL); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Do(context.Background(), &network.Request{
+		Method: http.MethodGet, URL: originURL, SiteURL: mustURL(t, "https://other.example.test/tab-b"), Kind: network.RequestFetch, Credentials: network.CredentialsOmit,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if counts["/origin"] != 2 {
+		t.Fatalf("cross-origin tab reused another partition: requests = %d", counts["/origin"])
+	}
+	if len(policyOrigins) != 3 || policyOrigins[0] != "https://app.example.test" || policyOrigins[1] != "" || policyOrigins[2] != "https://other.example.test" {
+		t.Fatalf("evaluated request origins = %q", policyOrigins)
+	}
+}
+
+func TestCloseTabKeepsSharedLocalStorageCookiesAndHTTPCache(t *testing.T) {
+	cacheRequests := 0
+	cookieReceived := false
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Content-Type", "text/html")
+		switch request.URL.Path {
+		case "/auth/set":
+			http.SetCookie(response, &http.Cookie{Name: "session", Value: "survives", Path: "/auth"})
+		case "/auth/check":
+			cookie, err := request.Cookie("session")
+			cookieReceived = err == nil && cookie.Value == "survives"
+		case "/cache":
+			cacheRequests++
+			response.Header().Set("Cache-Control", "max-age=60")
+		}
+		_, _ = response.Write([]byte("<!doctype html><title>Shared Profile</title>"))
+	}))
+	defer server.Close()
+
+	profile := storagecore.NewManager()
+	client := network.NewClientWithLimits(server.Client(), 4096)
+	var pageSessions []*storagecore.Manager
+	session := NewSession(func() *Browser {
+		manager := profile.NewPageSession()
+		pageSessions = append(pageSessions, manager)
+		return NewWithRuntimeFactoryAndStorage(client, nil, manager)
+	})
+	defer session.Close()
+	first, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.NewTab(nil); err != nil {
+		t.Fatal(err)
+	}
+	originURL := mustURL(t, server.URL+"/app")
+	local, _, err := pageSessions[0].Areas(originURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := local.Set("workspace", "kept"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.tabs[0].browser.Navigate(context.Background(), server.URL+"/auth/set"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.tabs[0].browser.Navigate(context.Background(), server.URL+"/cache"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := session.CloseTab(first.ID); err != nil {
+		t.Fatal(err)
+	}
+	secondLocal, _, err := pageSessions[1].Areas(originURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value, found := secondLocal.Get("workspace"); !found || value != "kept" {
+		t.Fatalf("Local Storage after close = (%q, %v)", value, found)
+	}
+	if _, err := session.tabs[0].browser.Navigate(context.Background(), server.URL+"/auth/check"); err != nil {
+		t.Fatal(err)
+	}
+	if !cookieReceived {
+		t.Fatal("shared Cookie was removed with closed tab")
+	}
+	if _, err := session.tabs[0].browser.Navigate(context.Background(), server.URL+"/cache"); err != nil {
+		t.Fatal(err)
+	}
+	if cacheRequests != 1 {
+		t.Fatalf("shared cache requests after close = %d, want 1", cacheRequests)
 	}
 }
 

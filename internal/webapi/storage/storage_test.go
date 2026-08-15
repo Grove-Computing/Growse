@@ -2,10 +2,73 @@ package storage
 
 import (
 	"errors"
+	"net/url"
 	"testing"
 
 	storagecore "github.com/Grove-Computing/Growse/internal/storage"
 )
+
+func TestLocalStorageEventExcludesSourceCrossOriginAndClosedPage(t *testing.T) {
+	manager := storagecore.NewManager()
+	sameOriginURL, _ := url.Parse("https://example.test/source")
+	crossOriginURL, _ := url.Parse("https://other.test/page")
+	sameOrigin, _, err := manager.Areas(sameOriginURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	crossOrigin, _, err := manager.Areas(crossOriginURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	source := NewPage(sameOrigin, storagecore.NewArea(), storagecore.MutationSource{ID: 10, URL: sameOriginURL.String()}, nil)
+	defer source.Close()
+	closed := NewPage(sameOrigin, storagecore.NewArea(), storagecore.MutationSource{ID: 11, URL: "https://example.test/closed"}, nil)
+	cross := NewPage(crossOrigin, storagecore.NewArea(), storagecore.MutationSource{ID: 12, URL: crossOriginURL.String()}, nil)
+	defer cross.Close()
+
+	counts := map[string]int{}
+	source.OnChange(func(Event) { counts["source"]++ })
+	closed.OnChange(func(Event) { counts["closed"]++ })
+	cross.OnChange(func(Event) { counts["cross"]++ })
+	closed.Close()
+
+	if err := source.Local().Set("shared", "value"); err != nil {
+		t.Fatal(err)
+	}
+	if counts["source"] != 0 || counts["closed"] != 0 || counts["cross"] != 0 {
+		t.Fatalf("excluded event counts = %#v", counts)
+	}
+}
+
+func TestLocalStorageCommitNotifiesOtherPage(t *testing.T) {
+	local := storagecore.NewArea()
+	source := NewPage(local, storagecore.NewArea(), storagecore.MutationSource{ID: 1, URL: "https://example.test/source"}, nil)
+	defer source.Close()
+	target := NewPage(local, storagecore.NewArea(), storagecore.MutationSource{ID: 2, URL: "https://example.test/target"}, nil)
+	defer target.Close()
+
+	var sourceEvents, targetEvents []Event
+	source.OnChange(func(event Event) { sourceEvents = append(sourceEvents, event) })
+	target.OnChange(func(event Event) { targetEvents = append(targetEvents, event) })
+	if err := source.Local().Set("theme", "dark"); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(sourceEvents) != 0 {
+		t.Fatalf("updating page received %d events", len(sourceEvents))
+	}
+	if len(targetEvents) != 1 {
+		t.Fatalf("other page received %d events, want 1", len(targetEvents))
+	}
+	event := targetEvents[0]
+	if event.Key != "theme" || event.HasOldValue || !event.HasNewValue || event.NewValue != "dark" || event.Cleared {
+		t.Fatalf("event = %+v", event)
+	}
+	if event.SourceURL != "https://example.test/source" || event.Sequence != 1 {
+		t.Fatalf("event source/order = (%q, %d)", event.SourceURL, event.Sequence)
+	}
+}
 
 func TestAPIDistinguishesLocalAndSessionStorage(t *testing.T) {
 	api := New(storagecore.NewArea(), storagecore.NewArea())
