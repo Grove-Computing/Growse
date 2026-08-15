@@ -992,6 +992,67 @@ func TestSessionTabsShareHTTPCacheAcrossNavigationResourcesWebGoAndFetch(t *test
 	}
 }
 
+func TestSharedCacheReevaluatesMIMEOriginCORSAndCredentialsPerTab(t *testing.T) {
+	counts := make(map[string]int)
+	var policyOrigins []string
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		counts[request.URL.Path]++
+		response.Header().Set("Cache-Control", "max-age=60")
+		response.Header().Set("Access-Control-Allow-Origin", "*")
+		if request.URL.Path == "/policy" || request.URL.Path == "/origin" {
+			policyOrigins = append(policyOrigins, request.Header.Get("Origin"))
+		}
+		response.Header().Set("Content-Type", "text/plain")
+		_, _ = response.Write([]byte("cached"))
+	}))
+	defer server.Close()
+
+	client := network.NewClientWithLimits(server.Client(), 1024)
+	mimeURL := mustURL(t, server.URL+"/mime")
+	if _, err := client.Do(context.Background(), &network.Request{
+		Method: http.MethodGet, URL: mimeURL, SiteURL: mustURL(t, server.URL+"/tab-a"), Kind: network.RequestFetch, Credentials: network.CredentialsOmit,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := New(client).Navigate(context.Background(), mimeURL.String()); err == nil || !strings.Contains(err.Error(), "unsupported Content-Type") {
+		t.Fatalf("cached navigation MIME error = %v", err)
+	}
+	if counts["/mime"] != 1 {
+		t.Fatalf("MIME check bypassed cache: requests = %d", counts["/mime"])
+	}
+
+	policyURL := mustURL(t, server.URL+"/policy")
+	policySite := mustURL(t, "https://app.example.test/tab-a")
+	request := &network.Request{Method: http.MethodGet, URL: policyURL, SiteURL: policySite, Kind: network.RequestFetch, Credentials: network.CredentialsOmit}
+	if _, err := client.Do(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	credentialed := *request
+	credentialed.Credentials = network.CredentialsInclude
+	if _, err := client.Do(context.Background(), &credentialed); !errors.Is(err, network.ErrCORS) {
+		t.Fatalf("credentialed cache hit error = %v, want ErrCORS", err)
+	}
+	if counts["/policy"] != 1 {
+		t.Fatalf("CORS policy cache requests = %d, want 1", counts["/policy"])
+	}
+
+	originURL := mustURL(t, server.URL+"/origin")
+	if _, err := client.Get(context.Background(), originURL); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Do(context.Background(), &network.Request{
+		Method: http.MethodGet, URL: originURL, SiteURL: mustURL(t, "https://other.example.test/tab-b"), Kind: network.RequestFetch, Credentials: network.CredentialsOmit,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if counts["/origin"] != 2 {
+		t.Fatalf("cross-origin tab reused another partition: requests = %d", counts["/origin"])
+	}
+	if len(policyOrigins) != 3 || policyOrigins[0] != "https://app.example.test" || policyOrigins[1] != "" || policyOrigins[2] != "https://other.example.test" {
+		t.Fatalf("evaluated request origins = %q", policyOrigins)
+	}
+}
+
 func mustURL(t *testing.T, raw string) *url.URL {
 	t.Helper()
 	parsed, err := url.Parse(raw)
