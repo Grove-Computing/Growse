@@ -1053,6 +1053,80 @@ func TestSharedCacheReevaluatesMIMEOriginCORSAndCredentialsPerTab(t *testing.T) 
 	}
 }
 
+func TestCloseTabKeepsSharedLocalStorageCookiesAndHTTPCache(t *testing.T) {
+	cacheRequests := 0
+	cookieReceived := false
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Content-Type", "text/html")
+		switch request.URL.Path {
+		case "/auth/set":
+			http.SetCookie(response, &http.Cookie{Name: "session", Value: "survives", Path: "/auth"})
+		case "/auth/check":
+			cookie, err := request.Cookie("session")
+			cookieReceived = err == nil && cookie.Value == "survives"
+		case "/cache":
+			cacheRequests++
+			response.Header().Set("Cache-Control", "max-age=60")
+		}
+		_, _ = response.Write([]byte("<!doctype html><title>Shared Profile</title>"))
+	}))
+	defer server.Close()
+
+	profile := storagecore.NewManager()
+	client := network.NewClientWithLimits(server.Client(), 4096)
+	var pageSessions []*storagecore.Manager
+	session := NewSession(func() *Browser {
+		manager := profile.NewPageSession()
+		pageSessions = append(pageSessions, manager)
+		return NewWithRuntimeFactoryAndStorage(client, nil, manager)
+	})
+	defer session.Close()
+	first, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.NewTab(nil); err != nil {
+		t.Fatal(err)
+	}
+	originURL := mustURL(t, server.URL+"/app")
+	local, _, err := pageSessions[0].Areas(originURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := local.Set("workspace", "kept"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.tabs[0].browser.Navigate(context.Background(), server.URL+"/auth/set"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.tabs[0].browser.Navigate(context.Background(), server.URL+"/cache"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := session.CloseTab(first.ID); err != nil {
+		t.Fatal(err)
+	}
+	secondLocal, _, err := pageSessions[1].Areas(originURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value, found := secondLocal.Get("workspace"); !found || value != "kept" {
+		t.Fatalf("Local Storage after close = (%q, %v)", value, found)
+	}
+	if _, err := session.tabs[0].browser.Navigate(context.Background(), server.URL+"/auth/check"); err != nil {
+		t.Fatal(err)
+	}
+	if !cookieReceived {
+		t.Fatal("shared Cookie was removed with closed tab")
+	}
+	if _, err := session.tabs[0].browser.Navigate(context.Background(), server.URL+"/cache"); err != nil {
+		t.Fatal(err)
+	}
+	if cacheRequests != 1 {
+		t.Fatalf("shared cache requests after close = %d, want 1", cacheRequests)
+	}
+}
+
 func mustURL(t *testing.T, raw string) *url.URL {
 	t.Helper()
 	parsed, err := url.Parse(raw)
