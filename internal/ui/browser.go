@@ -157,6 +157,11 @@ type activeBrowserSource interface {
 	ActiveBrowserTarget() (browser.TabID, *browser.Browser, bool)
 }
 
+type tabNavigationStateSink interface {
+	BeginTabNavigation(id browser.TabID) (browser.TabSnapshot, error)
+	FinishTabNavigation(id browser.TabID, failed bool) (browser.TabSnapshot, error)
+}
+
 type animationFrameNavigator interface {
 	RunAnimationFrame(time.Time) bool
 	HasAnimationFrameCallbacks() bool
@@ -626,6 +631,14 @@ func (ui *BrowserUI) startPageLoad(tabID browser.TabID, navigator Navigator, sta
 	ui.nextNavigationID++
 	navigationID := ui.nextNavigationID
 	ui.navigations[tabID] = tabNavigation{id: navigationID, cancel: cancel}
+	if sink, ok := ui.tabs.(tabNavigationStateSink); ok && tabID != 0 {
+		if _, err := sink.BeginTabNavigation(tabID); err != nil {
+			cancel()
+			delete(ui.navigations, tabID)
+			ui.reportTabOperationError("TabのNavigation状態を更新できません", err)
+			return
+		}
+	}
 	ui.loading = true
 	ui.statusHasError = false
 	ui.status = status
@@ -670,6 +683,11 @@ func (ui *BrowserUI) consumeNavigationResult() {
 				continue
 			}
 			delete(ui.navigations, result.tabID)
+			if sink, ok := ui.tabs.(tabNavigationStateSink); ok && result.tabID != 0 {
+				if _, err := sink.FinishTabNavigation(result.tabID, result.err != nil); err != nil {
+					ui.reportTabOperationError("TabのNavigation結果を更新できません", err)
+				}
+			}
 			if result.tabID != 0 && !ui.tabIsActive(result.tabID) {
 				ui.loading = false
 				continue

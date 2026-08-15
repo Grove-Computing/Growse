@@ -639,7 +639,8 @@ func TestAddressNavigationIsPinnedToOperationStartTab(t *testing.T) {
 		created = append(created, state)
 		return state
 	})
-	if _, err := session.NewTab(nil); err != nil {
+	first, err := session.NewTab(nil)
+	if err != nil {
 		t.Fatal(err)
 	}
 	second, err := session.NewTab(nil)
@@ -655,6 +656,9 @@ func TestAddressNavigationIsPinnedToOperationStartTab(t *testing.T) {
 	case <-loader.started:
 	case <-time.After(time.Second):
 		t.Fatal("navigation did not start")
+	}
+	if tabs := session.Tabs(); !tabs[0].Loading || tabs[0].ID != first.ID {
+		t.Fatalf("target tab did not enter loading state: %+v", tabs)
 	}
 	if _, err := session.SelectTab(second.ID); err != nil {
 		t.Fatal(err)
@@ -675,6 +679,13 @@ func TestAddressNavigationIsPinnedToOperationStartTab(t *testing.T) {
 	}
 	if got := ui.address.Text(); got == "https://example.com/pinned" {
 		t.Fatalf("background navigation overwrote active address bar: %q", got)
+	}
+	tabs := session.Tabs()
+	if tabs[0].ID != first.ID || tabs[0].Loading || tabs[0].Error || !tabs[0].PendingUpdate || tabs[0].Title != "Pinned" {
+		t.Fatalf("background tab row state = %+v, want completed pending update", tabs[0])
+	}
+	if !tabs[1].Active || tabs[1].ID != second.ID {
+		t.Fatalf("background completion changed active tab: %+v", tabs)
 	}
 }
 

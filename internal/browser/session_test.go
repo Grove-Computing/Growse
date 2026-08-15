@@ -383,6 +383,41 @@ func TestDefaultSessionPolicyMatchesReleaseLimits(t *testing.T) {
 	}
 }
 
+func TestSessionPublishesBackgroundNavigationStateWithoutSelectingTab(t *testing.T) {
+	session := NewSession()
+	first, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.BeginTabNavigation(first.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.SelectTab(second.ID); err != nil {
+		t.Fatal(err)
+	}
+	finished, err := session.FinishTabNavigation(first.ID, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if finished.Active || finished.Loading || !finished.Error || !finished.PendingUpdate {
+		t.Fatalf("background navigation state = %+v", finished)
+	}
+	if active, ok := session.ActiveTab(); !ok || active.ID != second.ID {
+		t.Fatalf("active tab = (%+v, %v), want %d", active, ok, second.ID)
+	}
+	selected, err := session.SelectTab(first.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected.PendingUpdate {
+		t.Fatalf("pending update remained after selection: %+v", selected)
+	}
+}
+
 func mustURL(t *testing.T, raw string) *url.URL {
 	t.Helper()
 	parsed, err := url.Parse(raw)

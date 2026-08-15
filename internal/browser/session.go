@@ -42,6 +42,9 @@ type Tab struct {
 	browser    *Browser
 	initialURL *url.URL
 	title      string
+	loading    bool
+	failed     bool
+	pending    bool
 }
 
 // TabSnapshot is an immutable view of a tab suitable for browser chrome.
@@ -174,6 +177,50 @@ func (s *Session) SetTabTitle(id TabID, title string) (TabSnapshot, error) {
 	return TabSnapshot{}, ErrTabNotFound
 }
 
+// BeginTabNavigation marks one tab as loading without changing selection.
+func (s *Session) BeginTabNavigation(id TabID) (TabSnapshot, error) {
+	if s == nil {
+		return TabSnapshot{}, ErrTabNotFound
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for index, tab := range s.tabs {
+		if tab != nil && tab.id == id && tab.state != TabClosing && tab.state != TabClosed {
+			tab.loading = true
+			tab.failed = false
+			tab.pending = false
+			return snapshotTab(tab, index, tab.id == s.activeID), nil
+		}
+	}
+	return TabSnapshot{}, ErrTabNotFound
+}
+
+// FinishTabNavigation publishes a result to its target tab without selecting it.
+func (s *Session) FinishTabNavigation(id TabID, failed bool) (TabSnapshot, error) {
+	if s == nil {
+		return TabSnapshot{}, ErrTabNotFound
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for index, tab := range s.tabs {
+		if tab == nil || tab.id != id || tab.state == TabClosing || tab.state == TabClosed {
+			continue
+		}
+		tab.loading = false
+		tab.failed = failed
+		tab.pending = tab.id != s.activeID
+		if tab.browser != nil {
+			if page := tab.browser.Page(); page != nil && page.Document != nil {
+				if title := page.Document.Title(); utf8.ValidString(title) && len(title) <= s.policy.MaxTitleBytes {
+					tab.title = title
+				}
+			}
+		}
+		return snapshotTab(tab, index, tab.id == s.activeID), nil
+	}
+	return TabSnapshot{}, ErrTabNotFound
+}
+
 func (s *Session) newTabLocked(initialURL *url.URL, state TabState) (*Tab, error) {
 	if s.factory == nil {
 		return nil, ErrTabBrowser
@@ -268,6 +315,7 @@ func (s *Session) selectTabLocked(position int) TabSnapshot {
 		}
 	}
 	target.state = TabActive
+	target.pending = false
 	s.activeID = target.id
 	return snapshotTab(target, position, true)
 }
@@ -399,7 +447,10 @@ func snapshotTab(tab *Tab, position int, active bool) TabSnapshot {
 	if tab == nil {
 		return TabSnapshot{Position: position}
 	}
-	snapshot := TabSnapshot{ID: tab.id, Position: position, State: tab.state, Active: active, Title: tab.title}
+	snapshot := TabSnapshot{
+		ID: tab.id, Position: position, State: tab.state, Active: active, Title: tab.title,
+		Loading: tab.loading, Error: tab.failed, PendingUpdate: tab.pending,
+	}
 	if tab.initialURL != nil {
 		snapshot.URL = displayTabURL(tab.initialURL)
 	} else if tab.browser != nil {
