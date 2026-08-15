@@ -69,6 +69,7 @@ type Browser struct {
 	clock          animationmodel.Clock
 	reducedMotion  bool
 	storage        *storagecore.Manager
+	active         bool
 }
 
 var (
@@ -91,7 +92,17 @@ func NewWithRuntimeFactoryAndStorage(client ResourceLoader, factory runtimemodel
 	if manager == nil {
 		manager = storagecore.NewManager()
 	}
-	return &Browser{client: client, runtimeFactory: factory, history: newHistory(), clock: animationmodel.SystemClock{}, storage: manager}
+	return &Browser{client: client, runtimeFactory: factory, history: newHistory(), clock: animationmodel.SystemClock{}, storage: manager, active: true}
+}
+
+// SetTabActive controls whether frame-driven page work may run for this Browser.
+func (b *Browser) SetTabActive(active bool) {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	b.active = active
+	b.mu.Unlock()
 }
 
 // SetAnimationClock replaces the page animation clock. Tests can inject a
@@ -149,7 +160,11 @@ func (b *Browser) InspectPage(inspect func(*Page) bool) bool {
 func (b *Browser) RunAnimationFrame(current time.Time) bool {
 	b.mu.RLock()
 	activeRuntime := b.activeRuntime
+	active := b.active
 	b.mu.RUnlock()
+	if !active {
+		return false
+	}
 	runtime, ok := activeRuntime.(animationFrameRuntime)
 	return ok && runtime.RunAnimationFrame(current)
 }
@@ -158,7 +173,11 @@ func (b *Browser) RunAnimationFrame(current time.Time) bool {
 func (b *Browser) HasAnimationFrameCallbacks() bool {
 	b.mu.RLock()
 	activeRuntime := b.activeRuntime
+	active := b.active
 	b.mu.RUnlock()
+	if !active {
+		return false
+	}
 	runtime, ok := activeRuntime.(animationFrameRuntime)
 	return ok && runtime.HasAnimationFrameCallbacks()
 }

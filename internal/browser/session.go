@@ -157,6 +157,7 @@ func (s *Session) NewTab(initialURL *url.URL) (TabSnapshot, error) {
 	if state == TabActive {
 		s.activeID = tab.id
 	}
+	tab.browser.SetTabActive(state == TabActive)
 	s.tabs = append(s.tabs, tab)
 	return snapshotTab(tab, len(s.tabs)-1, state == TabActive), nil
 }
@@ -326,9 +327,15 @@ func (s *Session) selectTabLocked(position int) TabSnapshot {
 	for _, tab := range s.tabs {
 		if tab != nil && tab.state == TabActive {
 			tab.state = TabBackground
+			if tab.browser != nil {
+				tab.browser.SetTabActive(false)
+			}
 		}
 	}
 	target.state = TabActive
+	if target.browser != nil {
+		target.browser.SetTabActive(true)
+	}
 	target.pending = false
 	s.activeID = target.id
 	return snapshotTab(target, position, true)

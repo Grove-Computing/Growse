@@ -5,11 +5,24 @@ import (
 	"errors"
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/events"
 	"github.com/Grove-Computing/Growse/internal/network"
 )
+
+type frameRuntimeStub struct {
+	runtimeStub
+	frames int
+}
+
+func (runtime *frameRuntimeStub) RunAnimationFrame(time.Time) bool {
+	runtime.frames++
+	return true
+}
+
+func (runtime *frameRuntimeStub) HasAnimationFrameCallbacks() bool { return true }
 
 func TestSessionKeepsOrderedTabsAndOneActiveTab(t *testing.T) {
 	session := NewSession()
@@ -544,6 +557,39 @@ func TestSessionOwnsIndependentPageHistoryRuntimeAndEventStatePerTab(t *testing.
 	created[0].history.pushEntry(&historyEntry{URL: mustURL(t, "https://example.test/only-first")})
 	if len(created[0].history.entries) != 2 || len(created[1].history.entries) != 1 {
 		t.Fatalf("history mutation crossed tabs: first=%d second=%d", len(created[0].history.entries), len(created[1].history.entries))
+	}
+}
+
+func TestBackgroundTabSuppressesFrameCallbacksUntilSelected(t *testing.T) {
+	browsers := []*Browser{New(nil), New(nil)}
+	runtimes := []*frameRuntimeStub{{}, {}}
+	next := 0
+	session := NewSession(func() *Browser {
+		state := browsers[next]
+		state.activeRuntime = runtimes[next]
+		next++
+		return state
+	})
+	first, _ := session.NewTab(nil)
+	second, _ := session.NewTab(nil)
+	now := time.Unix(100, 0)
+	if !browsers[0].RunAnimationFrame(now) || runtimes[0].frames != 1 {
+		t.Fatal("active tab frame was not delivered")
+	}
+	if browsers[1].RunAnimationFrame(now) || browsers[1].HasAnimationFrameCallbacks() || runtimes[1].frames != 0 {
+		t.Fatal("background tab delivered or requested a frame")
+	}
+	if _, err := session.SelectTab(second.ID); err != nil {
+		t.Fatal(err)
+	}
+	if browsers[0].RunAnimationFrame(now) || runtimes[0].frames != 1 {
+		t.Fatal("former active tab continued frame delivery")
+	}
+	if !browsers[1].RunAnimationFrame(now) || runtimes[1].frames != 1 {
+		t.Fatal("selected tab did not resume at current frame")
+	}
+	if active, _ := session.ActiveTab(); active.ID == first.ID {
+		t.Fatal("frame delivery changed tab selection unexpectedly")
 	}
 }
 
