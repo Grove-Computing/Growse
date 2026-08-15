@@ -4,12 +4,22 @@ import (
 	"errors"
 	"net/url"
 	"sync"
+	"unicode/utf8"
 )
 
 var (
 	ErrTabIDExhausted = errors.New("tab id space is exhausted")
 	ErrTabBrowser     = errors.New("tab browser factory returned nil")
 	ErrTabNotFound    = errors.New("tab was not found")
+	ErrTabLimit       = errors.New("tab limit was reached")
+	ErrTabURLTooLong  = errors.New("tab URL is too long")
+	ErrTabTitle       = errors.New("tab title is invalid")
+)
+
+const (
+	defaultMaxTabs       = 64
+	defaultMaxTitleBytes = 4 * 1024
+	defaultMaxURLBytes   = 8 * 1024
 )
 
 // TabID identifies one tab for the lifetime of a browser session.
@@ -31,6 +41,7 @@ type Tab struct {
 	state      TabState
 	browser    *Browser
 	initialURL *url.URL
+	title      string
 }
 
 // TabSnapshot is an immutable view of a tab suitable for browser chrome.
@@ -40,6 +51,7 @@ type TabSnapshot struct {
 	State    TabState
 	Active   bool
 	URL      string
+	Title    string
 }
 
 // TabCloseResult reports the active tab selected after a close operation.
@@ -52,6 +64,24 @@ type TabCloseResult struct {
 // BrowserFactory creates the isolated Browser owned by a new tab.
 type BrowserFactory func() *Browser
 
+// SessionPolicy bounds tab-owned state before memory or identifiers are consumed.
+type SessionPolicy struct {
+	MaxTabs       int
+	MaxTabID      uint64
+	MaxTitleBytes int
+	MaxURLBytes   int
+}
+
+// DefaultSessionPolicy returns the production safety limits.
+func DefaultSessionPolicy() SessionPolicy {
+	return SessionPolicy{
+		MaxTabs:       defaultMaxTabs,
+		MaxTabID:      ^uint64(0),
+		MaxTitleBytes: defaultMaxTitleBytes,
+		MaxURLBytes:   defaultMaxURLBytes,
+	}
+}
+
 // Session owns an ordered collection of tabs and at most one active tab.
 type Session struct {
 	mu       sync.RWMutex
@@ -59,6 +89,7 @@ type Session struct {
 	activeID TabID
 	nextID   uint64
 	factory  BrowserFactory
+	policy   SessionPolicy
 }
 
 // NewSession creates an empty browser session.
@@ -67,7 +98,28 @@ func NewSession(factory ...BrowserFactory) *Session {
 	if len(factory) != 0 && factory[0] != nil {
 		createBrowser = factory[0]
 	}
-	return &Session{factory: createBrowser}
+	return NewSessionWithPolicy(createBrowser, DefaultSessionPolicy())
+}
+
+// NewSessionWithPolicy creates an empty browser session with explicit limits.
+func NewSessionWithPolicy(factory BrowserFactory, policy SessionPolicy) *Session {
+	if factory == nil {
+		factory = func() *Browser { return New(nil) }
+	}
+	defaults := DefaultSessionPolicy()
+	if policy.MaxTabs <= 0 {
+		policy.MaxTabs = defaults.MaxTabs
+	}
+	if policy.MaxTabID == 0 {
+		policy.MaxTabID = defaults.MaxTabID
+	}
+	if policy.MaxTitleBytes <= 0 {
+		policy.MaxTitleBytes = defaults.MaxTitleBytes
+	}
+	if policy.MaxURLBytes <= 0 {
+		policy.MaxURLBytes = defaults.MaxURLBytes
+	}
+	return &Session{factory: factory, policy: policy}
 }
 
 // NewTab adds an empty tab or a tab with a requested initial URL. Navigation
@@ -78,6 +130,12 @@ func (s *Session) NewTab(initialURL *url.URL) (TabSnapshot, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if len(s.tabs) >= s.policy.MaxTabs {
+		return TabSnapshot{}, ErrTabLimit
+	}
+	if initialURL != nil && len(initialURL.String()) > s.policy.MaxURLBytes {
+		return TabSnapshot{}, ErrTabURLTooLong
+	}
 
 	state := TabBackground
 	if len(s.tabs) == 0 {
@@ -92,6 +150,25 @@ func (s *Session) NewTab(initialURL *url.URL) (TabSnapshot, error) {
 	}
 	s.tabs = append(s.tabs, tab)
 	return snapshotTab(tab, len(s.tabs)-1, state == TabActive), nil
+}
+
+// SetTabTitle stores a validated document title for browser chrome.
+func (s *Session) SetTabTitle(id TabID, title string) (TabSnapshot, error) {
+	if s == nil {
+		return TabSnapshot{}, ErrTabNotFound
+	}
+	if !utf8.ValidString(title) || len(title) > s.policy.MaxTitleBytes {
+		return TabSnapshot{}, ErrTabTitle
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for index, tab := range s.tabs {
+		if tab != nil && tab.id == id && tab.state != TabClosing && tab.state != TabClosed {
+			tab.title = title
+			return snapshotTab(tab, index, tab.id == s.activeID), nil
+		}
+	}
+	return TabSnapshot{}, ErrTabNotFound
 }
 
 func (s *Session) newTabLocked(initialURL *url.URL, state TabState) (*Tab, error) {
@@ -296,21 +373,33 @@ func snapshotTab(tab *Tab, position int, active bool) TabSnapshot {
 	if tab == nil {
 		return TabSnapshot{Position: position}
 	}
-	snapshot := TabSnapshot{ID: tab.id, Position: position, State: tab.state, Active: active}
+	snapshot := TabSnapshot{ID: tab.id, Position: position, State: tab.state, Active: active, Title: tab.title}
 	if tab.initialURL != nil {
-		snapshot.URL = tab.initialURL.String()
-	} else if tab.browser != nil && tab.browser.Page() != nil && tab.browser.Page().URL != nil {
-		snapshot.URL = tab.browser.Page().URL.String()
+		snapshot.URL = displayTabURL(tab.initialURL)
+	} else if tab.browser != nil {
+		page := tab.browser.Page()
+		if page != nil && page.URL != nil {
+			snapshot.URL = displayTabURL(page.URL)
+		}
 	}
 	return snapshot
 }
 
 func (s *Session) allocateTabIDLocked() (TabID, error) {
-	if s.nextID == ^uint64(0) {
+	if s.nextID >= s.policy.MaxTabID {
 		return 0, ErrTabIDExhausted
 	}
 	s.nextID++
 	return TabID(s.nextID), nil
+}
+
+func displayTabURL(source *url.URL) string {
+	if source == nil {
+		return ""
+	}
+	copy := *source
+	copy.User = nil
+	return copy.String()
 }
 
 func (s *Session) tabByIDLocked(id TabID) (*Tab, bool) {

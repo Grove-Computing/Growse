@@ -312,6 +312,77 @@ func TestSessionKeepsLastTabWhenBlankReplacementCannotBeCreated(t *testing.T) {
 	}
 }
 
+func TestSessionAppliesTabCountAndIDLimitsWithoutChangingExistingTabs(t *testing.T) {
+	policy := DefaultSessionPolicy()
+	policy.MaxTabs = 1
+	policy.MaxTabID = 1
+	session := NewSessionWithPolicy(func() *Browser { return New(nil) }, policy)
+	first, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.NewTab(nil); !errors.Is(err, ErrTabLimit) {
+		t.Fatalf("NewTab() error = %v, want %v", err, ErrTabLimit)
+	}
+	if tabs := session.Tabs(); len(tabs) != 1 || tabs[0].ID != first.ID || !tabs[0].Active {
+		t.Fatalf("Tabs() = %#v", tabs)
+	}
+
+	policy.MaxTabs = 2
+	idLimited := NewSessionWithPolicy(func() *Browser { return New(nil) }, policy)
+	if _, err := idLimited.NewTab(nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := idLimited.NewTab(nil); !errors.Is(err, ErrTabIDExhausted) {
+		t.Fatalf("ID-limited NewTab() error = %v, want %v", err, ErrTabIDExhausted)
+	}
+}
+
+func TestSessionAppliesURLAndTitleLimits(t *testing.T) {
+	policy := DefaultSessionPolicy()
+	policy.MaxURLBytes = 32
+	policy.MaxTitleBytes = len("Goタブ")
+	created := 0
+	session := NewSessionWithPolicy(func() *Browser {
+		created++
+		return New(nil)
+	}, policy)
+
+	if _, err := session.NewTab(mustURL(t, "https://example.test/this-path-is-too-long")); !errors.Is(err, ErrTabURLTooLong) {
+		t.Fatalf("long URL error = %v, want %v", err, ErrTabURLTooLong)
+	}
+	if created != 0 {
+		t.Fatalf("browser factory called %d times for rejected URL", created)
+	}
+	tab, err := session.NewTab(mustURL(t, "https://u:p@e.test/"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tab.URL != "https://e.test/" {
+		t.Fatalf("display URL = %q, want credentials removed", tab.URL)
+	}
+	updated, err := session.SetTabTitle(tab.ID, "Goタブ")
+	if err != nil || updated.Title != "Goタブ" {
+		t.Fatalf("SetTabTitle() = %#v, %v", updated, err)
+	}
+	if _, err := session.SetTabTitle(tab.ID, "Goタブ!"); !errors.Is(err, ErrTabTitle) {
+		t.Fatalf("long title error = %v, want %v", err, ErrTabTitle)
+	}
+	if _, err := session.SetTabTitle(tab.ID, string([]byte{0xff})); !errors.Is(err, ErrTabTitle) {
+		t.Fatalf("invalid title error = %v, want %v", err, ErrTabTitle)
+	}
+	if current := session.Tabs()[0].Title; current != "Goタブ" {
+		t.Fatalf("title after rejected updates = %q", current)
+	}
+}
+
+func TestDefaultSessionPolicyMatchesReleaseLimits(t *testing.T) {
+	policy := DefaultSessionPolicy()
+	if policy.MaxTabs != 64 || policy.MaxTitleBytes != 4*1024 || policy.MaxURLBytes != 8*1024 || policy.MaxTabID != ^uint64(0) {
+		t.Fatalf("DefaultSessionPolicy() = %#v", policy)
+	}
+}
+
 func mustURL(t *testing.T, raw string) *url.URL {
 	t.Helper()
 	parsed, err := url.Parse(raw)
