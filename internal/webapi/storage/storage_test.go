@@ -2,10 +2,44 @@ package storage
 
 import (
 	"errors"
+	"net/url"
 	"testing"
 
 	storagecore "github.com/Grove-Computing/Growse/internal/storage"
 )
+
+func TestLocalStorageEventExcludesSourceCrossOriginAndClosedPage(t *testing.T) {
+	manager := storagecore.NewManager()
+	sameOriginURL, _ := url.Parse("https://example.test/source")
+	crossOriginURL, _ := url.Parse("https://other.test/page")
+	sameOrigin, _, err := manager.Areas(sameOriginURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	crossOrigin, _, err := manager.Areas(crossOriginURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	source := NewPage(sameOrigin, storagecore.NewArea(), storagecore.MutationSource{ID: 10, URL: sameOriginURL.String()}, nil)
+	defer source.Close()
+	closed := NewPage(sameOrigin, storagecore.NewArea(), storagecore.MutationSource{ID: 11, URL: "https://example.test/closed"}, nil)
+	cross := NewPage(crossOrigin, storagecore.NewArea(), storagecore.MutationSource{ID: 12, URL: crossOriginURL.String()}, nil)
+	defer cross.Close()
+
+	counts := map[string]int{}
+	source.OnChange(func(Event) { counts["source"]++ })
+	closed.OnChange(func(Event) { counts["closed"]++ })
+	cross.OnChange(func(Event) { counts["cross"]++ })
+	closed.Close()
+
+	if err := source.Local().Set("shared", "value"); err != nil {
+		t.Fatal(err)
+	}
+	if counts["source"] != 0 || counts["closed"] != 0 || counts["cross"] != 0 {
+		t.Fatalf("excluded event counts = %#v", counts)
+	}
+}
 
 func TestLocalStorageCommitNotifiesOtherPage(t *testing.T) {
 	local := storagecore.NewArea()
