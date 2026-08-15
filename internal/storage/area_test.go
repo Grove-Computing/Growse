@@ -91,3 +91,32 @@ func TestAreaAppliesKeyValueAndOriginQuotasWithoutMutation(t *testing.T) {
 		t.Fatal("Origin quota failure mutated Area")
 	}
 }
+
+func TestAreaCommitFailureRollsBackWithoutEvent(t *testing.T) {
+	commitErr := errors.New("disk unavailable")
+	for _, test := range []struct {
+		name   string
+		mutate func(*Area) error
+	}{
+		{name: "set", mutate: func(area *Area) error { return area.SetFrom(MutationSource{ID: 1}, "saved", "changed") }},
+		{name: "remove", mutate: func(area *Area) error { return area.RemoveFrom(MutationSource{ID: 1}, "saved") }},
+		{name: "clear", mutate: func(area *Area) error { return area.ClearFrom(MutationSource{ID: 1}) }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			area := newPersistentArea([]Entry{{Key: "saved", Value: "original"}}, func([]Entry) error { return commitErr })
+			events := 0
+			unsubscribe := area.Subscribe(2, func(Change) { events++ })
+			defer unsubscribe()
+
+			if err := test.mutate(area); !errors.Is(err, commitErr) {
+				t.Fatalf("mutation error = %v", err)
+			}
+			if value, found := area.Get("saved"); !found || value != "original" {
+				t.Fatalf("rolled back value = (%q, %v)", value, found)
+			}
+			if events != 0 {
+				t.Fatalf("events after failed commit = %d", events)
+			}
+		})
+	}
+}
