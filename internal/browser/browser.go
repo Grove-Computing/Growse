@@ -48,6 +48,10 @@ type animationFrameRuntime interface {
 	HasAnimationFrameCallbacks() bool
 }
 
+type backgroundRuntime interface {
+	SetBackground(bool)
+}
+
 type pageEventRuntime interface {
 	DispatchPageEvent(func() bool) bool
 }
@@ -103,7 +107,11 @@ func (b *Browser) SetTabActive(active bool) {
 	}
 	b.mu.Lock()
 	b.active = active
+	runtime := b.activeRuntime
 	b.mu.Unlock()
+	if runtime, ok := runtime.(backgroundRuntime); ok {
+		runtime.SetBackground(!active)
+	}
 }
 
 // SetAnimationClock replaces the page animation clock. Tests can inject a
@@ -1099,6 +1107,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	}
 	previousRuntime := b.activeRuntime
 	previousPage := b.page
+	background := !b.active
 	b.nextPageID++
 	page.HistoryID = b.nextPageID
 	page.ScrollRevision = 1
@@ -1143,6 +1152,9 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	}
 	b.mu.Unlock()
 	close(navigationReady)
+	if runtime, ok := pageRuntime.(backgroundRuntime); ok {
+		runtime.SetBackground(background)
+	}
 	if previousRuntime != nil {
 		_ = previousRuntime.Stop()
 	}

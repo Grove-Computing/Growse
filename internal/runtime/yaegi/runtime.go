@@ -234,6 +234,16 @@ func (r *Runtime) HasAnimationFrameCallbacks() bool {
 	return scheduler != nil && scheduler.HasAnimationFrameCallbacks()
 }
 
+// SetBackground applies hidden-tab scheduling policy to this page runtime.
+func (r *Runtime) SetBackground(background bool) {
+	r.mu.Lock()
+	scheduler := r.schedulerAPI
+	r.mu.Unlock()
+	if scheduler != nil {
+		scheduler.SetBackground(background)
+	}
+}
+
 // DispatchPageEvent runs a browser-originated DOM event on the page queue and
 // waits for cancelation/default-action state to become observable.
 func (r *Runtime) DispatchPageEvent(callback func() bool) bool {

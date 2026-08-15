@@ -32,6 +32,10 @@ const (
 	MaxFrameCallbacksPerPage = 10000
 	// MaxCallbacksPerTurn prevents one deadline from starving the Page queue.
 	MaxCallbacksPerTurn = 1000
+	// MaxBackgroundCallbacksPerTurn limits work queued by a hidden tab.
+	MaxBackgroundCallbacksPerTurn = 100
+	// MinBackgroundTimerDelay clamps hidden-tab timers.
+	MinBackgroundTimerDelay = time.Second
 )
 
 // Clock supplies monotonic time to the scheduler.
@@ -97,14 +101,15 @@ type API struct {
 	clock   Clock
 	enqueue func(func()) bool
 
-	mu       sync.Mutex
-	timers   map[TimerID]*timerEntry
-	queue    timerQueue
-	nextID   TimerID
-	sequence uint64
-	lastNow  time.Time
-	nesting  int
-	closed   bool
+	mu         sync.Mutex
+	timers     map[TimerID]*timerEntry
+	queue      timerQueue
+	nextID     TimerID
+	sequence   uint64
+	lastNow    time.Time
+	nesting    int
+	closed     bool
+	background bool
 
 	frameOrigin    time.Time
 	frameCallbacks map[FrameID]func(Timestamp)
@@ -116,6 +121,33 @@ type API struct {
 	wake chan struct{}
 	done chan struct{}
 	auto bool
+}
+
+// SetBackground applies hidden-tab timer clamping and callback budgeting.
+func (api *API) SetBackground(background bool) {
+	if api == nil {
+		return
+	}
+	api.mu.Lock()
+	if api.closed || api.background == background {
+		api.mu.Unlock()
+		return
+	}
+	api.background = background
+	if background {
+		minimum := api.nowLocked().Add(MinBackgroundTimerDelay)
+		for _, entry := range api.queue {
+			if entry.deadline.Before(minimum) {
+				entry.deadline = minimum
+			}
+			if entry.repeat && entry.interval < MinBackgroundTimerDelay {
+				entry.interval = MinBackgroundTimerDelay
+			}
+		}
+		heap.Init(&api.queue)
+	}
+	api.mu.Unlock()
+	api.signal()
 }
 
 // NewPage creates a scheduler that waits for deadlines and delivers callbacks
@@ -326,6 +358,14 @@ func (api *API) schedule(delay, interval time.Duration, repeat bool, callback fu
 			return 0, err
 		}
 	}
+	if api.background {
+		if delay < MinBackgroundTimerDelay {
+			delay = MinBackgroundTimerDelay
+		}
+		if repeat && interval < MinBackgroundTimerDelay {
+			interval = MinBackgroundTimerDelay
+		}
+	}
 	api.nextID++
 	if api.nextID == 0 {
 		api.nextID++
@@ -404,8 +444,12 @@ func (api *API) run() {
 func (api *API) runDue(current time.Time) {
 	api.mu.Lock()
 	current = api.observeLocked(current)
+	budget := MaxCallbacksPerTurn
+	if api.background {
+		budget = MaxBackgroundCallbacksPerTurn
+	}
 	api.mu.Unlock()
-	for delivered := 0; delivered < MaxCallbacksPerTurn; delivered++ {
+	for delivered := 0; delivered < budget; delivered++ {
 		api.mu.Lock()
 		if api.closed || len(api.queue) == 0 || api.queue[0].deadline.After(current) {
 			api.mu.Unlock()
