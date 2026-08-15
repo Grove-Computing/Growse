@@ -246,6 +246,9 @@ func calculateBrowserChromeGeometry(size image.Point, railWidth, toolbarHeight i
 }
 
 func layoutRegion(gtx layout.Context, region image.Rectangle, widget layout.Widget) layout.Dimensions {
+	if region.Empty() {
+		return layout.Dimensions{Size: region.Size()}
+	}
 	defer op.Offset(region.Min).Push(gtx.Ops).Pop()
 	gtx.Constraints = layout.Exact(region.Size())
 	return widget(gtx)

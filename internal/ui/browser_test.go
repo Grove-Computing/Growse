@@ -364,6 +364,41 @@ func TestTabRailCoordinatesAreExcludedFromPageHitTesting(t *testing.T) {
 	}
 }
 
+func TestNarrowWindowKeepsChromeRegionsSafeAndDisjoint(t *testing.T) {
+	sizes := []image.Point{
+		{},
+		image.Pt(1, 1),
+		image.Pt(160, 80),
+		image.Pt(223, 91),
+		image.Pt(224, 92),
+		image.Pt(300, 180),
+	}
+	for _, size := range sizes {
+		t.Run(size.String(), func(t *testing.T) {
+			geometry := calculateBrowserChromeGeometry(size, 224, 92)
+			window := image.Rectangle{Max: size}
+			for name, region := range map[string]image.Rectangle{
+				"tab rail": geometry.tabRail,
+				"toolbar":  geometry.toolbar,
+				"viewport": geometry.viewport,
+			} {
+				if region.Dx() < 0 || region.Dy() < 0 || !region.In(window) {
+					t.Fatalf("%s region %v is invalid for window %v", name, region, window)
+				}
+			}
+			if geometry.tabRail.Overlaps(geometry.toolbar) || geometry.tabRail.Overlaps(geometry.viewport) || geometry.toolbar.Overlaps(geometry.viewport) {
+				t.Fatalf("chrome regions overlap for window %v: %+v", size, geometry)
+			}
+
+			ui := NewBrowserUI(nil, nil)
+			gtx := layout.Context{Ops: new(op.Ops), Constraints: layout.Exact(size), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}}
+			if got := ui.Layout(gtx).Size; got != size {
+				t.Fatalf("narrow browser UI size = %v, want %v", got, size)
+			}
+		})
+	}
+}
+
 func TestTabRowDisplaysTitleFallbackAndLifecycleState(t *testing.T) {
 	tests := []struct {
 		name      string
