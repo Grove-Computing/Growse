@@ -213,11 +213,11 @@ func secondsDuration(raw string) time.Duration {
 }
 
 func durationFromSeconds(seconds uint64) time.Duration {
-	limit := uint64(math.MaxInt64 / int64(time.Second))
-	if seconds > limit {
+	const maxDurationSeconds uint64 = math.MaxInt64 / uint64(time.Second)
+	if seconds > maxDurationSeconds {
 		return time.Duration(math.MaxInt64)
 	}
-	return time.Duration(seconds) * time.Second
+	return time.Duration(int64(seconds)) * time.Second
 }
 
 // Match はRequest Headerを含めて一致する保存済みvariantを返す。

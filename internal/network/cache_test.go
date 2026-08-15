@@ -2,6 +2,7 @@ package network
 
 import (
 	"fmt"
+	"math"
 	"net/http"
 	"net/url"
 	"strings"
@@ -90,6 +91,19 @@ func TestCalculateFreshnessBoundsHugeAgeAndMaxAge(t *testing.T) {
 	}, storedAt)
 	if value.lifetime < 0 || value.initialAge < 0 {
 		t.Fatalf("overflowed freshness = %#v", value)
+	}
+}
+
+func TestDurationFromSecondsClampsBeforeSignedConversion(t *testing.T) {
+	const maxDurationSeconds uint64 = math.MaxInt64 / uint64(time.Second)
+	if got, want := durationFromSeconds(maxDurationSeconds), time.Duration(maxDurationSeconds)*time.Second; got != want {
+		t.Fatalf("durationFromSeconds(max) = %v, want %v", got, want)
+	}
+	if got := durationFromSeconds(maxDurationSeconds + 1); got != time.Duration(math.MaxInt64) {
+		t.Fatalf("durationFromSeconds(max+1) = %v, want saturation", got)
+	}
+	if got := durationFromSeconds(math.MaxUint64); got != time.Duration(math.MaxInt64) {
+		t.Fatalf("durationFromSeconds(MaxUint64) = %v, want saturation", got)
 	}
 }
 
