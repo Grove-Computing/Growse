@@ -849,6 +849,63 @@ func TestBlankLinkOpensActiveNewTab(t *testing.T) {
 	}
 }
 
+func TestTabSelectionSynchronizesActiveBrowserChrome(t *testing.T) {
+	newTitledPage := func(rawURL, title string) *browser.Page {
+		document := dom.NewDocument()
+		titleNode := document.CreateElement("title", nil)
+		if err := document.AppendChild(document.Root, titleNode); err != nil {
+			t.Fatal(err)
+		}
+		if err := document.AppendChild(titleNode, document.CreateText(title)); err != nil {
+			t.Fatal(err)
+		}
+		pageURL, err := url.Parse(rawURL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return &browser.Page{URL: pageURL, Document: document}
+	}
+	created := []*browser.Browser{browser.New(nil), browser.New(nil)}
+	created[0].SetPage(newTitledPage("https://one.example/first", "One"))
+	created[1].SetPage(newTitledPage("https://two.example/second", "Two"))
+	next := 0
+	session := browser.NewSession(func() *browser.Browser {
+		state := created[next]
+		next++
+		return state
+	})
+	first, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.BeginTabNavigation(second.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.FinishTabNavigation(second.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	ui := NewBrowserUIWithTabs(nil, session, nil)
+
+	ui.syncActiveTabChrome()
+	if ui.displayedTabID != first.ID || ui.navigator != created[0] || ui.address.Text() != "https://one.example/first" || ui.pageTitle != "One" {
+		t.Fatalf("first tab chrome was not synchronized: id=%d address=%q title=%q navigator=%p", ui.displayedTabID, ui.address.Text(), ui.pageTitle, ui.navigator)
+	}
+	if _, err := session.SelectTab(second.ID); err != nil {
+		t.Fatal(err)
+	}
+	ui.syncActiveTabChrome()
+	if ui.displayedTabID != second.ID || ui.navigator != created[1] || ui.address.Text() != "https://two.example/second" || ui.pageTitle != "Two" {
+		t.Fatalf("second tab chrome was not synchronized: id=%d address=%q title=%q navigator=%p", ui.displayedTabID, ui.address.Text(), ui.pageTitle, ui.navigator)
+	}
+	if ui.status != "読み込みエラー" || !ui.statusHasError {
+		t.Fatalf("second tab status = %q error=%v", ui.status, ui.statusHasError)
+	}
+}
+
 func (navigator *recordingNavigator) Navigate(_ context.Context, rawURL string) (*browser.Page, error) {
 	navigator.navigated <- rawURL
 	return navigator.page, navigator.err

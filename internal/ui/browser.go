@@ -63,6 +63,7 @@ type BrowserUI struct {
 	nextNavigationID uint64
 	loading          bool
 	tabs             TabController
+	displayedTabID   browser.TabID
 
 	backButton        widget.Clickable
 	forwardButton     widget.Clickable
@@ -243,6 +244,7 @@ func (ui *BrowserUI) Layout(gtx layout.Context) layout.Dimensions {
 	ui.handlePointerEvents(gtx)
 	ui.handleKeyboardShortcuts(gtx)
 	ui.handleActions(gtx)
+	ui.syncActiveTabChrome()
 
 	geometry := calculateBrowserChromeGeometry(gtx.Constraints.Max, gtx.Dp(tabRailWidth), gtx.Dp(toolbarHeight))
 	layoutRegion(gtx, geometry.viewport, ui.layoutViewport)
@@ -588,8 +590,13 @@ func (ui *BrowserUI) handleTabActions(gtx layout.Context) {
 }
 
 func (ui *BrowserUI) createTab(gtx layout.Context) {
-	if _, err := ui.tabs.NewTab(nil); err != nil {
+	tab, err := ui.tabs.NewTab(nil)
+	if err != nil {
 		ui.reportTabOperationError("新しいTabを作成できません", err)
+		return
+	}
+	if _, err := ui.tabs.SelectTab(tab.ID); err != nil {
+		ui.reportTabOperationError("新しいTabを選択できません", err)
 		return
 	}
 	gtx.Execute(key.FocusCmd{Tag: &ui.address})
@@ -672,6 +679,57 @@ func (ui *BrowserUI) activeNavigationTarget() (browser.TabID, Navigator) {
 		}
 	}
 	return 0, ui.navigator
+}
+
+func (ui *BrowserUI) syncActiveTabChrome() {
+	if ui.tabs == nil {
+		return
+	}
+	active, ok := ui.tabs.ActiveTab()
+	if !ok || active.ID == ui.displayedTabID {
+		return
+	}
+	tabID, navigator := ui.activeNavigationTarget()
+	if navigator == nil || tabID != active.ID {
+		return
+	}
+	ui.displayedTabID = active.ID
+	ui.navigator = navigator
+	ui.loading = active.Loading
+	ui.statusHasError = active.Error
+	ui.inputEditors = make(map[dom.NodeID]*widget.Editor)
+	ui.inputFocused = make(map[dom.NodeID]bool)
+	ui.inputCommitted = make(map[dom.NodeID]string)
+	ui.selectButtons = make(map[dom.NodeID]*widget.Clickable)
+	ui.checkableButtons = make(map[dom.NodeID]*widget.Clickable)
+	ui.formButtons = make(map[dom.NodeID]*widget.Clickable)
+	ui.layoutCache = documentLayoutCache{}
+	if page := navigator.Page(); page != nil {
+		if page.URL != nil {
+			ui.address.SetText(page.URL.String())
+		}
+		ui.pageList.Position = layout.Position{First: page.ScrollFirst, Offset: page.ScrollOffset}
+		ui.scrollRevision = page.ScrollRevision
+		ui.pageTitle = active.Title
+		if ui.pageTitle == "" && page.Document != nil {
+			ui.pageTitle = page.Document.Title()
+		}
+		if ui.pageTitle == "" && page.URL != nil {
+			ui.pageTitle = page.URL.Hostname()
+		}
+	} else {
+		ui.address.SetText(active.URL)
+		ui.pageList.Position = layout.Position{}
+		ui.scrollRevision = 0
+		ui.pageTitle = tabDisplayTitle(active)
+	}
+	if active.Status != "" {
+		ui.status = active.Status
+		ui.pageStatus = active.Status
+	} else if navigator.Page() == nil {
+		ui.status = "URLを入力して Gopher ボタンを押してください"
+		ui.pageStatus = ui.status
+	}
 }
 
 func (ui *BrowserUI) consumeNavigationResult() {

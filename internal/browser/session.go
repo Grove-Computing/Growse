@@ -46,6 +46,7 @@ type Tab struct {
 	loading    bool
 	failed     bool
 	pending    bool
+	status     string
 }
 
 // TabSnapshot is an immutable view of a tab suitable for browser chrome.
@@ -59,6 +60,7 @@ type TabSnapshot struct {
 	Loading       bool
 	Error         bool
 	PendingUpdate bool
+	Status        string
 }
 
 // TabCloseResult reports the active tab selected after a close operation.
@@ -190,6 +192,7 @@ func (s *Session) BeginTabNavigation(id TabID) (TabSnapshot, error) {
 			tab.loading = true
 			tab.failed = false
 			tab.pending = false
+			tab.status = "読み込み中"
 			return snapshotTab(tab, index, tab.id == s.activeID), nil
 		}
 	}
@@ -210,6 +213,11 @@ func (s *Session) FinishTabNavigation(id TabID, failed bool) (TabSnapshot, error
 		tab.loading = false
 		tab.failed = failed
 		tab.pending = tab.id != s.activeID
+		if failed {
+			tab.status = "読み込みエラー"
+		} else {
+			tab.status = "取得完了"
+		}
 		if tab.browser != nil {
 			if page := tab.browser.Page(); page != nil && page.Document != nil {
 				if title := page.Document.Title(); utf8.ValidString(title) && len(title) <= s.policy.MaxTitleBytes {
@@ -455,7 +463,7 @@ func snapshotTab(tab *Tab, position int, active bool) TabSnapshot {
 	}
 	snapshot := TabSnapshot{
 		ID: tab.id, Position: position, State: tab.state, Active: active, Title: tab.title,
-		Loading: tab.loading, Error: tab.failed, PendingUpdate: tab.pending,
+		Loading: tab.loading, Error: tab.failed, PendingUpdate: tab.pending, Status: tab.status,
 	}
 	if tab.initialURL != nil {
 		snapshot.URL = displayTabURL(tab.initialURL)
