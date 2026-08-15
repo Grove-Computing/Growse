@@ -59,9 +59,9 @@ func runWindow(window *gioapp.Window) error {
 		state := browser.NewWithRuntimeFactoryAndStorage(networkClient, func() runtimemodel.Runtime {
 			return yaegi.New()
 		}, storageManager.NewPageSession())
-		state.SetOnMutation(window.Invalidate)
 		return state
 	})
+	session.SetOnActiveMutation(window.Invalidate)
 	if _, err := session.NewTab(nil); err != nil {
 		return err
 	}

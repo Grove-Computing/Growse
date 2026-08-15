@@ -620,6 +620,42 @@ func TestReselectedTabReceivesOnlyCurrentFrameTimestamp(t *testing.T) {
 	}
 }
 
+func TestBackgroundMutationMarksTabWithoutInvalidatingActiveViewport(t *testing.T) {
+	browsers := []*Browser{New(nil), New(nil)}
+	next := 0
+	session := NewSession(func() *Browser {
+		state := browsers[next]
+		next++
+		return state
+	})
+	first, _ := session.NewTab(nil)
+	second, _ := session.NewTab(nil)
+	invalidations := 0
+	session.SetOnActiveMutation(func() { invalidations++ })
+
+	browsers[1].onMutation()
+	if invalidations != 0 {
+		t.Fatalf("background mutation invalidated active viewport %d times", invalidations)
+	}
+	if tabs := session.Tabs(); !tabs[1].PendingUpdate || tabs[0].ID != first.ID {
+		t.Fatalf("background mutation state = %+v", tabs)
+	}
+	browsers[0].onMutation()
+	if invalidations != 1 {
+		t.Fatalf("active mutation invalidations = %d, want 1", invalidations)
+	}
+	if _, err := session.SelectTab(second.ID); err != nil {
+		t.Fatal(err)
+	}
+	if session.Tabs()[1].PendingUpdate {
+		t.Fatal("pending mutation remained after tab selection")
+	}
+	browsers[1].onMutation()
+	if invalidations != 2 {
+		t.Fatalf("selected tab mutation invalidations = %d, want 2", invalidations)
+	}
+}
+
 func TestSessionRejectsBrowserInstanceReuseAcrossTabs(t *testing.T) {
 	shared := New(nil)
 	session := NewSession(func() *Browser { return shared })

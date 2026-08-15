@@ -93,12 +93,13 @@ func DefaultSessionPolicy() SessionPolicy {
 
 // Session owns an ordered collection of tabs and at most one active tab.
 type Session struct {
-	mu       sync.RWMutex
-	tabs     []*Tab
-	activeID TabID
-	nextID   uint64
-	factory  BrowserFactory
-	policy   SessionPolicy
+	mu               sync.RWMutex
+	tabs             []*Tab
+	activeID         TabID
+	nextID           uint64
+	factory          BrowserFactory
+	policy           SessionPolicy
+	onActiveMutation func()
 }
 
 // NewSession creates an empty browser session.
@@ -249,7 +250,37 @@ func (s *Session) newTabLocked(initialURL *url.URL, state TabState) (*Tab, error
 		_ = browser.Close()
 		return nil, err
 	}
+	browser.SetOnMutation(func() { s.handleTabMutation(id) })
 	return &Tab{id: id, state: state, browser: browser, initialURL: cloneURL(initialURL)}, nil
+}
+
+// SetOnActiveMutation registers the Browser Window invalidation callback.
+func (s *Session) SetOnActiveMutation(callback func()) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.onActiveMutation = callback
+	s.mu.Unlock()
+}
+
+func (s *Session) handleTabMutation(id TabID) {
+	s.mu.Lock()
+	tab, ok := s.tabByIDLocked(id)
+	if !ok || tab.state == TabClosing || tab.state == TabClosed {
+		s.mu.Unlock()
+		return
+	}
+	if id != s.activeID {
+		tab.pending = true
+		s.mu.Unlock()
+		return
+	}
+	callback := s.onActiveMutation
+	s.mu.Unlock()
+	if callback != nil {
+		callback()
+	}
 }
 
 // SelectTab makes the identified live tab active.
