@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -299,7 +300,8 @@ func TestPersistentAppStatesVisualRegression(t *testing.T) {
 		t.Fatal(err)
 	}
 	actual = append(actual, '\n')
-	want, err := os.ReadFile("testdata/persistent-app.golden.json")
+	goldenFile := persistentAppGoldenFile(runtime.GOOS, runtime.GOARCH)
+	want, err := os.ReadFile(filepath.Join("testdata", goldenFile))
 	if err != nil {
 		t.Fatalf("read Persistent App visual golden: %v\n--- actual ---\n%s", err, actual)
 	}
@@ -309,6 +311,61 @@ func TestPersistentAppStatesVisualRegression(t *testing.T) {
 	}
 	if !reflect.DeepEqual(snapshot, expected) {
 		t.Fatalf("Persistent App visual snapshot changed\n--- actual ---\n%s", actual)
+	}
+}
+
+func persistentAppGoldenFile(goos, goarch string) string {
+	if goos == "darwin" && goarch == "arm64" {
+		return "persistent-app-darwin-arm64.golden.json"
+	}
+	return "persistent-app.golden.json"
+}
+
+func TestPersistentAppGoldenFileMatchesReleasePlatform(t *testing.T) {
+	tests := []struct {
+		goos, goarch string
+		want         string
+	}{
+		{goos: "linux", goarch: "amd64", want: "persistent-app.golden.json"},
+		{goos: "darwin", goarch: "amd64", want: "persistent-app.golden.json"},
+		{goos: "windows", goarch: "amd64", want: "persistent-app.golden.json"},
+		{goos: "darwin", goarch: "arm64", want: "persistent-app-darwin-arm64.golden.json"},
+	}
+	for _, test := range tests {
+		t.Run(test.goos+"-"+test.goarch, func(t *testing.T) {
+			if got := persistentAppGoldenFile(test.goos, test.goarch); got != test.want {
+				t.Fatalf("persistentAppGoldenFile(%q, %q) = %q, want %q", test.goos, test.goarch, got, test.want)
+			}
+		})
+	}
+}
+
+func TestPersistentAppGoldenFilesShareLayoutAndDisplay(t *testing.T) {
+	read := func(name string) persistentVisualSnapshot {
+		t.Helper()
+		source, err := os.ReadFile(filepath.Join("testdata", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var snapshot persistentVisualSnapshot
+		if err := json.Unmarshal(source, &snapshot); err != nil {
+			t.Fatal(err)
+		}
+		return snapshot
+	}
+	amd64 := read("persistent-app.golden.json")
+	arm64 := read("persistent-app-darwin-arm64.golden.json")
+	if amd64.Viewport != arm64.Viewport || amd64.Scale != arm64.Scale || amd64.Font != arm64.Font || amd64.Timestamp != arm64.Timestamp {
+		t.Fatal("Persistent App visual metadata differs between architectures")
+	}
+	if len(amd64.States) != len(arm64.States) {
+		t.Fatalf("Persistent App visual state count = amd64 %d, arm64 %d", len(amd64.States), len(arm64.States))
+	}
+	for index := range amd64.States {
+		left, right := amd64.States[index], arm64.States[index]
+		if left.Name != right.Name || left.GeometrySHA != right.GeometrySHA || left.DisplaySHA != right.DisplaySHA {
+			t.Fatalf("Persistent App state %d layout/display differs between architectures", index)
+		}
 	}
 }
 

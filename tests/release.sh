@@ -2,6 +2,7 @@
 set -euo pipefail
 
 workflow=".github/workflows/release.yml"
+ci_workflow=".github/workflows/ci.yml"
 package_script="scripts/package-gui.sh"
 desktop_entry="packaging/linux/io.github.grovecomputing.Growse.desktop"
 desktop_icon="packaging/linux/io.github.grovecomputing.Growse.png"
@@ -12,6 +13,13 @@ windows_shortcut="packaging/windows/install-shortcut.ps1"
 require() {
     if ! grep -Fq -- "$1" "$workflow" && ! grep -Fq -- "$1" "$package_script"; then
         echo "release workflowまたはpackage scriptに必須設定がありません: $1" >&2
+        exit 1
+    fi
+}
+
+require_ci() {
+    if ! grep -Fq -- "$1" "$ci_workflow"; then
+        echo "CI workflowにリリース前検証の必須設定がありません: $1" >&2
         exit 1
     fi
 }
@@ -53,6 +61,15 @@ for value in \
     "if-no-files-found: error"
 do
     require "$value"
+done
+
+for value in \
+    "runner: macos-15" \
+    "runner: windows-2025" \
+    "name: Run platform tests" \
+    "run: go test ./..."
+do
+    require_ci "$value"
 done
 
 for asset in \

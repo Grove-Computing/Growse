@@ -182,6 +182,10 @@ jobs:
         shell: bash
         run: go mod download
 
+      - name: Run platform tests
+        shell: bash
+        run: go test ./...
+
       - name: Build GUI package
         shell: bash
         env:
