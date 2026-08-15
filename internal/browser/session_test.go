@@ -3,7 +3,10 @@ package browser
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -866,6 +869,71 @@ func TestCloseTabDiscardsOnlyItsSessionStorage(t *testing.T) {
 	}
 	if value, found := secondLocal.Get("theme"); !found || value != "shared" {
 		t.Fatalf("shared Local Storage after close = (%q, %v)", value, found)
+	}
+}
+
+func TestSessionTabsShareCookiesAcrossNavigationFormAndFetch(t *testing.T) {
+	var failures []string
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Content-Type", "text/html")
+		switch request.URL.Path {
+		case "/navigation":
+			http.SetCookie(response, &http.Cookie{Name: "navigation", Value: "shared", Path: "/"})
+		case "/form-page":
+			_, _ = response.Write([]byte(`<form id="shared-form" action="/form" method="post"><input name="message" value="hello"></form>`))
+			return
+		case "/form":
+			if cookie, err := request.Cookie("navigation"); err != nil || cookie.Value != "shared" {
+				failures = append(failures, "form did not receive navigation cookie")
+			}
+			http.SetCookie(response, &http.Cookie{Name: "form", Value: "shared", Path: "/"})
+		case "/fetch":
+			for _, name := range []string{"navigation", "form"} {
+				if cookie, err := request.Cookie(name); err != nil || cookie.Value != "shared" {
+					failures = append(failures, "fetch did not receive "+name+" cookie")
+				}
+			}
+		}
+		_, _ = response.Write([]byte("<!doctype html><title>Shared Cookie</title>"))
+	}))
+	defer server.Close()
+
+	client := network.NewClientWithLimits(server.Client(), 1024)
+	session := NewSession(func() *Browser { return New(client) })
+	defer session.Close()
+	if _, err := session.NewTab(nil); err != nil {
+		t.Fatal(err)
+	}
+	first := session.tabs[0].browser
+	if _, err := first.Navigate(context.Background(), server.URL+"/navigation"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.NewTab(nil); err != nil {
+		t.Fatal(err)
+	}
+	second := session.tabs[1].browser
+	page, err := second.Navigate(context.Background(), server.URL+"/form-page")
+	if err != nil {
+		t.Fatal(err)
+	}
+	form, found := page.Document.GetElementByID("shared-form")
+	if !found {
+		t.Fatal("form was not parsed")
+	}
+	if _, err := second.SubmitPOST(context.Background(), form.ID, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.NewTab(nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Do(context.Background(), &network.Request{
+		Method: http.MethodGet, URL: mustURL(t, server.URL+"/fetch"), SiteURL: mustURL(t, server.URL+"/page"),
+		Kind: network.RequestFetch, Credentials: network.CredentialsSameOrigin,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(failures) != 0 {
+		t.Fatal(strings.Join(failures, "; "))
 	}
 }
 
