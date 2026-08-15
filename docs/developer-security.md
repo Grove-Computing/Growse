@@ -47,7 +47,7 @@ bash scripts/audit-github-security.sh
 | Organization 2FA | 必須。有効な方法はpasskeyまたはhardware security keyを優先し、recovery codeをoffline保管 |
 | Classic PAT | Organization accessを禁止 |
 | Fine-grained PAT | `Growse`だけ、必要Permissionだけ、最大90日。不要になった時点で失効 |
-| Release Environment | `release`に30分のwait timer、Protection ruleのadmin bypass無効、`v*` tagだけを許可 |
+| Release Environment | `release`に10分のwait timer、Protection ruleのadmin bypass無効、`v*` tagだけを許可 |
 | Releases | Immutable Releasesを有効にし、公開後のtag／Asset差し替えを禁止 |
 
 一人開発ではPR作成者本人のmergeを許可しますが、必須CI完了前のmergeとRuleset bypassは許可しません。Collaboratorが増えたらrequired reviewerを1人以上にし、last push approvalとself-review禁止を追加します。
