@@ -53,6 +53,19 @@ require_file_value "$workflow" "Promote verified image tags by digest"
 require_file_value "$workflow" '"$IMAGE_NAME@${{ steps.build.outputs.digest }}"'
 require_file_value "$workflow" "push-to-registry: true"
 
+container_attest_job=$(sed -n '/^  container-attest:/,/^  publish:/p' "$workflow")
+for value in \
+    "Log in to GitHub Container Registry for attestation" \
+    "docker/login-action@dbcb813823bdd20940b903addbd779551569679fd" \
+    "registry: ghcr.io" \
+    'username: ${{ github.actor }}' \
+    'password: ${{ github.token }}'; do
+    if [[ "$container_attest_job" != *"$value"* ]]; then
+        echo "${workflow}のcontainer-attest jobに必須設定がありません: ${value}" >&2
+        exit 1
+    fi
+done
+
 ci_workflow=.github/workflows/ci.yml
 require_file_value "$ci_workflow" "Docker package (v0.9.0)"
 require_file_value "$ci_workflow" "docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c"
