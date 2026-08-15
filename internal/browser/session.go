@@ -512,6 +512,8 @@ func (s *Session) Close() error {
 	tabs := s.tabs
 	s.tabs = nil
 	s.activeID = 0
+	s.factory = nil
+	s.onActiveMutation = nil
 	for _, tab := range tabs {
 		if tab != nil {
 			tab.state = TabClosing

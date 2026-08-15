@@ -743,6 +743,64 @@ func TestRuntimeAndNavigationErrorsRemainScopedToOwningTabs(t *testing.T) {
 	}
 }
 
+func TestSessionCloseReleasesAllTabGoroutinesCallbacksAndPages(t *testing.T) {
+	loaders := []*closeCancelLoader{
+		{started: make(chan struct{}), canceled: make(chan struct{})},
+		{started: make(chan struct{}), canceled: make(chan struct{})},
+	}
+	browsers := []*Browser{New(loaders[0]), New(loaders[1])}
+	runtimes := []*runtimeStub{{}, {}}
+	next := 0
+	session := NewSession(func() *Browser {
+		state := browsers[next]
+		state.SetPage(&Page{URL: mustURL(t, "https://example.test/held"), Source: []byte("held response body")})
+		state.activeRuntime = runtimes[next]
+		next++
+		return state
+	})
+	tabs := make([]TabSnapshot, 2)
+	done := []chan struct{}{make(chan struct{}), make(chan struct{})}
+	for index := range tabs {
+		var err error
+		tabs[index], err = session.NewTab(nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		go func(index int) {
+			defer close(done[index])
+			_, _ = browsers[index].Navigate(context.Background(), "https://example.test/slow")
+		}(index)
+		select {
+		case <-loaders[index].started:
+		case <-time.After(time.Second):
+			t.Fatalf("tab %d navigation did not start", index)
+		}
+	}
+	callbackHeld := true
+	session.SetOnActiveMutation(func() { callbackHeld = false })
+	if err := session.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for index := range browsers {
+		select {
+		case <-loaders[index].canceled:
+		case <-time.After(time.Second):
+			t.Fatalf("tab %d goroutine was not canceled", index)
+		}
+		select {
+		case <-done[index]:
+		case <-time.After(time.Second):
+			t.Fatalf("tab %d goroutine did not exit", index)
+		}
+		if runtimes[index].stopCalls.Load() != 1 || browsers[index].Page() != nil || browsers[index].client != nil || browsers[index].onMutation != nil {
+			t.Fatalf("tab %d resources remain: stops=%d page=%+v client=%T callback=%v", index, runtimes[index].stopCalls.Load(), browsers[index].Page(), browsers[index].client, browsers[index].onMutation != nil)
+		}
+	}
+	if len(session.Tabs()) != 0 || session.factory != nil || session.onActiveMutation != nil || !callbackHeld {
+		t.Fatalf("session retained resources: tabs=%+v factory=%v callback=%v", session.Tabs(), session.factory != nil, session.onActiveMutation != nil)
+	}
+}
+
 func TestSessionRejectsBrowserInstanceReuseAcrossTabs(t *testing.T) {
 	shared := New(nil)
 	session := NewSession(func() *Browser { return shared })
