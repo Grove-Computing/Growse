@@ -70,6 +70,7 @@ type Browser struct {
 	reducedMotion  bool
 	storage        *storagecore.Manager
 	active         bool
+	lastFrame      time.Time
 }
 
 var (
@@ -158,10 +159,16 @@ func (b *Browser) InspectPage(inspect func(*Page) bool) bool {
 
 // RunAnimationFrame delivers one Gio frame timestamp to the active WebGo runtime.
 func (b *Browser) RunAnimationFrame(current time.Time) bool {
-	b.mu.RLock()
+	b.mu.Lock()
 	activeRuntime := b.activeRuntime
 	active := b.active
-	b.mu.RUnlock()
+	if active && current.Before(b.lastFrame) {
+		current = b.lastFrame
+	}
+	if active {
+		b.lastFrame = current
+	}
+	b.mu.Unlock()
 	if !active {
 		return false
 	}

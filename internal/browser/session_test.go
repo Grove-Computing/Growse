@@ -14,11 +14,13 @@ import (
 
 type frameRuntimeStub struct {
 	runtimeStub
-	frames int
+	frames     int
+	timestamps []time.Time
 }
 
-func (runtime *frameRuntimeStub) RunAnimationFrame(time.Time) bool {
+func (runtime *frameRuntimeStub) RunAnimationFrame(current time.Time) bool {
 	runtime.frames++
+	runtime.timestamps = append(runtime.timestamps, current)
 	return true
 }
 
@@ -590,6 +592,31 @@ func TestBackgroundTabSuppressesFrameCallbacksUntilSelected(t *testing.T) {
 	}
 	if active, _ := session.ActiveTab(); active.ID == first.ID {
 		t.Fatal("frame delivery changed tab selection unexpectedly")
+	}
+}
+
+func TestReselectedTabReceivesOnlyCurrentFrameTimestamp(t *testing.T) {
+	browsers := []*Browser{New(nil), New(nil)}
+	runtimes := []*frameRuntimeStub{{}, {}}
+	next := 0
+	session := NewSession(func() *Browser {
+		state := browsers[next]
+		state.activeRuntime = runtimes[next]
+		next++
+		return state
+	})
+	first, _ := session.NewTab(nil)
+	second, _ := session.NewTab(nil)
+	start := time.Unix(200, 0)
+	browsers[0].RunAnimationFrame(start)
+	session.SelectTab(second.ID)
+	browsers[0].RunAnimationFrame(start.Add(time.Second))
+	browsers[0].RunAnimationFrame(start.Add(2 * time.Second))
+	session.SelectTab(first.ID)
+	current := start.Add(10 * time.Second)
+	browsers[0].RunAnimationFrame(current)
+	if got := runtimes[0].timestamps; len(got) != 2 || !got[0].Equal(start) || !got[1].Equal(current) {
+		t.Fatalf("delivered frame timestamps = %v, want only start and current", got)
 	}
 }
 
