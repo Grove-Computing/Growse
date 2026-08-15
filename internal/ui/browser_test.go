@@ -440,6 +440,34 @@ func TestVerticalTabPointerControlsCreateSelectAndCloseTabs(t *testing.T) {
 	}
 }
 
+func TestOverflowingTabRailScrollIsIndependentFromPageScroll(t *testing.T) {
+	session := browser.NewSession()
+	for index := 0; index < 12; index++ {
+		if _, err := session.NewTab(nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ui := NewBrowserUIWithTabs(nil, session, nil)
+	ui.tabList.Position = layout.Position{First: 5, Offset: 3}
+	ui.pageList.Position = layout.Position{First: 2, Offset: 17}
+	gtx := layout.Context{
+		Ops:         new(op.Ops),
+		Constraints: layout.Exact(image.Pt(204, 128)),
+		Metric:      unit.Metric{PxPerDp: 1, PxPerSp: 1},
+	}
+
+	dims := ui.layoutTabList(gtx, session.Tabs())
+	if got, want := dims.Size, image.Pt(204, 128); got != want {
+		t.Fatalf("overflowing tab list size = %v, want %v", got, want)
+	}
+	if ui.tabList.Position.First == 0 {
+		t.Fatalf("tab list scroll position was reset: %+v", ui.tabList.Position)
+	}
+	if got, want := ui.pageList.Position, (layout.Position{First: 2, Offset: 17}); got != want {
+		t.Fatalf("page scroll changed with tab rail: %+v, want %+v", got, want)
+	}
+}
+
 func TestBrowserUILayoutFillsViewport(t *testing.T) {
 	ui := NewBrowserUI(nil, nil)
 	gtx := layout.Context{

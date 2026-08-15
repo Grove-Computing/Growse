@@ -288,12 +288,15 @@ func (ui *BrowserUI) layoutTabRail(gtx layout.Context) layout.Dimensions {
 				})
 			}),
 			layout.Rigid(layout.Spacer{Height: unit.Dp(12)}.Layout),
-			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-				return material.List(ui.theme, &ui.tabList).Layout(gtx, len(tabs), func(gtx layout.Context, index int) layout.Dimensions {
-					return ui.layoutTabRow(gtx, tabs[index])
-				})
-			}),
+			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions { return ui.layoutTabList(gtx, tabs) }),
 		)
+	})
+}
+
+func (ui *BrowserUI) layoutTabList(gtx layout.Context, tabs []browser.TabSnapshot) layout.Dimensions {
+	defer clip.Rect{Max: gtx.Constraints.Max}.Push(gtx.Ops).Pop()
+	return material.List(ui.theme, &ui.tabList).Layout(gtx, len(tabs), func(gtx layout.Context, index int) layout.Dimensions {
+		return ui.layoutTabRow(gtx, tabs[index])
 	})
 }
 
