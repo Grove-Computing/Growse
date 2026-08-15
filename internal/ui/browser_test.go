@@ -426,6 +426,16 @@ func TestTabRowDisplaysTitleFallbackAndLifecycleState(t *testing.T) {
 	}
 }
 
+func TestNavigationLoadingStatusRedactsURLCredentials(t *testing.T) {
+	status := navigationLoadingStatus("https://alice:password@example.test/private?view=notes")
+	if strings.Contains(status, "alice") || strings.Contains(status, "password") {
+		t.Fatalf("loading status exposed credentials: %q", status)
+	}
+	if status != "読み込み中: https://example.test/private?view=notes" {
+		t.Fatalf("loading status = %q", status)
+	}
+}
+
 func TestActiveTabRowHasVisibleFixedHeight(t *testing.T) {
 	ui := NewBrowserUI(nil, nil)
 	gtx := layout.Context{

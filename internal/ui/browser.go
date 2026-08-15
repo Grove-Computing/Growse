@@ -643,7 +643,7 @@ func (ui *BrowserUI) startNavigation(rawURL string) {
 		ui.statusHasError = true
 		return
 	}
-	ui.startPageLoad(tabID, navigator, "読み込み中: "+rawURL, func(ctx context.Context) (*browser.Page, error) {
+	ui.startPageLoad(tabID, navigator, navigationLoadingStatus(rawURL), func(ctx context.Context) (*browser.Page, error) {
 		return navigator.Navigate(ctx, rawURL)
 	})
 }
@@ -1233,9 +1233,17 @@ func (ui *BrowserUI) openURLInNewTab(target *url.URL) {
 		ui.statusHasError = true
 		return
 	}
-	ui.startPageLoad(tabID, navigator, "読み込み中: "+target.String(), func(ctx context.Context) (*browser.Page, error) {
+	ui.startPageLoad(tabID, navigator, navigationLoadingStatus(target.String()), func(ctx context.Context) (*browser.Page, error) {
 		return navigator.Navigate(ctx, target.String())
 	})
+}
+
+func navigationLoadingStatus(rawURL string) string {
+	target, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return "読み込み中"
+	}
+	return "読み込み中: " + network.RedactedURL(target)
 }
 
 func focusableNodeID(document *dom.Document, nodeID dom.NodeID) dom.NodeID {
