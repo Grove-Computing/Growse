@@ -2,7 +2,9 @@ package storage
 
 import (
 	"errors"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -118,5 +120,51 @@ func TestAreaCommitFailureRollsBackWithoutEvent(t *testing.T) {
 				t.Fatalf("events after failed commit = %d", events)
 			}
 		})
+	}
+}
+
+func TestConcurrentAreaMutationsPreserveCommitAndEventOrder(t *testing.T) {
+	const mutations = 16
+	var commitOrder []string
+	area := newPersistentArea(nil, func(entries []Entry) error {
+		commitOrder = append(commitOrder, entries[0].Value)
+		return nil
+	})
+	var eventOrder []string
+	var sequences []uint64
+	unsubscribe := area.Subscribe(100, func(change Change) {
+		eventOrder = append(eventOrder, change.NewValue)
+		sequences = append(sequences, change.Sequence)
+	})
+	defer unsubscribe()
+
+	var wait sync.WaitGroup
+	errors := make(chan error, mutations)
+	for index := 0; index < mutations; index++ {
+		wait.Add(1)
+		go func(index int) {
+			defer wait.Done()
+			value := fmt.Sprintf("value-%02d", index)
+			if err := area.SetFrom(MutationSource{ID: uint64(index + 1)}, "shared", value); err != nil {
+				errors <- err
+			}
+		}(index)
+	}
+	wait.Wait()
+	close(errors)
+	for err := range errors {
+		t.Fatal(err)
+	}
+
+	if len(commitOrder) != mutations || len(eventOrder) != mutations {
+		t.Fatalf("commit/event count = %d/%d, want %d", len(commitOrder), len(eventOrder), mutations)
+	}
+	for index := range commitOrder {
+		if eventOrder[index] != commitOrder[index] {
+			t.Fatalf("event[%d] = %q, commit = %q", index, eventOrder[index], commitOrder[index])
+		}
+		if sequences[index] != uint64(index+1) {
+			t.Fatalf("sequence[%d] = %d", index, sequences[index])
+		}
 	}
 }
