@@ -16,6 +16,7 @@ import (
 	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/unit"
+	"gioui.org/widget"
 
 	"github.com/Grove-Computing/Growse/internal/browser"
 	"github.com/Grove-Computing/Growse/internal/css"
@@ -476,6 +477,41 @@ func TestVerticalTabPointerControlsCreateSelectAndCloseTabs(t *testing.T) {
 	}
 }
 
+func TestClosedTabRejectsDelayedNavigationResultAndReleasesUIState(t *testing.T) {
+	session := browser.NewSession()
+	first, _ := session.NewTab(nil)
+	second, _ := session.NewTab(nil)
+	ui := NewBrowserUIWithTabs(nil, session, nil)
+	canceled := false
+	ui.navigations[first.ID] = tabNavigation{id: 7, cancel: func() { canceled = true }}
+	ui.tabRenderStates[first.ID] = tabRenderState{inputEditors: map[dom.NodeID]*widget.Editor{1: new(widget.Editor)}}
+	ui.tabRowButton(first.ID)
+	ui.tabCloseButton(first.ID)
+	ui.displayedTabID = first.ID
+
+	if !ui.closeTab(first.ID) {
+		t.Fatal("active tab close failed")
+	}
+	closedURL, err := url.Parse("https://closed.example/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ui.results <- navigationResult{id: 7, tabID: first.ID, page: browser.NewPage(closedURL)}
+	ui.consumeNavigationResult()
+	if !canceled {
+		t.Fatal("closed tab navigation was not canceled")
+	}
+	if _, ok := ui.tabRenderStates[first.ID]; ok || ui.tabRowButtons[first.ID] != nil || ui.tabCloseButtons[first.ID] != nil {
+		t.Fatal("closed tab UI callback state remains reachable")
+	}
+	if tabs := session.Tabs(); len(tabs) != 1 || tabs[0].ID != second.ID || !tabs[0].Active {
+		t.Fatalf("tabs after delayed result = %+v", tabs)
+	}
+	if ui.address.Text() == "https://closed.example/" {
+		t.Fatal("closed tab result updated browser chrome")
+	}
+}
+
 func TestOverflowingTabRailScrollIsIndependentFromPageScroll(t *testing.T) {
 	session := browser.NewSession()
 	for index := 0; index < 12; index++ {
@@ -894,6 +930,13 @@ func TestTabSelectionSynchronizesActiveBrowserChrome(t *testing.T) {
 	if ui.displayedTabID != first.ID || ui.navigator != created[0] || ui.address.Text() != "https://one.example/first" || ui.pageTitle != "One" {
 		t.Fatalf("first tab chrome was not synchronized: id=%d address=%q title=%q navigator=%p", ui.displayedTabID, ui.address.Text(), ui.pageTitle, ui.navigator)
 	}
+	ui.layoutCache.revision = 11
+	firstEditor := new(widget.Editor)
+	firstEditor.SetText("first value")
+	ui.inputEditors[99] = firstEditor
+	ui.pageList.Position = layout.Position{First: 3, Offset: 17}
+	created[0].Page().FocusTarget = 99
+	created[0].Page().HoverTarget = 100
 	if _, err := session.SelectTab(second.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -903,6 +946,23 @@ func TestTabSelectionSynchronizesActiveBrowserChrome(t *testing.T) {
 	}
 	if ui.status != "読み込みエラー" || !ui.statusHasError {
 		t.Fatalf("second tab status = %q error=%v", ui.status, ui.statusHasError)
+	}
+	if ui.layoutCache.revision != 0 {
+		t.Fatalf("second tab inherited first layout cache revision %d", ui.layoutCache.revision)
+	}
+	ui.layoutCache.revision = 22
+	if _, err := session.SelectTab(first.ID); err != nil {
+		t.Fatal(err)
+	}
+	ui.syncActiveTabChrome()
+	if ui.layoutCache.revision != 11 || ui.navigator.Page().Document != created[0].Page().Document {
+		t.Fatalf("first tab render state was not restored: revision=%d page=%p", ui.layoutCache.revision, ui.navigator.Page())
+	}
+	if ui.inputEditors[99] != firstEditor || ui.inputEditors[99].Text() != "first value" || ui.pageList.Position != (layout.Position{First: 3, Offset: 17}) {
+		t.Fatalf("first tab form/scroll state was not restored: editor=%p position=%+v", ui.inputEditors[99], ui.pageList.Position)
+	}
+	if created[0].Page().FocusTarget != 99 || created[0].Page().HoverTarget != 100 {
+		t.Fatalf("first tab focus/hover state changed: focus=%d hover=%d", created[0].Page().FocusTarget, created[0].Page().HoverTarget)
 	}
 }
 

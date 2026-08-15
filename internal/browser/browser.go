@@ -48,6 +48,10 @@ type animationFrameRuntime interface {
 	HasAnimationFrameCallbacks() bool
 }
 
+type backgroundRuntime interface {
+	SetBackground(bool)
+}
+
 type pageEventRuntime interface {
 	DispatchPageEvent(func() bool) bool
 }
@@ -57,18 +61,21 @@ type pageEventRuntime interface {
 // MVPでは1つのアクティブページ、線形の閲覧履歴、信頼済みページごとに
 // 独立した1つのGo Runtimeを保持する。
 type Browser struct {
-	mu             sync.RWMutex
-	page           *Page
-	client         ResourceLoader
-	runtimeFactory runtimemodel.Factory
-	activeRuntime  runtimemodel.Runtime
-	onMutation     func()
-	navigationID   uint64
-	nextPageID     uint64
-	history        history
-	clock          animationmodel.Clock
-	reducedMotion  bool
-	storage        *storagecore.Manager
+	mu               sync.RWMutex
+	page             *Page
+	client           ResourceLoader
+	runtimeFactory   runtimemodel.Factory
+	activeRuntime    runtimemodel.Runtime
+	onMutation       func()
+	navigationID     uint64
+	nextPageID       uint64
+	history          history
+	clock            animationmodel.Clock
+	reducedMotion    bool
+	storage          *storagecore.Manager
+	active           bool
+	lastFrame        time.Time
+	navigationCancel context.CancelFunc
 }
 
 var (
@@ -91,7 +98,21 @@ func NewWithRuntimeFactoryAndStorage(client ResourceLoader, factory runtimemodel
 	if manager == nil {
 		manager = storagecore.NewManager()
 	}
-	return &Browser{client: client, runtimeFactory: factory, history: newHistory(), clock: animationmodel.SystemClock{}, storage: manager}
+	return &Browser{client: client, runtimeFactory: factory, history: newHistory(), clock: animationmodel.SystemClock{}, storage: manager, active: true}
+}
+
+// SetTabActive controls whether frame-driven page work may run for this Browser.
+func (b *Browser) SetTabActive(active bool) {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	b.active = active
+	runtime := b.activeRuntime
+	b.mu.Unlock()
+	if runtime, ok := runtime.(backgroundRuntime); ok {
+		runtime.SetBackground(!active)
+	}
 }
 
 // SetAnimationClock replaces the page animation clock. Tests can inject a
@@ -147,9 +168,19 @@ func (b *Browser) InspectPage(inspect func(*Page) bool) bool {
 
 // RunAnimationFrame delivers one Gio frame timestamp to the active WebGo runtime.
 func (b *Browser) RunAnimationFrame(current time.Time) bool {
-	b.mu.RLock()
+	b.mu.Lock()
 	activeRuntime := b.activeRuntime
-	b.mu.RUnlock()
+	active := b.active
+	if active && current.Before(b.lastFrame) {
+		current = b.lastFrame
+	}
+	if active {
+		b.lastFrame = current
+	}
+	b.mu.Unlock()
+	if !active {
+		return false
+	}
 	runtime, ok := activeRuntime.(animationFrameRuntime)
 	return ok && runtime.RunAnimationFrame(current)
 }
@@ -158,7 +189,11 @@ func (b *Browser) RunAnimationFrame(current time.Time) bool {
 func (b *Browser) HasAnimationFrameCallbacks() bool {
 	b.mu.RLock()
 	activeRuntime := b.activeRuntime
+	active := b.active
 	b.mu.RUnlock()
+	if !active {
+		return false
+	}
 	runtime, ok := activeRuntime.(animationFrameRuntime)
 	return ok && runtime.HasAnimationFrameCallbacks()
 }
@@ -530,6 +565,10 @@ func (b *Browser) SetReducedMotion(reduce bool) bool {
 func (b *Browser) SetPage(page *Page) {
 	b.mu.Lock()
 	b.navigationID++
+	if b.navigationCancel != nil {
+		b.navigationCancel()
+		b.navigationCancel = nil
+	}
 	activeRuntime := b.activeRuntime
 	previousPage := b.page
 	b.activeRuntime = nil
@@ -573,6 +612,10 @@ func (b *Browser) SetPage(page *Page) {
 func (b *Browser) Close() error {
 	b.mu.Lock()
 	b.navigationID++
+	if b.navigationCancel != nil {
+		b.navigationCancel()
+		b.navigationCancel = nil
+	}
 	activeRuntime := b.activeRuntime
 	page := b.page
 	b.activeRuntime = nil
@@ -917,7 +960,12 @@ func (b *Browser) loadIgnoringCache(ctx context.Context, pageURL *url.URL, commi
 }
 
 func (b *Browser) loadWithClient(ctx context.Context, pageURL *url.URL, commit historyCommit, historyIndex int, revalidateDocument, revalidateResources bool) (*Page, error) {
+	navigationContext, cancel := context.WithCancel(ctx)
 	b.mu.Lock()
+	if b.navigationCancel != nil {
+		b.navigationCancel()
+	}
+	b.navigationCancel = cancel
 	b.navigationID++
 	navigationID := b.navigationID
 	client := b.client
@@ -928,6 +976,7 @@ func (b *Browser) loadWithClient(ctx context.Context, pageURL *url.URL, commit h
 	b.mu.Unlock()
 
 	if client == nil {
+		cancel()
 		return nil, errors.New("network client is not configured")
 	}
 	documentClient := client
@@ -939,11 +988,12 @@ func (b *Browser) loadWithClient(ctx context.Context, pageURL *url.URL, commit h
 		resourceClient = cacheRevalidatingLoader{ResourceLoader: client}
 	}
 
-	response, err := documentClient.Get(ctx, pageURL)
+	response, err := documentClient.Get(navigationContext, pageURL)
 	if err != nil {
+		cancel()
 		return nil, fmt.Errorf("navigate to %s: %w", network.RedactedURL(pageURL), err)
 	}
-	return b.finishLoad(ctx, pageURL, response, commit, historyIndex, navigationID, resourceClient, client, runtimeFactory, storageManager, onMutation, reducedMotion)
+	return b.finishLoad(navigationContext, pageURL, response, commit, historyIndex, navigationID, resourceClient, client, runtimeFactory, storageManager, onMutation, reducedMotion)
 }
 
 type cacheRevalidatingLoader struct {
@@ -1073,6 +1123,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	}
 	previousRuntime := b.activeRuntime
 	previousPage := b.page
+	background := !b.active
 	b.nextPageID++
 	page.HistoryID = b.nextPageID
 	page.ScrollRevision = 1
@@ -1117,6 +1168,9 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	}
 	b.mu.Unlock()
 	close(navigationReady)
+	if runtime, ok := pageRuntime.(backgroundRuntime); ok {
+		runtime.SetBackground(background)
+	}
 	if previousRuntime != nil {
 		_ = previousRuntime.Stop()
 	}

@@ -82,6 +82,33 @@ func TestPersistentManagerRestoresLocalButNotSessionStorage(t *testing.T) {
 	}
 }
 
+func TestPageSessionsShareLocalButIsolateSessionStorage(t *testing.T) {
+	profile := NewManager()
+	first := profile.NewPageSession()
+	second := profile.NewPageSession()
+	documentURL := parseURL(t, "https://example.test/app")
+	firstLocal, firstSession, err := first.Areas(documentURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondLocal, secondSession, err := second.Areas(documentURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstLocal != secondLocal {
+		t.Fatal("page sessions did not share Local Storage Area")
+	}
+	if firstSession == secondSession {
+		t.Fatal("page sessions shared Session Storage Area")
+	}
+	if err := firstSession.Set("draft", "first-only"); err != nil {
+		t.Fatal(err)
+	}
+	if value, found := secondSession.Get("draft"); found || value != "" {
+		t.Fatalf("second page session observed first value = (%q, %v)", value, found)
+	}
+}
+
 func TestPersistentAreaRollsBackWhenAtomicRenameFails(t *testing.T) {
 	root := t.TempDir()
 	documentURL := parseURL(t, "https://example.test/app")

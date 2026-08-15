@@ -433,3 +433,30 @@ func TestCloseDiscardsTimerAndFrameCallbacks(t *testing.T) {
 		t.Fatalf("callback count after Close = %d, want 0", callbackCount)
 	}
 }
+
+func TestBackgroundTimersUseOneSecondClampAndCallbackBudget(t *testing.T) {
+	clock := &fakeClock{current: time.Unix(500, 0)}
+	fired := 0
+	api := newAPI(context.Background(), clock, func(callback func()) bool {
+		callback()
+		return true
+	}, nil, false)
+	api.SetBackground(true)
+	for index := 0; index < MaxBackgroundCallbacksPerTurn+50; index++ {
+		if _, err := api.SetTimeout(0, func() { fired++ }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	api.RunDue(clock.current.Add(MinBackgroundTimerDelay - time.Millisecond))
+	if fired != 0 {
+		t.Fatalf("background timer fired before clamp: %d", fired)
+	}
+	api.RunDue(clock.current.Add(MinBackgroundTimerDelay))
+	if fired != MaxBackgroundCallbacksPerTurn {
+		t.Fatalf("callbacks in first background turn = %d, want %d", fired, MaxBackgroundCallbacksPerTurn)
+	}
+	api.RunDue(clock.current.Add(MinBackgroundTimerDelay))
+	if fired != MaxBackgroundCallbacksPerTurn+50 {
+		t.Fatalf("callbacks after second background turn = %d, want %d", fired, MaxBackgroundCallbacksPerTurn+50)
+	}
+}

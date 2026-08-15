@@ -55,12 +55,18 @@ func runWindow(window *gioapp.Window) error {
 	} else {
 		log.Printf("HTTP Cache directoryを解決できませんでした: %v", err)
 	}
-	browserState := browser.NewWithRuntimeFactoryAndStorage(networkClient, func() runtimemodel.Runtime {
-		return yaegi.New()
-	}, storageManager)
-	browserState.SetOnMutation(window.Invalidate)
-	defer browserState.Close()
-	browserUI := ui.NewBrowserUI(browserState, window.Invalidate)
+	session := browser.NewSession(func() *browser.Browser {
+		state := browser.NewWithRuntimeFactoryAndStorage(networkClient, func() runtimemodel.Runtime {
+			return yaegi.New()
+		}, storageManager.NewPageSession())
+		return state
+	})
+	session.SetOnActiveMutation(window.Invalidate)
+	if _, err := session.NewTab(nil); err != nil {
+		return err
+	}
+	defer session.Close()
+	browserUI := ui.NewBrowserUIWithTabs(nil, session, window.Invalidate)
 	defer browserUI.Close()
 
 	for {

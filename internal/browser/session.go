@@ -93,12 +93,13 @@ func DefaultSessionPolicy() SessionPolicy {
 
 // Session owns an ordered collection of tabs and at most one active tab.
 type Session struct {
-	mu       sync.RWMutex
-	tabs     []*Tab
-	activeID TabID
-	nextID   uint64
-	factory  BrowserFactory
-	policy   SessionPolicy
+	mu               sync.RWMutex
+	tabs             []*Tab
+	activeID         TabID
+	nextID           uint64
+	factory          BrowserFactory
+	policy           SessionPolicy
+	onActiveMutation func()
 }
 
 // NewSession creates an empty browser session.
@@ -157,6 +158,7 @@ func (s *Session) NewTab(initialURL *url.URL) (TabSnapshot, error) {
 	if state == TabActive {
 		s.activeID = tab.id
 	}
+	tab.browser.SetTabActive(state == TabActive)
 	s.tabs = append(s.tabs, tab)
 	return snapshotTab(tab, len(s.tabs)-1, state == TabActive), nil
 }
@@ -211,9 +213,17 @@ func (s *Session) FinishTabNavigation(id TabID, failed bool) (TabSnapshot, error
 			continue
 		}
 		tab.loading = false
-		tab.failed = failed
+		runtimeFailed := false
+		if tab.browser != nil {
+			if page := tab.browser.Page(); page != nil {
+				runtimeFailed = page.RuntimeError != ""
+			}
+		}
+		tab.failed = failed || runtimeFailed
 		tab.pending = tab.id != s.activeID
-		if failed {
+		if runtimeFailed {
+			tab.status = "Runtimeエラー"
+		} else if failed {
 			tab.status = "読み込みエラー"
 		} else {
 			tab.status = "取得完了"
@@ -248,7 +258,37 @@ func (s *Session) newTabLocked(initialURL *url.URL, state TabState) (*Tab, error
 		_ = browser.Close()
 		return nil, err
 	}
+	browser.SetOnMutation(func() { s.handleTabMutation(id) })
 	return &Tab{id: id, state: state, browser: browser, initialURL: cloneURL(initialURL)}, nil
+}
+
+// SetOnActiveMutation registers the Browser Window invalidation callback.
+func (s *Session) SetOnActiveMutation(callback func()) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.onActiveMutation = callback
+	s.mu.Unlock()
+}
+
+func (s *Session) handleTabMutation(id TabID) {
+	s.mu.Lock()
+	tab, ok := s.tabByIDLocked(id)
+	if !ok || tab.state == TabClosing || tab.state == TabClosed {
+		s.mu.Unlock()
+		return
+	}
+	if id != s.activeID {
+		tab.pending = true
+		s.mu.Unlock()
+		return
+	}
+	callback := s.onActiveMutation
+	s.mu.Unlock()
+	if callback != nil {
+		callback()
+	}
 }
 
 // SelectTab makes the identified live tab active.
@@ -326,9 +366,15 @@ func (s *Session) selectTabLocked(position int) TabSnapshot {
 	for _, tab := range s.tabs {
 		if tab != nil && tab.state == TabActive {
 			tab.state = TabBackground
+			if tab.browser != nil {
+				tab.browser.SetTabActive(false)
+			}
 		}
 	}
 	target.state = TabActive
+	if target.browser != nil {
+		target.browser.SetTabActive(true)
+	}
 	target.pending = false
 	s.activeID = target.id
 	return snapshotTab(target, position, true)
@@ -455,6 +501,36 @@ func (s *Session) ActiveBrowserTarget() (TabID, *Browser, bool) {
 		return 0, nil, false
 	}
 	return tab.id, tab.browser, true
+}
+
+// Close transitions every tab to closed and releases each owned Browser.
+func (s *Session) Close() error {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	tabs := s.tabs
+	s.tabs = nil
+	s.activeID = 0
+	s.factory = nil
+	s.onActiveMutation = nil
+	for _, tab := range tabs {
+		if tab != nil {
+			tab.state = TabClosing
+		}
+	}
+	s.mu.Unlock()
+	var closeErr error
+	for _, tab := range tabs {
+		if tab == nil {
+			continue
+		}
+		if tab.browser != nil {
+			closeErr = errors.Join(closeErr, tab.browser.Close())
+		}
+		tab.state = TabClosed
+	}
+	return closeErr
 }
 
 func snapshotTab(tab *Tab, position int, active bool) TabSnapshot {

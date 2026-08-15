@@ -5,11 +5,38 @@ import (
 	"errors"
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/events"
 	"github.com/Grove-Computing/Growse/internal/network"
 )
+
+type frameRuntimeStub struct {
+	runtimeStub
+	frames     int
+	timestamps []time.Time
+}
+
+type closeCancelLoader struct {
+	started  chan struct{}
+	canceled chan struct{}
+}
+
+func (loader *closeCancelLoader) Get(ctx context.Context, _ *url.URL) (*network.Response, error) {
+	close(loader.started)
+	<-ctx.Done()
+	close(loader.canceled)
+	return nil, ctx.Err()
+}
+
+func (runtime *frameRuntimeStub) RunAnimationFrame(current time.Time) bool {
+	runtime.frames++
+	runtime.timestamps = append(runtime.timestamps, current)
+	return true
+}
+
+func (runtime *frameRuntimeStub) HasAnimationFrameCallbacks() bool { return true }
 
 func TestSessionKeepsOrderedTabsAndOneActiveTab(t *testing.T) {
 	session := NewSession()
@@ -513,6 +540,264 @@ func TestNewTabDoesNotInheritSourceDOMOrRuntimeReference(t *testing.T) {
 	}
 	if source.Page().Document != sourceDocument || source.activeRuntime != sourceRuntime {
 		t.Fatal("source DOM or Runtime reference changed")
+	}
+}
+
+func TestSessionOwnsIndependentPageHistoryRuntimeAndEventStatePerTab(t *testing.T) {
+	created := []*Browser{New(nil), New(nil)}
+	next := 0
+	session := NewSession(func() *Browser {
+		state := created[next]
+		next++
+		return state
+	})
+	for range created {
+		if _, err := session.NewTab(nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for index, state := range created {
+		pageURL := mustURL(t, "https://example.test/tab"+string(rune('1'+index)))
+		state.page = &Page{URL: pageURL, Document: dom.NewDocument(), Events: events.NewDispatcher()}
+		state.activeRuntime = new(runtimeStub)
+		state.history.pushEntry(&historyEntry{URL: pageURL, PageID: uint64(index + 1)})
+	}
+	if created[0] == created[1] || created[0].page == created[1].page || created[0].page.Document == created[1].page.Document || created[0].page.Events == created[1].page.Events {
+		t.Fatal("tab page, DOM, or event state was shared")
+	}
+	if created[0].activeRuntime == created[1].activeRuntime || &created[0].history == &created[1].history {
+		t.Fatal("tab runtime or history state was shared")
+	}
+	created[0].history.pushEntry(&historyEntry{URL: mustURL(t, "https://example.test/only-first")})
+	if len(created[0].history.entries) != 2 || len(created[1].history.entries) != 1 {
+		t.Fatalf("history mutation crossed tabs: first=%d second=%d", len(created[0].history.entries), len(created[1].history.entries))
+	}
+}
+
+func TestBackgroundTabSuppressesFrameCallbacksUntilSelected(t *testing.T) {
+	browsers := []*Browser{New(nil), New(nil)}
+	runtimes := []*frameRuntimeStub{{}, {}}
+	next := 0
+	session := NewSession(func() *Browser {
+		state := browsers[next]
+		state.activeRuntime = runtimes[next]
+		next++
+		return state
+	})
+	first, _ := session.NewTab(nil)
+	second, _ := session.NewTab(nil)
+	now := time.Unix(100, 0)
+	if !browsers[0].RunAnimationFrame(now) || runtimes[0].frames != 1 {
+		t.Fatal("active tab frame was not delivered")
+	}
+	if browsers[1].RunAnimationFrame(now) || browsers[1].HasAnimationFrameCallbacks() || runtimes[1].frames != 0 {
+		t.Fatal("background tab delivered or requested a frame")
+	}
+	if _, err := session.SelectTab(second.ID); err != nil {
+		t.Fatal(err)
+	}
+	if browsers[0].RunAnimationFrame(now) || runtimes[0].frames != 1 {
+		t.Fatal("former active tab continued frame delivery")
+	}
+	if !browsers[1].RunAnimationFrame(now) || runtimes[1].frames != 1 {
+		t.Fatal("selected tab did not resume at current frame")
+	}
+	if active, _ := session.ActiveTab(); active.ID == first.ID {
+		t.Fatal("frame delivery changed tab selection unexpectedly")
+	}
+}
+
+func TestReselectedTabReceivesOnlyCurrentFrameTimestamp(t *testing.T) {
+	browsers := []*Browser{New(nil), New(nil)}
+	runtimes := []*frameRuntimeStub{{}, {}}
+	next := 0
+	session := NewSession(func() *Browser {
+		state := browsers[next]
+		state.activeRuntime = runtimes[next]
+		next++
+		return state
+	})
+	first, _ := session.NewTab(nil)
+	second, _ := session.NewTab(nil)
+	start := time.Unix(200, 0)
+	browsers[0].RunAnimationFrame(start)
+	session.SelectTab(second.ID)
+	browsers[0].RunAnimationFrame(start.Add(time.Second))
+	browsers[0].RunAnimationFrame(start.Add(2 * time.Second))
+	session.SelectTab(first.ID)
+	current := start.Add(10 * time.Second)
+	browsers[0].RunAnimationFrame(current)
+	if got := runtimes[0].timestamps; len(got) != 2 || !got[0].Equal(start) || !got[1].Equal(current) {
+		t.Fatalf("delivered frame timestamps = %v, want only start and current", got)
+	}
+}
+
+func TestBackgroundMutationMarksTabWithoutInvalidatingActiveViewport(t *testing.T) {
+	browsers := []*Browser{New(nil), New(nil)}
+	next := 0
+	session := NewSession(func() *Browser {
+		state := browsers[next]
+		next++
+		return state
+	})
+	first, _ := session.NewTab(nil)
+	second, _ := session.NewTab(nil)
+	invalidations := 0
+	session.SetOnActiveMutation(func() { invalidations++ })
+
+	browsers[1].onMutation()
+	if invalidations != 0 {
+		t.Fatalf("background mutation invalidated active viewport %d times", invalidations)
+	}
+	if tabs := session.Tabs(); !tabs[1].PendingUpdate || tabs[0].ID != first.ID {
+		t.Fatalf("background mutation state = %+v", tabs)
+	}
+	browsers[0].onMutation()
+	if invalidations != 1 {
+		t.Fatalf("active mutation invalidations = %d, want 1", invalidations)
+	}
+	if _, err := session.SelectTab(second.ID); err != nil {
+		t.Fatal(err)
+	}
+	if session.Tabs()[1].PendingUpdate {
+		t.Fatal("pending mutation remained after tab selection")
+	}
+	browsers[1].onMutation()
+	if invalidations != 2 {
+		t.Fatalf("selected tab mutation invalidations = %d, want 2", invalidations)
+	}
+}
+
+func TestClosingTabCancelsNavigationAndStopsRuntimeResources(t *testing.T) {
+	loader := &closeCancelLoader{started: make(chan struct{}), canceled: make(chan struct{})}
+	state := New(loader)
+	runtime := new(runtimeStub)
+	state.activeRuntime = runtime
+	created := 0
+	session := NewSession(func() *Browser {
+		created++
+		if created == 1 {
+			return state
+		}
+		return New(nil)
+	})
+	tab, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := state.Navigate(context.Background(), "https://example.test/slow")
+		done <- err
+	}()
+	select {
+	case <-loader.started:
+	case <-time.After(time.Second):
+		t.Fatal("navigation did not start")
+	}
+	if _, err := session.CloseTab(tab.ID); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-loader.canceled:
+	case <-time.After(time.Second):
+		t.Fatal("closing tab did not cancel navigation")
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("canceled navigation did not return")
+	}
+	if runtime.stopCalls.Load() != 1 || state.Page() != nil {
+		t.Fatalf("closed tab resources remain: stops=%d page=%+v", runtime.stopCalls.Load(), state.Page())
+	}
+}
+
+func TestRuntimeAndNavigationErrorsRemainScopedToOwningTabs(t *testing.T) {
+	browsers := []*Browser{New(nil), New(nil)}
+	browsers[0].SetPage(&Page{URL: mustURL(t, "https://runtime-error.test/"), RuntimeError: "panic isolated"})
+	browsers[1].SetPage(&Page{URL: mustURL(t, "https://healthy.test/")})
+	next := 0
+	session := NewSession(func() *Browser {
+		state := browsers[next]
+		next++
+		return state
+	})
+	first, _ := session.NewTab(nil)
+	second, _ := session.NewTab(nil)
+	if _, err := session.FinishTabNavigation(first.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.FinishTabNavigation(second.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	tabs := session.Tabs()
+	if !tabs[0].Error || tabs[0].Status != "Runtimeエラー" {
+		t.Fatalf("runtime error state = %+v", tabs[0])
+	}
+	if !tabs[1].Error || tabs[1].Status != "読み込みエラー" {
+		t.Fatalf("navigation error state = %+v", tabs[1])
+	}
+	if browsers[0].Page().URL.Hostname() == browsers[1].Page().URL.Hostname() || browsers[1].Page().RuntimeError != "" {
+		t.Fatalf("error crossed Browser boundary: first=%+v second=%+v", browsers[0].Page(), browsers[1].Page())
+	}
+}
+
+func TestSessionCloseReleasesAllTabGoroutinesCallbacksAndPages(t *testing.T) {
+	loaders := []*closeCancelLoader{
+		{started: make(chan struct{}), canceled: make(chan struct{})},
+		{started: make(chan struct{}), canceled: make(chan struct{})},
+	}
+	browsers := []*Browser{New(loaders[0]), New(loaders[1])}
+	runtimes := []*runtimeStub{{}, {}}
+	next := 0
+	session := NewSession(func() *Browser {
+		state := browsers[next]
+		state.SetPage(&Page{URL: mustURL(t, "https://example.test/held"), Source: []byte("held response body")})
+		state.activeRuntime = runtimes[next]
+		next++
+		return state
+	})
+	tabs := make([]TabSnapshot, 2)
+	done := []chan struct{}{make(chan struct{}), make(chan struct{})}
+	for index := range tabs {
+		var err error
+		tabs[index], err = session.NewTab(nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		go func(index int) {
+			defer close(done[index])
+			_, _ = browsers[index].Navigate(context.Background(), "https://example.test/slow")
+		}(index)
+		select {
+		case <-loaders[index].started:
+		case <-time.After(time.Second):
+			t.Fatalf("tab %d navigation did not start", index)
+		}
+	}
+	callbackHeld := true
+	session.SetOnActiveMutation(func() { callbackHeld = false })
+	if err := session.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for index := range browsers {
+		select {
+		case <-loaders[index].canceled:
+		case <-time.After(time.Second):
+			t.Fatalf("tab %d goroutine was not canceled", index)
+		}
+		select {
+		case <-done[index]:
+		case <-time.After(time.Second):
+			t.Fatalf("tab %d goroutine did not exit", index)
+		}
+		if runtimes[index].stopCalls.Load() != 1 || browsers[index].Page() != nil || browsers[index].client != nil || browsers[index].onMutation != nil {
+			t.Fatalf("tab %d resources remain: stops=%d page=%+v client=%T callback=%v", index, runtimes[index].stopCalls.Load(), browsers[index].Page(), browsers[index].client, browsers[index].onMutation != nil)
+		}
+	}
+	if len(session.Tabs()) != 0 || session.factory != nil || session.onActiveMutation != nil || !callbackHeld {
+		t.Fatalf("session retained resources: tabs=%+v factory=%v callback=%v", session.Tabs(), session.factory != nil, session.onActiveMutation != nil)
 	}
 }
 
