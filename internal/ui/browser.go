@@ -1097,12 +1097,42 @@ func (ui *BrowserUI) handleViewportClicks(gtx layout.Context, page *browser.Page
 		if ui.navigator.DispatchClick(nodeID, x, y) {
 			continue
 		}
-		linkURL, ok := page.LinkURL(nodeID)
+		linkURL, target, ok := page.LinkDestination(nodeID)
 		if !ok {
+			continue
+		}
+		if target == "_blank" {
+			ui.openURLInNewTab(linkURL)
 			continue
 		}
 		ui.startNavigation(linkURL.String())
 	}
+}
+
+func (ui *BrowserUI) openURLInNewTab(target *url.URL) {
+	if ui.tabs == nil || target == nil {
+		ui.status = "新しいTabでNavigationを開始できません"
+		ui.statusHasError = true
+		return
+	}
+	tab, err := ui.tabs.NewTab(target)
+	if err != nil {
+		ui.reportTabOperationError("新しいTabを作成できません", err)
+		return
+	}
+	if _, err := ui.tabs.SelectTab(tab.ID); err != nil {
+		ui.reportTabOperationError("新しいTabを選択できません", err)
+		return
+	}
+	tabID, navigator := ui.activeNavigationTarget()
+	if tabID != tab.ID || navigator == nil {
+		ui.status = "新しいTabのNavigationを開始できません"
+		ui.statusHasError = true
+		return
+	}
+	ui.startPageLoad(tabID, navigator, "読み込み中: "+target.String(), func(ctx context.Context) (*browser.Page, error) {
+		return navigator.Navigate(ctx, target.String())
+	})
 }
 
 func focusableNodeID(document *dom.Document, nodeID dom.NodeID) dom.NodeID {

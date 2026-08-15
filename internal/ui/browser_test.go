@@ -806,6 +806,49 @@ func TestNavigationsInDifferentTabsCompleteIndependently(t *testing.T) {
 	}
 }
 
+func TestBlankLinkOpensActiveNewTab(t *testing.T) {
+	loader := &controlledNavigationLoader{started: make(chan struct{}, 1), release: make(chan struct{})}
+	close(loader.release)
+	created := make([]*browser.Browser, 0, 2)
+	session := browser.NewSession(func() *browser.Browser {
+		state := browser.New(nil)
+		if len(created) != 0 {
+			state = browser.New(loader)
+		}
+		created = append(created, state)
+		return state
+	})
+	first, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceURL, _ := url.Parse("https://source.example/")
+	created[0].SetPage(browser.NewPage(sourceURL))
+	invalidated := make(chan struct{}, 1)
+	ui := NewBrowserUIWithTabs(nil, session, func() { invalidated <- struct{}{} })
+	defer ui.Close()
+	target, _ := url.Parse("https://target.example/new")
+
+	ui.openURLInNewTab(target)
+	select {
+	case <-invalidated:
+	case <-time.After(time.Second):
+		t.Fatal("new tab navigation did not finish")
+	}
+	ui.consumeNavigationResult()
+
+	tabs := session.Tabs()
+	if len(tabs) != 2 || tabs[0].ID != first.ID || tabs[0].Active || !tabs[1].Active {
+		t.Fatalf("tabs after _blank navigation = %+v", tabs)
+	}
+	if got := created[0].Page().URL.String(); got != sourceURL.String() {
+		t.Fatalf("source page changed = %q, want %q", got, sourceURL)
+	}
+	if got := created[1].Page().URL.String(); got != target.String() {
+		t.Fatalf("new tab page = %q, want %q", got, target)
+	}
+}
+
 func (navigator *recordingNavigator) Navigate(_ context.Context, rawURL string) (*browser.Page, error) {
 	navigator.navigated <- rawURL
 	return navigator.page, navigator.err

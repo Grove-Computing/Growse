@@ -78,12 +78,18 @@ func NewPage(pageURL *url.URL) *Page {
 
 // LinkURL resolves the nearest anchor at nodeID against the page URL.
 func (p *Page) LinkURL(nodeID dom.NodeID) (*url.URL, bool) {
+	linkURL, _, ok := p.LinkDestination(nodeID)
+	return linkURL, ok
+}
+
+// LinkDestination resolves the nearest anchor URL and normalized target.
+func (p *Page) LinkDestination(nodeID dom.NodeID) (*url.URL, string, bool) {
 	if p == nil || p.URL == nil || p.Document == nil {
-		return nil, false
+		return nil, "", false
 	}
 	node, ok := p.Document.NodeByID(nodeID)
 	if !ok {
-		return nil, false
+		return nil, "", false
 	}
 	for current := node; current != nil; current = current.Parent {
 		if current.Type != dom.NodeElement || current.TagName != "a" {
@@ -92,19 +98,20 @@ func (p *Page) LinkURL(nodeID dom.NodeID) (*url.URL, bool) {
 		href, ok := current.Attribute("href")
 		href = strings.TrimSpace(href)
 		if !ok || href == "" {
-			return nil, false
+			return nil, "", false
 		}
 		reference, err := url.Parse(href)
 		if err != nil {
-			return nil, false
+			return nil, "", false
 		}
 		resolved := p.URL.ResolveReference(reference)
 		if resolved.Scheme != "http" && resolved.Scheme != "https" {
-			return nil, false
+			return nil, "", false
 		}
-		return resolved, true
+		target, _ := current.Attribute("target")
+		return resolved, strings.ToLower(strings.TrimSpace(target)), true
 	}
-	return nil, false
+	return nil, "", false
 }
 
 func cloneURL(source *url.URL) *url.URL {
