@@ -36,6 +36,22 @@ type requestRouteLoader struct {
 	requests []*network.Request
 }
 
+type supersedingNavigationLoader struct {
+	started map[string]chan struct{}
+	release map[string]chan struct{}
+}
+
+func (loader *supersedingNavigationLoader) Get(ctx context.Context, resourceURL *url.URL) (*network.Response, error) {
+	path := resourceURL.Path
+	close(loader.started[path])
+	select {
+	case <-loader.release[path]:
+		return &network.Response{URL: resourceURL, StatusCode: http.StatusOK, ContentType: "text/html", Body: []byte("<title>" + path + "</title>")}, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
 func (loader *requestRouteLoader) Do(_ context.Context, request *network.Request) (*network.Response, error) {
 	copy := *request
 	copy.Body = append([]byte(nil), request.Body...)
@@ -1358,6 +1374,36 @@ func TestSubmitPOSTSendsEncodedBodyAndNavigatesToResponse(t *testing.T) {
 	}
 	if page.URL.String() != finalURL.String() || !browser.CanBack() {
 		t.Fatalf("page=%s canBack=%v", page.URL, browser.CanBack())
+	}
+}
+
+func TestSupersedingNavigationCancelsStaleResult(t *testing.T) {
+	loader := &supersedingNavigationLoader{
+		started: map[string]chan struct{}{"/first": make(chan struct{}), "/second": make(chan struct{})},
+		release: map[string]chan struct{}{"/first": make(chan struct{}), "/second": make(chan struct{})},
+	}
+	state := New(loader)
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := state.Navigate(context.Background(), "https://example.test/first")
+		firstDone <- err
+	}()
+	<-loader.started["/first"]
+	secondDone := make(chan error, 1)
+	go func() {
+		_, err := state.Navigate(context.Background(), "https://example.test/second")
+		secondDone <- err
+	}()
+	<-loader.started["/second"]
+	close(loader.release["/second"])
+	if err := <-secondDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-firstDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("superseded navigation error = %v", err)
+	}
+	if page := state.Page(); page == nil || page.URL.Path != "/second" {
+		t.Fatalf("committed page after navigation competition = %+v", page)
 	}
 }
 

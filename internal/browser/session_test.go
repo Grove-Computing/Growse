@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -818,6 +819,44 @@ func TestSessionRejectsBrowserInstanceReuseAcrossTabs(t *testing.T) {
 	}
 	if tabs := session.Tabs(); len(tabs) != 1 || tabs[0].ID != first.ID || !tabs[0].Active {
 		t.Fatalf("tabs changed after Browser reuse rejection: %+v", tabs)
+	}
+}
+
+func TestConcurrentCloseAllowsExactlyOneWinner(t *testing.T) {
+	session := NewSession()
+	if _, err := session.NewTab(nil); err != nil {
+		t.Fatal(err)
+	}
+	target, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const attempts = 16
+	results := make(chan error, attempts)
+	var wait sync.WaitGroup
+	for range attempts {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			_, err := session.CloseTab(target.ID)
+			results <- err
+		}()
+	}
+	wait.Wait()
+	close(results)
+	successes, rejected := 0, 0
+	for err := range results {
+		switch {
+		case err == nil:
+			successes++
+		case errors.Is(err, ErrTabNotFound):
+			rejected++
+		default:
+			t.Fatalf("concurrent close error = %v", err)
+		}
+	}
+	if successes != 1 || rejected != attempts-1 || len(session.Tabs()) != 1 {
+		t.Fatalf("concurrent close results = success:%d rejected:%d tabs:%d", successes, rejected, len(session.Tabs()))
 	}
 }
 
