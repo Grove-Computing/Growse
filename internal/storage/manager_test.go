@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -142,8 +143,25 @@ func TestPersistentAreaRollsBackWhenAtomicRenameFails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o600 {
+	// Windows does not expose POSIX permission bits through os.FileMode. The
+	// persistence and rollback assertions above still run on every platform.
+	if supportsPOSIXPermissions(runtime.GOOS) && info.Mode().Perm() != 0o600 {
 		t.Fatalf("storage file permissions = %o, want 600", info.Mode().Perm())
+	}
+}
+
+func supportsPOSIXPermissions(goos string) bool {
+	return goos != "windows"
+}
+
+func TestPersistentFilePermissionChecksMatchPlatformSemantics(t *testing.T) {
+	if supportsPOSIXPermissions("windows") {
+		t.Fatal("Windows does not expose POSIX permission bits")
+	}
+	for _, goos := range []string{"linux", "darwin"} {
+		if !supportsPOSIXPermissions(goos) {
+			t.Fatalf("%s must enforce persistent file permissions", goos)
+		}
 	}
 }
 

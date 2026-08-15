@@ -17,7 +17,7 @@ go test ./internal/paint -run TestDashboardVisualRegression
 
 ## v0.9.0 Persistent App
 
-`internal/paint/TestPersistentAppStatesVisualRegression`は480×600 CSS px、scale 1、Go Regular 72 dpi、固定timestampでinitial、restored、routing、saving、saved、cache revalidation、errorの各状態を描画し、`internal/paint/testdata/persistent-app.golden.json`と比較する。`examples/persistent-app/TestPersistentAppRestoresNotesRoutesAndReusesHTTPCache`はAnimation Frame、Back / Forward後のScroll・Paint復元、および再起動後のStorage / Cache再利用を`examples/persistent-app/testdata/lifecycle.golden.json`と比較する。
+`internal/paint/TestPersistentAppStatesVisualRegression`は480×600 CSS px、scale 1、Go Regular 72 dpi、固定timestampでinitial、restored、routing、saving、saved、cache revalidation、errorの各状態を描画する。amd64では`internal/paint/testdata/persistent-app.golden.json`、macOS Apple SiliconではRasterizerのアーキテクチャ差を記録した`internal/paint/testdata/persistent-app-darwin-arm64.golden.json`と比較する。Layout geometryとDisplay Listは両方のReferenceで一致させる。`examples/persistent-app/TestPersistentAppRestoresNotesRoutesAndReusesHTTPCache`はAnimation Frame、Back / Forward後のScroll・Paint復元、および再起動後のStorage / Cache再利用を`examples/persistent-app/testdata/lifecycle.golden.json`と比較する。
 
 ```sh
 go test ./internal/paint ./examples/persistent-app -run 'PersistentApp'
