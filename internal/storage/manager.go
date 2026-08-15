@@ -19,7 +19,7 @@ var (
 
 // Manager は1つのBrowser Windowに属するLocal / Session Storageを保持する。
 type Manager struct {
-	mu       sync.Mutex
+	mu       *sync.Mutex
 	local    map[string]*Area
 	session  map[string]*Area
 	localDir string
@@ -27,7 +27,18 @@ type Manager struct {
 
 // NewManager は永続化しない空のStorage Managerを生成する。
 func NewManager() *Manager {
-	return &Manager{local: make(map[string]*Area), session: make(map[string]*Area)}
+	return &Manager{mu: new(sync.Mutex), local: make(map[string]*Area), session: make(map[string]*Area)}
+}
+
+// NewPageSession shares Local Storage while creating an empty Session Storage
+// namespace for one top-level tab.
+func (manager *Manager) NewPageSession() *Manager {
+	if manager == nil {
+		return NewManager()
+	}
+	return &Manager{
+		mu: manager.mu, local: manager.local, session: make(map[string]*Area), localDir: manager.localDir,
+	}
 }
 
 // NewPersistentManager はdataRoot配下へLocal Storageを永続化するManagerを生成する。

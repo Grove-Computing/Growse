@@ -58,7 +58,7 @@ func runWindow(window *gioapp.Window) error {
 	session := browser.NewSession(func() *browser.Browser {
 		state := browser.NewWithRuntimeFactoryAndStorage(networkClient, func() runtimemodel.Runtime {
 			return yaegi.New()
-		}, storageManager)
+		}, storageManager.NewPageSession())
 		state.SetOnMutation(window.Invalidate)
 		return state
 	})
