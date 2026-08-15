@@ -239,10 +239,22 @@ jobs:
         with:
           context: .
           platforms: linux/amd64
+          load: true
           push: false
           tags: growse:v0.9.0
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Verify unused Pebble runtime is absent
+        run: docker run --rm --user root --entrypoint sh growse:v0.9.0 -c 'test ! -e /usr/bin/pebble'
+
+      - name: Scan Docker image
+        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
+        with:
+          image: growse:v0.9.0
+          fail-build: true
+          severity-cutoff: high
+          output-format: table
 
   security:
     name: Vulnerability scan

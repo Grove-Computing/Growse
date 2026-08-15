@@ -25,6 +25,8 @@ RUN CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
 
 FROM ubuntu:26.04@sha256:678c6550cc43645e08669028bc177f50be4e7c5b8cca677067b1914d4afc7a03
 
+# Ubuntuのベースイメージに含まれるPebbleはGrowseでは使用しない。
+# 不要なGoバイナリをランタイムへ残さず、脆弱性の影響範囲から外す。
 RUN apt-get update \
     && apt-get install --no-install-recommends -y ca-certificates \
     && sed -i 's|http://archive.ubuntu.com|https://archive.ubuntu.com|g; s|http://security.ubuntu.com|https://security.ubuntu.com|g' /etc/apt/sources.list.d/ubuntu.sources \
@@ -42,6 +44,7 @@ RUN apt-get update \
         libxcursor1 \
         libxkbcommon-x11-0 \
     && rm -rf /var/lib/apt/lists/* \
+    && rm -rf /usr/bin/pebble /var/lib/pebble \
     && groupadd --system growse \
     && useradd --system --gid growse --create-home --home-dir /home/growse growse
 
