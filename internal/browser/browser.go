@@ -61,20 +61,21 @@ type pageEventRuntime interface {
 // MVPでは1つのアクティブページ、線形の閲覧履歴、信頼済みページごとに
 // 独立した1つのGo Runtimeを保持する。
 type Browser struct {
-	mu             sync.RWMutex
-	page           *Page
-	client         ResourceLoader
-	runtimeFactory runtimemodel.Factory
-	activeRuntime  runtimemodel.Runtime
-	onMutation     func()
-	navigationID   uint64
-	nextPageID     uint64
-	history        history
-	clock          animationmodel.Clock
-	reducedMotion  bool
-	storage        *storagecore.Manager
-	active         bool
-	lastFrame      time.Time
+	mu               sync.RWMutex
+	page             *Page
+	client           ResourceLoader
+	runtimeFactory   runtimemodel.Factory
+	activeRuntime    runtimemodel.Runtime
+	onMutation       func()
+	navigationID     uint64
+	nextPageID       uint64
+	history          history
+	clock            animationmodel.Clock
+	reducedMotion    bool
+	storage          *storagecore.Manager
+	active           bool
+	lastFrame        time.Time
+	navigationCancel context.CancelFunc
 }
 
 var (
@@ -564,6 +565,10 @@ func (b *Browser) SetReducedMotion(reduce bool) bool {
 func (b *Browser) SetPage(page *Page) {
 	b.mu.Lock()
 	b.navigationID++
+	if b.navigationCancel != nil {
+		b.navigationCancel()
+		b.navigationCancel = nil
+	}
 	activeRuntime := b.activeRuntime
 	previousPage := b.page
 	b.activeRuntime = nil
@@ -607,6 +612,10 @@ func (b *Browser) SetPage(page *Page) {
 func (b *Browser) Close() error {
 	b.mu.Lock()
 	b.navigationID++
+	if b.navigationCancel != nil {
+		b.navigationCancel()
+		b.navigationCancel = nil
+	}
 	activeRuntime := b.activeRuntime
 	page := b.page
 	b.activeRuntime = nil
@@ -951,7 +960,12 @@ func (b *Browser) loadIgnoringCache(ctx context.Context, pageURL *url.URL, commi
 }
 
 func (b *Browser) loadWithClient(ctx context.Context, pageURL *url.URL, commit historyCommit, historyIndex int, revalidateDocument, revalidateResources bool) (*Page, error) {
+	navigationContext, cancel := context.WithCancel(ctx)
 	b.mu.Lock()
+	if b.navigationCancel != nil {
+		b.navigationCancel()
+	}
+	b.navigationCancel = cancel
 	b.navigationID++
 	navigationID := b.navigationID
 	client := b.client
@@ -962,6 +976,7 @@ func (b *Browser) loadWithClient(ctx context.Context, pageURL *url.URL, commit h
 	b.mu.Unlock()
 
 	if client == nil {
+		cancel()
 		return nil, errors.New("network client is not configured")
 	}
 	documentClient := client
@@ -973,11 +988,12 @@ func (b *Browser) loadWithClient(ctx context.Context, pageURL *url.URL, commit h
 		resourceClient = cacheRevalidatingLoader{ResourceLoader: client}
 	}
 
-	response, err := documentClient.Get(ctx, pageURL)
+	response, err := documentClient.Get(navigationContext, pageURL)
 	if err != nil {
+		cancel()
 		return nil, fmt.Errorf("navigate to %s: %w", network.RedactedURL(pageURL), err)
 	}
-	return b.finishLoad(ctx, pageURL, response, commit, historyIndex, navigationID, resourceClient, client, runtimeFactory, storageManager, onMutation, reducedMotion)
+	return b.finishLoad(navigationContext, pageURL, response, commit, historyIndex, navigationID, resourceClient, client, runtimeFactory, storageManager, onMutation, reducedMotion)
 }
 
 type cacheRevalidatingLoader struct {

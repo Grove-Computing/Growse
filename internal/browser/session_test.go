@@ -18,6 +18,18 @@ type frameRuntimeStub struct {
 	timestamps []time.Time
 }
 
+type closeCancelLoader struct {
+	started  chan struct{}
+	canceled chan struct{}
+}
+
+func (loader *closeCancelLoader) Get(ctx context.Context, _ *url.URL) (*network.Response, error) {
+	close(loader.started)
+	<-ctx.Done()
+	close(loader.canceled)
+	return nil, ctx.Err()
+}
+
 func (runtime *frameRuntimeStub) RunAnimationFrame(current time.Time) bool {
 	runtime.frames++
 	runtime.timestamps = append(runtime.timestamps, current)
@@ -653,6 +665,51 @@ func TestBackgroundMutationMarksTabWithoutInvalidatingActiveViewport(t *testing.
 	browsers[1].onMutation()
 	if invalidations != 2 {
 		t.Fatalf("selected tab mutation invalidations = %d, want 2", invalidations)
+	}
+}
+
+func TestClosingTabCancelsNavigationAndStopsRuntimeResources(t *testing.T) {
+	loader := &closeCancelLoader{started: make(chan struct{}), canceled: make(chan struct{})}
+	state := New(loader)
+	runtime := new(runtimeStub)
+	state.activeRuntime = runtime
+	created := 0
+	session := NewSession(func() *Browser {
+		created++
+		if created == 1 {
+			return state
+		}
+		return New(nil)
+	})
+	tab, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := state.Navigate(context.Background(), "https://example.test/slow")
+		done <- err
+	}()
+	select {
+	case <-loader.started:
+	case <-time.After(time.Second):
+		t.Fatal("navigation did not start")
+	}
+	if _, err := session.CloseTab(tab.ID); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-loader.canceled:
+	case <-time.After(time.Second):
+		t.Fatal("closing tab did not cancel navigation")
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("canceled navigation did not return")
+	}
+	if runtime.stopCalls.Load() != 1 || state.Page() != nil {
+		t.Fatalf("closed tab resources remain: stops=%d page=%+v", runtime.stopCalls.Load(), state.Page())
 	}
 }
 

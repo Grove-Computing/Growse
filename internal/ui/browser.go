@@ -617,6 +617,7 @@ func (ui *BrowserUI) createTab(gtx layout.Context) {
 }
 
 func (ui *BrowserUI) closeTab(id browser.TabID) bool {
+	ui.cancelTabNavigation(id)
 	if _, err := ui.tabs.CloseTab(id); err != nil {
 		ui.reportTabOperationError("Tabを終了できません", err)
 		return false
