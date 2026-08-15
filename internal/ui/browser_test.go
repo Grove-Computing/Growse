@@ -894,6 +894,7 @@ func TestTabSelectionSynchronizesActiveBrowserChrome(t *testing.T) {
 	if ui.displayedTabID != first.ID || ui.navigator != created[0] || ui.address.Text() != "https://one.example/first" || ui.pageTitle != "One" {
 		t.Fatalf("first tab chrome was not synchronized: id=%d address=%q title=%q navigator=%p", ui.displayedTabID, ui.address.Text(), ui.pageTitle, ui.navigator)
 	}
+	ui.layoutCache.revision = 11
 	if _, err := session.SelectTab(second.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -903,6 +904,17 @@ func TestTabSelectionSynchronizesActiveBrowserChrome(t *testing.T) {
 	}
 	if ui.status != "読み込みエラー" || !ui.statusHasError {
 		t.Fatalf("second tab status = %q error=%v", ui.status, ui.statusHasError)
+	}
+	if ui.layoutCache.revision != 0 {
+		t.Fatalf("second tab inherited first layout cache revision %d", ui.layoutCache.revision)
+	}
+	ui.layoutCache.revision = 22
+	if _, err := session.SelectTab(first.ID); err != nil {
+		t.Fatal(err)
+	}
+	ui.syncActiveTabChrome()
+	if ui.layoutCache.revision != 11 || ui.navigator.Page().Document != created[0].Page().Document {
+		t.Fatalf("first tab render state was not restored: revision=%d page=%p", ui.layoutCache.revision, ui.navigator.Page())
 	}
 }
 

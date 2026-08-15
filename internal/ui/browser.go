@@ -64,6 +64,7 @@ type BrowserUI struct {
 	loading          bool
 	tabs             TabController
 	displayedTabID   browser.TabID
+	tabRenderStates  map[browser.TabID]tabRenderState
 
 	backButton        widget.Clickable
 	forwardButton     widget.Clickable
@@ -113,6 +114,11 @@ type browserChromeGeometry struct {
 	tabRail  image.Rectangle
 	toolbar  image.Rectangle
 	viewport image.Rectangle
+}
+
+type tabRenderState struct {
+	layoutCache    documentLayoutCache
+	scrollRevision uint64
 }
 
 // Navigator is the browser capability used by the UI.
@@ -204,6 +210,7 @@ func NewBrowserUIWithTabs(navigator Navigator, tabs TabController, invalidate fu
 		invalidate:       invalidate,
 		results:          make(chan navigationResult, browser.DefaultSessionPolicy().MaxTabs),
 		navigations:      make(map[browser.TabID]tabNavigation),
+		tabRenderStates:  make(map[browser.TabID]tabRenderState),
 		gopher:           paint.NewImageOp(gopherImage),
 		backIcon:         mustIcon(widget.NewIcon(icons.NavigationArrowBack)),
 		forwardIcon:      mustIcon(widget.NewIcon(icons.NavigationArrowForward)),
@@ -693,6 +700,9 @@ func (ui *BrowserUI) syncActiveTabChrome() {
 	if navigator == nil || tabID != active.ID {
 		return
 	}
+	if ui.displayedTabID != 0 {
+		ui.tabRenderStates[ui.displayedTabID] = tabRenderState{layoutCache: ui.layoutCache, scrollRevision: ui.scrollRevision}
+	}
 	ui.displayedTabID = active.ID
 	ui.navigator = navigator
 	ui.loading = active.Loading
@@ -703,13 +713,21 @@ func (ui *BrowserUI) syncActiveTabChrome() {
 	ui.selectButtons = make(map[dom.NodeID]*widget.Clickable)
 	ui.checkableButtons = make(map[dom.NodeID]*widget.Clickable)
 	ui.formButtons = make(map[dom.NodeID]*widget.Clickable)
-	ui.layoutCache = documentLayoutCache{}
+	if state, ok := ui.tabRenderStates[active.ID]; ok {
+		ui.layoutCache = state.layoutCache
+		ui.scrollRevision = state.scrollRevision
+	} else {
+		ui.layoutCache = documentLayoutCache{}
+		ui.scrollRevision = 0
+	}
 	if page := navigator.Page(); page != nil {
 		if page.URL != nil {
 			ui.address.SetText(page.URL.String())
 		}
 		ui.pageList.Position = layout.Position{First: page.ScrollFirst, Offset: page.ScrollOffset}
-		ui.scrollRevision = page.ScrollRevision
+		if _, restored := ui.tabRenderStates[active.ID]; !restored {
+			ui.scrollRevision = page.ScrollRevision
+		}
 		ui.pageTitle = active.Title
 		if ui.pageTitle == "" && page.Document != nil {
 			ui.pageTitle = page.Document.Title()
