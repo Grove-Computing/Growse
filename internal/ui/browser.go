@@ -100,6 +100,12 @@ type documentLayoutCache struct {
 	tree                  *layoutengine.Tree
 }
 
+type browserChromeGeometry struct {
+	tabRail  image.Rectangle
+	toolbar  image.Rectangle
+	viewport image.Rectangle
+}
+
 // Navigator is the browser capability used by the UI.
 type Navigator interface {
 	Navigate(ctx context.Context, rawURL string) (*browser.Page, error)
@@ -188,17 +194,32 @@ func (ui *BrowserUI) Layout(gtx layout.Context) layout.Dimensions {
 	ui.handleKeyboardShortcuts(gtx)
 	ui.handleActions(gtx)
 
-	viewport := layout.Flex{Axis: layout.Horizontal}.Layout(gtx,
-		layout.Rigid(ui.layoutTabRail),
-		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-			viewport := layout.Inset{Top: toolbarHeight}.Layout(gtx, ui.layoutViewport)
-			ui.layoutToolbar(gtx)
-			return viewport
-		}),
-	)
+	geometry := calculateBrowserChromeGeometry(gtx.Constraints.Max, gtx.Dp(tabRailWidth), gtx.Dp(toolbarHeight))
+	layoutRegion(gtx, geometry.viewport, ui.layoutViewport)
+	layoutRegion(gtx, geometry.toolbar, ui.layoutToolbar)
+	layoutRegion(gtx, geometry.tabRail, ui.layoutTabRail)
 	ui.layoutGopherCursor(gtx)
 	ui.registerPointerTracker(gtx)
-	return viewport
+	return layout.Dimensions{Size: gtx.Constraints.Max}
+}
+
+func calculateBrowserChromeGeometry(size image.Point, railWidth, toolbarHeight int) browserChromeGeometry {
+	railWidth = min(max(railWidth, 0), max(size.X, 0))
+	contentHeight := max(size.Y, 0)
+	toolbarHeight = min(max(toolbarHeight, 0), contentHeight)
+	contentLeft := railWidth
+	contentRight := max(size.X, contentLeft)
+	return browserChromeGeometry{
+		tabRail:  image.Rect(0, 0, railWidth, contentHeight),
+		toolbar:  image.Rect(contentLeft, 0, contentRight, toolbarHeight),
+		viewport: image.Rect(contentLeft, toolbarHeight, contentRight, contentHeight),
+	}
+}
+
+func layoutRegion(gtx layout.Context, region image.Rectangle, widget layout.Widget) layout.Dimensions {
+	defer op.Offset(region.Min).Push(gtx.Ops).Pop()
+	gtx.Constraints = layout.Exact(region.Size())
+	return widget(gtx)
 }
 
 func (ui *BrowserUI) layoutTabRail(gtx layout.Context) layout.Dimensions {
@@ -657,13 +678,14 @@ func (ui *BrowserUI) updateViewportHover(gtx layout.Context, page *browser.Page,
 	if ui.navigator == nil {
 		return
 	}
+	viewportX := ui.pointer.position.X - float32(gtx.Dp(tabRailWidth))
 	viewportY := ui.pointer.position.Y - float32(gtx.Dp(toolbarHeight))
-	if !ui.pointer.inside || viewportY < 0 || viewportY >= float32(gtx.Constraints.Max.Y) {
+	if !ui.pointer.inside || viewportX < 0 || viewportX >= float32(gtx.Constraints.Max.X) || viewportY < 0 || viewportY >= float32(gtx.Constraints.Max.Y) {
 		ui.navigator.ClearHover()
 		ui.updateLinkPreview(page, 0)
 		return
 	}
-	position := image.Pt(int(math.Round(float64(ui.pointer.position.X))), int(math.Round(float64(viewportY))))
+	position := image.Pt(int(math.Round(float64(viewportX))), int(math.Round(float64(viewportY))))
 	x, y, ok := ui.documentPoint(position, displayList, gtx.Metric.PxPerDp)
 	if !ok {
 		ui.navigator.ClearHover()

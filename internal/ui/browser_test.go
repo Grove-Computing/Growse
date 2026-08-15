@@ -322,6 +322,23 @@ func TestVerticalTabRailUsesLeftSideFixedWidth(t *testing.T) {
 	}
 }
 
+func TestBrowserChromeHasNoHorizontalTabStrip(t *testing.T) {
+	geometry := calculateBrowserChromeGeometry(image.Pt(1280, 800), 224, 92)
+
+	if got, want := geometry.tabRail, image.Rect(0, 0, 224, 800); got != want {
+		t.Fatalf("tab rail = %v, want %v", got, want)
+	}
+	if got, want := geometry.toolbar, image.Rect(224, 0, 1280, 92); got != want {
+		t.Fatalf("toolbar = %v, want %v", got, want)
+	}
+	if got, want := geometry.viewport, image.Rect(224, 92, 1280, 800); got != want {
+		t.Fatalf("viewport = %v, want %v", got, want)
+	}
+	if geometry.toolbar.Min.Y != 0 {
+		t.Fatalf("toolbar must touch the window top; an unexpected horizontal tab strip may have been inserted: %v", geometry.toolbar)
+	}
+}
+
 func TestBrowserUILayoutFillsViewport(t *testing.T) {
 	ui := NewBrowserUI(nil, nil)
 	gtx := layout.Context{
@@ -552,7 +569,7 @@ func TestPointerMoveAppliesAndClearsHoverStyle(t *testing.T) {
 
 	ui.Layout(gtx)
 	router.Frame(gtx.Ops)
-	router.Queue(pointer.Event{Kind: pointer.Move, Source: pointer.Mouse, Position: f32.Pt(40, float32(toolbarHeight)+40)})
+	router.Queue(pointer.Event{Kind: pointer.Move, Source: pointer.Mouse, Position: f32.Pt(float32(tabRailWidth)+40, float32(toolbarHeight)+40)})
 	gtx.Reset()
 	ui.Layout(gtx)
 
@@ -697,7 +714,7 @@ func TestPointerHoveringLinkDoesNotStartNavigation(t *testing.T) {
 
 	ui.Layout(gtx)
 	router.Frame(gtx.Ops)
-	router.Queue(pointer.Event{Kind: pointer.Move, Source: pointer.Mouse, Position: f32.Pt(40, float32(toolbarHeight)+40)})
+	router.Queue(pointer.Event{Kind: pointer.Move, Source: pointer.Mouse, Position: f32.Pt(float32(tabRailWidth)+40, float32(toolbarHeight)+40)})
 	gtx.Reset()
 	ui.Layout(gtx)
 
