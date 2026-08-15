@@ -67,7 +67,8 @@ for value in \
     "runner: macos-15" \
     "runner: windows-2025" \
     "name: Run platform tests" \
-    "run: go test ./..."
+    "run: go test ./..." \
+    'scripts/package-gui.sh dist/package v0.10.0 "$GITHUB_RUN_NUMBER"'
 do
     require_ci "$value"
 done

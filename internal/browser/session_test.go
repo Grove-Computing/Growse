@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -821,6 +822,44 @@ func TestSessionRejectsBrowserInstanceReuseAcrossTabs(t *testing.T) {
 	}
 }
 
+func TestConcurrentCloseAllowsExactlyOneWinner(t *testing.T) {
+	session := NewSession()
+	if _, err := session.NewTab(nil); err != nil {
+		t.Fatal(err)
+	}
+	target, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const attempts = 16
+	results := make(chan error, attempts)
+	var wait sync.WaitGroup
+	for range attempts {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			_, err := session.CloseTab(target.ID)
+			results <- err
+		}()
+	}
+	wait.Wait()
+	close(results)
+	successes, rejected := 0, 0
+	for err := range results {
+		switch {
+		case err == nil:
+			successes++
+		case errors.Is(err, ErrTabNotFound):
+			rejected++
+		default:
+			t.Fatalf("concurrent close error = %v", err)
+		}
+	}
+	if successes != 1 || rejected != attempts-1 || len(session.Tabs()) != 1 {
+		t.Fatalf("concurrent close results = success:%d rejected:%d tabs:%d", successes, rejected, len(session.Tabs()))
+	}
+}
+
 func TestCloseTabDiscardsOnlyItsSessionStorage(t *testing.T) {
 	profile := storagecore.NewManager()
 	var pageSessions []*storagecore.Manager
@@ -1124,6 +1163,52 @@ func TestCloseTabKeepsSharedLocalStorageCookiesAndHTTPCache(t *testing.T) {
 	}
 	if cacheRequests != 1 {
 		t.Fatalf("shared cache requests after close = %d, want 1", cacheRequests)
+	}
+}
+
+func TestTabChromeDoesNotExposeURLCookieOrStorageCredentials(t *testing.T) {
+	const cookieSecret = "cookie-top-secret"
+	const storageSecret = "storage-top-secret"
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		http.SetCookie(response, &http.Cookie{Name: "session", Value: cookieSecret, Path: "/", HttpOnly: true})
+		response.Header().Set("Content-Type", "text/html")
+		_, _ = response.Write([]byte("<!doctype html><title>Private Workspace</title>"))
+	}))
+	defer server.Close()
+
+	profile := storagecore.NewManager()
+	pageProfile := profile.NewPageSession()
+	client := network.NewClientWithLimits(server.Client(), 4096)
+	state := NewWithRuntimeFactoryAndStorage(client, nil, pageProfile)
+	session := NewSession(func() *Browser { return state })
+	defer session.Close()
+	credentialURL := strings.Replace(server.URL, "http://", "http://tab-user:tab-password@", 1) + "/workspace"
+	tab, err := session.NewTab(mustURL(t, credentialURL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := state.Navigate(context.Background(), credentialURL); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.FinishTabNavigation(tab.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	local, _, err := pageProfile.Areas(mustURL(t, credentialURL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := local.Set("credential", storageSecret); err != nil {
+		t.Fatal(err)
+	}
+
+	chrome := fmt.Sprintf("%+v", session.Tabs())
+	for _, secret := range []string{"tab-user", "tab-password", cookieSecret, storageSecret} {
+		if strings.Contains(chrome, secret) {
+			t.Fatalf("Tab chrome exposed %q: %s", secret, chrome)
+		}
+	}
+	if !strings.Contains(chrome, "Private Workspace") || !strings.Contains(chrome, server.URL+"/workspace") {
+		t.Fatalf("redacted Tab chrome lost safe label data: %s", chrome)
 	}
 }
 

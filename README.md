@@ -8,14 +8,14 @@ HTMLとCSSで画面を構築し、`<script type="text/go">`に書いたWebGoか�
 
 | 項目 | 主な機能 |
 | --- | --- |
-| ブラウジング | URL入力、リンク遷移、same-document Routing、戻る、進む、再読込、Scroll復元 |
+| ブラウジング | 左側Vertical Tab、URL入力、リンク遷移、same-document Routing、戻る、進む、再読込、Scroll復元 |
 | HTML / DOM | 要素の検索・生成・追加・削除、属性・class・Form値の操作 |
 | CSS Layout | Box Model、Flexbox、Grid、Position、Overflow |
 | CSS Paint | Color、Gradient、複数Background、Shadow、Opacity、2D Transform |
 | Animation | CSS Transition、`@keyframes`、Easing、Iteration、Direction、Fill Mode、Pause、`prefers-reduced-motion` |
 | Form | Form Controls、Focus、Constraint Validation、GET / POST Submission |
 | Scheduler | timeout、interval、Animation Frame、Page終了時の自動解除 |
-| Storage | Origin分離された永続Local StorageとPage Session単位のSession Storage |
+| Storage | Tab間で共有する永続Local Storage、Storage Event、Tab単位のSession Storage |
 | HTTP | WebGo Fetch、Cookie、Same-Origin Policy、CORS、Freshness・再検証・Disk対応のHTTP Cache |
 | WebGo | DOM Event、非同期Fetch、Scheduler、History、Navigation、Storage API |
 
@@ -42,7 +42,7 @@ wget -qO- https://github.com/Grove-Computing/Growse/releases/latest/download/ins
 Versionとインストール先を指定する場合は、環境変数を利用します。
 
 ```sh
-wget -qO- https://github.com/Grove-Computing/Growse/releases/latest/download/install.sh | GROWSE_VERSION=v0.9.0 GROWSE_INSTALL_DIR=/usr/local/bin bash
+wget -qO- https://github.com/Grove-Computing/Growse/releases/latest/download/install.sh | GROWSE_VERSION=v0.10.0 GROWSE_INSTALL_DIR=/usr/local/bin bash
 ```
 
 GUI Applicationの配置先は、`GROWSE_DATA_HOME`、`GROWSE_APPLICATIONS_DIR`、`GROWSE_WINDOWS_PROGRAMS_DIR`で変更できます。
@@ -52,7 +52,7 @@ GUI Applicationの配置先は、`GROWSE_DATA_HOME`、`GROWSE_APPLICATIONS_DIR`�
 Linux amd64のDocker imageを、GitHub Container Registryから取得できます。
 
 ```sh
-docker pull ghcr.io/grove-computing/growse:v0.9.0
+docker pull ghcr.io/grove-computing/growse:v0.10.0
 ```
 
 GrowseはGUI applicationのため、Containerから起動する場合はホストのDisplay ServerとGPU deviceを接続する必要があります。
@@ -80,7 +80,7 @@ go mod download
 go run ./cmd/growse
 ```
 
-起動すると、戻る・進む・再読込・URL入力欄・Gopherボタン・状態表示を備えたブラウザウィンドウが開きます。
+起動すると、左側Vertical Tab Rail、戻る・進む・再読込・URL入力欄・Gopherボタン・状態表示を備えたブラウザウィンドウが開きます。
 
 ## Demoを試す
 
@@ -102,8 +102,11 @@ python3 -m http.server 8080 --directory examples/data-app
 | Animation Showcase | `examples/animation` | hover Transition、複数Keyframes Animation |
 | Data App Showcase | `examples/data-app` | Form、WebGo Fetch、Session Cookie、DOM更新、Animation |
 | Persistent App Showcase | `examples/persistent-app` | Scheduler、same-document Routing、Local / Session Storage、Fetch、HTTP Cache、offline状態 |
+| Multi-Tab Workspace | `go run ./examples/multi-tab-workspace` | Vertical Tab、Storage Event、共有Cookie / Cache、Tab別Session / Scheduler |
 
 WebGoソースは通常のGo build対象から除外するため、各Demoでは`_app.go`として配置しています。
+
+Multi-Tab Workspaceは専用のlocal fixture serverを起動し、Growseで`http://localhost:8080`を開きます。Notes画面のリンクからTasksとActivityを新しいVertical Tabへ開けます。外部ServiceやAPI keyは不要です。
 
 ## ブラウザの仕組み
 
@@ -124,8 +127,10 @@ Animation中のPaintとHit Testingは、同じFrameの値を参照します。DO
 
 ### Navigation
 
+- 左側のVertical Tab RailからTabを作成、選択、終了できます。TabごとにNavigation、History、Scroll、Focus、WebGo Runtime、Scheduler、Session Storageを保持します。
 - URL入力欄でEnterを押すか、Gopherボタンを押すと移動します。
 - リンクのclick、戻る、進む、履歴を増やさない再読込に対応しています。
+- `Ctrl+T`（macOSでは`Command+T`）でTabを作成し、`Ctrl+W`（macOSでは`Command+W`）でactive Tabを終了します。`Ctrl+Tab`と`Ctrl+Shift+Tab`で前後のTabへ切り替えます。
 - `Ctrl+R`（macOSでは`Command+R`）で通常の再読込、`Ctrl+Shift+R`（macOSでは`Command+Shift+R`）でHTTP Cacheへ再検証を要求する強制再読込を実行します。
 - リンクへカーソルを重ねると、認証情報を除去した遷移先URLを状態表示に示します。
 - ウィンドウ内では、青いGopherをマウスカーソルとして表示します。
@@ -138,7 +143,7 @@ Animation中のPaintとHit Testingは、同じFrameの値を参照します。DO
 - `growse/fetch`: 非同期HTTP Requestを実行
 - `growse/navigation`: 現在URL、pushState / replaceState、History traversalとEventを操作
 - `growse/scheduler`: timeout、interval、Animation Frameを登録・解除
-- `growse/storage`: Origin単位のLocal / Session Storageを操作
+- `growse/storage`: Origin単位のLocal / Session Storageを操作し、`OnChange`で別TabのLocal Storage更新を受信
 - Fetch callback: PageのEvent Queueで実行
 - Page終了時: Timer、Frame callback、実行中Fetchをcancelし、Runtime参照を解放
 
@@ -156,6 +161,7 @@ WebGo RuntimeはSandboxではありません。信頼できるローカルペー
 | [WPT由来テスト](docs/wpt.md) | Web Platform Testsから移植したTestと出典 |
 | [Developer Supply Chain Security](docs/developer-security.md) | 不可視Code検査、Extension管理、署名、Credential、Incident Response |
 | [v0.9.0リリース定義](docs/v0.9.0.md) | v0.9.0のTheme、Scope、完了条件 |
+| [v0.10.0リリース定義](docs/v0.10.0.md) | v0.10.0のTheme、Scope、完了条件 |
 
 ## 品質チェック
 
@@ -186,7 +192,7 @@ GrowseとWebGo Runtimeは、信頼できないGoコードを安全に実行す�
 
 ## リリース成果物
 
-`v0.9.0`のようなVersion tagをpushすると、GitHub Actionsが次の成果物、SHA-256 checksum、SPDX JSON SBOMをGitHub Releaseへ公開します。ArchiveとSBOMにはGitHub Artifact Attestation、Docker imageにはBuildKitのSBOMとSLSA Provenanceを付与します。
+`v0.10.0`のようなVersion tagをpushすると、GitHub Actionsが次の成果物、SHA-256 checksum、SPDX JSON SBOMをGitHub Releaseへ公開します。ArchiveとSBOMにはGitHub Artifact Attestation、Docker imageにはBuildKitのSBOMとSLSA Provenanceを付与します。
 
 - Linux amd64
 - macOS Intel

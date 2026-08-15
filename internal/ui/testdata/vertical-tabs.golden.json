@@ -1,0 +1,20 @@
+{
+  "viewport": "1280x800",
+  "chrome_geometry": [
+    "rail=(0,0)-(224,800)",
+    "toolbar=(224,0)-(1280,92)",
+    "page=(224,92)-(1280,800)"
+  ],
+  "narrow_geometry": [
+    "rail=(0,0)-(224,180)",
+    "toolbar=(224,0)-(300,92)",
+    "page=(224,92)-(300,180)"
+  ],
+  "tab_rows": [
+    "size=204x64 title=\"Notes\" state=\"選択中\"",
+    "size=204x64 title=\"Tasks\" state=\"読込中\"",
+    "size=204x64 title=\"Activity\" state=\"エラー · 更新あり\""
+  ],
+  "overflow": "tabs=12 viewport=204x128 scroll=5,3",
+  "horizontal_tab_strip": false
+}

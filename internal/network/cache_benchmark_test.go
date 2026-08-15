@@ -44,3 +44,28 @@ func BenchmarkHitAndRevalidate1000HTTPCacheEntries(b *testing.B) {
 		}
 	}
 }
+
+func BenchmarkSharedHTTPCacheHitAcross64Tabs(b *testing.B) {
+	cache := NewHTTPCache()
+	target, err := url.Parse("https://example.test/shared.css")
+	if err != nil {
+		b.Fatal(err)
+	}
+	request := &Request{Method: http.MethodGet, URL: target, SiteURL: target, Kind: RequestSubresource}
+	if !cache.Store(request, &Response{
+		URL: target, StatusCode: http.StatusOK,
+		Header: http.Header{"Cache-Control": []string{"max-age=3600"}}, Body: []byte("body{}"),
+	}) {
+		b.Fatal("Store() failed")
+	}
+	b.ReportAllocs()
+	b.ReportMetric(64, "hits/op")
+	b.ResetTimer()
+	for b.Loop() {
+		for range 64 {
+			if _, ok := cache.MatchFresh(request); !ok {
+				b.Fatal("shared cache miss")
+			}
+		}
+	}
+}
