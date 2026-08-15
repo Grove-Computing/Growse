@@ -117,8 +117,15 @@ type browserChromeGeometry struct {
 }
 
 type tabRenderState struct {
-	layoutCache    documentLayoutCache
-	scrollRevision uint64
+	layoutCache      documentLayoutCache
+	scrollRevision   uint64
+	pagePosition     layout.Position
+	inputEditors     map[dom.NodeID]*widget.Editor
+	inputFocused     map[dom.NodeID]bool
+	inputCommitted   map[dom.NodeID]string
+	selectButtons    map[dom.NodeID]*widget.Clickable
+	checkableButtons map[dom.NodeID]*widget.Clickable
+	formButtons      map[dom.NodeID]*widget.Clickable
 }
 
 // Navigator is the browser capability used by the UI.
@@ -701,30 +708,43 @@ func (ui *BrowserUI) syncActiveTabChrome() {
 		return
 	}
 	if ui.displayedTabID != 0 {
-		ui.tabRenderStates[ui.displayedTabID] = tabRenderState{layoutCache: ui.layoutCache, scrollRevision: ui.scrollRevision}
+		ui.tabRenderStates[ui.displayedTabID] = tabRenderState{
+			layoutCache: ui.layoutCache, scrollRevision: ui.scrollRevision, pagePosition: ui.pageList.Position,
+			inputEditors: ui.inputEditors, inputFocused: ui.inputFocused, inputCommitted: ui.inputCommitted,
+			selectButtons: ui.selectButtons, checkableButtons: ui.checkableButtons, formButtons: ui.formButtons,
+		}
 	}
 	ui.displayedTabID = active.ID
 	ui.navigator = navigator
 	ui.loading = active.Loading
 	ui.statusHasError = active.Error
-	ui.inputEditors = make(map[dom.NodeID]*widget.Editor)
-	ui.inputFocused = make(map[dom.NodeID]bool)
-	ui.inputCommitted = make(map[dom.NodeID]string)
-	ui.selectButtons = make(map[dom.NodeID]*widget.Clickable)
-	ui.checkableButtons = make(map[dom.NodeID]*widget.Clickable)
-	ui.formButtons = make(map[dom.NodeID]*widget.Clickable)
 	if state, ok := ui.tabRenderStates[active.ID]; ok {
 		ui.layoutCache = state.layoutCache
 		ui.scrollRevision = state.scrollRevision
+		ui.pageList.Position = state.pagePosition
+		ui.inputEditors = state.inputEditors
+		ui.inputFocused = state.inputFocused
+		ui.inputCommitted = state.inputCommitted
+		ui.selectButtons = state.selectButtons
+		ui.checkableButtons = state.checkableButtons
+		ui.formButtons = state.formButtons
 	} else {
 		ui.layoutCache = documentLayoutCache{}
 		ui.scrollRevision = 0
+		ui.inputEditors = make(map[dom.NodeID]*widget.Editor)
+		ui.inputFocused = make(map[dom.NodeID]bool)
+		ui.inputCommitted = make(map[dom.NodeID]string)
+		ui.selectButtons = make(map[dom.NodeID]*widget.Clickable)
+		ui.checkableButtons = make(map[dom.NodeID]*widget.Clickable)
+		ui.formButtons = make(map[dom.NodeID]*widget.Clickable)
 	}
 	if page := navigator.Page(); page != nil {
 		if page.URL != nil {
 			ui.address.SetText(page.URL.String())
 		}
-		ui.pageList.Position = layout.Position{First: page.ScrollFirst, Offset: page.ScrollOffset}
+		if _, restored := ui.tabRenderStates[active.ID]; !restored {
+			ui.pageList.Position = layout.Position{First: page.ScrollFirst, Offset: page.ScrollOffset}
+		}
 		if _, restored := ui.tabRenderStates[active.ID]; !restored {
 			ui.scrollRevision = page.ScrollRevision
 		}

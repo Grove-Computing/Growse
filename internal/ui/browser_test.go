@@ -16,6 +16,7 @@ import (
 	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/unit"
+	"gioui.org/widget"
 
 	"github.com/Grove-Computing/Growse/internal/browser"
 	"github.com/Grove-Computing/Growse/internal/css"
@@ -895,6 +896,12 @@ func TestTabSelectionSynchronizesActiveBrowserChrome(t *testing.T) {
 		t.Fatalf("first tab chrome was not synchronized: id=%d address=%q title=%q navigator=%p", ui.displayedTabID, ui.address.Text(), ui.pageTitle, ui.navigator)
 	}
 	ui.layoutCache.revision = 11
+	firstEditor := new(widget.Editor)
+	firstEditor.SetText("first value")
+	ui.inputEditors[99] = firstEditor
+	ui.pageList.Position = layout.Position{First: 3, Offset: 17}
+	created[0].Page().FocusTarget = 99
+	created[0].Page().HoverTarget = 100
 	if _, err := session.SelectTab(second.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -915,6 +922,12 @@ func TestTabSelectionSynchronizesActiveBrowserChrome(t *testing.T) {
 	ui.syncActiveTabChrome()
 	if ui.layoutCache.revision != 11 || ui.navigator.Page().Document != created[0].Page().Document {
 		t.Fatalf("first tab render state was not restored: revision=%d page=%p", ui.layoutCache.revision, ui.navigator.Page())
+	}
+	if ui.inputEditors[99] != firstEditor || ui.inputEditors[99].Text() != "first value" || ui.pageList.Position != (layout.Position{First: 3, Offset: 17}) {
+		t.Fatalf("first tab form/scroll state was not restored: editor=%p position=%+v", ui.inputEditors[99], ui.pageList.Position)
+	}
+	if created[0].Page().FocusTarget != 99 || created[0].Page().HoverTarget != 100 {
+		t.Fatalf("first tab focus/hover state changed: focus=%d hover=%d", created[0].Page().FocusTarget, created[0].Page().HoverTarget)
 	}
 }
 
