@@ -621,6 +621,46 @@ func TestKeyboardShortcutsCreateAndCloseTabWithoutKeyRepeat(t *testing.T) {
 	}
 }
 
+func TestKeyboardShortcutsCycleTabsForwardAndBackward(t *testing.T) {
+	session := browser.NewSession()
+	first, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.NewTab(nil); err != nil {
+		t.Fatal(err)
+	}
+	ui := NewBrowserUIWithTabs(nil, session, nil)
+	router := new(input.Router)
+	gtx := layout.Context{
+		Ops:         new(op.Ops),
+		Source:      router.Source(),
+		Constraints: layout.Exact(image.Pt(800, 600)),
+		Metric:      unit.Metric{PxPerDp: 1, PxPerSp: 1},
+	}
+	ui.Layout(gtx)
+
+	router.Frame(gtx.Ops)
+	router.Queue(key.Event{Name: key.NameTab, Modifiers: key.ModShortcut, State: key.Press})
+	gtx.Reset()
+	ui.Layout(gtx)
+	if active, ok := session.ActiveTab(); !ok || active.ID != second.ID {
+		t.Fatalf("active tab after Ctrl+Tab = (%+v, %v), want %d", active, ok, second.ID)
+	}
+
+	router.Frame(gtx.Ops)
+	router.Queue(key.Event{Name: key.NameTab, Modifiers: key.ModShortcut | key.ModShift, State: key.Press})
+	gtx.Reset()
+	ui.Layout(gtx)
+	if active, ok := session.ActiveTab(); !ok || active.ID != first.ID {
+		t.Fatalf("active tab after Ctrl+Shift+Tab = (%+v, %v), want %d", active, ok, first.ID)
+	}
+}
+
 func (navigator *reloadRecordingNavigator) Reload(context.Context) (*browser.Page, error) {
 	navigator.reloads <- false
 	return navigator.page, navigator.err

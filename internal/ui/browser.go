@@ -148,6 +148,8 @@ type TabController interface {
 	ActiveTab() (browser.TabSnapshot, bool)
 	NewTab(initialURL *url.URL) (browser.TabSnapshot, error)
 	SelectTab(id browser.TabID) (browser.TabSnapshot, error)
+	SelectNext() (browser.TabSnapshot, error)
+	SelectPrevious() (browser.TabSnapshot, error)
 	CloseTab(id browser.TabID) (browser.TabCloseResult, error)
 }
 
@@ -484,6 +486,25 @@ func (ui *BrowserUI) handleTabKeyboardShortcuts(gtx layout.Context) {
 					ui.closeTab(active.ID)
 				}
 			}
+		}
+	}
+	for {
+		event, ok := gtx.Event(key.Filter{Name: key.NameTab, Required: key.ModShortcut, Optional: key.ModShift})
+		if !ok {
+			break
+		}
+		keyEvent, ok := event.(key.Event)
+		if !ok || keyEvent.State != key.Press {
+			continue
+		}
+		var err error
+		if keyEvent.Modifiers.Contain(key.ModShift) {
+			_, err = ui.tabs.SelectPrevious()
+		} else {
+			_, err = ui.tabs.SelectNext()
+		}
+		if err != nil {
+			ui.reportTabOperationError("Tabを切り替えられません", err)
 		}
 	}
 }
