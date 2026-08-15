@@ -42,6 +42,13 @@ type TabSnapshot struct {
 	URL      string
 }
 
+// TabCloseResult reports the active tab selected after a close operation.
+type TabCloseResult struct {
+	Closed    TabID
+	Active    TabSnapshot
+	HasActive bool
+}
+
 // BrowserFactory creates the isolated Browser owned by a new tab.
 type BrowserFactory func() *Browser
 
@@ -170,6 +177,62 @@ func (s *Session) selectTabLocked(position int) TabSnapshot {
 	target.state = TabActive
 	s.activeID = target.id
 	return snapshotTab(target, position, true)
+}
+
+// CloseTab removes a tab and deterministically selects its right neighbor or,
+// when there is no right neighbor, its left neighbor.
+func (s *Session) CloseTab(id TabID) (TabCloseResult, error) {
+	if s == nil {
+		return TabCloseResult{}, ErrTabNotFound
+	}
+	s.mu.Lock()
+	position := -1
+	var closing *Tab
+	for index, tab := range s.tabs {
+		if tab != nil && tab.id == id && tab.state != TabClosing && tab.state != TabClosed {
+			position = index
+			closing = tab
+			break
+		}
+	}
+	if closing == nil {
+		s.mu.Unlock()
+		return TabCloseResult{}, ErrTabNotFound
+	}
+	wasActive := closing.id == s.activeID && closing.state == TabActive
+	closing.state = TabClosing
+	s.tabs = append(s.tabs[:position], s.tabs[position+1:]...)
+	closing.state = TabClosed
+	result := TabCloseResult{Closed: id}
+	if wasActive {
+		s.activeID = 0
+		if len(s.tabs) != 0 {
+			selection := position
+			if selection >= len(s.tabs) {
+				selection = len(s.tabs) - 1
+			}
+			result.Active = s.selectTabLocked(selection)
+			result.HasActive = true
+		}
+	} else if active, activePosition, ok := s.activeTabLocked(); ok {
+		result.Active = snapshotTab(active, activePosition, true)
+		result.HasActive = true
+	}
+	s.mu.Unlock()
+
+	if closing.browser != nil {
+		return result, closing.browser.Close()
+	}
+	return result, nil
+}
+
+func (s *Session) activeTabLocked() (*Tab, int, bool) {
+	for index, tab := range s.tabs {
+		if tab != nil && tab.id == s.activeID && tab.state == TabActive {
+			return tab, index, true
+		}
+	}
+	return nil, -1, false
 }
 
 // Tabs returns the tabs in their display order.

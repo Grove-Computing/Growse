@@ -219,3 +219,43 @@ func TestEmptySessionCannotSelectRelativeTab(t *testing.T) {
 		t.Fatalf("SelectPrevious() error = %v, want %v", err, ErrTabNotFound)
 	}
 }
+
+func TestSessionClosingActiveTabSelectsRightThenLeftNeighbor(t *testing.T) {
+	session := NewSession()
+	first, _ := session.NewTab(nil)
+	second, _ := session.NewTab(nil)
+	third, _ := session.NewTab(nil)
+
+	closed, err := session.CloseTab(first.ID)
+	if err != nil || !closed.HasActive || closed.Active.ID != second.ID {
+		t.Fatalf("CloseTab(first) = %#v, %v", closed, err)
+	}
+	if tabs := session.Tabs(); len(tabs) != 2 || tabs[0].ID != second.ID || tabs[1].ID != third.ID {
+		t.Fatalf("Tabs() after closing first = %#v", tabs)
+	}
+
+	if _, err := session.SelectTab(third.ID); err != nil {
+		t.Fatal(err)
+	}
+	closed, err = session.CloseTab(third.ID)
+	if err != nil || !closed.HasActive || closed.Active.ID != second.ID {
+		t.Fatalf("CloseTab(third) = %#v, %v", closed, err)
+	}
+	if tabs := session.Tabs(); len(tabs) != 1 || tabs[0].ID != second.ID || !tabs[0].Active {
+		t.Fatalf("Tabs() after closing third = %#v", tabs)
+	}
+}
+
+func TestSessionClosingBackgroundTabKeepsCurrentActiveTab(t *testing.T) {
+	session := NewSession()
+	first, _ := session.NewTab(nil)
+	second, _ := session.NewTab(nil)
+
+	closed, err := session.CloseTab(second.ID)
+	if err != nil || !closed.HasActive || closed.Active.ID != first.ID {
+		t.Fatalf("CloseTab(background) = %#v, %v", closed, err)
+	}
+	if _, err := session.CloseTab(second.ID); !errors.Is(err, ErrTabNotFound) {
+		t.Fatalf("second CloseTab() error = %v, want %v", err, ErrTabNotFound)
+	}
+}
