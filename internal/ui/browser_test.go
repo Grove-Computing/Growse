@@ -378,6 +378,43 @@ func TestActiveTabRowHasVisibleFixedHeight(t *testing.T) {
 	}
 }
 
+func TestVerticalTabPointerControlsCreateSelectAndCloseTabs(t *testing.T) {
+	session := browser.NewSession()
+	first, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ui := NewBrowserUIWithTabs(nil, session, nil)
+	gtx := layout.Context{
+		Ops:         new(op.Ops),
+		Constraints: layout.Exact(image.Pt(224, 400)),
+		Metric:      unit.Metric{PxPerDp: 1, PxPerSp: 1},
+	}
+	ui.layoutTabRail(gtx)
+
+	ui.tabRowButtons[second.ID].Click()
+	ui.handleTabActions(gtx)
+	if active, ok := session.ActiveTab(); !ok || active.ID != second.ID {
+		t.Fatalf("active tab after row click = (%+v, %v), want %d", active, ok, second.ID)
+	}
+
+	ui.tabCloseButtons[first.ID].Click()
+	ui.handleTabActions(gtx)
+	if tabs := session.Tabs(); len(tabs) != 1 || tabs[0].ID != second.ID {
+		t.Fatalf("tabs after close click = %+v, want only tab %d", tabs, second.ID)
+	}
+
+	ui.newTabButton.Click()
+	ui.handleTabActions(gtx)
+	if got := len(session.Tabs()); got != 2 {
+		t.Fatalf("tab count after new tab click = %d, want 2", got)
+	}
+}
+
 func TestBrowserUILayoutFillsViewport(t *testing.T) {
 	ui := NewBrowserUI(nil, nil)
 	gtx := layout.Context{
