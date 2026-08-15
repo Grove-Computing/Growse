@@ -12,6 +12,8 @@ import (
 	"image/png"
 	"log/slog"
 	"math"
+	"net/url"
+	"strings"
 	"time"
 
 	"gioui.org/f32"
@@ -60,12 +62,14 @@ type BrowserUI struct {
 	cancelNavigation context.CancelFunc
 	navigationID     uint64
 	loading          bool
+	tabs             TabSource
 
 	backButton        widget.Clickable
 	forwardButton     widget.Clickable
 	reloadButton      widget.Clickable
 	goButton          widget.Clickable
 	pageList          widget.List
+	tabList           widget.List
 	viewportClick     gesture.Click
 	address           widget.Editor
 	gopher            paint.ImageOp
@@ -129,6 +133,11 @@ type Navigator interface {
 	UpdateViewport(width, height float32) bool
 }
 
+// TabSource provides immutable browser-session state to the vertical tab rail.
+type TabSource interface {
+	Tabs() []browser.TabSnapshot
+}
+
 type animationFrameNavigator interface {
 	RunAnimationFrame(time.Time) bool
 	HasAnimationFrameCallbacks() bool
@@ -146,6 +155,11 @@ type navigationResult struct {
 
 // NewBrowserUI creates a browser toolbar and an empty viewport.
 func NewBrowserUI(navigator Navigator, invalidate func()) *BrowserUI {
+	return NewBrowserUIWithTabs(navigator, nil, invalidate)
+}
+
+// NewBrowserUIWithTabs creates browser chrome backed by a tab source.
+func NewBrowserUIWithTabs(navigator Navigator, tabs TabSource, invalidate func()) *BrowserUI {
 	gopherImage, err := png.Decode(bytes.NewReader(gopherPNG))
 	if err != nil {
 		panic("decode embedded Go Gopher image: " + err.Error())
@@ -155,6 +169,7 @@ func NewBrowserUI(navigator Navigator, invalidate func()) *BrowserUI {
 	ui := &BrowserUI{
 		theme:            material.NewTheme(),
 		navigator:        navigator,
+		tabs:             tabs,
 		invalidate:       invalidate,
 		results:          make(chan navigationResult, 1),
 		gopher:           paint.NewImageOp(gopherImage),
@@ -185,6 +200,7 @@ func NewBrowserUI(navigator Navigator, invalidate func()) *BrowserUI {
 	ui.address.Submit = true
 	ui.address.SetText(defaultURL)
 	ui.pageList.Axis = layout.Vertical
+	ui.tabList.Axis = layout.Vertical
 	return ui
 }
 
@@ -237,21 +253,123 @@ func (ui *BrowserUI) layoutTabRail(gtx layout.Context) layout.Dimensions {
 		clip.Rect{Min: image.Pt(width-1, 0), Max: image.Pt(width, gtx.Constraints.Max.Y)}.Op(),
 	)
 
-	return layout.Inset{Top: unit.Dp(18), Right: unit.Dp(14), Bottom: unit.Dp(14), Left: unit.Dp(14)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+	return layout.Inset{Top: unit.Dp(18), Right: unit.Dp(10), Bottom: unit.Dp(14), Left: unit.Dp(10)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		tabs := ui.tabSnapshots()
 		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				label := material.H6(ui.theme, "Growse")
-				label.Color = color.NRGBA{R: 248, G: 250, B: 252, A: 255}
-				return label.Layout(gtx)
+				return layout.Inset{Left: unit.Dp(4)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					label := material.H6(ui.theme, "Growse")
+					label.Color = color.NRGBA{R: 248, G: 250, B: 252, A: 255}
+					return label.Layout(gtx)
+				})
 			}),
 			layout.Rigid(layout.Spacer{Height: unit.Dp(18)}.Layout),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				label := material.Body1(ui.theme, "＋  新しいタブ")
 				label.Color = color.NRGBA{R: 203, G: 213, B: 225, A: 255}
-				return label.Layout(gtx)
+				return layout.Inset{Left: unit.Dp(4)}.Layout(gtx, label.Layout)
+			}),
+			layout.Rigid(layout.Spacer{Height: unit.Dp(12)}.Layout),
+			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+				return material.List(ui.theme, &ui.tabList).Layout(gtx, len(tabs), func(gtx layout.Context, index int) layout.Dimensions {
+					return ui.layoutTabRow(gtx, tabs[index])
+				})
 			}),
 		)
 	})
+}
+
+func (ui *BrowserUI) tabSnapshots() []browser.TabSnapshot {
+	if ui.tabs != nil {
+		return ui.tabs.Tabs()
+	}
+	return []browser.TabSnapshot{{
+		Active: true, Title: ui.pageTitle, Loading: ui.loading, Error: ui.statusHasError,
+	}}
+}
+
+func (ui *BrowserUI) layoutTabRow(gtx layout.Context, tab browser.TabSnapshot) layout.Dimensions {
+	height := gtx.Dp(unit.Dp(64))
+	if height > gtx.Constraints.Max.Y {
+		height = gtx.Constraints.Max.Y
+	}
+	gtx.Constraints.Min.X = gtx.Constraints.Max.X
+	gtx.Constraints.Min.Y = height
+	gtx.Constraints.Max.Y = height
+	background := color.NRGBA{R: 31, G: 41, B: 55, A: 255}
+	if tab.Active {
+		background = color.NRGBA{R: 51, G: 65, B: 85, A: 255}
+	}
+	return layout.Stack{}.Layout(gtx,
+		layout.Expanded(func(gtx layout.Context) layout.Dimensions {
+			paint.FillShape(gtx.Ops, background, clip.UniformRRect(image.Rectangle{Max: gtx.Constraints.Min}, gtx.Dp(unit.Dp(9))).Op(gtx.Ops))
+			if tab.Active {
+				paint.FillShape(gtx.Ops, color.NRGBA{R: 56, G: 189, B: 248, A: 255}, clip.Rect{Max: image.Pt(gtx.Dp(unit.Dp(3)), gtx.Constraints.Min.Y)}.Op())
+			}
+			return layout.Dimensions{Size: gtx.Constraints.Min}
+		}),
+		layout.Stacked(func(gtx layout.Context) layout.Dimensions {
+			return layout.Inset{Top: unit.Dp(9), Right: unit.Dp(10), Bottom: unit.Dp(7), Left: unit.Dp(12)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						label := material.Body1(ui.theme, tabDisplayTitle(tab))
+						label.Color = color.NRGBA{R: 248, G: 250, B: 252, A: 255}
+						label.MaxLines = 1
+						return label.Layout(gtx)
+					}),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						label := material.Caption(ui.theme, tabStateLabel(tab))
+						label.Color = tabStateColor(tab)
+						label.MaxLines = 1
+						return label.Layout(gtx)
+					}),
+				)
+			})
+		}),
+	)
+}
+
+func tabDisplayTitle(tab browser.TabSnapshot) string {
+	if title := strings.TrimSpace(tab.Title); title != "" {
+		return title
+	}
+	if parsed, err := url.Parse(tab.URL); err == nil && parsed.Hostname() != "" {
+		return parsed.Hostname()
+	}
+	return "新しいタブ"
+}
+
+func tabStateLabel(tab browser.TabSnapshot) string {
+	states := make([]string, 0, 3)
+	if tab.Active {
+		states = append(states, "選択中")
+	}
+	if tab.Loading {
+		states = append(states, "読込中")
+	}
+	if tab.Error {
+		states = append(states, "エラー")
+	}
+	if tab.PendingUpdate {
+		states = append(states, "更新あり")
+	}
+	if len(states) == 0 {
+		return "待機中"
+	}
+	return strings.Join(states, " · ")
+}
+
+func tabStateColor(tab browser.TabSnapshot) color.NRGBA {
+	switch {
+	case tab.Error:
+		return color.NRGBA{R: 253, G: 164, B: 175, A: 255}
+	case tab.Loading:
+		return color.NRGBA{R: 125, G: 211, B: 252, A: 255}
+	case tab.PendingUpdate:
+		return color.NRGBA{R: 253, G: 224, B: 71, A: 255}
+	default:
+		return color.NRGBA{R: 148, G: 163, B: 184, A: 255}
+	}
 }
 
 func (ui *BrowserUI) handleKeyboardShortcuts(gtx layout.Context) {

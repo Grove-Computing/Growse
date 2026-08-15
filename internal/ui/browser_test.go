@@ -339,6 +339,45 @@ func TestBrowserChromeHasNoHorizontalTabStrip(t *testing.T) {
 	}
 }
 
+func TestTabRowDisplaysTitleFallbackAndLifecycleState(t *testing.T) {
+	tests := []struct {
+		name      string
+		tab       browser.TabSnapshot
+		wantTitle string
+		wantState string
+	}{
+		{name: "title", tab: browser.TabSnapshot{Title: "Dashboard", URL: "https://example.com/", Active: true}, wantTitle: "Dashboard", wantState: "選択中"},
+		{name: "host fallback", tab: browser.TabSnapshot{URL: "https://docs.example.com/path", Loading: true}, wantTitle: "docs.example.com", wantState: "読込中"},
+		{name: "blank fallback", tab: browser.TabSnapshot{Error: true}, wantTitle: "新しいタブ", wantState: "エラー"},
+		{name: "pending update", tab: browser.TabSnapshot{PendingUpdate: true}, wantTitle: "新しいタブ", wantState: "更新あり"},
+		{name: "combined", tab: browser.TabSnapshot{Active: true, Loading: true, Error: true, PendingUpdate: true}, wantTitle: "新しいタブ", wantState: "選択中 · 読込中 · エラー · 更新あり"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := tabDisplayTitle(test.tab); got != test.wantTitle {
+				t.Fatalf("tab title = %q, want %q", got, test.wantTitle)
+			}
+			if got := tabStateLabel(test.tab); got != test.wantState {
+				t.Fatalf("tab state = %q, want %q", got, test.wantState)
+			}
+		})
+	}
+}
+
+func TestActiveTabRowHasVisibleFixedHeight(t *testing.T) {
+	ui := NewBrowserUI(nil, nil)
+	gtx := layout.Context{
+		Ops:         new(op.Ops),
+		Constraints: layout.Constraints{Max: image.Pt(204, 400)},
+		Metric:      unit.Metric{PxPerDp: 1, PxPerSp: 1},
+	}
+
+	dims := ui.layoutTabRow(gtx, browser.TabSnapshot{Active: true, Title: "Dashboard"})
+	if got, want := dims.Size, image.Pt(204, 64); got != want {
+		t.Fatalf("active tab row size = %v, want %v", got, want)
+	}
+}
+
 func TestBrowserUILayoutFillsViewport(t *testing.T) {
 	ui := NewBrowserUI(nil, nil)
 	gtx := layout.Context{
