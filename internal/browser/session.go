@@ -457,6 +457,34 @@ func (s *Session) ActiveBrowserTarget() (TabID, *Browser, bool) {
 	return tab.id, tab.browser, true
 }
 
+// Close transitions every tab to closed and releases each owned Browser.
+func (s *Session) Close() error {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	tabs := s.tabs
+	s.tabs = nil
+	s.activeID = 0
+	for _, tab := range tabs {
+		if tab != nil {
+			tab.state = TabClosing
+		}
+	}
+	s.mu.Unlock()
+	var closeErr error
+	for _, tab := range tabs {
+		if tab == nil {
+			continue
+		}
+		if tab.browser != nil {
+			closeErr = errors.Join(closeErr, tab.browser.Close())
+		}
+		tab.state = TabClosed
+	}
+	return closeErr
+}
+
 func snapshotTab(tab *Tab, position int, active bool) TabSnapshot {
 	if tab == nil {
 		return TabSnapshot{Position: position}

@@ -516,6 +516,37 @@ func TestNewTabDoesNotInheritSourceDOMOrRuntimeReference(t *testing.T) {
 	}
 }
 
+func TestSessionOwnsIndependentPageHistoryRuntimeAndEventStatePerTab(t *testing.T) {
+	created := []*Browser{New(nil), New(nil)}
+	next := 0
+	session := NewSession(func() *Browser {
+		state := created[next]
+		next++
+		return state
+	})
+	for range created {
+		if _, err := session.NewTab(nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for index, state := range created {
+		pageURL := mustURL(t, "https://example.test/tab"+string(rune('1'+index)))
+		state.page = &Page{URL: pageURL, Document: dom.NewDocument(), Events: events.NewDispatcher()}
+		state.activeRuntime = new(runtimeStub)
+		state.history.pushEntry(&historyEntry{URL: pageURL, PageID: uint64(index + 1)})
+	}
+	if created[0] == created[1] || created[0].page == created[1].page || created[0].page.Document == created[1].page.Document || created[0].page.Events == created[1].page.Events {
+		t.Fatal("tab page, DOM, or event state was shared")
+	}
+	if created[0].activeRuntime == created[1].activeRuntime || &created[0].history == &created[1].history {
+		t.Fatal("tab runtime or history state was shared")
+	}
+	created[0].history.pushEntry(&historyEntry{URL: mustURL(t, "https://example.test/only-first")})
+	if len(created[0].history.entries) != 2 || len(created[1].history.entries) != 1 {
+		t.Fatalf("history mutation crossed tabs: first=%d second=%d", len(created[0].history.entries), len(created[1].history.entries))
+	}
+}
+
 func TestSessionRejectsBrowserInstanceReuseAcrossTabs(t *testing.T) {
 	shared := New(nil)
 	session := NewSession(func() *Browser { return shared })
