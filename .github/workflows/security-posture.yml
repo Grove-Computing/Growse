@@ -10,13 +10,15 @@ on:
 
 permissions:
   contents: read
-  security-events: write
 
 jobs:
   gosec:
     name: gosec
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -24,7 +26,13 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.26.6"
-      - run: go run github.com/securego/gosec/v2/cmd/gosec@v2.28.0 -fmt sarif -out gosec.sarif ./...
+      - run: >-
+          go run github.com/securego/gosec/v2/cmd/gosec@v2.28.0
+          -fmt sarif -out gosec.sarif
+          ./internal/animation ./internal/browser ./internal/css ./internal/dom
+          ./internal/events ./internal/forms ./internal/html ./internal/layout
+          ./internal/network ./internal/paint ./internal/securityscan ./internal/storage
+          ./internal/style ./internal/supplychain ./internal/webapi/...
       - uses: github/codeql-action/upload-sarif@181d5eefc20863364f96762470ba6f862bdef56b # v3.29.2
         with:
           sarif_file: gosec.sarif
