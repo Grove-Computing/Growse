@@ -94,7 +94,8 @@ Test失敗時はcheckboxを更新せず、原因を調査して同じ少項目�
 3. README、SECURITY.md、対応表、Showcase、Installer、成果物versionがscope文書と一致することを確認する。
 4. release branchのopen PR、未push commit、未commit変更がないことを確認する。
 5. 完了内容、PR一覧、Test結果、既知の対象外を報告する。
-6. `release/vX.Y.Z`から`main`への最終PR、tag、GitHub Releaseは利用者が明示的に依頼した場合だけ作成する。
+6. リリース全体の実行を依頼されている場合は、`release/vX.Y.Z`から`main`への最終PRを作成し、必須CI成功後にMerge commitで取り込む。続けてrelease branchのHEADへannotated tag `vX.Y.Z`を作成・pushする。GitHub Releaseがtagから自動作成されるRepositoryでは作成完了を確認し、手動作成は行わない。
+7. 利用者が最終PR、tag、またはGitHub Releaseを明示的に除外した場合だけ、その操作を省略して理由を報告する。
 
 ## 中断条件
 
