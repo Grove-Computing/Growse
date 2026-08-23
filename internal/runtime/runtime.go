@@ -39,6 +39,7 @@ type Environment struct {
 	RequestFrame    func()
 	FrameScope      func(time.Time, func())
 	ConsoleLog      func(message string)
+	ConsoleRecord   func(level, message string)
 }
 
 // Runtime は1ページに属するGoスクリプトを実行する。

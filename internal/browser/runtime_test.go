@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Grove-Computing/Growse/internal/devtools"
 	"github.com/Grove-Computing/Growse/internal/events"
 	"github.com/Grove-Computing/Growse/internal/network"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
@@ -548,6 +549,34 @@ func main() {}</script>`),
 	}
 	if runtime.stopCalls.Load() != 1 {
 		t.Fatalf("Stop() calls = %d, want failed runtime cleanup", runtime.stopCalls.Load())
+	}
+	records := page.DevTools.Console()
+	if len(records) != 1 || records[0].Level != devtools.ConsoleError || records[0].Source != "runtime" || !strings.Contains(records[0].Message, "compile failed") {
+		t.Fatalf("runtime console records = %+v", records)
+	}
+}
+
+func TestConsoleCallbackCannotWriteAfterPageClose(t *testing.T) {
+	pageURL := mustParseURL(t, "http://localhost/index.html")
+	runtime := &runtimeStub{}
+	browserState := NewWithRuntimeFactory(stubLoader{response: &network.Response{
+		URL: pageURL, StatusCode: 200, ContentType: "text/html",
+		Body: []byte(`<script type="text/go">package main; func main() {}</script>`),
+	}}, func() runtimemodel.Runtime { return runtime })
+	page, err := browserState.Navigate(context.Background(), pageURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime.environment.ConsoleRecord("warn", "before close")
+	if got := len(page.DevTools.Console()); got != 1 {
+		t.Fatalf("records before close = %d, want 1", got)
+	}
+	if err := browserState.Close(); err != nil {
+		t.Fatal(err)
+	}
+	runtime.environment.ConsoleRecord("error", "after close")
+	if got := len(page.DevTools.Console()); got != 0 {
+		t.Fatalf("records after close callback = %d, want 0", got)
 	}
 }
 

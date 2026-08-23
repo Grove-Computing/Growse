@@ -18,6 +18,7 @@ import (
 	"unicode/utf8"
 
 	animationmodel "github.com/Grove-Computing/Growse/internal/animation"
+	"github.com/Grove-Computing/Growse/internal/devtools"
 	"github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/events"
 	"github.com/Grove-Computing/Growse/internal/forms"
@@ -595,7 +596,11 @@ func (b *Browser) SetPage(page *Page) {
 	if previousPage != nil && previousPage != page && previousPage.Transitions != nil {
 		previousPage.Transitions.Clear()
 	}
+	if previousPage != nil && previousPage != page {
+		previousPage.closeDevTools()
+	}
 	if page != nil {
+		page.ensureDevTools()
 		if page.ComputedStyles == nil {
 			page.ComputedStyles = computePageStyles(page)
 		}
@@ -641,6 +646,9 @@ func (b *Browser) Close() error {
 	}
 	if page != nil && page.Transitions != nil {
 		page.Transitions.Clear()
+	}
+	if page != nil {
+		page.closeDevTools()
 	}
 	b.page = nil
 	b.client = nil
@@ -1105,6 +1113,10 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 		BackgroundErrors: backgroundErrors,
 		Scripts:          scripts,
 		ScriptErrors:     scriptErrors,
+		DevTools:         devtools.NewPageStore(),
+	}
+	for _, scriptError := range scriptErrors {
+		page.DevTools.AddConsole(devtools.ConsoleError, "script", scriptError)
 	}
 	page.Animations.Reconcile(computedStyles, b.currentTime())
 	navigationReady := make(chan struct{})
@@ -1132,6 +1144,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 		if pageRuntime != nil {
 			_ = pageRuntime.Stop()
 		}
+		page.closeDevTools()
 		return nil, err
 	}
 	b.mu.Lock()
@@ -1143,6 +1156,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 		if pageRuntime != nil {
 			_ = pageRuntime.Stop()
 		}
+		page.closeDevTools()
 		return nil, context.Canceled
 	}
 	previousRuntime := b.activeRuntime
@@ -1158,6 +1172,9 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	}
 	if previousPage != nil && previousPage != page && previousPage.Transitions != nil {
 		previousPage.Transitions.Clear()
+	}
+	if previousPage != nil && previousPage != page {
+		previousPage.closeDevTools()
 	}
 	dispatchPopState := false
 	popState := ""
@@ -1397,23 +1414,23 @@ func startRuntime(ctx context.Context, factory runtimemodel.Factory, page *Page,
 		return nil
 	}
 	if !IsTrustedOrigin(page.URL) {
-		page.RuntimeError = fmt.Sprintf("blocked Go script execution from untrusted origin: %s", network.RedactedURL(page.URL))
+		setRuntimeError(page, fmt.Sprintf("blocked Go script execution from untrusted origin: %s", network.RedactedURL(page.URL)))
 		return nil
 	}
 	for _, script := range page.Scripts {
 		if !IsTrustedOrigin(script.SourceURL) {
-			page.RuntimeError = fmt.Sprintf("blocked Go script execution from untrusted origin: %s", runtimeOrigin(script.SourceURL))
+			setRuntimeError(page, fmt.Sprintf("blocked Go script execution from untrusted origin: %s", runtimeOrigin(script.SourceURL)))
 			return nil
 		}
 	}
 	if len(page.ScriptErrors) != 0 {
-		page.RuntimeError = "Go script loading failed; runtime was not started"
+		setRuntimeError(page, "Go script loading failed; runtime was not started")
 		return nil
 	}
 
 	pageRuntime := factory()
 	if pageRuntime == nil {
-		page.RuntimeError = "Go runtime factory returned nil"
+		setRuntimeError(page, "Go runtime factory returned nil")
 		return nil
 	}
 	var frameMu sync.RWMutex
@@ -1463,6 +1480,9 @@ func startRuntime(ctx context.Context, factory runtimemodel.Factory, page *Page,
 			}()
 			callback()
 		},
+		ConsoleRecord: func(level, message string) {
+			page.ensureDevTools().AddConsole(devtools.ConsoleLevel(level), "webgo", message)
+		},
 	}
 	if local, session, _ := storageManager.Areas(page.URL); local != nil || session != nil {
 		environment.LocalStorage = local
@@ -1473,17 +1493,22 @@ func startRuntime(ctx context.Context, factory runtimemodel.Factory, page *Page,
 		environment.Fetch = loader.Do
 	}
 	if err := pageRuntime.Load(ctx, page.Scripts, environment); err != nil {
-		page.RuntimeError = fmt.Sprintf("load Go runtime: %v", err)
+		setRuntimeError(page, fmt.Sprintf("load Go runtime: %v", err))
 		_ = pageRuntime.Stop()
 		return nil
 	}
 	if err := pageRuntime.Start(ctx); err != nil {
-		page.RuntimeError = fmt.Sprintf("start Go runtime: %v", err)
+		setRuntimeError(page, fmt.Sprintf("start Go runtime: %v", err))
 		_ = pageRuntime.Stop()
 		return nil
 	}
 	page.RuntimeStarted = true
 	return pageRuntime
+}
+
+func setRuntimeError(page *Page, message string) {
+	page.RuntimeError = message
+	page.ensureDevTools().AddConsole(devtools.ConsoleError, "runtime", message)
 }
 
 func hoverPath(document *dom.Document, nodeID dom.NodeID) []dom.NodeID {
