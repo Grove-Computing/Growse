@@ -156,6 +156,39 @@ func TestFetchEncodesEachStructuredBodyType(t *testing.T) {
 	}
 }
 
+func TestRequestDataDoesNotMutatePageURLOrInjectCookies(t *testing.T) {
+	baseURL, _ := url.Parse("https://example.test/page?current=1")
+	params, err := urlapi.Parse("tag=web+api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	formData := formapi.New()
+	if err := formData.Append("name", "Growse"); err != nil {
+		t.Fatal(err)
+	}
+	api := New(baseURL, func(_ context.Context, request *network.Request) (*network.Response, error) {
+		if got := request.Header.Get("Cookie"); got != "" {
+			t.Errorf("request injected Cookie header %q", got)
+		}
+		if got, want := baseURL.String(), "https://example.test/page?current=1"; got != want {
+			t.Errorf("page URL mutated to %q", got)
+		}
+		return &network.Response{}, nil
+	})
+	if _, err := api.fetch(context.Background(), Request{Method: http.MethodPost, URL: "/submit", Params: params}); err != nil {
+		t.Fatalf("params fetch error = %v", err)
+	}
+	if _, err := api.fetch(context.Background(), Request{Method: http.MethodPost, URL: "/submit", FormData: formData}); err != nil {
+		t.Fatalf("FormData fetch error = %v", err)
+	}
+	if got, err := params.Encode(); err != nil || got != "tag=web+api" {
+		t.Fatalf("params mutated: %q, %v", got, err)
+	}
+	if got, err := formData.Encode(); err != nil || got != "name=Growse" {
+		t.Fatalf("FormData mutated: %q, %v", got, err)
+	}
+}
+
 func mustHeaders(t *testing.T, name, value string) *Headers {
 	t.Helper()
 	headers := NewHeaders()
