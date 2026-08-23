@@ -31,6 +31,7 @@ type Request struct {
 	Method      string
 	URL         string
 	Header      Header
+	Headers     *Headers
 	Body        []byte
 	Text        string
 	Credentials CredentialsMode
@@ -256,20 +257,19 @@ func (api *API) prepare(request Request) (*network.Request, error) {
 	if credentials != network.CredentialsOmit && credentials != network.CredentialsSameOrigin && credentials != network.CredentialsInclude {
 		return nil, errors.New("invalid Fetch credentials mode")
 	}
-	header := make(http.Header, len(request.Header))
-	for name, values := range request.Header {
-		if !validToken(name) {
-			return nil, errors.New("invalid Fetch header name")
+	if request.Header != nil && request.Headers != nil {
+		return nil, errors.New("Fetch request cannot use both Header and Headers")
+	}
+	headers := request.Headers
+	if headers == nil {
+		headers, err = legacyHeaders(request.Header)
+		if err != nil {
+			return nil, err
 		}
-		if forbiddenHeader(name) {
-			return nil, errors.New("forbidden Fetch request header: " + name)
-		}
-		for _, value := range values {
-			if strings.ContainsAny(value, "\r\n\x00") {
-				return nil, errors.New("invalid Fetch header value")
-			}
-		}
-		header[name] = append([]string(nil), values...)
+	}
+	header, err := headers.httpHeader()
+	if err != nil {
+		return nil, err
 	}
 	return &network.Request{
 		Method:      method,

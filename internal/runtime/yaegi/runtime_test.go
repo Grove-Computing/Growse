@@ -511,10 +511,13 @@ import "growse/dom"
 var Status int
 var Failure string
 func main() {
+	headers := fetch.NewHeaders()
+	_ = headers.Append("X-Test", "one")
+	_ = headers.Append("X-Test", "two")
 	fetch.Fetch(fetch.Request{
 		Method: "PATCH",
 		URL: "/items/7",
-		Header: fetch.Header{"X-Test": []string{"one", "two"}},
+		Headers: headers,
 		Text: "updated",
 	}, func(response fetch.Response) {
 		Status = response.Status
