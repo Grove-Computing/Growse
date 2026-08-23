@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 	"unicode/utf8"
 
 	"github.com/Grove-Computing/Growse/internal/network"
@@ -42,6 +43,7 @@ type Request struct {
 	Params      *urlapi.URLSearchParams
 	FormData    *formapi.FormData
 	Signal      *AbortSignal
+	Timeout     time.Duration
 	Credentials CredentialsMode
 }
 
@@ -108,6 +110,7 @@ type API struct {
 	baseURL *url.URL
 	do      func(context.Context, *network.Request) (*network.Response, error)
 	enqueue func(func()) bool
+	clock   Clock
 	mu      sync.Mutex
 	closed  bool
 	active  sync.WaitGroup
@@ -126,7 +129,17 @@ func NewPage(ctx context.Context, baseURL *url.URL, do func(context.Context, *ne
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return &API{ctx: ctx, baseURL: cloneURL(baseURL), do: do, enqueue: enqueue}
+	return NewPageWithClock(ctx, baseURL, do, enqueue, systemClock{})
+}
+
+func NewPageWithClock(ctx context.Context, baseURL *url.URL, do func(context.Context, *network.Request) (*network.Response, error), enqueue func(func()) bool, clock Clock) *API {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if clock == nil {
+		clock = systemClock{}
+	}
+	return &API{ctx: ctx, baseURL: cloneURL(baseURL), do: do, enqueue: enqueue, clock: clock}
 }
 
 // Fetch starts request asynchronously and delivers exactly one callback.
@@ -165,10 +178,26 @@ func (api *API) Fetch(request Request, success func(Response), failure func(stri
 		defer api.active.Done()
 		ctx, cancel := context.WithCancel(api.ctx)
 		unsubscribe := request.Signal.subscribe(cancel)
+		timedOut := make(chan struct{})
+		var timer Timer
+		if request.Timeout > 0 {
+			timer = api.clock.AfterFunc(request.Timeout, func() { close(timedOut); cancel() })
+		}
 		response, fetchError := api.do(ctx, networkRequest)
+		if timer != nil {
+			timer.Stop()
+		}
 		unsubscribe()
 		cancel()
 		api.deliver(func() {
+			select {
+			case <-timedOut:
+				if failure != nil {
+					failure("TimeoutError: Fetch timed out")
+				}
+				return
+			default:
+			}
 			if request.Signal != nil && request.Signal.Aborted() {
 				if failure != nil {
 					failure("AbortError: Fetch was aborted")

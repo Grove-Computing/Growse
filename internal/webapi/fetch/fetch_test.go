@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Grove-Computing/Growse/internal/network"
 	formapi "github.com/Grove-Computing/Growse/internal/webapi/form"
@@ -273,6 +274,48 @@ func TestFetchAbortDeliversOneFailureAndCancelsRequest(t *testing.T) {
 		}
 	})
 }
+
+func TestFetchTimeoutUsesInjectableClockAndDeliversOneFailure(t *testing.T) {
+	baseURL, _ := url.Parse("https://example.test/page")
+	clock := &fetchFakeClock{}
+	started := make(chan struct{})
+	failure := make(chan string, 2)
+	api := NewPageWithClock(context.Background(), baseURL, func(ctx context.Context, _ *network.Request) (*network.Response, error) {
+		close(started)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}, func(callback func()) bool { callback(); return true }, clock)
+	api.Fetch(Request{URL: "/slow", Timeout: time.Second}, func(Response) { t.Error("success called") }, func(message string) { failure <- message })
+	<-started
+	clock.Fire()
+	if got := <-failure; got != "TimeoutError: Fetch timed out" {
+		t.Fatalf("failure = %q", got)
+	}
+	select {
+	case extra := <-failure:
+		t.Fatalf("extra callback = %q", extra)
+	default:
+	}
+}
+
+type fetchFakeClock struct {
+	callback func()
+	stopped  bool
+}
+
+func (clock *fetchFakeClock) AfterFunc(_ time.Duration, callback func()) Timer {
+	clock.callback = callback
+	return fetchFakeTimer{clock}
+}
+func (clock *fetchFakeClock) Fire() {
+	if clock.callback != nil && !clock.stopped {
+		clock.callback()
+	}
+}
+
+type fetchFakeTimer struct{ clock *fetchFakeClock }
+
+func (timer fetchFakeTimer) Stop() bool { timer.clock.stopped = true; return true }
 
 func TestConcurrentFetchesDeliverCallbacksInCompletionOrder(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
