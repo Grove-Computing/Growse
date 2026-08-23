@@ -1,7 +1,7 @@
 name: Unicode Security
 
 on:
-  pull_request_target:
+  pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches: [main]
@@ -56,7 +56,7 @@ jobs:
           -config "$GITHUB_WORKSPACE/trusted/.security/security-policy.json"
 
       - name: Scan pull request diff with trusted policy
-        if: github.event_name == 'pull_request_target'
+        if: github.event_name == 'pull_request'
         working-directory: candidate
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
