@@ -51,7 +51,8 @@ require docs/css-support.md '`animation-*`、`animation`'
 require docs/css-support.md '`prefers-reduced-motion`'
 require docs/css-support.md "Subgrid、masonry"
 require SECURITY.md "TabはDOM、Runtime、History、Session Storageを分離"
-require docs/form-fetch-cookie-support.md "Growse v0.10.0"
+require docs/form-fetch-cookie-support.md "Growse v0.11.0"
+require docs/form-fetch-cookie-support.md "AbortController"
 require docs/form-fetch-cookie-support.md "Credentials Mode"
 require docs/form-fetch-cookie-support.md "SameSite"
 require docs/form-fetch-cookie-support.md "CORS"
@@ -59,6 +60,7 @@ require docs/form-fetch-cookie-support.md "HTTP Cache"
 require docs/wpt.md "## v0.8.0の選定範囲"
 require docs/wpt.md "## v0.9.0の選定範囲"
 require docs/wpt.md "## v0.10.0の選定範囲"
+require docs/wpt.md "## v0.11.0の選定範囲"
 require docs/wpt.md "CSS Transitions Level 2"
 require docs/wpt.md "HTML Forms"
 require docs/wpt.md "RFC 9111"
@@ -84,4 +86,4 @@ for file in README.md SECURITY.md docs/form-fetch-cookie-support.md docs/storage
     fi
 done
 
-echo "v0.10.0文書同期検証成功: README, SECURITY.md, Storage / Cache対応表, Form / Fetch / Cookie対応表, CSS対応表, WPT文書, Showcase"
+echo "v0.11.0文書同期検証成功: README, SECURITY.md, Storage / Cache対応表, Form / Fetch / Cookie対応表, CSS対応表, WPT文書, Showcase"

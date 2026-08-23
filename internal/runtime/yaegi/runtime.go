@@ -131,6 +131,8 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 			"CredentialsMode":       reflect.ValueOf((*fetchapi.CredentialsMode)(nil)),
 			"CredentialsOmit":       reflect.ValueOf(fetchapi.CredentialsOmit),
 			"CredentialsSameOrigin": reflect.ValueOf(fetchapi.CredentialsSameOrigin),
+			"Millisecond":           reflect.ValueOf(fetchapi.Millisecond),
+			"Second":                reflect.ValueOf(fetchapi.Second),
 			"Fetch":                 reflect.ValueOf(fetch.Fetch),
 			"Header":                reflect.ValueOf((*fetchapi.Header)(nil)),
 			"HeaderEntry":           reflect.ValueOf((*fetchapi.HeaderEntry)(nil)),
