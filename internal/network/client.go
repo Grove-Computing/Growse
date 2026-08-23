@@ -204,9 +204,13 @@ func (c *Client) Do(ctx context.Context, requestData *Request) (result *Response
 	startedAt := c.now()
 	if requestData.Observer != nil {
 		defer func() {
+			categoryError := resultErr
+			if cause := context.Cause(ctx); cause != nil {
+				categoryError = errors.Join(categoryError, cause)
+			}
 			observation := Observation{
 				Method: requestMethod(requestData), URL: cloneURL(requestData.URL), Kind: requestData.Kind,
-				StartedAt: startedAt, Duration: c.now().Sub(startedAt), ErrorCategory: observationErrorCategory(resultErr),
+				StartedAt: startedAt, Duration: c.now().Sub(startedAt), ErrorCategory: observationErrorCategory(categoryError),
 			}
 			if result != nil {
 				observation.StatusCode = result.StatusCode

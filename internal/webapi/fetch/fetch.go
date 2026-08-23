@@ -224,19 +224,19 @@ func (api *API) Fetch(request Request, success func(Response), failure func(stri
 			limiter.Release()
 			api.active.Done()
 		}()
-		ctx, cancel := context.WithCancel(api.ctx)
-		unsubscribe := request.Signal.subscribe(cancel)
+		ctx, cancel := context.WithCancelCause(api.ctx)
+		unsubscribe := request.Signal.subscribe(func() { cancel(context.Canceled) })
 		timedOut := make(chan struct{})
 		var timer Timer
 		if request.Timeout > 0 {
-			timer = api.clock.AfterFunc(request.Timeout, func() { close(timedOut); cancel() })
+			timer = api.clock.AfterFunc(request.Timeout, func() { close(timedOut); cancel(network.ErrTimeout) })
 		}
 		response, fetchError := api.do(ctx, networkRequest)
 		if timer != nil {
 			timer.Stop()
 		}
 		unsubscribe()
-		cancel()
+		cancel(context.Canceled)
 		api.deliver(func() {
 			select {
 			case <-timedOut:
