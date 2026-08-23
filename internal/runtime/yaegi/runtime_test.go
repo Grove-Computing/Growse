@@ -86,6 +86,35 @@ func main() { console.Log("Hello from Go", 42) }`}}
 	}
 }
 
+func TestRuntimeExposesURLSearchParams(t *testing.T) {
+	runtime := New()
+	scripts := []runtimemodel.Script{{Source: `package main
+import "growse/url"
+var Encoded string
+var First string
+func main() {
+	params, err := url.Parse("tag=go&tag=web+api&empty=")
+	if err != nil { return }
+	_ = params.Set("tag", "growse")
+	_ = params.Append("page", "1")
+	First, _ = params.Get("tag")
+	Encoded, _ = params.Encode()
+}`}}
+	if err := runtime.Load(context.Background(), scripts, runtimemodel.Environment{}); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	symbols := runtime.interpreter.Symbols("page")["page"]
+	if got, want := symbols["First"].String(), "growse"; got != want {
+		t.Fatalf("First = %q, want %q", got, want)
+	}
+	if got, want := symbols["Encoded"].String(), "tag=growse&empty=&page=1"; got != want {
+		t.Fatalf("Encoded = %q, want %q", got, want)
+	}
+}
+
 func TestRuntimeExposesLocalAndSessionStorage(t *testing.T) {
 	runtime := New()
 	scripts := []runtimemodel.Script{{Source: `package main

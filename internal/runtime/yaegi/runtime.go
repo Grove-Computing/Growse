@@ -25,6 +25,7 @@ import (
 	schedulerapi "github.com/Grove-Computing/Growse/internal/webapi/scheduler"
 	storageapi "github.com/Grove-Computing/Growse/internal/webapi/storage"
 	strconvapi "github.com/Grove-Computing/Growse/internal/webapi/strconv"
+	urlapi "github.com/Grove-Computing/Growse/internal/webapi/url"
 	"github.com/traefik/yaegi/interp"
 )
 
@@ -169,6 +170,12 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 		},
 		"growse/strconv/strconv": {
 			"Itoa": reflect.ValueOf(strconvapi.Itoa),
+		},
+		"growse/url/url": {
+			"Entry":           reflect.ValueOf((*urlapi.Entry)(nil)),
+			"New":             reflect.ValueOf(urlapi.New),
+			"Parse":           reflect.ValueOf(urlapi.Parse),
+			"URLSearchParams": reflect.ValueOf((*urlapi.URLSearchParams)(nil)),
 		},
 	}); err != nil {
 		return fmt.Errorf("register Growse Web API: %w", err)
