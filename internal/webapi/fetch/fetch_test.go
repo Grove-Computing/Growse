@@ -431,6 +431,30 @@ func TestConcurrentFetchesDeliverCallbacksInCompletionOrder(t *testing.T) {
 	<-workerDone
 }
 
+func TestFetchRejectsRequestsAbovePerPageConcurrencyLimit(t *testing.T) {
+	baseURL, _ := url.Parse("https://example.test/page")
+	release := make(chan struct{})
+	started := make(chan struct{}, 16)
+	failures := make(chan string, 1)
+	api := New(baseURL, func(context.Context, *network.Request) (*network.Response, error) {
+		started <- struct{}{}
+		<-release
+		return &network.Response{}, nil
+	})
+	for index := 0; index < 16; index++ {
+		api.Fetch(Request{URL: "/held"}, nil, nil)
+	}
+	for index := 0; index < 16; index++ {
+		<-started
+	}
+	api.Fetch(Request{URL: "/rejected"}, nil, func(message string) { failures <- message })
+	if got := <-failures; got != "QuotaError: Fetch concurrency limit reached" {
+		t.Fatalf("failure = %q", got)
+	}
+	close(release)
+	api.Close()
+}
+
 func TestCloseWaitsForCanceledFetchOperation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	started := make(chan struct{})

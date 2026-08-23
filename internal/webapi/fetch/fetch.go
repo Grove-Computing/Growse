@@ -113,14 +113,15 @@ func (response Response) consumeBody() ([]byte, error) {
 
 // API binds WebGo Fetch calls to one page URL and network executor.
 type API struct {
-	ctx     context.Context
-	baseURL *url.URL
-	do      func(context.Context, *network.Request) (*network.Response, error)
-	enqueue func(func()) bool
-	clock   Clock
-	mu      sync.Mutex
-	closed  bool
-	active  sync.WaitGroup
+	ctx      context.Context
+	baseURL  *url.URL
+	do       func(context.Context, *network.Request) (*network.Response, error)
+	enqueue  func(func()) bool
+	clock    Clock
+	mu       sync.Mutex
+	closed   bool
+	inFlight int
+	active   sync.WaitGroup
 }
 
 // New creates a page-scoped Fetch API.
@@ -179,10 +180,20 @@ func (api *API) Fetch(request Request, success func(Response), failure func(stri
 		api.mu.Unlock()
 		return
 	}
+	if api.inFlight >= 16 {
+		api.mu.Unlock()
+		api.deliver(func() {
+			if failure != nil {
+				failure("QuotaError: Fetch concurrency limit reached")
+			}
+		})
+		return
+	}
+	api.inFlight++
 	api.active.Add(1)
 	api.mu.Unlock()
 	go func() {
-		defer api.active.Done()
+		defer func() { api.mu.Lock(); api.inFlight--; api.mu.Unlock(); api.active.Done() }()
 		ctx, cancel := context.WithCancel(api.ctx)
 		unsubscribe := request.Signal.subscribe(cancel)
 		timedOut := make(chan struct{})
