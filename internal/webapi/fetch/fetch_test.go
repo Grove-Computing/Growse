@@ -237,6 +237,43 @@ func TestFetchDistinguishesHTTPErrorStatusFromNetworkError(t *testing.T) {
 	})
 }
 
+func TestFetchAbortDeliversOneFailureAndCancelsRequest(t *testing.T) {
+	baseURL, _ := url.Parse("https://example.test/page")
+	t.Run("before start", func(t *testing.T) {
+		controller := NewAbortController()
+		controller.Abort()
+		called := 0
+		New(baseURL, func(context.Context, *network.Request) (*network.Response, error) {
+			t.Fatal("request started")
+			return nil, nil
+		}).Fetch(Request{URL: "/data", Signal: controller.Signal()}, nil, func(message string) {
+			called++
+			if message != "AbortError: Fetch was aborted" {
+				t.Errorf("failure = %q", message)
+			}
+		})
+		if called != 1 {
+			t.Fatalf("callbacks = %d", called)
+		}
+	})
+	t.Run("in flight", func(t *testing.T) {
+		controller := NewAbortController()
+		started := make(chan struct{})
+		failure := make(chan string, 1)
+		api := New(baseURL, func(ctx context.Context, _ *network.Request) (*network.Response, error) {
+			close(started)
+			<-ctx.Done()
+			return nil, ctx.Err()
+		})
+		api.Fetch(Request{URL: "/data", Signal: controller.Signal()}, func(Response) { t.Error("success called") }, func(message string) { failure <- message })
+		<-started
+		controller.Abort()
+		if got := <-failure; got != "AbortError: Fetch was aborted" {
+			t.Fatalf("failure = %q", got)
+		}
+	})
+}
+
 func TestConcurrentFetchesDeliverCallbacksInCompletionOrder(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

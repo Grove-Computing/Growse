@@ -41,6 +41,7 @@ type Request struct {
 	JSON        string
 	Params      *urlapi.URLSearchParams
 	FormData    *formapi.FormData
+	Signal      *AbortSignal
 	Credentials CredentialsMode
 }
 
@@ -136,6 +137,14 @@ func (api *API) Fetch(request Request, success func(Response), failure func(stri
 	if closed {
 		return
 	}
+	if request.Signal != nil && request.Signal.Aborted() {
+		api.deliver(func() {
+			if failure != nil {
+				failure("AbortError: Fetch was aborted")
+			}
+		})
+		return
+	}
 	networkRequest, err := api.prepare(request)
 	if err != nil {
 		api.deliver(func() {
@@ -154,8 +163,18 @@ func (api *API) Fetch(request Request, success func(Response), failure func(stri
 	api.mu.Unlock()
 	go func() {
 		defer api.active.Done()
-		response, fetchError := api.do(api.ctx, networkRequest)
+		ctx, cancel := context.WithCancel(api.ctx)
+		unsubscribe := request.Signal.subscribe(cancel)
+		response, fetchError := api.do(ctx, networkRequest)
+		unsubscribe()
+		cancel()
 		api.deliver(func() {
+			if request.Signal != nil && request.Signal.Aborted() {
+				if failure != nil {
+					failure("AbortError: Fetch was aborted")
+				}
+				return
+			}
 			if fetchError != nil {
 				if failure != nil {
 					failure(fetchError.Error())
