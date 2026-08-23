@@ -138,6 +138,7 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 			"NewAbortController":    reflect.ValueOf(fetchapi.NewAbortController),
 			"Request":               reflect.ValueOf((*fetchapi.Request)(nil)),
 			"Response":              reflect.ValueOf((*fetchapi.Response)(nil)),
+			"ResponseHeaders":       reflect.ValueOf((*fetchapi.ResponseHeaders)(nil)),
 		},
 		"growse/form/form": {
 			"Entry":    reflect.ValueOf((*formapi.Entry)(nil)),

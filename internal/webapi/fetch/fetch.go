@@ -55,6 +55,7 @@ type Response struct {
 	URL        string
 	Redirected bool
 	Header     Header
+	Headers    *ResponseHeaders
 	body       *responseBody
 }
 
@@ -65,6 +66,7 @@ type responseBody struct {
 
 // ErrBodyConsumed reports a second attempt to consume one response body.
 var ErrBodyConsumed = errors.New("response body has already been consumed")
+var ErrInvalidText = errors.New("response body is not valid UTF-8")
 
 // Bytes consumes the response body and returns a defensive copy.
 func (response Response) Bytes() ([]byte, error) {
@@ -81,8 +83,13 @@ func (response Response) Text() (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if !utf8.Valid(body) {
+		return "", ErrInvalidText
+	}
 	return string(body), nil
 }
+
+func (response Response) BodyUsed() bool { return response.body != nil && response.body.consumed }
 
 // JSON consumes and decodes the response body into target.
 func (response Response) JSON(target any) error {
@@ -246,8 +253,12 @@ func newResponse(response *network.Response) Response {
 		return Response{}
 	}
 	header := make(Header, len(response.Header))
+	entries := make([]HeaderEntry, 0)
 	for name, values := range response.Header {
 		header[name] = append([]string(nil), values...)
+		for _, value := range values {
+			entries = append(entries, HeaderEntry{Name: name, Value: value})
+		}
 	}
 	finalURL := ""
 	if response.URL != nil {
@@ -259,6 +270,7 @@ func newResponse(response *network.Response) Response {
 		URL:        finalURL,
 		Redirected: response.Redirected,
 		Header:     header,
+		Headers:    &ResponseHeaders{entries: entries},
 		body:       &responseBody{value: append([]byte(nil), response.Body...)},
 	}
 }

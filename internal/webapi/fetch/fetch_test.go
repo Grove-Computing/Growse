@@ -75,6 +75,27 @@ func TestResponseBytesAndTextReturnBody(t *testing.T) {
 	}
 }
 
+func TestResponseHeadersBodyUsedAndInvalidText(t *testing.T) {
+	response := newResponse(&network.Response{Header: http.Header{"X-Result": {"one", "two"}}, Body: []byte{0xff}})
+	if got, ok := response.Headers.Get("x-result"); !ok || got != "one" {
+		t.Fatalf("Headers.Get = %q, %t", got, ok)
+	}
+	entries := response.Headers.Entries()
+	entries[0].Value = "changed"
+	if got, _ := response.Headers.Get("X-Result"); got != "one" {
+		t.Fatalf("Headers leaked mutation: %q", got)
+	}
+	if response.BodyUsed() {
+		t.Fatal("BodyUsed before consumption")
+	}
+	if _, err := response.Text(); !errors.Is(err, ErrInvalidText) {
+		t.Fatalf("Text error = %v", err)
+	}
+	if !response.BodyUsed() {
+		t.Fatal("BodyUsed after consumption")
+	}
+}
+
 func TestFetchRejectsInvalidRequestBeforeSending(t *testing.T) {
 	baseURL, err := url.Parse("https://example.test/page")
 	if err != nil {
