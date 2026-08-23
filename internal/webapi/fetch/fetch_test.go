@@ -319,6 +319,32 @@ func TestFetchTimeoutUsesInjectableClockAndDeliversOneFailure(t *testing.T) {
 	}
 }
 
+func TestFetchDiscardsLateResponseAfterAbort(t *testing.T) {
+	baseURL, _ := url.Parse("https://example.test/page")
+	controller := NewAbortController()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	success := make(chan struct{}, 1)
+	failure := make(chan string, 1)
+	api := New(baseURL, func(context.Context, *network.Request) (*network.Response, error) {
+		close(started)
+		<-release
+		return &network.Response{StatusCode: http.StatusOK}, nil
+	})
+	api.Fetch(Request{URL: "/late", Signal: controller.Signal()}, func(Response) { success <- struct{}{} }, func(message string) { failure <- message })
+	<-started
+	controller.Abort()
+	close(release)
+	if got := <-failure; got != "AbortError: Fetch was aborted" {
+		t.Fatalf("failure = %q", got)
+	}
+	select {
+	case <-success:
+		t.Fatal("late response delivered success")
+	default:
+	}
+}
+
 type fetchFakeClock struct {
 	callback func()
 	stopped  bool
