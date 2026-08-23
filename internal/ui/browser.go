@@ -86,7 +86,9 @@ type BrowserUI struct {
 	tabCloseButtons   map[browser.TabID]*widget.Clickable
 	tabShortcutDown   map[key.Name]bool
 	devToolsStates    map[browser.TabID]devToolsTabState
+	inspectorButtons  map[browser.TabID]map[dom.NodeID]*widget.Clickable
 	devToolsList      widget.List
+	inspectorList     widget.List
 	pageList          widget.List
 	tabList           widget.List
 	viewportClick     gesture.Click
@@ -150,6 +152,7 @@ type devToolsTabState struct {
 	Open   bool
 	Panel  devToolsPanel
 	Filter devtoolsmodel.ConsoleLevel
+	NodeID dom.NodeID
 }
 
 type tabRenderState struct {
@@ -205,6 +208,10 @@ type TabController interface {
 
 type activeBrowserSource interface {
 	ActiveBrowserTarget() (browser.TabID, *browser.Browser, bool)
+}
+
+type pageInspector interface {
+	InspectPage(func(*browser.Page) bool) bool
 }
 
 type tabNavigationStateSink interface {
@@ -290,6 +297,7 @@ func NewBrowserUIWithTabsAndUpdater(navigator Navigator, tabs TabController, inv
 		tabCloseButtons:  make(map[browser.TabID]*widget.Clickable),
 		tabShortcutDown:  make(map[key.Name]bool),
 		devToolsStates:   make(map[browser.TabID]devToolsTabState),
+		inspectorButtons: make(map[browser.TabID]map[dom.NodeID]*widget.Clickable),
 		layoutBuild:      layoutengine.BuildWithScroll,
 		updater:          applicationUpdater,
 		updateResults:    make(chan applicationUpdateResult, 2),
@@ -312,6 +320,7 @@ func NewBrowserUIWithTabsAndUpdater(navigator Navigator, tabs TabController, inv
 	ui.pageList.Axis = layout.Vertical
 	ui.tabList.Axis = layout.Vertical
 	ui.devToolsList.Axis = layout.Vertical
+	ui.inspectorList.Axis = layout.Vertical
 	ui.startUpdateCheck()
 	return ui
 }
@@ -701,6 +710,14 @@ func (ui *BrowserUI) handleActions(gtx layout.Context) {
 			}
 		}
 	}
+	activeID, _ := ui.activeNavigationTarget()
+	for nodeID, button := range ui.inspectorButtons[activeID] {
+		for button.Clicked(gtx) {
+			state := ui.devToolsState()
+			state.NodeID = nodeID
+			ui.setDevToolsState(state)
+		}
+	}
 }
 
 func (ui *BrowserUI) startUpdateCheck() {
@@ -809,6 +826,7 @@ func (ui *BrowserUI) closeTab(id browser.TabID) bool {
 	}
 	delete(ui.tabRenderStates, id)
 	delete(ui.devToolsStates, id)
+	delete(ui.inspectorButtons, id)
 	delete(ui.tabRowButtons, id)
 	delete(ui.tabCloseButtons, id)
 	if ui.displayedTabID == id {
@@ -1166,7 +1184,7 @@ func (ui *BrowserUI) layoutDevTools(gtx layout.Context) layout.Dimensions {
 			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 				switch state.Panel {
 				case devToolsPanelInspector:
-					return ui.layoutDevToolsPlaceholder(gtx, "DOM / Styles / Layout inspector will appear here")
+					return ui.layoutDevToolsInspector(gtx, state)
 				case devToolsPanelNetwork:
 					return ui.layoutDevToolsPlaceholder(gtx, "Network request timeline will appear here")
 				default:
@@ -1175,6 +1193,130 @@ func (ui *BrowserUI) layoutDevTools(gtx layout.Context) layout.Dimensions {
 			}),
 		)
 	})
+}
+
+func (ui *BrowserUI) layoutDevToolsInspector(gtx layout.Context, state devToolsTabState) layout.Dimensions {
+	navigator := ui.activeNavigator()
+	if navigator == nil || navigator.Page() == nil || navigator.Page().Document == nil {
+		return ui.layoutDevToolsPlaceholder(gtx, "Inspector has no active document")
+	}
+	page := navigator.Page()
+	var tree *layoutengine.Tree
+	if ui.layoutCache.page == page {
+		tree = ui.layoutCache.tree
+	}
+	var snapshot devtoolsmodel.InspectorSnapshot
+	inspect := func(current *browser.Page) bool {
+		if current != page {
+			return false
+		}
+		snapshot = devtoolsmodel.SnapshotInspector(current.Document, current.ComputedStyles, tree, state.NodeID)
+		return true
+	}
+	if inspector, ok := navigator.(pageInspector); ok {
+		if !inspector.InspectPage(inspect) {
+			return ui.layoutDevToolsPlaceholder(gtx, "Inspector snapshot is temporarily unavailable")
+		}
+	} else {
+		inspect(page)
+	}
+	if state.NodeID != 0 && snapshot.Selected == 0 {
+		state.NodeID = 0
+		ui.setDevToolsState(state)
+	}
+	tabID, _ := ui.activeNavigationTarget()
+	buttons := ui.inspectorButtons[tabID]
+	if buttons == nil {
+		buttons = make(map[dom.NodeID]*widget.Clickable)
+		ui.inspectorButtons[tabID] = buttons
+	}
+	return layout.Flex{Axis: layout.Horizontal}.Layout(gtx,
+		layout.Flexed(0.58, func(gtx layout.Context) layout.Dimensions {
+			return material.List(ui.theme, &ui.inspectorList).Layout(gtx, len(snapshot.Nodes), func(gtx layout.Context, index int) layout.Dimensions {
+				node := snapshot.Nodes[index]
+				button := buttons[node.ID]
+				if button == nil {
+					button = &widget.Clickable{}
+					buttons[node.ID] = button
+				}
+				return button.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					label := material.Body2(ui.theme, inspectorNodeLabel(node))
+					label.Color = color.NRGBA{R: 203, G: 213, B: 225, A: 255}
+					if snapshot.Selected == node.ID {
+						paint.Fill(gtx.Ops, color.NRGBA{R: 12, G: 74, B: 110, A: 255})
+						label.Color = color.NRGBA{R: 240, G: 249, B: 255, A: 255}
+					}
+					return layout.Inset{Top: unit.Dp(3), Right: unit.Dp(4), Bottom: unit.Dp(3), Left: unit.Dp(6)}.Layout(gtx, label.Layout)
+				})
+			})
+		}),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			width := gtx.Dp(unit.Dp(1))
+			gtx.Constraints = layout.Exact(image.Pt(width, gtx.Constraints.Max.Y))
+			paint.Fill(gtx.Ops, color.NRGBA{R: 51, G: 65, B: 85, A: 255})
+			return layout.Dimensions{Size: gtx.Constraints.Max}
+		}),
+		layout.Flexed(0.42, func(gtx layout.Context) layout.Dimensions {
+			return ui.layoutInspectorDetails(gtx, snapshot)
+		}),
+	)
+}
+
+func inspectorNodeLabel(node devtoolsmodel.DOMNode) string {
+	indent := strings.Repeat("  ", node.Depth)
+	if node.Kind == "text" {
+		text := strings.Join(strings.Fields(node.Text), " ")
+		runes := []rune(text)
+		if len(runes) > 80 {
+			text = string(runes[:80]) + "…"
+		}
+		return fmt.Sprintf("%s#text %q", indent, text)
+	}
+	label := indent + node.Name
+	for _, attribute := range node.Attributes {
+		if attribute.Name == "id" {
+			label += "#" + attribute.Value
+		}
+		if attribute.Name == "class" {
+			label += "." + strings.ReplaceAll(attribute.Value, " ", ".")
+		}
+	}
+	return label
+}
+
+func (ui *BrowserUI) layoutInspectorDetails(gtx layout.Context, snapshot devtoolsmodel.InspectorSnapshot) layout.Dimensions {
+	if snapshot.SelectedNode == nil {
+		return ui.layoutDevToolsPlaceholder(gtx, "Select a DOM node to inspect attributes, styles, and layout")
+	}
+	lines := []string{fmt.Sprintf("%s  node=%d", snapshot.SelectedNode.Name, snapshot.SelectedNode.ID), "", "Attributes"}
+	if len(snapshot.SelectedNode.Attributes) == 0 {
+		lines = append(lines, "  (none)")
+	}
+	for _, attribute := range snapshot.SelectedNode.Attributes {
+		lines = append(lines, fmt.Sprintf("  %s=%q", attribute.Name, attribute.Value))
+	}
+	lines = append(lines, "", "Computed Style")
+	if len(snapshot.Styles) == 0 {
+		lines = append(lines, "  (not available)")
+	}
+	for _, property := range snapshot.Styles {
+		lines = append(lines, fmt.Sprintf("  %-18s %s", property.Name, property.Value))
+	}
+	lines = append(lines, "", "Layout Box")
+	if snapshot.Layout == nil {
+		lines = append(lines, "  (not rendered)")
+	} else {
+		lines = append(lines,
+			fmt.Sprintf("  x %.2f  y %.2f", snapshot.Layout.X, snapshot.Layout.Y),
+			fmt.Sprintf("  width %.2f  height %.2f", snapshot.Layout.Width, snapshot.Layout.Height),
+		)
+	}
+	if snapshot.Truncated {
+		lines = append(lines, "", "Snapshot truncated at safety limit")
+	}
+	label := material.Body2(ui.theme, strings.Join(lines, "\n"))
+	label.Color = color.NRGBA{R: 203, G: 213, B: 225, A: 255}
+	return layout.Inset{Top: unit.Dp(6), Right: unit.Dp(6), Left: unit.Dp(10)}.Layout(gtx, label.Layout)
 }
 
 func (ui *BrowserUI) devToolsTab(button *widget.Clickable, panel devToolsPanel, active bool) layout.Widget {
