@@ -5,6 +5,8 @@ import (
 	"net/url"
 	"sync"
 	"unicode/utf8"
+
+	fetchapi "github.com/Grove-Computing/Growse/internal/webapi/fetch"
 )
 
 var (
@@ -79,6 +81,7 @@ type SessionPolicy struct {
 	MaxTabID      uint64
 	MaxTitleBytes int
 	MaxURLBytes   int
+	MaxFetches    int
 }
 
 // DefaultSessionPolicy returns the production safety limits.
@@ -88,6 +91,7 @@ func DefaultSessionPolicy() SessionPolicy {
 		MaxTabID:      ^uint64(0),
 		MaxTitleBytes: defaultMaxTitleBytes,
 		MaxURLBytes:   defaultMaxURLBytes,
+		MaxFetches:    128,
 	}
 }
 
@@ -100,6 +104,7 @@ type Session struct {
 	factory          BrowserFactory
 	policy           SessionPolicy
 	onActiveMutation func()
+	fetchLimiter     *fetchapi.Limiter
 }
 
 // NewSession creates an empty browser session.
@@ -129,7 +134,10 @@ func NewSessionWithPolicy(factory BrowserFactory, policy SessionPolicy) *Session
 	if policy.MaxURLBytes <= 0 {
 		policy.MaxURLBytes = defaults.MaxURLBytes
 	}
-	return &Session{factory: factory, policy: policy}
+	if policy.MaxFetches <= 0 {
+		policy.MaxFetches = defaults.MaxFetches
+	}
+	return &Session{factory: factory, policy: policy, fetchLimiter: fetchapi.NewLimiter(policy.MaxFetches)}
 }
 
 // NewTab adds an empty tab or a tab with a requested initial URL. Navigation
@@ -248,6 +256,7 @@ func (s *Session) newTabLocked(initialURL *url.URL, state TabState) (*Tab, error
 	if browser == nil {
 		return nil, ErrTabBrowser
 	}
+	browser.SetFetchLimiter(s.fetchLimiter)
 	for _, existing := range s.tabs {
 		if existing != nil && existing.browser == browser && existing.state != TabClosed {
 			return nil, ErrTabBrowserReuse

@@ -72,3 +72,9 @@ Upstreamのファイル全体はコピーせず、assertionの意味と最小入
 - Top-level Browsing Contextは`target="_blank"`による独立Context作成を選定し、iframe、named target再利用、opener API、およびBrowsing Context Groupは対象外とする。
 - Lifecycleはclose後のContextへworkを配送せずlive siblingを維持する範囲を選定し、`beforeunload` prompt、Page Visibility Event、およびBFCacheは対象外とする。
 - Storage Eventはsame-originの更新元以外へcommit順にkey、old/new value、URLを配送する範囲を選定し、複数Window Process間同期とSession Storage Eventは対象外とする。
+
+## v0.11.0の選定範囲
+
+- Fetch は request body の排他指定、forbidden request header、abort、timeout、Response body の一回消費を選定し、Promise、Stream、WebSocket は対象外とする。
+- URLSearchParams と FormData は ordered duplicate field、空値、application/x-www-form-urlencoded serialize を選定し、File / Blob / multipart は対象外とする。
+- Abort と timeout は fake clock / context cancellation へ縮約し、WPT の Window、AbortSignal Event、実時間待機は直接実行しない。

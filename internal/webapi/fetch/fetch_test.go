@@ -7,8 +7,11 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Grove-Computing/Growse/internal/network"
+	formapi "github.com/Grove-Computing/Growse/internal/webapi/form"
+	urlapi "github.com/Grove-Computing/Growse/internal/webapi/url"
 )
 
 func TestFetchResponseMetadataAndBodyHelpers(t *testing.T) {
@@ -72,6 +75,27 @@ func TestResponseBytesAndTextReturnBody(t *testing.T) {
 	}
 }
 
+func TestResponseHeadersBodyUsedAndInvalidText(t *testing.T) {
+	response := newResponse(&network.Response{Header: http.Header{"X-Result": {"one", "two"}}, Body: []byte{0xff}})
+	if got, ok := response.Headers.Get("x-result"); !ok || got != "one" {
+		t.Fatalf("Headers.Get = %q, %t", got, ok)
+	}
+	entries := response.Headers.Entries()
+	entries[0].Value = "changed"
+	if got, _ := response.Headers.Get("X-Result"); got != "one" {
+		t.Fatalf("Headers leaked mutation: %q", got)
+	}
+	if response.BodyUsed() {
+		t.Fatal("BodyUsed before consumption")
+	}
+	if _, err := response.Text(); !errors.Is(err, ErrInvalidText) {
+		t.Fatalf("Text error = %v", err)
+	}
+	if !response.BodyUsed() {
+		t.Fatal("BodyUsed after consumption")
+	}
+}
+
 func TestFetchRejectsInvalidRequestBeforeSending(t *testing.T) {
 	baseURL, err := url.Parse("https://example.test/page")
 	if err != nil {
@@ -96,6 +120,10 @@ func TestFetchRejectsInvalidRequestBeforeSending(t *testing.T) {
 		{name: "invalid header value", request: Request{URL: "/data", Header: Header{"X-Test": []string{"safe\r\ninjected"}}}},
 		{name: "GET body", request: Request{Method: http.MethodGet, URL: "/data", Body: []byte{}}},
 		{name: "HEAD text body", request: Request{Method: http.MethodHead, URL: "/data", Text: "body"}},
+		{name: "competing body types", request: Request{URL: "/data", Text: "body", JSON: `{}`}},
+		{name: "invalid JSON", request: Request{URL: "/data", JSON: `{`}},
+		{name: "invalid text UTF-8", request: Request{URL: "/data", Text: string([]byte{0xff})}},
+		{name: "large body", request: Request{URL: "/data", Body: []byte(strings.Repeat("x", maxRequestBodySize+1))}},
 		{name: "invalid credentials", request: Request{URL: "/data", Credentials: "always"}},
 	}
 	for _, test := range tests {
@@ -109,6 +137,87 @@ func TestFetchRejectsInvalidRequestBeforeSending(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestFetchEncodesEachStructuredBodyType(t *testing.T) {
+	baseURL, _ := url.Parse("https://example.test/page")
+	params, err := urlapi.Parse("tag=go&tag=web+api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	formData := formapi.New()
+	if err := formData.Append("name", "Growse"); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name               string
+		request            Request
+		wantBody, wantType string
+	}{
+		{"bytes", Request{Method: http.MethodPost, URL: "/data", Body: []byte{0, 1}}, string([]byte{0, 1}), ""},
+		{"text", Request{Method: http.MethodPost, URL: "/data", Text: "hello"}, "hello", "text/plain;charset=UTF-8"},
+		{"JSON", Request{Method: http.MethodPost, URL: "/data", JSON: `{"name":"growse"}`}, `{"name":"growse"}`, "application/json"},
+		{"params", Request{Method: http.MethodPost, URL: "/data", Params: params}, "tag=go&tag=web+api", "application/x-www-form-urlencoded;charset=UTF-8"},
+		{"form data", Request{Method: http.MethodPost, URL: "/data", FormData: formData}, "name=Growse", formapi.ContentTypeURLEncoded},
+		{"explicit content type", Request{Method: http.MethodPost, URL: "/data", Text: "hello", Headers: mustHeaders(t, "Content-Type", "text/custom")}, "hello", "text/custom"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			api := New(baseURL, func(_ context.Context, request *network.Request) (*network.Response, error) {
+				if got := string(request.Body); got != test.wantBody {
+					t.Errorf("body = %q, want %q", got, test.wantBody)
+				}
+				if got := request.Header.Get("Content-Type"); got != test.wantType {
+					t.Errorf("Content-Type = %q, want %q", got, test.wantType)
+				}
+				return &network.Response{}, nil
+			})
+			if _, err := api.fetch(context.Background(), test.request); err != nil {
+				t.Fatalf("fetch() error = %v", err)
+			}
+		})
+	}
+}
+
+func TestRequestDataDoesNotMutatePageURLOrInjectCookies(t *testing.T) {
+	baseURL, _ := url.Parse("https://example.test/page?current=1")
+	params, err := urlapi.Parse("tag=web+api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	formData := formapi.New()
+	if err := formData.Append("name", "Growse"); err != nil {
+		t.Fatal(err)
+	}
+	api := New(baseURL, func(_ context.Context, request *network.Request) (*network.Response, error) {
+		if got := request.Header.Get("Cookie"); got != "" {
+			t.Errorf("request injected Cookie header %q", got)
+		}
+		if got, want := baseURL.String(), "https://example.test/page?current=1"; got != want {
+			t.Errorf("page URL mutated to %q", got)
+		}
+		return &network.Response{}, nil
+	})
+	if _, err := api.fetch(context.Background(), Request{Method: http.MethodPost, URL: "/submit", Params: params}); err != nil {
+		t.Fatalf("params fetch error = %v", err)
+	}
+	if _, err := api.fetch(context.Background(), Request{Method: http.MethodPost, URL: "/submit", FormData: formData}); err != nil {
+		t.Fatalf("FormData fetch error = %v", err)
+	}
+	if got, err := params.Encode(); err != nil || got != "tag=web+api" {
+		t.Fatalf("params mutated: %q, %v", got, err)
+	}
+	if got, err := formData.Encode(); err != nil || got != "name=Growse" {
+		t.Fatalf("FormData mutated: %q, %v", got, err)
+	}
+}
+
+func mustHeaders(t *testing.T, name, value string) *Headers {
+	t.Helper()
+	headers := NewHeaders()
+	if err := headers.Append(name, value); err != nil {
+		t.Fatal(err)
+	}
+	return headers
 }
 
 func TestFetchDistinguishesHTTPErrorStatusFromNetworkError(t *testing.T) {
@@ -149,6 +258,111 @@ func TestFetchDistinguishesHTTPErrorStatusFromNetworkError(t *testing.T) {
 		}
 	})
 }
+
+func TestFetchAbortDeliversOneFailureAndCancelsRequest(t *testing.T) {
+	baseURL, _ := url.Parse("https://example.test/page")
+	t.Run("before start", func(t *testing.T) {
+		controller := NewAbortController()
+		controller.Abort()
+		called := 0
+		New(baseURL, func(context.Context, *network.Request) (*network.Response, error) {
+			t.Fatal("request started")
+			return nil, nil
+		}).Fetch(Request{URL: "/data", Signal: controller.Signal()}, nil, func(message string) {
+			called++
+			if message != "AbortError: Fetch was aborted" {
+				t.Errorf("failure = %q", message)
+			}
+		})
+		if called != 1 {
+			t.Fatalf("callbacks = %d", called)
+		}
+	})
+	t.Run("in flight", func(t *testing.T) {
+		controller := NewAbortController()
+		started := make(chan struct{})
+		failure := make(chan string, 1)
+		api := New(baseURL, func(ctx context.Context, _ *network.Request) (*network.Response, error) {
+			close(started)
+			<-ctx.Done()
+			return nil, ctx.Err()
+		})
+		api.Fetch(Request{URL: "/data", Signal: controller.Signal()}, func(Response) { t.Error("success called") }, func(message string) { failure <- message })
+		<-started
+		controller.Abort()
+		if got := <-failure; got != "AbortError: Fetch was aborted" {
+			t.Fatalf("failure = %q", got)
+		}
+	})
+}
+
+func TestFetchTimeoutUsesInjectableClockAndDeliversOneFailure(t *testing.T) {
+	baseURL, _ := url.Parse("https://example.test/page")
+	clock := &fetchFakeClock{}
+	started := make(chan struct{})
+	failure := make(chan string, 2)
+	api := NewPageWithClock(context.Background(), baseURL, func(ctx context.Context, _ *network.Request) (*network.Response, error) {
+		close(started)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}, func(callback func()) bool { callback(); return true }, clock)
+	api.Fetch(Request{URL: "/slow", Timeout: time.Second}, func(Response) { t.Error("success called") }, func(message string) { failure <- message })
+	<-started
+	clock.Fire()
+	if got := <-failure; got != "TimeoutError: Fetch timed out" {
+		t.Fatalf("failure = %q", got)
+	}
+	select {
+	case extra := <-failure:
+		t.Fatalf("extra callback = %q", extra)
+	default:
+	}
+}
+
+func TestFetchDiscardsLateResponseAfterAbort(t *testing.T) {
+	baseURL, _ := url.Parse("https://example.test/page")
+	controller := NewAbortController()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	success := make(chan struct{}, 1)
+	failure := make(chan string, 1)
+	api := New(baseURL, func(context.Context, *network.Request) (*network.Response, error) {
+		close(started)
+		<-release
+		return &network.Response{StatusCode: http.StatusOK}, nil
+	})
+	api.Fetch(Request{URL: "/late", Signal: controller.Signal()}, func(Response) { success <- struct{}{} }, func(message string) { failure <- message })
+	<-started
+	controller.Abort()
+	close(release)
+	if got := <-failure; got != "AbortError: Fetch was aborted" {
+		t.Fatalf("failure = %q", got)
+	}
+	select {
+	case <-success:
+		t.Fatal("late response delivered success")
+	default:
+	}
+}
+
+type fetchFakeClock struct {
+	callback func()
+	stopped  bool
+}
+
+func (clock *fetchFakeClock) AfterFunc(_ time.Duration, callback func()) Timer {
+	clock.callback = callback
+	return fetchFakeTimer{clock}
+}
+func (clock *fetchFakeClock) Fire() {
+	if clock.callback != nil && !clock.stopped {
+		clock.callback()
+	}
+}
+
+type fetchFakeTimer struct{ clock *fetchFakeClock }
+
+func (timer fetchFakeTimer) Stop() bool { timer.clock.stopped = true; return true }
 
 func TestConcurrentFetchesDeliverCallbacksInCompletionOrder(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -215,6 +429,57 @@ func TestConcurrentFetchesDeliverCallbacksInCompletionOrder(t *testing.T) {
 	}
 	cancel()
 	<-workerDone
+}
+
+func TestFetchRejectsRequestsAbovePerPageConcurrencyLimit(t *testing.T) {
+	baseURL, _ := url.Parse("https://example.test/page")
+	release := make(chan struct{})
+	started := make(chan struct{}, 16)
+	failures := make(chan string, 1)
+	api := New(baseURL, func(context.Context, *network.Request) (*network.Response, error) {
+		started <- struct{}{}
+		<-release
+		return &network.Response{}, nil
+	})
+	for index := 0; index < 16; index++ {
+		api.Fetch(Request{URL: "/held"}, nil, nil)
+	}
+	for index := 0; index < 16; index++ {
+		<-started
+	}
+	api.Fetch(Request{URL: "/rejected"}, nil, func(message string) { failures <- message })
+	if got := <-failures; got != "QuotaError: Fetch concurrency limit reached" {
+		t.Fatalf("failure = %q", got)
+	}
+	close(release)
+	api.Close()
+}
+
+func TestFetchRejectsRequestsAboveSharedSessionLimit(t *testing.T) {
+	baseURL, _ := url.Parse("https://example.test/page")
+	limiter := NewLimiter(1)
+	release := make(chan struct{})
+	started := make(chan struct{})
+	failure := make(chan string, 1)
+	first := New(baseURL, func(context.Context, *network.Request) (*network.Response, error) {
+		close(started)
+		<-release
+		return &network.Response{}, nil
+	})
+	second := New(baseURL, func(context.Context, *network.Request) (*network.Response, error) {
+		t.Fatal("second request started")
+		return nil, nil
+	})
+	first.SetLimiter(limiter)
+	second.SetLimiter(limiter)
+	first.Fetch(Request{URL: "/first"}, nil, nil)
+	<-started
+	second.Fetch(Request{URL: "/second"}, nil, func(message string) { failure <- message })
+	if got := <-failure; got != "QuotaError: Session Fetch concurrency limit reached" {
+		t.Fatalf("failure = %q", got)
+	}
+	close(release)
+	first.Close()
 }
 
 func TestCloseWaitsForCanceledFetchOperation(t *testing.T) {

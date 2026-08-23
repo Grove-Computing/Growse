@@ -5,12 +5,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
 	"sync"
+	"time"
+	"unicode/utf8"
 
 	"github.com/Grove-Computing/Growse/internal/network"
+	formapi "github.com/Grove-Computing/Growse/internal/webapi/form"
+	urlapi "github.com/Grove-Computing/Growse/internal/webapi/url"
 )
 
 // Header preserves every value associated with an HTTP header name.
@@ -25,14 +30,25 @@ const (
 	CredentialsInclude    CredentialsMode = "include"
 )
 
+const (
+	Millisecond time.Duration = time.Millisecond
+	Second      time.Duration = time.Second
+)
+
 // Request describes an HTTP request issued by a WebGo program.
 // Body takes precedence over Text when both are set.
 type Request struct {
 	Method      string
 	URL         string
 	Header      Header
+	Headers     *Headers
 	Body        []byte
 	Text        string
+	JSON        string
+	Params      *urlapi.URLSearchParams
+	FormData    *formapi.FormData
+	Signal      *AbortSignal
+	Timeout     time.Duration
 	Credentials CredentialsMode
 }
 
@@ -44,6 +60,7 @@ type Response struct {
 	URL        string
 	Redirected bool
 	Header     Header
+	Headers    *ResponseHeaders
 	body       *responseBody
 }
 
@@ -54,6 +71,7 @@ type responseBody struct {
 
 // ErrBodyConsumed reports a second attempt to consume one response body.
 var ErrBodyConsumed = errors.New("response body has already been consumed")
+var ErrInvalidText = errors.New("response body is not valid UTF-8")
 
 // Bytes consumes the response body and returns a defensive copy.
 func (response Response) Bytes() ([]byte, error) {
@@ -70,8 +88,13 @@ func (response Response) Text() (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if !utf8.Valid(body) {
+		return "", ErrInvalidText
+	}
 	return string(body), nil
 }
+
+func (response Response) BodyUsed() bool { return response.body != nil && response.body.consumed }
 
 // JSON consumes and decodes the response body into target.
 func (response Response) JSON(target any) error {
@@ -95,13 +118,16 @@ func (response Response) consumeBody() ([]byte, error) {
 
 // API binds WebGo Fetch calls to one page URL and network executor.
 type API struct {
-	ctx     context.Context
-	baseURL *url.URL
-	do      func(context.Context, *network.Request) (*network.Response, error)
-	enqueue func(func()) bool
-	mu      sync.Mutex
-	closed  bool
-	active  sync.WaitGroup
+	ctx      context.Context
+	baseURL  *url.URL
+	do       func(context.Context, *network.Request) (*network.Response, error)
+	enqueue  func(func()) bool
+	clock    Clock
+	limiter  *Limiter
+	mu       sync.Mutex
+	closed   bool
+	inFlight int
+	active   sync.WaitGroup
 }
 
 // New creates a page-scoped Fetch API.
@@ -117,7 +143,25 @@ func NewPage(ctx context.Context, baseURL *url.URL, do func(context.Context, *ne
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return &API{ctx: ctx, baseURL: cloneURL(baseURL), do: do, enqueue: enqueue}
+	return NewPageWithClock(ctx, baseURL, do, enqueue, systemClock{})
+}
+
+func NewPageWithClock(ctx context.Context, baseURL *url.URL, do func(context.Context, *network.Request) (*network.Response, error), enqueue func(func()) bool, clock Clock) *API {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if clock == nil {
+		clock = systemClock{}
+	}
+	return &API{ctx: ctx, baseURL: cloneURL(baseURL), do: do, enqueue: enqueue, clock: clock}
+}
+
+func (api *API) SetLimiter(limiter *Limiter) {
+	if api != nil {
+		api.mu.Lock()
+		api.limiter = limiter
+		api.mu.Unlock()
+	}
 }
 
 // Fetch starts request asynchronously and delivers exactly one callback.
@@ -126,6 +170,14 @@ func (api *API) Fetch(request Request, success func(Response), failure func(stri
 	closed := api.closed
 	api.mu.Unlock()
 	if closed {
+		return
+	}
+	if request.Signal != nil && request.Signal.Aborted() {
+		api.deliver(func() {
+			if failure != nil {
+				failure("AbortError: Fetch was aborted")
+			}
+		})
 		return
 	}
 	networkRequest, err := api.prepare(request)
@@ -142,12 +194,64 @@ func (api *API) Fetch(request Request, success func(Response), failure func(stri
 		api.mu.Unlock()
 		return
 	}
+	if api.inFlight >= 16 {
+		api.mu.Unlock()
+		api.deliver(func() {
+			if failure != nil {
+				failure("QuotaError: Fetch concurrency limit reached")
+			}
+		})
+		return
+	}
+	if !api.limiter.Acquire() {
+		api.mu.Unlock()
+		api.deliver(func() {
+			if failure != nil {
+				failure("QuotaError: Session Fetch concurrency limit reached")
+			}
+		})
+		return
+	}
+	api.inFlight++
 	api.active.Add(1)
 	api.mu.Unlock()
 	go func() {
-		defer api.active.Done()
-		response, fetchError := api.do(api.ctx, networkRequest)
+		defer func() {
+			api.mu.Lock()
+			api.inFlight--
+			limiter := api.limiter
+			api.mu.Unlock()
+			limiter.Release()
+			api.active.Done()
+		}()
+		ctx, cancel := context.WithCancel(api.ctx)
+		unsubscribe := request.Signal.subscribe(cancel)
+		timedOut := make(chan struct{})
+		var timer Timer
+		if request.Timeout > 0 {
+			timer = api.clock.AfterFunc(request.Timeout, func() { close(timedOut); cancel() })
+		}
+		response, fetchError := api.do(ctx, networkRequest)
+		if timer != nil {
+			timer.Stop()
+		}
+		unsubscribe()
+		cancel()
 		api.deliver(func() {
+			select {
+			case <-timedOut:
+				if failure != nil {
+					failure("TimeoutError: Fetch timed out")
+				}
+				return
+			default:
+			}
+			if request.Signal != nil && request.Signal.Aborted() {
+				if failure != nil {
+					failure("AbortError: Fetch was aborted")
+				}
+				return
+			}
 			if fetchError != nil {
 				if failure != nil {
 					failure(fetchError.Error())
@@ -190,8 +294,12 @@ func newResponse(response *network.Response) Response {
 		return Response{}
 	}
 	header := make(Header, len(response.Header))
+	entries := make([]HeaderEntry, 0)
 	for name, values := range response.Header {
 		header[name] = append([]string(nil), values...)
+		for _, value := range values {
+			entries = append(entries, HeaderEntry{Name: name, Value: value})
+		}
 	}
 	finalURL := ""
 	if response.URL != nil {
@@ -203,6 +311,7 @@ func newResponse(response *network.Response) Response {
 		URL:        finalURL,
 		Redirected: response.Redirected,
 		Header:     header,
+		Headers:    &ResponseHeaders{entries: entries},
 		body:       &responseBody{value: append([]byte(nil), response.Body...)},
 	}
 }
@@ -234,10 +343,9 @@ func (api *API) prepare(request Request) (*network.Request, error) {
 		return nil, errors.New("Fetch URL must use HTTP or HTTPS")
 	}
 
-	hasBody := request.Body != nil || request.Text != ""
-	body := append([]byte(nil), request.Body...)
-	if request.Body == nil && request.Text != "" {
-		body = []byte(request.Text)
+	body, contentType, hasBody, err := requestBody(request)
+	if err != nil {
+		return nil, err
 	}
 	method := strings.ToUpper(strings.TrimSpace(request.Method))
 	if method == "" {
@@ -256,20 +364,22 @@ func (api *API) prepare(request Request) (*network.Request, error) {
 	if credentials != network.CredentialsOmit && credentials != network.CredentialsSameOrigin && credentials != network.CredentialsInclude {
 		return nil, errors.New("invalid Fetch credentials mode")
 	}
-	header := make(http.Header, len(request.Header))
-	for name, values := range request.Header {
-		if !validToken(name) {
-			return nil, errors.New("invalid Fetch header name")
+	if request.Header != nil && request.Headers != nil {
+		return nil, errors.New("Fetch request cannot use both Header and Headers")
+	}
+	headers := request.Headers
+	if headers == nil {
+		headers, err = legacyHeaders(request.Header)
+		if err != nil {
+			return nil, err
 		}
-		if forbiddenHeader(name) {
-			return nil, errors.New("forbidden Fetch request header: " + name)
-		}
-		for _, value := range values {
-			if strings.ContainsAny(value, "\r\n\x00") {
-				return nil, errors.New("invalid Fetch header value")
-			}
-		}
-		header[name] = append([]string(nil), values...)
+	}
+	header, err := headers.httpHeader()
+	if err != nil {
+		return nil, err
+	}
+	if contentType != "" && header.Get("Content-Type") == "" {
+		header.Set("Content-Type", contentType)
 	}
 	return &network.Request{
 		Method:      method,
@@ -280,6 +390,65 @@ func (api *API) prepare(request Request) (*network.Request, error) {
 		Kind:        network.RequestFetch,
 		Credentials: credentials,
 	}, nil
+}
+
+const maxRequestBodySize = 1024 * 1024
+
+func requestBody(request Request) ([]byte, string, bool, error) {
+	count := 0
+	if request.Body != nil {
+		count++
+	}
+	if request.Text != "" {
+		count++
+	}
+	if request.JSON != "" {
+		count++
+	}
+	if request.Params != nil {
+		count++
+	}
+	if request.FormData != nil {
+		count++
+	}
+	if count > 1 {
+		return nil, "", false, errors.New("Fetch request body must use exactly one body type")
+	}
+	if count == 0 {
+		return nil, "", false, nil
+	}
+	var body []byte
+	contentType := ""
+	switch {
+	case request.Body != nil:
+		body = append([]byte(nil), request.Body...)
+	case request.Text != "":
+		if !utf8.ValidString(request.Text) {
+			return nil, "", false, errors.New("invalid Fetch text body")
+		}
+		body, contentType = []byte(request.Text), "text/plain;charset=UTF-8"
+	case request.JSON != "":
+		if !utf8.ValidString(request.JSON) || !json.Valid([]byte(request.JSON)) {
+			return nil, "", false, errors.New("invalid Fetch JSON body")
+		}
+		body, contentType = []byte(request.JSON), "application/json"
+	case request.Params != nil:
+		encoded, err := request.Params.Encode()
+		if err != nil {
+			return nil, "", false, fmt.Errorf("encode Fetch URLSearchParams body: %w", err)
+		}
+		body, contentType = []byte(encoded), "application/x-www-form-urlencoded;charset=UTF-8"
+	case request.FormData != nil:
+		encoded, err := request.FormData.Encode()
+		if err != nil {
+			return nil, "", false, fmt.Errorf("encode Fetch FormData body: %w", err)
+		}
+		body, contentType = []byte(encoded), formapi.ContentTypeURLEncoded
+	}
+	if len(body) > maxRequestBodySize {
+		return nil, "", false, errors.New("Fetch request body exceeds size limit")
+	}
+	return body, contentType, true, nil
 }
 
 func allowedMethod(method string) bool {

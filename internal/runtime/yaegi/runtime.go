@@ -21,10 +21,12 @@ import (
 	consoleapi "github.com/Grove-Computing/Growse/internal/webapi/console"
 	domapi "github.com/Grove-Computing/Growse/internal/webapi/dom"
 	fetchapi "github.com/Grove-Computing/Growse/internal/webapi/fetch"
+	formapi "github.com/Grove-Computing/Growse/internal/webapi/form"
 	navigationapi "github.com/Grove-Computing/Growse/internal/webapi/navigation"
 	schedulerapi "github.com/Grove-Computing/Growse/internal/webapi/scheduler"
 	storageapi "github.com/Grove-Computing/Growse/internal/webapi/storage"
 	strconvapi "github.com/Grove-Computing/Growse/internal/webapi/strconv"
+	urlapi "github.com/Grove-Computing/Growse/internal/webapi/url"
 	"github.com/traefik/yaegi/interp"
 )
 
@@ -99,6 +101,7 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 	console := consoleapi.New(environment.ConsoleLog)
 	dom := domapi.New(environment.Document, environment.Events, environment.OnMutation)
 	fetch := fetchapi.NewPage(r.runtimeCtx, environment.BaseURL, environment.Fetch, r.enqueueCallback)
+	fetch.SetLimiter(environment.FetchLimiter)
 	navigation := navigationapi.NewPage(environment.BaseURL, environment.Navigate)
 	navigation.SetPushStateHandler(environment.HistoryPush)
 	navigation.SetReplaceStateHandler(environment.HistoryReplace)
@@ -122,14 +125,28 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 			"QuerySelector":  reflect.ValueOf(dom.QuerySelector),
 		},
 		"growse/fetch/fetch": {
+			"AbortController":       reflect.ValueOf((*fetchapi.AbortController)(nil)),
+			"AbortSignal":           reflect.ValueOf((*fetchapi.AbortSignal)(nil)),
 			"CredentialsInclude":    reflect.ValueOf(fetchapi.CredentialsInclude),
 			"CredentialsMode":       reflect.ValueOf((*fetchapi.CredentialsMode)(nil)),
 			"CredentialsOmit":       reflect.ValueOf(fetchapi.CredentialsOmit),
 			"CredentialsSameOrigin": reflect.ValueOf(fetchapi.CredentialsSameOrigin),
+			"Millisecond":           reflect.ValueOf(fetchapi.Millisecond),
+			"Second":                reflect.ValueOf(fetchapi.Second),
 			"Fetch":                 reflect.ValueOf(fetch.Fetch),
 			"Header":                reflect.ValueOf((*fetchapi.Header)(nil)),
+			"HeaderEntry":           reflect.ValueOf((*fetchapi.HeaderEntry)(nil)),
+			"Headers":               reflect.ValueOf((*fetchapi.Headers)(nil)),
+			"NewHeaders":            reflect.ValueOf(fetchapi.NewHeaders),
+			"NewAbortController":    reflect.ValueOf(fetchapi.NewAbortController),
 			"Request":               reflect.ValueOf((*fetchapi.Request)(nil)),
 			"Response":              reflect.ValueOf((*fetchapi.Response)(nil)),
+			"ResponseHeaders":       reflect.ValueOf((*fetchapi.ResponseHeaders)(nil)),
+		},
+		"growse/form/form": {
+			"Entry":    reflect.ValueOf((*formapi.Entry)(nil)),
+			"FormData": reflect.ValueOf((*formapi.FormData)(nil)),
+			"New":      reflect.ValueOf(formapi.New),
 		},
 		"growse/navigation/navigation": {
 			"Back":            reflect.ValueOf(navigation.Back),
@@ -169,6 +186,12 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 		},
 		"growse/strconv/strconv": {
 			"Itoa": reflect.ValueOf(strconvapi.Itoa),
+		},
+		"growse/url/url": {
+			"Entry":           reflect.ValueOf((*urlapi.Entry)(nil)),
+			"New":             reflect.ValueOf(urlapi.New),
+			"Parse":           reflect.ValueOf(urlapi.Parse),
+			"URLSearchParams": reflect.ValueOf((*urlapi.URLSearchParams)(nil)),
 		},
 	}); err != nil {
 		return fmt.Errorf("register Growse Web API: %w", err)

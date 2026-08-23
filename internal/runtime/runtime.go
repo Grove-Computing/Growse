@@ -10,6 +10,7 @@ import (
 	"github.com/Grove-Computing/Growse/internal/events"
 	"github.com/Grove-Computing/Growse/internal/network"
 	storagecore "github.com/Grove-Computing/Growse/internal/storage"
+	fetchapi "github.com/Grove-Computing/Growse/internal/webapi/fetch"
 )
 
 // Script は文書内で見つかった1つのGoソースを表す。
@@ -25,6 +26,7 @@ type Environment struct {
 	Events          *events.Dispatcher
 	BaseURL         *url.URL
 	Fetch           func(context.Context, *network.Request) (*network.Response, error)
+	FetchLimiter    *fetchapi.Limiter
 	Navigate        func(*url.URL) error
 	HistoryPush     func(string, *url.URL) error
 	HistoryReplace  func(string, *url.URL) error
