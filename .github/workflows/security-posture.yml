@@ -32,7 +32,7 @@ jobs:
           ./internal/animation ./internal/browser ./internal/css ./internal/dom
           ./internal/events ./internal/forms ./internal/html ./internal/layout
           ./internal/network ./internal/paint ./internal/securityscan ./internal/storage
-          ./internal/style ./internal/supplychain ./internal/webapi/...
+          ./internal/style ./internal/supplychain ./internal/updater ./internal/webapi/...
       - uses: github/codeql-action/upload-sarif@181d5eefc20863364f96762470ba6f862bdef56b # v3.29.2
         with:
           sarif_file: gosec.sarif

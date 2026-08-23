@@ -27,6 +27,7 @@ import (
 	"github.com/Grove-Computing/Growse/internal/network"
 	paintmodel "github.com/Grove-Computing/Growse/internal/paint"
 	"github.com/Grove-Computing/Growse/internal/style"
+	"github.com/Grove-Computing/Growse/internal/updater"
 )
 
 func TestCommandClipTranslatesDocumentCoordinatesToCommandCoordinates(t *testing.T) {
@@ -98,6 +99,25 @@ func TestPixelBorderRadiiPreservesEllipticalCorners(t *testing.T) {
 type stubNavigator struct {
 	page *browser.Page
 	err  error
+}
+
+type stubApplicationUpdater struct {
+	release   updater.Release
+	available bool
+	checkErr  error
+	applyErr  error
+	applied   chan updater.Release
+}
+
+func (stub *stubApplicationUpdater) Check(context.Context) (updater.Release, bool, error) {
+	return stub.release, stub.available, stub.checkErr
+}
+
+func (stub *stubApplicationUpdater) Apply(_ context.Context, release updater.Release) error {
+	if stub.applied != nil {
+		stub.applied <- release
+	}
+	return stub.applyErr
 }
 
 func (navigator *stubNavigator) Navigate(context.Context, string) (*browser.Page, error) {
@@ -484,6 +504,38 @@ func TestVerticalTabPointerControlsCreateSelectAndCloseTabs(t *testing.T) {
 	ui.handleTabActions(gtx)
 	if got := len(session.Tabs()); got != 2 {
 		t.Fatalf("tab count after new tab click = %d, want 2", got)
+	}
+}
+
+func TestAvailableApplicationUpdateIsAppliedFromToolbar(t *testing.T) {
+	applicationUpdater := &stubApplicationUpdater{
+		release: updater.Release{Version: "v0.12.0"}, available: true,
+		applied: make(chan updater.Release, 1),
+	}
+	restarted := false
+	ui := NewBrowserUIWithTabsAndUpdater(nil, nil, nil, applicationUpdater, func() { restarted = true })
+	defer ui.Close()
+	checkResult := <-ui.updateResults
+	ui.updateResults <- checkResult
+	ui.consumeUpdateResults()
+	if !ui.updateAvailable || ui.updateRelease.Version != "v0.12.0" {
+		t.Fatalf("update state = available %v, release %#v", ui.updateAvailable, ui.updateRelease)
+	}
+
+	gtx := layout.Context{
+		Ops: new(op.Ops), Constraints: layout.Exact(image.Pt(1280, 800)),
+		Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1},
+	}
+	ui.updateButton.Click()
+	ui.handleActions(gtx)
+	if applied := <-applicationUpdater.applied; applied.Version != "v0.12.0" {
+		t.Fatalf("applied release = %#v", applied)
+	}
+	applyResult := <-ui.updateResults
+	ui.updateResults <- applyResult
+	ui.consumeUpdateResults()
+	if ui.updateAvailable || ui.updating || !restarted {
+		t.Fatalf("completed update state = available %v, updating %v, restarted %v", ui.updateAvailable, ui.updating, restarted)
 	}
 }
 

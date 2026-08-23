@@ -28,7 +28,7 @@ fi
 
 mkdir -p "$package_dir"
 output="${package_dir}/growse"
-ldflags="-s -w -X gioui.org/app.ID=${application_id}"
+ldflags="-s -w -X gioui.org/app.ID=${application_id} -X github.com/Grove-Computing/Growse/internal/updater.CurrentVersion=${release_tag}"
 short_version="${release_tag#v}"
 short_version="${short_version%%-*}"
 

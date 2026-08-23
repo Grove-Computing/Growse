@@ -39,6 +39,7 @@ for value in \
     "examples/persistent-app" \
     'application_id="io.github.grovecomputing.Growse"' \
     '-X gioui.org/app.ID=${application_id}' \
+    '-X github.com/Grove-Computing/Growse/internal/updater.CurrentVersion=${release_tag}' \
     "packaging/linux/io.github.grovecomputing.Growse.desktop" \
     "packaging/linux/io.github.grovecomputing.Growse.png" \
     "Growse.app/Contents/MacOS/growse" \

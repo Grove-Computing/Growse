@@ -38,6 +38,7 @@ import (
 	"github.com/Grove-Computing/Growse/internal/network"
 	paintmodel "github.com/Grove-Computing/Growse/internal/paint"
 	stylemodel "github.com/Grove-Computing/Growse/internal/style"
+	"github.com/Grove-Computing/Growse/internal/updater"
 )
 
 //go:embed assets/gopher-blue.png
@@ -70,6 +71,7 @@ type BrowserUI struct {
 	forwardButton     widget.Clickable
 	reloadButton      widget.Clickable
 	goButton          widget.Clickable
+	updateButton      widget.Clickable
 	newTabButton      widget.Clickable
 	tabRowButtons     map[browser.TabID]*widget.Clickable
 	tabCloseButtons   map[browser.TabID]*widget.Clickable
@@ -99,6 +101,14 @@ type BrowserUI struct {
 	layoutBuild       func(*dom.Document, stylemodel.Map, float32, float32, float32, float32) *layoutengine.Tree
 	layoutCache       documentLayoutCache
 	scrollRevision    uint64
+	updater           ApplicationUpdater
+	updateResults     chan applicationUpdateResult
+	updateContext     context.Context
+	cancelUpdate      context.CancelFunc
+	updateRelease     updater.Release
+	updateAvailable   bool
+	updating          bool
+	onUpdateApplied   func()
 }
 
 type documentLayoutCache struct {
@@ -192,6 +202,19 @@ type navigationResult struct {
 	err   error
 }
 
+// ApplicationUpdater provides the release operations used by browser chrome.
+type ApplicationUpdater interface {
+	Check(context.Context) (updater.Release, bool, error)
+	Apply(context.Context, updater.Release) error
+}
+
+type applicationUpdateResult struct {
+	release   updater.Release
+	available bool
+	applying  bool
+	err       error
+}
+
 type tabNavigation struct {
 	id     uint64
 	cancel context.CancelFunc
@@ -204,12 +227,18 @@ func NewBrowserUI(navigator Navigator, invalidate func()) *BrowserUI {
 
 // NewBrowserUIWithTabs creates browser chrome backed by a tab source.
 func NewBrowserUIWithTabs(navigator Navigator, tabs TabController, invalidate func()) *BrowserUI {
+	return NewBrowserUIWithTabsAndUpdater(navigator, tabs, invalidate, nil, nil)
+}
+
+// NewBrowserUIWithTabsAndUpdater creates browser chrome with automatic release updates.
+func NewBrowserUIWithTabsAndUpdater(navigator Navigator, tabs TabController, invalidate func(), applicationUpdater ApplicationUpdater, onUpdateApplied func()) *BrowserUI {
 	gopherImage, err := png.Decode(bytes.NewReader(gopherPNG))
 	if err != nil {
 		panic("decode embedded Go Gopher image: " + err.Error())
 	}
 
 	cursorImage, cursorErr := loadGopherCursor()
+	updateContext, cancelUpdate := context.WithCancel(context.Background())
 	ui := &BrowserUI{
 		theme:            material.NewTheme(),
 		navigator:        navigator,
@@ -235,6 +264,11 @@ func NewBrowserUIWithTabs(navigator Navigator, tabs TabController, invalidate fu
 		tabCloseButtons:  make(map[browser.TabID]*widget.Clickable),
 		tabShortcutDown:  make(map[key.Name]bool),
 		layoutBuild:      layoutengine.BuildWithScroll,
+		updater:          applicationUpdater,
+		updateResults:    make(chan applicationUpdateResult, 2),
+		updateContext:    updateContext,
+		cancelUpdate:     cancelUpdate,
+		onUpdateApplied:  onUpdateApplied,
 	}
 	if cursorErr != nil {
 		slog.Error("Gopherカーソルを初期化できませんでした", "component", "ui", "error", cursorErr)
@@ -250,6 +284,7 @@ func NewBrowserUIWithTabs(navigator Navigator, tabs TabController, invalidate fu
 	ui.address.SetText(defaultURL)
 	ui.pageList.Axis = layout.Vertical
 	ui.tabList.Axis = layout.Vertical
+	ui.startUpdateCheck()
 	return ui
 }
 
@@ -544,6 +579,7 @@ func (ui *BrowserUI) handleTabKeyboardShortcuts(gtx layout.Context) {
 
 func (ui *BrowserUI) handleActions(gtx layout.Context) {
 	ui.consumeNavigationResult()
+	ui.consumeUpdateResults()
 	ui.handleTabActions(gtx)
 
 	for {
@@ -571,6 +607,66 @@ func (ui *BrowserUI) handleActions(gtx layout.Context) {
 	for ui.reloadButton.Clicked(gtx) {
 		if tabID, navigator := ui.activeNavigationTarget(); navigator != nil && navigator.Page() != nil {
 			ui.startPageLoad(tabID, navigator, "ページを再読み込み中", navigator.Reload)
+		}
+	}
+	for ui.updateButton.Clicked(gtx) {
+		ui.startUpdate()
+	}
+}
+
+func (ui *BrowserUI) startUpdateCheck() {
+	if ui.updater == nil {
+		return
+	}
+	go func() {
+		release, available, err := ui.updater.Check(ui.updateContext)
+		ui.updateResults <- applicationUpdateResult{release: release, available: available, err: err}
+		ui.invalidate()
+	}()
+}
+
+func (ui *BrowserUI) startUpdate() {
+	if ui.updater == nil || !ui.updateAvailable || ui.updating {
+		return
+	}
+	ui.updating = true
+	ui.statusHasError = false
+	ui.status = "Growse " + ui.updateRelease.Version + " をダウンロードして検証中"
+	release := ui.updateRelease
+	go func() {
+		err := ui.updater.Apply(ui.updateContext, release)
+		ui.updateResults <- applicationUpdateResult{release: release, applying: true, err: err}
+		ui.invalidate()
+	}()
+}
+
+func (ui *BrowserUI) consumeUpdateResults() {
+	for {
+		select {
+		case result := <-ui.updateResults:
+			if !result.applying {
+				if result.err != nil {
+					slog.Warn("Growseの最新版を確認できませんでした", "component", "updater", "error", result.err)
+					continue
+				}
+				ui.updateRelease = result.release
+				ui.updateAvailable = result.available
+				continue
+			}
+			ui.updating = false
+			if result.err != nil {
+				ui.statusHasError = true
+				ui.status = "Growseを更新できませんでした: " + result.err.Error()
+				continue
+			}
+			ui.updateAvailable = false
+			ui.statusHasError = false
+			ui.status = "Growse " + result.release.Version + " へ更新しました。再起動します"
+			if ui.onUpdateApplied != nil {
+				ui.onUpdateApplied()
+			}
+		default:
+			return
 		}
 	}
 }
@@ -854,6 +950,7 @@ func (ui *BrowserUI) tabIsActive(id browser.TabID) bool {
 
 // Close cancels an in-flight navigation when the window closes.
 func (ui *BrowserUI) Close() {
+	ui.cancelUpdate()
 	if ui.navigator != nil {
 		ui.navigator.ClearHover()
 	}
@@ -897,6 +994,8 @@ func (ui *BrowserUI) layoutToolbar(gtx layout.Context) layout.Dimensions {
 						return ui.layoutToolbarButton(gtx, &ui.reloadButton, ui.reloadIcon, "再読込", canReload)
 					}),
 					layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
+					layout.Rigid(ui.layoutUpdateButton),
+					layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
 					layout.Flexed(1, ui.layoutAddressBar),
 					layout.Rigid(layout.Spacer{Width: unit.Dp(4)}.Layout),
 					layout.Rigid(ui.layoutGopherButton),
@@ -911,6 +1010,25 @@ func (ui *BrowserUI) layoutToolbar(gtx layout.Context) layout.Dimensions {
 			}),
 		)
 	})
+}
+
+func (ui *BrowserUI) layoutUpdateButton(gtx layout.Context) layout.Dimensions {
+	if !ui.updateAvailable && !ui.updating {
+		return layout.Dimensions{}
+	}
+	label := "更新 " + ui.updateRelease.Version
+	if ui.updating {
+		label = "更新中…"
+		gtx = gtx.Disabled()
+	}
+	gtx.Constraints.Min.Y = gtx.Dp(controlHeight)
+	gtx.Constraints.Max.Y = gtx.Dp(controlHeight)
+	button := material.Button(ui.theme, &ui.updateButton, label)
+	button.Background = color.NRGBA{R: 37, G: 99, B: 235, A: 255}
+	button.Color = color.NRGBA{R: 255, G: 255, B: 255, A: 255}
+	button.CornerRadius = unit.Dp(10)
+	button.Inset = layout.Inset{Top: unit.Dp(8), Right: unit.Dp(12), Bottom: unit.Dp(8), Left: unit.Dp(12)}
+	return button.Layout(gtx)
 }
 
 func (ui *BrowserUI) layoutToolbarButton(gtx layout.Context, button *widget.Clickable, icon *widget.Icon, description string, enabled bool) layout.Dimensions {
