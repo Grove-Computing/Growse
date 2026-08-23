@@ -32,6 +32,7 @@ import (
 	xdraw "golang.org/x/image/draw"
 
 	"github.com/Grove-Computing/Growse/internal/browser"
+	devtoolsmodel "github.com/Grove-Computing/Growse/internal/devtools"
 	"github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/forms"
 	layoutengine "github.com/Grove-Computing/Growse/internal/layout"
@@ -52,6 +53,7 @@ const (
 	addressBarHeight   = unit.Dp(48)
 	gopherButtonWidth  = unit.Dp(72)
 	gopherButtonHeight = unit.Dp(52)
+	devToolsHeight     = unit.Dp(280)
 )
 
 // BrowserUI owns the widgets displayed around the page viewport.
@@ -72,10 +74,19 @@ type BrowserUI struct {
 	reloadButton      widget.Clickable
 	goButton          widget.Clickable
 	updateButton      widget.Clickable
+	devToolsButton    widget.Clickable
+	devToolsClose     widget.Clickable
+	devToolsClear     widget.Clickable
+	devToolsConsole   widget.Clickable
+	devToolsInspector widget.Clickable
+	devToolsNetwork   widget.Clickable
+	devToolsFilter    widget.Clickable
 	newTabButton      widget.Clickable
 	tabRowButtons     map[browser.TabID]*widget.Clickable
 	tabCloseButtons   map[browser.TabID]*widget.Clickable
 	tabShortcutDown   map[key.Name]bool
+	devToolsStates    map[browser.TabID]devToolsTabState
+	devToolsList      widget.List
 	pageList          widget.List
 	tabList           widget.List
 	viewportClick     gesture.Click
@@ -124,6 +135,21 @@ type browserChromeGeometry struct {
 	tabRail  image.Rectangle
 	toolbar  image.Rectangle
 	viewport image.Rectangle
+	devTools image.Rectangle
+}
+
+type devToolsPanel string
+
+const (
+	devToolsPanelConsole   devToolsPanel = "Console"
+	devToolsPanelInspector devToolsPanel = "Inspector"
+	devToolsPanelNetwork   devToolsPanel = "Network"
+)
+
+type devToolsTabState struct {
+	Open   bool
+	Panel  devToolsPanel
+	Filter devtoolsmodel.ConsoleLevel
 }
 
 type tabRenderState struct {
@@ -263,6 +289,7 @@ func NewBrowserUIWithTabsAndUpdater(navigator Navigator, tabs TabController, inv
 		tabRowButtons:    make(map[browser.TabID]*widget.Clickable),
 		tabCloseButtons:  make(map[browser.TabID]*widget.Clickable),
 		tabShortcutDown:  make(map[key.Name]bool),
+		devToolsStates:   make(map[browser.TabID]devToolsTabState),
 		layoutBuild:      layoutengine.BuildWithScroll,
 		updater:          applicationUpdater,
 		updateResults:    make(chan applicationUpdateResult, 2),
@@ -284,6 +311,7 @@ func NewBrowserUIWithTabsAndUpdater(navigator Navigator, tabs TabController, inv
 	ui.address.SetText(defaultURL)
 	ui.pageList.Axis = layout.Vertical
 	ui.tabList.Axis = layout.Vertical
+	ui.devToolsList.Axis = layout.Vertical
 	ui.startUpdateCheck()
 	return ui
 }
@@ -295,8 +323,13 @@ func (ui *BrowserUI) Layout(gtx layout.Context) layout.Dimensions {
 	ui.handleActions(gtx)
 	ui.syncActiveTabChrome()
 
-	geometry := calculateBrowserChromeGeometry(gtx.Constraints.Max, gtx.Dp(tabRailWidth), gtx.Dp(toolbarHeight))
+	panelHeight := 0
+	if ui.devToolsState().Open {
+		panelHeight = gtx.Dp(devToolsHeight)
+	}
+	geometry := calculateBrowserChromeGeometryWithDevTools(gtx.Constraints.Max, gtx.Dp(tabRailWidth), gtx.Dp(toolbarHeight), panelHeight)
 	layoutRegion(gtx, geometry.viewport, ui.layoutViewport)
+	layoutRegion(gtx, geometry.devTools, ui.layoutDevTools)
 	layoutRegion(gtx, geometry.toolbar, ui.layoutToolbar)
 	layoutRegion(gtx, geometry.tabRail, ui.layoutTabRail)
 	ui.layoutGopherCursor(gtx)
@@ -305,15 +338,22 @@ func (ui *BrowserUI) Layout(gtx layout.Context) layout.Dimensions {
 }
 
 func calculateBrowserChromeGeometry(size image.Point, railWidth, toolbarHeight int) browserChromeGeometry {
+	return calculateBrowserChromeGeometryWithDevTools(size, railWidth, toolbarHeight, 0)
+}
+
+func calculateBrowserChromeGeometryWithDevTools(size image.Point, railWidth, toolbarHeight, panelHeight int) browserChromeGeometry {
 	railWidth = min(max(railWidth, 0), max(size.X, 0))
 	contentHeight := max(size.Y, 0)
 	toolbarHeight = min(max(toolbarHeight, 0), contentHeight)
+	panelHeight = min(max(panelHeight, 0), max(contentHeight-toolbarHeight, 0))
 	contentLeft := railWidth
 	contentRight := max(size.X, contentLeft)
+	panelTop := contentHeight - panelHeight
 	return browserChromeGeometry{
 		tabRail:  image.Rect(0, 0, railWidth, contentHeight),
 		toolbar:  image.Rect(contentLeft, 0, contentRight, toolbarHeight),
-		viewport: image.Rect(contentLeft, toolbarHeight, contentRight, contentHeight),
+		viewport: image.Rect(contentLeft, toolbarHeight, contentRight, panelTop),
+		devTools: image.Rect(contentLeft, panelTop, contentRight, contentHeight),
 	}
 }
 
@@ -507,6 +547,18 @@ func tabStateColor(tab browser.TabSnapshot) color.NRGBA {
 func (ui *BrowserUI) handleKeyboardShortcuts(gtx layout.Context) {
 	ui.handleTabKeyboardShortcuts(gtx)
 	for {
+		event, ok := gtx.Event(key.Filter{Name: key.NameF12})
+		if !ok {
+			break
+		}
+		keyEvent, ok := event.(key.Event)
+		if ok && keyEvent.State == key.Press {
+			state := ui.devToolsState()
+			state.Open = !state.Open
+			ui.setDevToolsState(state)
+		}
+	}
+	for {
 		event, ok := gtx.Event(key.Filter{Name: "R", Required: key.ModShortcut, Optional: key.ModShift})
 		if !ok {
 			return
@@ -611,6 +663,43 @@ func (ui *BrowserUI) handleActions(gtx layout.Context) {
 	}
 	for ui.updateButton.Clicked(gtx) {
 		ui.startUpdate()
+	}
+	for ui.devToolsButton.Clicked(gtx) {
+		state := ui.devToolsState()
+		state.Open = !state.Open
+		ui.setDevToolsState(state)
+	}
+	for ui.devToolsClose.Clicked(gtx) {
+		state := ui.devToolsState()
+		state.Open = false
+		ui.setDevToolsState(state)
+	}
+	for ui.devToolsConsole.Clicked(gtx) {
+		state := ui.devToolsState()
+		state.Panel = devToolsPanelConsole
+		ui.setDevToolsState(state)
+	}
+	for ui.devToolsInspector.Clicked(gtx) {
+		state := ui.devToolsState()
+		state.Panel = devToolsPanelInspector
+		ui.setDevToolsState(state)
+	}
+	for ui.devToolsNetwork.Clicked(gtx) {
+		state := ui.devToolsState()
+		state.Panel = devToolsPanelNetwork
+		ui.setDevToolsState(state)
+	}
+	for ui.devToolsFilter.Clicked(gtx) {
+		state := ui.devToolsState()
+		state.Filter = nextConsoleFilter(state.Filter)
+		ui.setDevToolsState(state)
+	}
+	for ui.devToolsClear.Clicked(gtx) {
+		if navigator := ui.activeNavigator(); navigator != nil {
+			if page := navigator.Page(); page != nil && page.DevTools != nil {
+				page.DevTools.ClearConsole()
+			}
+		}
 	}
 }
 
@@ -719,6 +808,7 @@ func (ui *BrowserUI) closeTab(id browser.TabID) bool {
 		return false
 	}
 	delete(ui.tabRenderStates, id)
+	delete(ui.devToolsStates, id)
 	delete(ui.tabRowButtons, id)
 	delete(ui.tabCloseButtons, id)
 	if ui.displayedTabID == id {
@@ -996,6 +1086,8 @@ func (ui *BrowserUI) layoutToolbar(gtx layout.Context) layout.Dimensions {
 					layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
 					layout.Rigid(ui.layoutUpdateButton),
 					layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
+					layout.Rigid(ui.layoutDevToolsButton),
+					layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
 					layout.Flexed(1, ui.layoutAddressBar),
 					layout.Rigid(layout.Spacer{Width: unit.Dp(4)}.Layout),
 					layout.Rigid(ui.layoutGopherButton),
@@ -1010,6 +1102,148 @@ func (ui *BrowserUI) layoutToolbar(gtx layout.Context) layout.Dimensions {
 			}),
 		)
 	})
+}
+
+func (ui *BrowserUI) layoutDevToolsButton(gtx layout.Context) layout.Dimensions {
+	gtx.Constraints.Min.Y = gtx.Dp(controlHeight)
+	gtx.Constraints.Max.Y = gtx.Dp(controlHeight)
+	button := material.Button(ui.theme, &ui.devToolsButton, "DevTools")
+	button.Background = color.NRGBA{R: 51, G: 65, B: 85, A: 255}
+	button.Color = color.NRGBA{R: 255, G: 255, B: 255, A: 255}
+	button.CornerRadius = unit.Dp(10)
+	button.Inset = layout.Inset{Top: unit.Dp(8), Right: unit.Dp(12), Bottom: unit.Dp(8), Left: unit.Dp(12)}
+	return button.Layout(gtx)
+}
+
+func (ui *BrowserUI) devToolsState() devToolsTabState {
+	id, _ := ui.activeNavigationTarget()
+	state := ui.devToolsStates[id]
+	if state.Panel == "" {
+		state.Panel = devToolsPanelConsole
+	}
+	return state
+}
+
+func (ui *BrowserUI) setDevToolsState(state devToolsTabState) {
+	id, _ := ui.activeNavigationTarget()
+	ui.devToolsStates[id] = state
+}
+
+func nextConsoleFilter(current devtoolsmodel.ConsoleLevel) devtoolsmodel.ConsoleLevel {
+	switch current {
+	case "":
+		return devtoolsmodel.ConsoleLog
+	case devtoolsmodel.ConsoleLog:
+		return devtoolsmodel.ConsoleInfo
+	case devtoolsmodel.ConsoleInfo:
+		return devtoolsmodel.ConsoleWarn
+	case devtoolsmodel.ConsoleWarn:
+		return devtoolsmodel.ConsoleError
+	default:
+		return ""
+	}
+}
+
+func (ui *BrowserUI) layoutDevTools(gtx layout.Context) layout.Dimensions {
+	paint.Fill(gtx.Ops, color.NRGBA{R: 15, G: 23, B: 42, A: 255})
+	state := ui.devToolsState()
+	return layout.Inset{Top: unit.Dp(8), Right: unit.Dp(10), Bottom: unit.Dp(8), Left: unit.Dp(10)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+					layout.Rigid(ui.devToolsTab(&ui.devToolsConsole, devToolsPanelConsole, state.Panel == devToolsPanelConsole)),
+					layout.Rigid(ui.devToolsTab(&ui.devToolsInspector, devToolsPanelInspector, state.Panel == devToolsPanelInspector)),
+					layout.Rigid(ui.devToolsTab(&ui.devToolsNetwork, devToolsPanelNetwork, state.Panel == devToolsPanelNetwork)),
+					layout.Flexed(1, layout.Spacer{}.Layout),
+					layout.Rigid(ui.devToolsAction(&ui.devToolsFilter, consoleFilterLabel(state.Filter))),
+					layout.Rigid(layout.Spacer{Width: unit.Dp(6)}.Layout),
+					layout.Rigid(ui.devToolsAction(&ui.devToolsClear, "Clear")),
+					layout.Rigid(layout.Spacer{Width: unit.Dp(6)}.Layout),
+					layout.Rigid(ui.devToolsAction(&ui.devToolsClose, "Close")),
+				)
+			}),
+			layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
+			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+				switch state.Panel {
+				case devToolsPanelInspector:
+					return ui.layoutDevToolsPlaceholder(gtx, "DOM / Styles / Layout inspector will appear here")
+				case devToolsPanelNetwork:
+					return ui.layoutDevToolsPlaceholder(gtx, "Network request timeline will appear here")
+				default:
+					return ui.layoutDevToolsConsole(gtx, state.Filter)
+				}
+			}),
+		)
+	})
+}
+
+func (ui *BrowserUI) devToolsTab(button *widget.Clickable, panel devToolsPanel, active bool) layout.Widget {
+	return func(gtx layout.Context) layout.Dimensions {
+		style := material.Button(ui.theme, button, string(panel))
+		style.Background = color.NRGBA{R: 30, G: 41, B: 59, A: 255}
+		if active {
+			style.Background = color.NRGBA{R: 3, G: 105, B: 161, A: 255}
+		}
+		style.Inset = layout.Inset{Top: unit.Dp(6), Right: unit.Dp(12), Bottom: unit.Dp(6), Left: unit.Dp(12)}
+		return style.Layout(gtx)
+	}
+}
+
+func (ui *BrowserUI) devToolsAction(button *widget.Clickable, label string) layout.Widget {
+	return func(gtx layout.Context) layout.Dimensions {
+		style := material.Button(ui.theme, button, label)
+		style.Background = color.NRGBA{R: 51, G: 65, B: 85, A: 255}
+		style.Inset = layout.Inset{Top: unit.Dp(5), Right: unit.Dp(9), Bottom: unit.Dp(5), Left: unit.Dp(9)}
+		return style.Layout(gtx)
+	}
+}
+
+func consoleFilterLabel(filter devtoolsmodel.ConsoleLevel) string {
+	if filter == "" {
+		return "Level: all"
+	}
+	return "Level: " + string(filter)
+}
+
+func (ui *BrowserUI) layoutDevToolsConsole(gtx layout.Context, filter devtoolsmodel.ConsoleLevel) layout.Dimensions {
+	var records []devtoolsmodel.ConsoleRecord
+	if navigator := ui.activeNavigator(); navigator != nil {
+		if page := navigator.Page(); page != nil && page.DevTools != nil {
+			for _, record := range page.DevTools.Console() {
+				if filter == "" || record.Level == filter {
+					records = append(records, record)
+				}
+			}
+		}
+	}
+	if len(records) == 0 {
+		return ui.layoutDevToolsPlaceholder(gtx, "Console has no matching messages")
+	}
+	return material.List(ui.theme, &ui.devToolsList).Layout(gtx, len(records), func(gtx layout.Context, index int) layout.Dimensions {
+		record := records[index]
+		label := material.Body2(ui.theme, fmt.Sprintf("%04d  %-5s  %-8s  %s", record.Sequence, record.Level, record.Source, record.Message))
+		label.Color = devToolsLevelColor(record.Level)
+		return layout.Inset{Top: unit.Dp(3), Bottom: unit.Dp(3), Left: unit.Dp(6)}.Layout(gtx, label.Layout)
+	})
+}
+
+func (ui *BrowserUI) layoutDevToolsPlaceholder(gtx layout.Context, message string) layout.Dimensions {
+	label := material.Body2(ui.theme, message)
+	label.Color = color.NRGBA{R: 148, G: 163, B: 184, A: 255}
+	return layout.Inset{Top: unit.Dp(12), Left: unit.Dp(8)}.Layout(gtx, label.Layout)
+}
+
+func devToolsLevelColor(level devtoolsmodel.ConsoleLevel) color.NRGBA {
+	switch level {
+	case devtoolsmodel.ConsoleWarn:
+		return color.NRGBA{R: 253, G: 224, B: 71, A: 255}
+	case devtoolsmodel.ConsoleError:
+		return color.NRGBA{R: 253, G: 164, B: 175, A: 255}
+	case devtoolsmodel.ConsoleInfo:
+		return color.NRGBA{R: 125, G: 211, B: 252, A: 255}
+	default:
+		return color.NRGBA{R: 226, G: 232, B: 240, A: 255}
+	}
 }
 
 func (ui *BrowserUI) layoutUpdateButton(gtx layout.Context) layout.Dimensions {
