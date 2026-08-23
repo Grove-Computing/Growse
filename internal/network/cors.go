@@ -73,7 +73,7 @@ func (client *Client) ensurePreflight(ctx context.Context, httpClient *http.Clie
 		return ErrCORS
 	}
 	headerNames := corsUnsafeHeaderNames(request.Header)
-	preflight, err := http.NewRequestWithContext(ctx, http.MethodOptions, request.URL.String(), nil)
+	preflight, err := http.NewRequestWithContext(ctx, http.MethodOptions, request.URL.String(), nil) // #nosec G704 -- browser fetch URLs are intentionally remote; CORS validation and the caller's network policy govern the request.
 	if err != nil {
 		return fmt.Errorf("create CORS preflight: %w", err)
 	}
@@ -85,7 +85,7 @@ func (client *Client) ensurePreflight(ctx context.Context, httpClient *http.Clie
 	preflightClient := *httpClient
 	preflightClient.Jar = nil
 	preflightClient.CheckRedirect = func(*http.Request, []*http.Request) error { return ErrCORS }
-	response, err := preflightClient.Do(preflight)
+	response, err := preflightClient.Do(preflight) // #nosec G704 -- this is the validated CORS preflight for the browser request above.
 	if err != nil {
 		return classifyRequestError(err)
 	}

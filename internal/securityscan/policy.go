@@ -39,7 +39,7 @@ var sha256Pattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 var codePointPattern = regexp.MustCompile(`^U\+[0-9A-Fa-f]{4,6}$`)
 
 func LoadPolicy(path string, now time.Time) (Policy, error) {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) // #nosec G304 -- caller explicitly selects the local policy file to load.
 	if err != nil {
 		return Policy{}, fmt.Errorf("read policy: %w", err)
 	}
