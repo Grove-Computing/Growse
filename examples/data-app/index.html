@@ -10,6 +10,7 @@
     <h1>Data App</h1>
     <p id="status" class="loading">loading</p>
     <form id="item-form" action="/api/items" method="post">
+	  <button id="cancel" type="button">Cancel loading</button>
       <label>Item <input id="item-name" name="name" required></label>
       <label><input id="item-done" type="checkbox" name="done"> Done</label>
       <button type="submit">Add</button>

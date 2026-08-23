@@ -30,6 +30,11 @@ const (
 	CredentialsInclude    CredentialsMode = "include"
 )
 
+const (
+	Millisecond time.Duration = time.Millisecond
+	Second      time.Duration = time.Second
+)
+
 // Request describes an HTTP request issued by a WebGo program.
 // Body takes precedence over Text when both are set.
 type Request struct {
