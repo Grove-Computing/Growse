@@ -1,0 +1,24 @@
+{
+  "geometry": [
+    "viewport=(224,92)-(1280,520)",
+    "devtools=(224,520)-(1280,800)"
+  ],
+  "console": [
+    "empty=Console has no matching messages",
+    "normal=0001/info/webgo/ready",
+    "error=0002/error/failed",
+    "truncated=bytes:4096 suffix:true"
+  ],
+  "inspector": [
+    "empty=Select a DOM node to inspect attributes, styles, and layout",
+    "normal=  input#password",
+    "details=attrs:[{id password} {type password} {value [REDACTED]}] styles:11 box:160x32",
+    "truncated=true nodes=129"
+  ],
+  "network": [
+    "empty=Network has no requests for this page",
+    "0001  fetch      GET   200                1.5ms      42 B  hit                 https://example.test/data?token=%5BREDACTED%5D",
+    "0002  fetch      GET   error:timeout       20ms       0 B  -                   https://example.test/data?token=%5BREDACTED%5D",
+    "0003  fetch      GET   error:response_limit       0s       0 B  -                   https://example.test/data?token=%5BREDACTED%5D"
+  ]
+}

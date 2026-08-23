@@ -1232,14 +1232,18 @@ func (ui *BrowserUI) layoutDevToolsNetwork(gtx layout.Context) layout.Dimensions
 		if flags == "" {
 			flags = "-"
 		}
-		label := material.Body2(ui.theme, fmt.Sprintf("%04d  %-10s %-5s %-15s %8s %7d B  %-18s  %s",
-			record.Sequence, record.Kind, record.Method, status, record.Duration.Round(time.Microsecond), record.ResponseBytes, flags, record.URL))
+		label := material.Body2(ui.theme, networkRecordLabel(record, status, flags))
 		label.Color = color.NRGBA{R: 203, G: 213, B: 225, A: 255}
 		if record.ErrorCategory != "" || record.StatusCode >= 400 {
 			label.Color = color.NRGBA{R: 253, G: 164, B: 175, A: 255}
 		}
 		return layout.Inset{Top: unit.Dp(3), Bottom: unit.Dp(3), Left: unit.Dp(6)}.Layout(gtx, label.Layout)
 	})
+}
+
+func networkRecordLabel(record devtoolsmodel.NetworkRecord, status, flags string) string {
+	return fmt.Sprintf("%04d  %-10s %-5s %-15s %8s %7d B  %-18s  %s",
+		record.Sequence, record.Kind, record.Method, status, record.Duration.Round(time.Microsecond), record.ResponseBytes, flags, record.URL)
 }
 
 func (ui *BrowserUI) layoutDevToolsInspector(gtx layout.Context, state devToolsTabState) layout.Dimensions {

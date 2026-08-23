@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Growse DevTools Showcase</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main id="showcase" class="showcase">
+    <p class="eyebrow">GROWSE v0.12.0</p>
+    <h1>WebGo DevTools</h1>
+    <p>F12またはツールバーのDevToolsからConsole、Inspector、Networkを確認できます。</p>
+    <section class="grid">
+      <article><h2>Console</h2><p id="console-state">waiting</p></article>
+      <article><h2>DOM mutation</h2><p id="mutation-state">before mutation</p></article>
+      <article><h2>Successful Fetch</h2><p id="success-state">waiting</p></article>
+      <article><h2>Redirect</h2><p id="redirect-state">waiting</p></article>
+      <article><h2>HTTP Cache</h2><p id="cache-state">waiting</p></article>
+      <article><h2>HTTP Error</h2><p id="error-state">waiting</p></article>
+      <article><h2>Timeout</h2><p id="timeout-state">waiting</p></article>
+    </section>
+    <label>Password remains private <input id="password" type="password" value="showcase-password"></label>
+  </main>
+  <script type="text/go" src="/_app.go"></script>
+</body>
+</html>
