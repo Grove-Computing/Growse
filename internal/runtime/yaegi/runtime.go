@@ -21,6 +21,7 @@ import (
 	consoleapi "github.com/Grove-Computing/Growse/internal/webapi/console"
 	domapi "github.com/Grove-Computing/Growse/internal/webapi/dom"
 	fetchapi "github.com/Grove-Computing/Growse/internal/webapi/fetch"
+	formapi "github.com/Grove-Computing/Growse/internal/webapi/form"
 	navigationapi "github.com/Grove-Computing/Growse/internal/webapi/navigation"
 	schedulerapi "github.com/Grove-Computing/Growse/internal/webapi/scheduler"
 	storageapi "github.com/Grove-Computing/Growse/internal/webapi/storage"
@@ -134,6 +135,11 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 			"NewHeaders":            reflect.ValueOf(fetchapi.NewHeaders),
 			"Request":               reflect.ValueOf((*fetchapi.Request)(nil)),
 			"Response":              reflect.ValueOf((*fetchapi.Response)(nil)),
+		},
+		"growse/form/form": {
+			"Entry":    reflect.ValueOf((*formapi.Entry)(nil)),
+			"FormData": reflect.ValueOf((*formapi.FormData)(nil)),
+			"New":      reflect.ValueOf(formapi.New),
 		},
 		"growse/navigation/navigation": {
 			"Back":            reflect.ValueOf(navigation.Back),

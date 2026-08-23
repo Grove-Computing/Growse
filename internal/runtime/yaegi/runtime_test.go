@@ -115,6 +115,28 @@ func main() {
 	}
 }
 
+func TestRuntimeExposesFormData(t *testing.T) {
+	runtime := New()
+	scripts := []runtimemodel.Script{{Source: `package main
+import "growse/form"
+var Encoded string
+func main() {
+	data := form.New()
+	_ = data.Append("name", "Growse")
+	_ = data.Append("tag", "web api")
+	Encoded, _ = data.Encode()
+}`}}
+	if err := runtime.Load(context.Background(), scripts, runtimemodel.Environment{}); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if got, want := runtime.interpreter.Symbols("page")["page"]["Encoded"].String(), "name=Growse&tag=web+api"; got != want {
+		t.Fatalf("Encoded = %q, want %q", got, want)
+	}
+}
+
 func TestRuntimeExposesLocalAndSessionStorage(t *testing.T) {
 	runtime := New()
 	scripts := []runtimemodel.Script{{Source: `package main
