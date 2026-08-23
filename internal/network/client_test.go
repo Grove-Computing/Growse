@@ -35,6 +35,61 @@ func TestClientGetHTML(t *testing.T) {
 	}
 }
 
+func TestClientEmitsBodyFreeObservationForMissAndHit(t *testing.T) {
+	requests := 0
+	client := NewClientWithLimits(&http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		requests++
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Cache-Control": []string{"max-age=60"}, "Content-Type": []string{"text/plain"}},
+			Body:       io.NopCloser(strings.NewReader("response body")), Request: request,
+		}, nil
+	})}, 1024)
+	now := time.Unix(100, 0)
+	client.now = func() time.Time { now = now.Add(time.Millisecond); return now }
+	target := mustParseURL(t, "https://example.test/data")
+	var observations []Observation
+	for range 2 {
+		if _, err := client.Do(context.Background(), &Request{Method: http.MethodGet, URL: target, SiteURL: target, Kind: RequestFetch, Observer: func(observation Observation) {
+			observations = append(observations, observation)
+		}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if requests != 1 || len(observations) != 2 {
+		t.Fatalf("requests=%d observations=%+v", requests, observations)
+	}
+	if observations[0].CacheStatus != "miss" || observations[1].CacheStatus != "hit" || observations[0].ResponseBytes != len("response body") || observations[0].Duration <= 0 {
+		t.Fatalf("observations = %+v", observations)
+	}
+}
+
+func TestClientObservationClassifiesFailures(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{name: "abort", err: context.Canceled, want: "canceled"},
+		{name: "timeout", err: context.DeadlineExceeded, want: "timeout"},
+		{name: "cors", err: ErrCORS, want: "cors"},
+		{name: "redirect", err: ErrRedirectLoop, want: "redirect_loop"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := NewClientWithLimits(&http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return nil, test.err
+			})}, 1024)
+			target := mustParseURL(t, "https://example.test/data")
+			var observation Observation
+			_, _ = client.Do(context.Background(), &Request{Method: http.MethodGet, URL: target, SiteURL: target, Kind: RequestFetch, Observer: func(value Observation) { observation = value }})
+			if observation.ErrorCategory != test.want {
+				t.Fatalf("category = %q, want %q", observation.ErrorCategory, test.want)
+			}
+		})
+	}
+}
+
 func TestClientReusesFreshResponseWithoutNetworkRequest(t *testing.T) {
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
