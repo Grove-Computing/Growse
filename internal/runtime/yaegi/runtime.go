@@ -98,7 +98,15 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 	r.callbackQueue = make(chan func(), 32)
 	r.callbackDone = make(chan struct{})
 	go r.runCallbacks(r.runtimeCtx, r.callbackQueue, r.callbackDone)
-	console := consoleapi.New(environment.ConsoleLog)
+	console := consoleapi.NewWithLevelSink(func(level consoleapi.Level, message string) {
+		if environment.ConsoleRecord != nil {
+			environment.ConsoleRecord(string(level), message)
+			return
+		}
+		if environment.ConsoleLog != nil {
+			environment.ConsoleLog(message)
+		}
+	})
 	dom := domapi.New(environment.Document, environment.Events, environment.OnMutation)
 	fetch := fetchapi.NewPage(r.runtimeCtx, environment.BaseURL, environment.Fetch, r.enqueueCallback)
 	fetch.SetLimiter(environment.FetchLimiter)
@@ -115,7 +123,10 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 	r.storageAPI = storage
 	if err := r.interpreter.Use(interp.Exports{
 		"growse/console/console": {
-			"Log": reflect.ValueOf(console.Log),
+			"Error": reflect.ValueOf(console.Error),
+			"Info":  reflect.ValueOf(console.Info),
+			"Log":   reflect.ValueOf(console.Log),
+			"Warn":  reflect.ValueOf(console.Warn),
 		},
 		"growse/dom/dom": {
 			"CreateElement":  reflect.ValueOf(dom.CreateElement),
