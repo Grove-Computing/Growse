@@ -118,6 +118,7 @@ type API struct {
 	do       func(context.Context, *network.Request) (*network.Response, error)
 	enqueue  func(func()) bool
 	clock    Clock
+	limiter  *Limiter
 	mu       sync.Mutex
 	closed   bool
 	inFlight int
@@ -148,6 +149,14 @@ func NewPageWithClock(ctx context.Context, baseURL *url.URL, do func(context.Con
 		clock = systemClock{}
 	}
 	return &API{ctx: ctx, baseURL: cloneURL(baseURL), do: do, enqueue: enqueue, clock: clock}
+}
+
+func (api *API) SetLimiter(limiter *Limiter) {
+	if api != nil {
+		api.mu.Lock()
+		api.limiter = limiter
+		api.mu.Unlock()
+	}
 }
 
 // Fetch starts request asynchronously and delivers exactly one callback.
@@ -189,11 +198,27 @@ func (api *API) Fetch(request Request, success func(Response), failure func(stri
 		})
 		return
 	}
+	if !api.limiter.Acquire() {
+		api.mu.Unlock()
+		api.deliver(func() {
+			if failure != nil {
+				failure("QuotaError: Session Fetch concurrency limit reached")
+			}
+		})
+		return
+	}
 	api.inFlight++
 	api.active.Add(1)
 	api.mu.Unlock()
 	go func() {
-		defer func() { api.mu.Lock(); api.inFlight--; api.mu.Unlock(); api.active.Done() }()
+		defer func() {
+			api.mu.Lock()
+			api.inFlight--
+			limiter := api.limiter
+			api.mu.Unlock()
+			limiter.Release()
+			api.active.Done()
+		}()
 		ctx, cancel := context.WithCancel(api.ctx)
 		unsubscribe := request.Signal.subscribe(cancel)
 		timedOut := make(chan struct{})

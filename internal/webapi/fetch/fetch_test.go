@@ -455,6 +455,33 @@ func TestFetchRejectsRequestsAbovePerPageConcurrencyLimit(t *testing.T) {
 	api.Close()
 }
 
+func TestFetchRejectsRequestsAboveSharedSessionLimit(t *testing.T) {
+	baseURL, _ := url.Parse("https://example.test/page")
+	limiter := NewLimiter(1)
+	release := make(chan struct{})
+	started := make(chan struct{})
+	failure := make(chan string, 1)
+	first := New(baseURL, func(context.Context, *network.Request) (*network.Response, error) {
+		close(started)
+		<-release
+		return &network.Response{}, nil
+	})
+	second := New(baseURL, func(context.Context, *network.Request) (*network.Response, error) {
+		t.Fatal("second request started")
+		return nil, nil
+	})
+	first.SetLimiter(limiter)
+	second.SetLimiter(limiter)
+	first.Fetch(Request{URL: "/first"}, nil, nil)
+	<-started
+	second.Fetch(Request{URL: "/second"}, nil, func(message string) { failure <- message })
+	if got := <-failure; got != "QuotaError: Session Fetch concurrency limit reached" {
+		t.Fatalf("failure = %q", got)
+	}
+	close(release)
+	first.Close()
+}
+
 func TestCloseWaitsForCanceledFetchOperation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	started := make(chan struct{})

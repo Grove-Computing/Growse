@@ -101,6 +101,7 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 	console := consoleapi.New(environment.ConsoleLog)
 	dom := domapi.New(environment.Document, environment.Events, environment.OnMutation)
 	fetch := fetchapi.NewPage(r.runtimeCtx, environment.BaseURL, environment.Fetch, r.enqueueCallback)
+	fetch.SetLimiter(environment.FetchLimiter)
 	navigation := navigationapi.NewPage(environment.BaseURL, environment.Navigate)
 	navigation.SetPushStateHandler(environment.HistoryPush)
 	navigation.SetReplaceStateHandler(environment.HistoryReplace)
