@@ -5,12 +5,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/Grove-Computing/Growse/internal/network"
+	formapi "github.com/Grove-Computing/Growse/internal/webapi/form"
+	urlapi "github.com/Grove-Computing/Growse/internal/webapi/url"
 )
 
 // Header preserves every value associated with an HTTP header name.
@@ -34,6 +38,9 @@ type Request struct {
 	Headers     *Headers
 	Body        []byte
 	Text        string
+	JSON        string
+	Params      *urlapi.URLSearchParams
+	FormData    *formapi.FormData
 	Credentials CredentialsMode
 }
 
@@ -235,10 +242,9 @@ func (api *API) prepare(request Request) (*network.Request, error) {
 		return nil, errors.New("Fetch URL must use HTTP or HTTPS")
 	}
 
-	hasBody := request.Body != nil || request.Text != ""
-	body := append([]byte(nil), request.Body...)
-	if request.Body == nil && request.Text != "" {
-		body = []byte(request.Text)
+	body, contentType, hasBody, err := requestBody(request)
+	if err != nil {
+		return nil, err
 	}
 	method := strings.ToUpper(strings.TrimSpace(request.Method))
 	if method == "" {
@@ -271,6 +277,9 @@ func (api *API) prepare(request Request) (*network.Request, error) {
 	if err != nil {
 		return nil, err
 	}
+	if contentType != "" && header.Get("Content-Type") == "" {
+		header.Set("Content-Type", contentType)
+	}
 	return &network.Request{
 		Method:      method,
 		URL:         resolved,
@@ -280,6 +289,65 @@ func (api *API) prepare(request Request) (*network.Request, error) {
 		Kind:        network.RequestFetch,
 		Credentials: credentials,
 	}, nil
+}
+
+const maxRequestBodySize = 1024 * 1024
+
+func requestBody(request Request) ([]byte, string, bool, error) {
+	count := 0
+	if request.Body != nil {
+		count++
+	}
+	if request.Text != "" {
+		count++
+	}
+	if request.JSON != "" {
+		count++
+	}
+	if request.Params != nil {
+		count++
+	}
+	if request.FormData != nil {
+		count++
+	}
+	if count > 1 {
+		return nil, "", false, errors.New("Fetch request body must use exactly one body type")
+	}
+	if count == 0 {
+		return nil, "", false, nil
+	}
+	var body []byte
+	contentType := ""
+	switch {
+	case request.Body != nil:
+		body = append([]byte(nil), request.Body...)
+	case request.Text != "":
+		if !utf8.ValidString(request.Text) {
+			return nil, "", false, errors.New("invalid Fetch text body")
+		}
+		body, contentType = []byte(request.Text), "text/plain;charset=UTF-8"
+	case request.JSON != "":
+		if !utf8.ValidString(request.JSON) || !json.Valid([]byte(request.JSON)) {
+			return nil, "", false, errors.New("invalid Fetch JSON body")
+		}
+		body, contentType = []byte(request.JSON), "application/json"
+	case request.Params != nil:
+		encoded, err := request.Params.Encode()
+		if err != nil {
+			return nil, "", false, fmt.Errorf("encode Fetch URLSearchParams body: %w", err)
+		}
+		body, contentType = []byte(encoded), "application/x-www-form-urlencoded;charset=UTF-8"
+	case request.FormData != nil:
+		encoded, err := request.FormData.Encode()
+		if err != nil {
+			return nil, "", false, fmt.Errorf("encode Fetch FormData body: %w", err)
+		}
+		body, contentType = []byte(encoded), formapi.ContentTypeURLEncoded
+	}
+	if len(body) > maxRequestBodySize {
+		return nil, "", false, errors.New("Fetch request body exceeds size limit")
+	}
+	return body, contentType, true, nil
 }
 
 func allowedMethod(method string) bool {

@@ -602,6 +602,46 @@ func main() {
 	}
 }
 
+func TestRuntimeFetchAcceptsFormDataBody(t *testing.T) {
+	runtime := New()
+	sent := make(chan *network.Request, 1)
+	scripts := []runtimemodel.Script{{Source: `package main
+import "growse/fetch"
+import "growse/form"
+func main() {
+	data := form.New()
+	_ = data.Append("name", "Growse")
+	fetch.Fetch(fetch.Request{Method: "POST", URL: "/items", FormData: data}, nil, nil)
+}`}}
+	baseURL, _ := url.Parse("https://example.test/page")
+	if err := runtime.Load(context.Background(), scripts, runtimemodel.Environment{
+		BaseURL: baseURL,
+		Fetch: func(_ context.Context, request *network.Request) (*network.Response, error) {
+			sent <- request
+			return &network.Response{}, nil
+		},
+	}); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	select {
+	case request := <-sent:
+		if got, want := string(request.Body), "name=Growse"; got != want {
+			t.Fatalf("body = %q, want %q", got, want)
+		}
+		if got, want := request.Header.Get("Content-Type"), "application/x-www-form-urlencoded;charset=UTF-8"; got != want {
+			t.Fatalf("Content-Type = %q, want %q", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("WebGo Fetch was not started")
+	}
+	if err := runtime.Stop(); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+}
+
 func TestRuntimeSerializesPageCallbacksInQueueOrder(t *testing.T) {
 	runtime := New()
 	scripts := []runtimemodel.Script{{Source: "package main\nfunc main() {}"}}
