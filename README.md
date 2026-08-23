@@ -100,7 +100,7 @@ python3 -m http.server 8080 --directory examples/data-app
 | Flexbox Showcase | `examples/flexbox` | grow / shrink、wrap、alignment、gap、auto margin、nested flex |
 | Dashboard | `examples/dashboard` | Grid、Position、複数Background、Shadow、Transform、Opacity |
 | Animation Showcase | `examples/animation` | hover Transition、複数Keyframes Animation |
-| Data App Showcase | `examples/data-app` | Form、WebGo Fetch、Session Cookie、DOM更新、Animation |
+| Data App Showcase | `examples/data-app` | Form、WebGo Fetch、structured Headers、Session Cookie、DOM更新、Animation |
 | Persistent App Showcase | `examples/persistent-app` | Scheduler、same-document Routing、Local / Session Storage、Fetch、HTTP Cache、offline状態 |
 | Multi-Tab Workspace | `go run ./examples/multi-tab-workspace` | Vertical Tab、Storage Event、共有Cookie / Cache、Tab別Session / Scheduler |
 
@@ -140,7 +140,7 @@ Animation中のPaintとHit Testingは、同じFrameの値を参照します。DO
 インラインの`<script type="text/go">`と外部`.go`ファイルをPageへ読み込み、localhost、127.0.0.1、`::1`のページでYaegi Runtimeの`main()`を実行します。
 
 - `growse/dom`: DOM、Form、Eventを操作
-- `growse/fetch`: 非同期HTTP Requestを実行
+- `growse/fetch`: Headers、JSON / text / binary / FormData body、AbortController、timeoutを備えた非同期HTTP Requestを実行
 - `growse/navigation`: 現在URL、pushState / replaceState、History traversalとEventを操作
 - `growse/scheduler`: timeout、interval、Animation Frameを登録・解除
 - `growse/storage`: Origin単位のLocal / Session Storageを操作し、`OnChange`で別TabのLocal Storage更新を受信

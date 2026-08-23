@@ -36,6 +36,10 @@ func TestDataAppLoadsSessionDataThroughWebGoFetch(t *testing.T) {
 			response.Header().Set("Content-Type", "text/x-go")
 			_, _ = response.Write(script)
 		case "/api/items":
+			if request.Header.Get("Accept") != "application/json" {
+				http.Error(response, "missing Accept", http.StatusBadRequest)
+				return
+			}
 			close(apiStarted)
 			<-releaseAPI
 			if cookie, err := request.Cookie("session"); err == nil && cookie.Value == "data-app" {

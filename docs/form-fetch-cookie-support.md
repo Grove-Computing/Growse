@@ -1,6 +1,6 @@
 # Form / Fetch / Cookie対応表
 
-この表はGrowse v0.10.0の実装を基準とする。「部分対応」は主要な利用経路を扱えるが、Web標準の全機能を実装していない項目を表す。
+この表はGrowse v0.11.0の実装を基準とする。「部分対応」は主要な利用経路を扱えるが、Web標準の全機能を実装していない項目を表す。
 
 ## Form Controls
 
@@ -29,18 +29,18 @@ Form entryは1,000件、各name/valueは64 KiB、urlencoded結果は1 MiBを上�
 
 ## WebGo FetchとHTTP Lifecycle
 
-WebGoは`growse/fetch`の`Fetch(Request, success, failure)`を利用する。相対URL、method、複数値Header、text/byte body、Credentials Modeを指定できる。Responseはstatus、status text、final URL、redirected、公開Headerを持ち、Bodyは`Bytes`、`Text`、`JSON`のいずれかで一度だけ消費できる。
+WebGoは`growse/fetch`の`Fetch(Request, success, failure)`を利用する。構造化`Headers`、JSON / text / bytes / URLSearchParams / FormData body、Credentials Mode、AbortSignal、timeoutを指定できる。Responseはcredentialを除去したstatus、final URL、immutable `ResponseHeaders`、`BodyUsed`を持ち、Bodyは`Bytes`、`Text`、`JSON`のいずれかで一度だけ消費できる。
 
 | 機能 | 対応 | 補足 |
 | --- | --- | --- |
 | 非同期callback | 対応 | Page event queueで成功・失敗のどちらか一回を通知する |
 | redirect | 対応 | 301、302、303、307、308とmethod変換を扱い、loop検出・最大10回を適用する |
-| timeout / cancel | 対応 | 既定15秒。NavigationとPage終了で進行中Requestをcancelする |
-| Body helper | 対応 | Bytes、Text、JSON。二重消費はErrorになる |
+| timeout / cancel | 対応 | `AbortController` / `AbortSignal`とrequest単位timeoutを扱う。NavigationとPage終了で進行中Requestをcancelする |
+| Body helper | 対応 | Bytes、Text、JSON、BodyUsed。二重消費とinvalid UTF-8 textはErrorになる |
 | Credentials Mode | 対応 | `omit`、`same-origin`、`include` |
-| safety limit | 対応 | Request 1 MiB、Header 100件/64 KiB、Response既定4 MiB |
+| safety limit | 対応 | Request 1 MiB、Header 100件/64 KiB、Pageあたり16件・Sessionあたり128件の同時Fetch |
 | HTTP Cache | 対応 | Navigation、Resource Loading、WebGo Source、Fetchで共通のprivate cacheを使用する |
-| 対象外 | 非対応 | Promise、ReadableStream、AbortController、Service Worker |
+| 対象外 | 非対応 | Promise、ReadableStream、Service Worker、WebSocket |
 
 ## Cookie
 

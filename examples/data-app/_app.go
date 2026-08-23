@@ -14,7 +14,12 @@ func main() {
 	if form := dom.GetElementByID("item-form"); form != nil {
 		form.OnSubmit(cancelNativeSubmit)
 	}
-	fetch.Fetch(fetch.Request{URL: "/api/items"}, loaded, failed)
+	headers := fetch.NewHeaders()
+	if err := headers.Append("Accept", "application/json"); err != nil {
+		failed(err.Error())
+		return
+	}
+	fetch.Fetch(fetch.Request{URL: "/api/items", Headers: headers}, loaded, failed)
 }
 
 func cancelNativeSubmit(event dom.Event) {
