@@ -26,6 +26,7 @@ import (
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 	storagecore "github.com/Grove-Computing/Growse/internal/storage"
 	"github.com/Grove-Computing/Growse/internal/style"
+	fetchapi "github.com/Grove-Computing/Growse/internal/webapi/fetch"
 )
 
 const (
@@ -78,6 +79,7 @@ type Browser struct {
 	lastFrame        time.Time
 	navigationCancel context.CancelFunc
 	storageSourceID  uint64
+	fetchLimiter     *fetchapi.Limiter
 }
 
 var nextStorageSourceID atomic.Uint64
@@ -117,6 +119,16 @@ func (b *Browser) SetTabActive(active bool) {
 	if runtime, ok := runtime.(backgroundRuntime); ok {
 		runtime.SetBackground(!active)
 	}
+}
+
+// SetFetchLimiter sets the Browser Session shared WebGo Fetch limit.
+func (b *Browser) SetFetchLimiter(limiter *fetchapi.Limiter) {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	b.fetchLimiter = limiter
+	b.mu.Unlock()
 }
 
 // SetAnimationClock replaces the page animation clock. Tests can inject a
@@ -1096,7 +1108,10 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	}
 	page.Animations.Reconcile(computedStyles, b.currentTime())
 	navigationReady := make(chan struct{})
-	pageRuntime := startRuntime(ctx, runtimeFactory, page, runtimeClient, storageManager, b.storageSourceID, onMutation, b.currentTime, func(target *url.URL) error {
+	b.mu.RLock()
+	fetchLimiter := b.fetchLimiter
+	b.mu.RUnlock()
+	pageRuntime := startRuntime(ctx, runtimeFactory, page, runtimeClient, storageManager, b.storageSourceID, fetchLimiter, onMutation, b.currentTime, func(target *url.URL) error {
 		resolved := cloneURL(target)
 		go func() {
 			<-navigationReady
@@ -1377,7 +1392,7 @@ func (b *Browser) traverseFromRuntime(source *Page, delta int) {
 	}
 }
 
-func startRuntime(ctx context.Context, factory runtimemodel.Factory, page *Page, client ResourceLoader, storageManager *storagecore.Manager, storageSourceID uint64, onMutation func(), now func() time.Time, navigate func(*url.URL) error, historyPush, historyReplace func(string, *url.URL) error, historyTraverse func(int) error, historyInfo func() (int, string)) runtimemodel.Runtime {
+func startRuntime(ctx context.Context, factory runtimemodel.Factory, page *Page, client ResourceLoader, storageManager *storagecore.Manager, storageSourceID uint64, fetchLimiter *fetchapi.Limiter, onMutation func(), now func() time.Time, navigate func(*url.URL) error, historyPush, historyReplace func(string, *url.URL) error, historyTraverse func(int) error, historyInfo func() (int, string)) runtimemodel.Runtime {
 	if factory == nil || page == nil || len(page.Scripts) == 0 {
 		return nil
 	}
@@ -1417,6 +1432,7 @@ func startRuntime(ctx context.Context, factory runtimemodel.Factory, page *Page,
 		Document:        page.Document,
 		Events:          page.Events,
 		BaseURL:         cloneURL(page.URL),
+		FetchLimiter:    fetchLimiter,
 		Navigate:        navigate,
 		HistoryPush:     historyPush,
 		HistoryReplace:  historyReplace,

@@ -101,6 +101,7 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 	console := consoleapi.New(environment.ConsoleLog)
 	dom := domapi.New(environment.Document, environment.Events, environment.OnMutation)
 	fetch := fetchapi.NewPage(r.runtimeCtx, environment.BaseURL, environment.Fetch, r.enqueueCallback)
+	fetch.SetLimiter(environment.FetchLimiter)
 	navigation := navigationapi.NewPage(environment.BaseURL, environment.Navigate)
 	navigation.SetPushStateHandler(environment.HistoryPush)
 	navigation.SetReplaceStateHandler(environment.HistoryReplace)
@@ -124,6 +125,8 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 			"QuerySelector":  reflect.ValueOf(dom.QuerySelector),
 		},
 		"growse/fetch/fetch": {
+			"AbortController":       reflect.ValueOf((*fetchapi.AbortController)(nil)),
+			"AbortSignal":           reflect.ValueOf((*fetchapi.AbortSignal)(nil)),
 			"CredentialsInclude":    reflect.ValueOf(fetchapi.CredentialsInclude),
 			"CredentialsMode":       reflect.ValueOf((*fetchapi.CredentialsMode)(nil)),
 			"CredentialsOmit":       reflect.ValueOf(fetchapi.CredentialsOmit),
@@ -133,8 +136,10 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 			"HeaderEntry":           reflect.ValueOf((*fetchapi.HeaderEntry)(nil)),
 			"Headers":               reflect.ValueOf((*fetchapi.Headers)(nil)),
 			"NewHeaders":            reflect.ValueOf(fetchapi.NewHeaders),
+			"NewAbortController":    reflect.ValueOf(fetchapi.NewAbortController),
 			"Request":               reflect.ValueOf((*fetchapi.Request)(nil)),
 			"Response":              reflect.ValueOf((*fetchapi.Response)(nil)),
+			"ResponseHeaders":       reflect.ValueOf((*fetchapi.ResponseHeaders)(nil)),
 		},
 		"growse/form/form": {
 			"Entry":    reflect.ValueOf((*formapi.Entry)(nil)),

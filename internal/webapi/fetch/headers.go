@@ -25,6 +25,39 @@ type HeaderEntry struct{ Name, Value string }
 // Headers stores ordered HTTP fields while preserving repeated values.
 type Headers struct{ entries []HeaderEntry }
 
+// ResponseHeaders is an immutable, defensive view of response fields.
+type ResponseHeaders struct{ entries []HeaderEntry }
+
+func (headers *ResponseHeaders) Get(name string) (string, bool) {
+	if headers == nil {
+		return "", false
+	}
+	for _, entry := range headers.entries {
+		if strings.EqualFold(entry.Name, name) {
+			return entry.Value, true
+		}
+	}
+	return "", false
+}
+func (headers *ResponseHeaders) Values(name string) []string {
+	if headers == nil {
+		return nil
+	}
+	values := []string{}
+	for _, entry := range headers.entries {
+		if strings.EqualFold(entry.Name, name) {
+			values = append(values, entry.Value)
+		}
+	}
+	return values
+}
+func (headers *ResponseHeaders) Entries() []HeaderEntry {
+	if headers == nil {
+		return nil
+	}
+	return append([]HeaderEntry(nil), headers.entries...)
+}
+
 // NewHeaders creates an empty request header collection.
 func NewHeaders() *Headers { return &Headers{} }
 
