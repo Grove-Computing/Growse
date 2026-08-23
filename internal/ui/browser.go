@@ -49,7 +49,7 @@ const (
 	toolbarHeight      = unit.Dp(92)
 	controlHeight      = unit.Dp(44)
 	addressBarHeight   = unit.Dp(48)
-	gopherButtonWidth  = unit.Dp(92)
+	gopherButtonWidth  = unit.Dp(72)
 	gopherButtonHeight = unit.Dp(52)
 )
 
@@ -877,7 +877,7 @@ func (ui *BrowserUI) layoutToolbar(gtx layout.Context) layout.Dimensions {
 		clip.Rect{Min: image.Pt(0, height-1), Max: image.Pt(gtx.Constraints.Max.X, height)}.Op(),
 	)
 
-	return layout.Inset{Top: unit.Dp(8), Right: unit.Dp(14), Bottom: unit.Dp(6), Left: unit.Dp(14)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+	return layout.Inset{Top: unit.Dp(8), Right: unit.Dp(8), Bottom: unit.Dp(6), Left: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		navigator := ui.activeNavigator()
 		canBack := navigator != nil && navigator.CanBack()
 		canForward := navigator != nil && navigator.CanForward()
@@ -888,17 +888,17 @@ func (ui *BrowserUI) layoutToolbar(gtx layout.Context) layout.Dimensions {
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 						return ui.layoutToolbarButton(gtx, &ui.backButton, ui.backIcon, "戻る", canBack)
 					}),
-					layout.Rigid(layout.Spacer{Width: unit.Dp(6)}.Layout),
+					layout.Rigid(layout.Spacer{Width: unit.Dp(4)}.Layout),
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 						return ui.layoutToolbarButton(gtx, &ui.forwardButton, ui.forwardIcon, "次へ", canForward)
 					}),
-					layout.Rigid(layout.Spacer{Width: unit.Dp(6)}.Layout),
+					layout.Rigid(layout.Spacer{Width: unit.Dp(4)}.Layout),
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 						return ui.layoutToolbarButton(gtx, &ui.reloadButton, ui.reloadIcon, "再読込", canReload)
 					}),
-					layout.Rigid(layout.Spacer{Width: unit.Dp(14)}.Layout),
-					layout.Flexed(1, ui.layoutAddressBar),
 					layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
+					layout.Flexed(1, ui.layoutAddressBar),
+					layout.Rigid(layout.Spacer{Width: unit.Dp(4)}.Layout),
 					layout.Rigid(ui.layoutGopherButton),
 				)
 			}),
@@ -955,6 +955,10 @@ func (ui *BrowserUI) layoutAddressBar(gtx layout.Context) layout.Dimensions {
 			}),
 			layout.Stacked(func(gtx layout.Context) layout.Dimensions {
 				return layout.UniformInset(unit.Dp(10)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					// Stack children receive a zero minimum width by default. Keep the
+					// editor's hit area as wide as the visible address bar instead of
+					// letting it shrink to its placeholder text.
+					gtx.Constraints.Min.X = gtx.Constraints.Max.X
 					return material.Editor(ui.theme, &ui.address, "URLを入力").Layout(gtx)
 				})
 			}),
