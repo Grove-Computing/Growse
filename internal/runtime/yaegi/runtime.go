@@ -21,10 +21,12 @@ import (
 	consoleapi "github.com/Grove-Computing/Growse/internal/webapi/console"
 	domapi "github.com/Grove-Computing/Growse/internal/webapi/dom"
 	fetchapi "github.com/Grove-Computing/Growse/internal/webapi/fetch"
+	formapi "github.com/Grove-Computing/Growse/internal/webapi/form"
 	navigationapi "github.com/Grove-Computing/Growse/internal/webapi/navigation"
 	schedulerapi "github.com/Grove-Computing/Growse/internal/webapi/scheduler"
 	storageapi "github.com/Grove-Computing/Growse/internal/webapi/storage"
 	strconvapi "github.com/Grove-Computing/Growse/internal/webapi/strconv"
+	urlapi "github.com/Grove-Computing/Growse/internal/webapi/url"
 	"github.com/traefik/yaegi/interp"
 )
 
@@ -128,8 +130,16 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 			"CredentialsSameOrigin": reflect.ValueOf(fetchapi.CredentialsSameOrigin),
 			"Fetch":                 reflect.ValueOf(fetch.Fetch),
 			"Header":                reflect.ValueOf((*fetchapi.Header)(nil)),
+			"HeaderEntry":           reflect.ValueOf((*fetchapi.HeaderEntry)(nil)),
+			"Headers":               reflect.ValueOf((*fetchapi.Headers)(nil)),
+			"NewHeaders":            reflect.ValueOf(fetchapi.NewHeaders),
 			"Request":               reflect.ValueOf((*fetchapi.Request)(nil)),
 			"Response":              reflect.ValueOf((*fetchapi.Response)(nil)),
+		},
+		"growse/form/form": {
+			"Entry":    reflect.ValueOf((*formapi.Entry)(nil)),
+			"FormData": reflect.ValueOf((*formapi.FormData)(nil)),
+			"New":      reflect.ValueOf(formapi.New),
 		},
 		"growse/navigation/navigation": {
 			"Back":            reflect.ValueOf(navigation.Back),
@@ -169,6 +179,12 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 		},
 		"growse/strconv/strconv": {
 			"Itoa": reflect.ValueOf(strconvapi.Itoa),
+		},
+		"growse/url/url": {
+			"Entry":           reflect.ValueOf((*urlapi.Entry)(nil)),
+			"New":             reflect.ValueOf(urlapi.New),
+			"Parse":           reflect.ValueOf(urlapi.Parse),
+			"URLSearchParams": reflect.ValueOf((*urlapi.URLSearchParams)(nil)),
 		},
 	}); err != nil {
 		return fmt.Errorf("register Growse Web API: %w", err)

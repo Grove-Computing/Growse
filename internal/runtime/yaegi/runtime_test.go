@@ -86,6 +86,57 @@ func main() { console.Log("Hello from Go", 42) }`}}
 	}
 }
 
+func TestRuntimeExposesURLSearchParams(t *testing.T) {
+	runtime := New()
+	scripts := []runtimemodel.Script{{Source: `package main
+import "growse/url"
+var Encoded string
+var First string
+func main() {
+	params, err := url.Parse("tag=go&tag=web+api&empty=")
+	if err != nil { return }
+	_ = params.Set("tag", "growse")
+	_ = params.Append("page", "1")
+	First, _ = params.Get("tag")
+	Encoded, _ = params.Encode()
+}`}}
+	if err := runtime.Load(context.Background(), scripts, runtimemodel.Environment{}); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	symbols := runtime.interpreter.Symbols("page")["page"]
+	if got, want := symbols["First"].String(), "growse"; got != want {
+		t.Fatalf("First = %q, want %q", got, want)
+	}
+	if got, want := symbols["Encoded"].String(), "tag=growse&empty=&page=1"; got != want {
+		t.Fatalf("Encoded = %q, want %q", got, want)
+	}
+}
+
+func TestRuntimeExposesFormData(t *testing.T) {
+	runtime := New()
+	scripts := []runtimemodel.Script{{Source: `package main
+import "growse/form"
+var Encoded string
+func main() {
+	data := form.New()
+	_ = data.Append("name", "Growse")
+	_ = data.Append("tag", "web api")
+	Encoded, _ = data.Encode()
+}`}}
+	if err := runtime.Load(context.Background(), scripts, runtimemodel.Environment{}); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if got, want := runtime.interpreter.Symbols("page")["page"]["Encoded"].String(), "name=Growse&tag=web+api"; got != want {
+		t.Fatalf("Encoded = %q, want %q", got, want)
+	}
+}
+
 func TestRuntimeExposesLocalAndSessionStorage(t *testing.T) {
 	runtime := New()
 	scripts := []runtimemodel.Script{{Source: `package main
@@ -482,10 +533,13 @@ import "growse/dom"
 var Status int
 var Failure string
 func main() {
+	headers := fetch.NewHeaders()
+	_ = headers.Append("X-Test", "one")
+	_ = headers.Append("X-Test", "two")
 	fetch.Fetch(fetch.Request{
 		Method: "PATCH",
 		URL: "/items/7",
-		Header: fetch.Header{"X-Test": []string{"one", "two"}},
+		Headers: headers,
 		Text: "updated",
 	}, func(response fetch.Response) {
 		Status = response.Status
@@ -542,6 +596,46 @@ func main() {
 	}
 	if got, want := result.TextContent(), "fetched"; got != want {
 		t.Fatalf("result text = %q, want %q", got, want)
+	}
+	if err := runtime.Stop(); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+}
+
+func TestRuntimeFetchAcceptsFormDataBody(t *testing.T) {
+	runtime := New()
+	sent := make(chan *network.Request, 1)
+	scripts := []runtimemodel.Script{{Source: `package main
+import "growse/fetch"
+import "growse/form"
+func main() {
+	data := form.New()
+	_ = data.Append("name", "Growse")
+	fetch.Fetch(fetch.Request{Method: "POST", URL: "/items", FormData: data}, nil, nil)
+}`}}
+	baseURL, _ := url.Parse("https://example.test/page")
+	if err := runtime.Load(context.Background(), scripts, runtimemodel.Environment{
+		BaseURL: baseURL,
+		Fetch: func(_ context.Context, request *network.Request) (*network.Response, error) {
+			sent <- request
+			return &network.Response{}, nil
+		},
+	}); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	select {
+	case request := <-sent:
+		if got, want := string(request.Body), "name=Growse"; got != want {
+			t.Fatalf("body = %q, want %q", got, want)
+		}
+		if got, want := request.Header.Get("Content-Type"), "application/x-www-form-urlencoded;charset=UTF-8"; got != want {
+			t.Fatalf("Content-Type = %q, want %q", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("WebGo Fetch was not started")
 	}
 	if err := runtime.Stop(); err != nil {
 		t.Fatalf("Stop() error = %v", err)

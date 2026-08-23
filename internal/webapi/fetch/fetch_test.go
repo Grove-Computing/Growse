@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/Grove-Computing/Growse/internal/network"
+	formapi "github.com/Grove-Computing/Growse/internal/webapi/form"
+	urlapi "github.com/Grove-Computing/Growse/internal/webapi/url"
 )
 
 func TestFetchResponseMetadataAndBodyHelpers(t *testing.T) {
@@ -96,6 +98,10 @@ func TestFetchRejectsInvalidRequestBeforeSending(t *testing.T) {
 		{name: "invalid header value", request: Request{URL: "/data", Header: Header{"X-Test": []string{"safe\r\ninjected"}}}},
 		{name: "GET body", request: Request{Method: http.MethodGet, URL: "/data", Body: []byte{}}},
 		{name: "HEAD text body", request: Request{Method: http.MethodHead, URL: "/data", Text: "body"}},
+		{name: "competing body types", request: Request{URL: "/data", Text: "body", JSON: `{}`}},
+		{name: "invalid JSON", request: Request{URL: "/data", JSON: `{`}},
+		{name: "invalid text UTF-8", request: Request{URL: "/data", Text: string([]byte{0xff})}},
+		{name: "large body", request: Request{URL: "/data", Body: []byte(strings.Repeat("x", maxRequestBodySize+1))}},
 		{name: "invalid credentials", request: Request{URL: "/data", Credentials: "always"}},
 	}
 	for _, test := range tests {
@@ -109,6 +115,87 @@ func TestFetchRejectsInvalidRequestBeforeSending(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestFetchEncodesEachStructuredBodyType(t *testing.T) {
+	baseURL, _ := url.Parse("https://example.test/page")
+	params, err := urlapi.Parse("tag=go&tag=web+api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	formData := formapi.New()
+	if err := formData.Append("name", "Growse"); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name               string
+		request            Request
+		wantBody, wantType string
+	}{
+		{"bytes", Request{Method: http.MethodPost, URL: "/data", Body: []byte{0, 1}}, string([]byte{0, 1}), ""},
+		{"text", Request{Method: http.MethodPost, URL: "/data", Text: "hello"}, "hello", "text/plain;charset=UTF-8"},
+		{"JSON", Request{Method: http.MethodPost, URL: "/data", JSON: `{"name":"growse"}`}, `{"name":"growse"}`, "application/json"},
+		{"params", Request{Method: http.MethodPost, URL: "/data", Params: params}, "tag=go&tag=web+api", "application/x-www-form-urlencoded;charset=UTF-8"},
+		{"form data", Request{Method: http.MethodPost, URL: "/data", FormData: formData}, "name=Growse", formapi.ContentTypeURLEncoded},
+		{"explicit content type", Request{Method: http.MethodPost, URL: "/data", Text: "hello", Headers: mustHeaders(t, "Content-Type", "text/custom")}, "hello", "text/custom"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			api := New(baseURL, func(_ context.Context, request *network.Request) (*network.Response, error) {
+				if got := string(request.Body); got != test.wantBody {
+					t.Errorf("body = %q, want %q", got, test.wantBody)
+				}
+				if got := request.Header.Get("Content-Type"); got != test.wantType {
+					t.Errorf("Content-Type = %q, want %q", got, test.wantType)
+				}
+				return &network.Response{}, nil
+			})
+			if _, err := api.fetch(context.Background(), test.request); err != nil {
+				t.Fatalf("fetch() error = %v", err)
+			}
+		})
+	}
+}
+
+func TestRequestDataDoesNotMutatePageURLOrInjectCookies(t *testing.T) {
+	baseURL, _ := url.Parse("https://example.test/page?current=1")
+	params, err := urlapi.Parse("tag=web+api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	formData := formapi.New()
+	if err := formData.Append("name", "Growse"); err != nil {
+		t.Fatal(err)
+	}
+	api := New(baseURL, func(_ context.Context, request *network.Request) (*network.Response, error) {
+		if got := request.Header.Get("Cookie"); got != "" {
+			t.Errorf("request injected Cookie header %q", got)
+		}
+		if got, want := baseURL.String(), "https://example.test/page?current=1"; got != want {
+			t.Errorf("page URL mutated to %q", got)
+		}
+		return &network.Response{}, nil
+	})
+	if _, err := api.fetch(context.Background(), Request{Method: http.MethodPost, URL: "/submit", Params: params}); err != nil {
+		t.Fatalf("params fetch error = %v", err)
+	}
+	if _, err := api.fetch(context.Background(), Request{Method: http.MethodPost, URL: "/submit", FormData: formData}); err != nil {
+		t.Fatalf("FormData fetch error = %v", err)
+	}
+	if got, err := params.Encode(); err != nil || got != "tag=web+api" {
+		t.Fatalf("params mutated: %q, %v", got, err)
+	}
+	if got, err := formData.Encode(); err != nil || got != "name=Growse" {
+		t.Fatalf("FormData mutated: %q, %v", got, err)
+	}
+}
+
+func mustHeaders(t *testing.T, name, value string) *Headers {
+	t.Helper()
+	headers := NewHeaders()
+	if err := headers.Append(name, value); err != nil {
+		t.Fatal(err)
+	}
+	return headers
 }
 
 func TestFetchDistinguishesHTTPErrorStatusFromNetworkError(t *testing.T) {
