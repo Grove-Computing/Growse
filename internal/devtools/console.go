@@ -32,17 +32,29 @@ type ConsoleRecord struct {
 
 // PageStore owns the diagnostics retained for a single loaded page.
 type PageStore struct {
-	mu         sync.RWMutex
-	console    []ConsoleRecord
-	next       uint64
-	closed     bool
-	maxRecords int
-	maxBytes   int
+	mu          sync.RWMutex
+	console     []ConsoleRecord
+	next        uint64
+	closed      bool
+	maxRecords  int
+	maxBytes    int
+	network     []NetworkRecord
+	nextNetwork uint64
+	maxNetwork  int
+	session     *SessionStore
 }
 
 // NewPageStore creates a store with production safety limits.
 func NewPageStore() *PageStore {
-	return newPageStore(DefaultMaxConsoleRecords, DefaultMaxMessageBytes)
+	return NewPageStoreForSession(NewSessionStore())
+}
+
+// NewPageStoreForSession creates page diagnostics under a shared session budget.
+func NewPageStoreForSession(session *SessionStore) *PageStore {
+	store := newPageStore(DefaultMaxConsoleRecords, DefaultMaxMessageBytes)
+	store.maxNetwork = DefaultMaxNetworkRecords
+	store.session = session
+	return store
 }
 
 func newPageStore(maxRecords, maxBytes int) *PageStore {
@@ -99,6 +111,7 @@ func (store *PageStore) Close() {
 	store.mu.Lock()
 	store.closed = true
 	store.console = nil
+	store.network = nil
 	store.mu.Unlock()
 }
 

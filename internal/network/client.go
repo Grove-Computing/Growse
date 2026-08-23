@@ -45,6 +45,7 @@ type Response struct {
 	ContentType string
 	Body        []byte
 	Redirected  bool
+	CacheStatus string
 }
 
 // Request contains the HTTP request data accepted by the network client.
@@ -56,6 +57,21 @@ type Request struct {
 	SiteURL     *url.URL
 	Kind        RequestKind
 	Credentials CredentialsMode
+	Observer    func(Observation)
+}
+
+// Observation is body-free request metadata emitted after one client operation.
+type Observation struct {
+	Method        string
+	URL           *url.URL
+	Kind          RequestKind
+	StartedAt     time.Time
+	Duration      time.Duration
+	StatusCode    int
+	Redirected    bool
+	CacheStatus   string
+	ResponseBytes int
+	ErrorCategory string
 }
 
 // RequestKind identifies the browser operation that initiated a request.
@@ -66,6 +82,9 @@ const (
 	RequestSubresource
 	RequestForm
 	RequestFetch
+	RequestStylesheet
+	RequestImage
+	RequestScript
 )
 
 // CredentialsMode controls whether Fetch sends and stores credentials.
@@ -178,9 +197,28 @@ func (c *Client) Get(ctx context.Context, resourceURL *url.URL) (*Response, erro
 }
 
 // Do sends a size-limited HTTP request.
-func (c *Client) Do(ctx context.Context, requestData *Request) (*Response, error) {
+func (c *Client) Do(ctx context.Context, requestData *Request) (result *Response, resultErr error) {
 	if requestData == nil || requestData.URL == nil {
 		return nil, errors.New("resource URL is nil")
+	}
+	startedAt := c.now()
+	if requestData.Observer != nil {
+		defer func() {
+			observation := Observation{
+				Method: requestMethod(requestData), URL: cloneURL(requestData.URL), Kind: requestData.Kind,
+				StartedAt: startedAt, Duration: c.now().Sub(startedAt), ErrorCategory: observationErrorCategory(resultErr),
+			}
+			if result != nil {
+				observation.StatusCode = result.StatusCode
+				observation.Redirected = result.Redirected
+				observation.CacheStatus = result.CacheStatus
+				observation.ResponseBytes = len(result.Body)
+				if observation.ErrorCategory == "" && result.StatusCode >= http.StatusBadRequest {
+					observation.ErrorCategory = "http"
+				}
+			}
+			requestData.Observer(observation)
+		}()
 	}
 	if len(requestData.Body) > maxRequestBodyBytes {
 		return nil, ErrRequestTooLarge
@@ -218,7 +256,11 @@ func (c *Client) Do(ctx context.Context, requestData *Request) (*Response, error
 	cacheRequest.Method = method
 	cacheRequest.Header = request.Header.Clone()
 	if cached, ok := c.cache.MatchFresh(&cacheRequest); ok {
-		return prepareCachedResponse(cached, requestData)
+		result, resultErr = prepareCachedResponse(cached, requestData)
+		if result != nil {
+			result.CacheStatus = "hit"
+		}
+		return result, resultErr
 	}
 	if validation, ok := c.cache.RevalidationHeaders(&cacheRequest); ok {
 		for name, values := range validation {
@@ -285,6 +327,7 @@ func (c *Client) Do(ctx context.Context, requestData *Request) (*Response, error
 		ContentType: response.Header.Get("Content-Type"),
 		Body:        body,
 		Redirected:  finalURL.String() != requestData.URL.String(),
+		CacheStatus: "miss",
 	}
 	c.invalidateAfterStateChange(&cacheRequest, cachedResult.StatusCode, response.Header, finalURL)
 	if cachedResult.StatusCode == http.StatusNotModified {
@@ -292,10 +335,37 @@ func (c *Client) Do(ctx context.Context, requestData *Request) (*Response, error
 		if !ok {
 			return nil, ErrCacheValidation
 		}
-		return prepareCachedResponse(merged, requestData)
+		result, resultErr = prepareCachedResponse(merged, requestData)
+		if result != nil {
+			result.CacheStatus = "revalidated"
+		}
+		return result, resultErr
 	}
 	c.cache.Store(&cacheRequest, cachedResult)
 	return prepareCachedResponse(cachedResult, requestData)
+}
+
+func observationErrorCategory(err error) string {
+	switch {
+	case err == nil:
+		return ""
+	case errors.Is(err, ErrCORS), errors.Is(err, ErrCORSPreflightRequired):
+		return "cors"
+	case errors.Is(err, ErrTimeout), errors.Is(err, context.DeadlineExceeded):
+		return "timeout"
+	case errors.Is(err, context.Canceled):
+		return "canceled"
+	case errors.Is(err, ErrRedirectLoop):
+		return "redirect_loop"
+	case errors.Is(err, ErrRedirectLimit):
+		return "redirect_limit"
+	case errors.Is(err, ErrResponseTooLarge), errors.Is(err, ErrResponseTruncated):
+		return "response_limit"
+	case errors.Is(err, ErrRequestTooLarge), errors.Is(err, ErrHeadersTooLarge):
+		return "request_limit"
+	default:
+		return "network"
+	}
 }
 
 func prepareCachedResponse(cached *Response, requestData *Request) (*Response, error) {

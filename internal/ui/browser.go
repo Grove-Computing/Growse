@@ -89,6 +89,7 @@ type BrowserUI struct {
 	inspectorButtons  map[browser.TabID]map[dom.NodeID]*widget.Clickable
 	devToolsList      widget.List
 	inspectorList     widget.List
+	networkList       widget.List
 	pageList          widget.List
 	tabList           widget.List
 	viewportClick     gesture.Click
@@ -321,6 +322,7 @@ func NewBrowserUIWithTabsAndUpdater(navigator Navigator, tabs TabController, inv
 	ui.tabList.Axis = layout.Vertical
 	ui.devToolsList.Axis = layout.Vertical
 	ui.inspectorList.Axis = layout.Vertical
+	ui.networkList.Axis = layout.Vertical
 	ui.startUpdateCheck()
 	return ui
 }
@@ -706,7 +708,11 @@ func (ui *BrowserUI) handleActions(gtx layout.Context) {
 	for ui.devToolsClear.Clicked(gtx) {
 		if navigator := ui.activeNavigator(); navigator != nil {
 			if page := navigator.Page(); page != nil && page.DevTools != nil {
-				page.DevTools.ClearConsole()
+				if ui.devToolsState().Panel == devToolsPanelNetwork {
+					page.DevTools.ClearNetwork()
+				} else {
+					page.DevTools.ClearConsole()
+				}
 			}
 		}
 	}
@@ -1173,7 +1179,12 @@ func (ui *BrowserUI) layoutDevTools(gtx layout.Context) layout.Dimensions {
 					layout.Rigid(ui.devToolsTab(&ui.devToolsInspector, devToolsPanelInspector, state.Panel == devToolsPanelInspector)),
 					layout.Rigid(ui.devToolsTab(&ui.devToolsNetwork, devToolsPanelNetwork, state.Panel == devToolsPanelNetwork)),
 					layout.Flexed(1, layout.Spacer{}.Layout),
-					layout.Rigid(ui.devToolsAction(&ui.devToolsFilter, consoleFilterLabel(state.Filter))),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						if state.Panel != devToolsPanelConsole {
+							return layout.Dimensions{}
+						}
+						return ui.devToolsAction(&ui.devToolsFilter, consoleFilterLabel(state.Filter))(gtx)
+					}),
 					layout.Rigid(layout.Spacer{Width: unit.Dp(6)}.Layout),
 					layout.Rigid(ui.devToolsAction(&ui.devToolsClear, "Clear")),
 					layout.Rigid(layout.Spacer{Width: unit.Dp(6)}.Layout),
@@ -1186,12 +1197,48 @@ func (ui *BrowserUI) layoutDevTools(gtx layout.Context) layout.Dimensions {
 				case devToolsPanelInspector:
 					return ui.layoutDevToolsInspector(gtx, state)
 				case devToolsPanelNetwork:
-					return ui.layoutDevToolsPlaceholder(gtx, "Network request timeline will appear here")
+					return ui.layoutDevToolsNetwork(gtx)
 				default:
 					return ui.layoutDevToolsConsole(gtx, state.Filter)
 				}
 			}),
 		)
+	})
+}
+
+func (ui *BrowserUI) layoutDevToolsNetwork(gtx layout.Context) layout.Dimensions {
+	var records []devtoolsmodel.NetworkRecord
+	if navigator := ui.activeNavigator(); navigator != nil {
+		if page := navigator.Page(); page != nil && page.DevTools != nil {
+			records = page.DevTools.Network()
+		}
+	}
+	if len(records) == 0 {
+		return ui.layoutDevToolsPlaceholder(gtx, "Network has no requests for this page")
+	}
+	return material.List(ui.theme, &ui.networkList).Layout(gtx, len(records), func(gtx layout.Context, index int) layout.Dimensions {
+		record := records[index]
+		status := fmt.Sprint(record.StatusCode)
+		if record.ErrorCategory != "" {
+			status = "error:" + record.ErrorCategory
+		}
+		flags := record.CacheStatus
+		if record.Redirected {
+			if flags != "" {
+				flags += ","
+			}
+			flags += "redirect"
+		}
+		if flags == "" {
+			flags = "-"
+		}
+		label := material.Body2(ui.theme, fmt.Sprintf("%04d  %-10s %-5s %-15s %8s %7d B  %-18s  %s",
+			record.Sequence, record.Kind, record.Method, status, record.Duration.Round(time.Microsecond), record.ResponseBytes, flags, record.URL))
+		label.Color = color.NRGBA{R: 203, G: 213, B: 225, A: 255}
+		if record.ErrorCategory != "" || record.StatusCode >= 400 {
+			label.Color = color.NRGBA{R: 253, G: 164, B: 175, A: 255}
+		}
+		return layout.Inset{Top: unit.Dp(3), Bottom: unit.Dp(3), Left: unit.Dp(6)}.Layout(gtx, label.Layout)
 	})
 }
 
