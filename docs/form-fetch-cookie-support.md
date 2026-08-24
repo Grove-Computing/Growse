@@ -1,6 +1,6 @@
 # Form / Fetch / Cookie対応表
 
-この表はGrowse v0.11.0の実装を基準とする。「部分対応」は主要な利用経路を扱えるが、Web標準の全機能を実装していない項目を表す。
+この表はGrowse v0.13.0の実装を基準とする。「部分対応」は主要な利用経路を扱えるが、Web標準の全機能を実装していない項目を表す。
 
 ## Form Controls
 
@@ -27,20 +27,21 @@
 
 Form entryは1,000件、各name/valueは64 KiB、urlencoded結果は1 MiBを上限とする。
 
-## WebGo FetchとHTTP Lifecycle
+## Go / JavaScript FetchとHTTP Lifecycle
 
-WebGoは`growse/fetch`の`Fetch(Request, success, failure)`を利用する。構造化`Headers`、JSON / text / bytes / URLSearchParams / FormData body、Credentials Mode、AbortSignal、timeoutを指定できる。Responseはcredentialを除去したstatus、final URL、immutable `ResponseHeaders`、`BodyUsed`を持ち、Bodyは`Bytes`、`Text`、`JSON`のいずれかで一度だけ消費できる。
+Goは`growse/fetch`の`Fetch(Request, success, failure)`を利用する。JavaScriptはPromise形式の`fetch(input, init)`を利用する。両方とも既存Network policyとPage lifecycleへ接続し、Credentials Mode、AbortSignal、timeoutを扱う。GoはJSON / text / bytes / URLSearchParams / FormData body、JavaScriptはv0.13.0でtext bodyを指定できる。Response bodyはどちらも一度だけ消費できる。
 
 | 機能 | 対応 | 補足 |
 | --- | --- | --- |
 | 非同期callback | 対応 | Page event queueで成功・失敗のどちらか一回を通知する |
+| JavaScript Promise | 対応 | `fetch`、`Response.text()`、`Response.json()`をPage queue上でsettleする |
 | redirect | 対応 | 301、302、303、307、308とmethod変換を扱い、loop検出・最大10回を適用する |
 | timeout / cancel | 対応 | `AbortController` / `AbortSignal`とrequest単位timeoutを扱う。NavigationとPage終了で進行中Requestをcancelする |
 | Body helper | 対応 | Bytes、Text、JSON、BodyUsed。二重消費とinvalid UTF-8 textはErrorになる |
 | Credentials Mode | 対応 | `omit`、`same-origin`、`include` |
 | safety limit | 対応 | Request 1 MiB、Header 100件/64 KiB、Pageあたり16件・Sessionあたり128件の同時Fetch |
-| HTTP Cache | 対応 | Navigation、Resource Loading、WebGo Source、Fetchで共通のprivate cacheを使用する |
-| 対象外 | 非対応 | Promise、ReadableStream、Service Worker、WebSocket |
+| HTTP Cache | 対応 | Navigation、Resource Loading、Go / JavaScript Source、Fetchで共通のprivate cacheを使用する |
+| 対象外 | 非対応 | ReadableStream、File / Blob body、Service Worker、WebSocket |
 
 ## Cookie
 
@@ -58,16 +59,16 @@ WebGoは`growse/fetch`の`Fetch(Request, success, failure)`を利用する。構
 
 ## Same-OriginとCORS
 
-HTTP(S)のscheme、host、正規化したportでOriginを比較する。WebGo Fetchのcross-origin requestにはOrigin Headerを付け、simple requestまたは成功したpreflightだけを送信する。
+HTTP(S)のscheme、host、正規化したportでOriginを比較する。Go / JavaScript Fetchのcross-origin requestにはOrigin Headerを付け、simple requestまたは成功したpreflightだけを送信する。
 
 | 機能 | 対応 | 補足 |
 | --- | --- | --- |
 | same-origin Fetch | 対応 | 同一OriginではCORS response headerを要求しない |
 | simple CORS | 対応 | safelisted methodとHeaderを判定する |
 | preflight | 対応 | OPTIONS responseのOrigin、Method、Header、Credentialsを検証し、Max-Ageをcacheする |
-| response filtering | 対応 | safelistedまたは明示的に公開されたHeaderだけをWebGoへ渡す |
+| response filtering | 対応 | safelistedまたは明示的に公開されたHeaderだけをGo / JavaScriptへ渡す |
 | credentialed CORS | 対応 | wildcard Originを拒否し、明示OriginとAllow-Credentialsを要求する |
-| forbidden Header | 対応 | Cookie、Host、Content-LengthなどWebGoが設定できないHeaderを拒否する |
+| forbidden Header | 対応 | Cookie、Host、Content-LengthなどRuntimeが設定できないHeaderを拒否する |
 | 対象外 | 非対応 | opaque Origin、Private Network Access、CORB、CSP、Mixed Content |
 
 WPT由来テストの固定revision、出典、適応差分は[Web Platform Tests由来テスト](wpt.md)を参照する。

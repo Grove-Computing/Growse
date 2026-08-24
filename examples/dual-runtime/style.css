@@ -1,0 +1,11 @@
+:root { color: #e2e8f0; background: #0f172a; font-family: sans-serif; }
+body { margin: 0; padding: 32px; }
+.app { max-width: 920px; margin: 0 auto; }
+.eyebrow { color: #38bdf8; font-weight: 700; }
+.grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin: 24px 0; }
+article { padding: 16px; border: 1px solid #334155; border-radius: 12px; background: #1e293b; }
+h1, h2, p { margin-top: 0; }
+button, input { padding: 10px 14px; border: 0; border-radius: 8px; }
+button { color: white; background: #2563eb; }
+input { width: 90%; color: #0f172a; background: #f8fafc; }
+.danger { background: #be123c; }

@@ -1,10 +1,10 @@
 # Storage / Cache対応表
 
-この表はGrowse v0.10.0の実装を基準とする。「部分対応」は主要なPage利用経路を扱えるが、Web標準の全機能を実装していない項目を表す。
+この表はGrowse v0.13.0の実装を基準とする。「部分対応」は主要なPage利用経路を扱えるが、Web標準の全機能を実装していない項目を表す。
 
 ## Web Storage
 
-WebGoは`growse/storage`の`Local()`と`Session()`からStorageを取得し、`Get`、`Set`、`Remove`、`Clear`、`Length`、`Key`を使用する。`OnChange`では、別のsame-origin TabがcommitしたLocal Storage更新を受信できる。HTTP(S)のscheme、host、正規化したportからOriginを作り、異なるOriginの値を共有しない。
+Goは`growse/storage`の`Local()`と`Session()`からStorageを取得し、`Get`、`Set`、`Remove`、`Clear`、`Length`、`Key`を使用する。JavaScriptは`localStorage`と`sessionStorage`から`getItem`、`setItem`、`removeItem`、`clear`、`length`、`key`を使用する。Goの`OnChange`またはJavaScriptの`addEventListener("storage", callback)`では、別のsame-origin TabがcommitしたLocal Storage更新を受信できる。HTTP(S)のscheme、host、正規化したportからOriginを作り、異なるOriginの値を共有しない。
 
 | 機能 | 対応 | 補足 |
 | --- | --- | --- |
@@ -22,7 +22,7 @@ WebGoは`growse/storage`の`Local()`と`Session()`からStorageを取得し、`G
 
 ## HTTP Cache
 
-同じBrowser SessionのNavigation、Stylesheet、Image、WebGo Source、FetchはTab間で同じprivate HTTP Cache Policyを使用する。通常Navigationはfresh entryを再利用し、通常reloadはDocumentを再検証しつつfresh subresourceを再利用する。強制reloadはDocumentとsubresourceの両方へ再検証を要求する。
+同じBrowser SessionのNavigation、Stylesheet、Image、Go / JavaScript Source、FetchはTab間で同じprivate HTTP Cache Policyを使用する。通常Navigationはfresh entryを再利用し、通常reloadはDocumentを再検証しつつfresh subresourceを再利用する。強制reloadはDocumentとsubresourceの両方へ再検証を要求する。
 
 | 機能 | 対応 | 補足 |
 | --- | --- | --- |

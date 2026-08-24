@@ -87,6 +87,45 @@ func TestDevToolsNetworkRecordsNavigationResourcesFetchAndFormByPage(t *testing.
 	}
 }
 
+func TestDevToolsNetworkDistinguishesExternalScriptEngine(t *testing.T) {
+	for _, engine := range []runtimemodel.Engine{runtimemodel.EngineGo, runtimemodel.EngineJavaScript} {
+		t.Run(string(engine), func(t *testing.T) {
+			scriptType, scriptPath, scriptMIME, scriptBody := "text/go", "/app.go", "text/go", "package main; func main() {}"
+			if engine == runtimemodel.EngineJavaScript {
+				scriptType, scriptPath, scriptMIME, scriptBody = "text/javascript", "/app.js", "text/javascript", "console.log('js')"
+			}
+			client := network.NewClientWithLimits(&http.Client{Transport: devToolsRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+				contentType, body := "text/html", `<script type="`+scriptType+`" src="`+scriptPath+`"></script>`
+				if request.URL.Path == scriptPath {
+					contentType, body = scriptMIME, scriptBody
+				}
+				return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{contentType}}, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
+			})}, 1<<20)
+			browserState := NewWithEngineFactory(client, func(runtimemodel.Engine) runtimemodel.Runtime { return &runtimeStub{} })
+			t.Cleanup(func() { _ = browserState.Close() })
+			if _, err := browserState.SetEngine(context.Background(), engine); err != nil {
+				t.Fatal(err)
+			}
+			page, err := browserState.Navigate(context.Background(), "http://localhost/index")
+			if err != nil {
+				t.Fatal(err)
+			}
+			found := false
+			for _, record := range page.DevTools.Network() {
+				if record.Kind == "script" {
+					found = true
+					if record.Engine != string(engine) {
+						t.Fatalf("script Engine = %q, want %q", record.Engine, engine)
+					}
+				}
+			}
+			if !found {
+				t.Fatal("external Script Network record was not created")
+			}
+		})
+	}
+}
+
 func hasNetworkKind(records []devtools.NetworkRecord, kind string) bool {
 	for _, record := range records {
 		if record.Kind == kind {

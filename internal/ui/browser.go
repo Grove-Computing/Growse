@@ -1174,10 +1174,7 @@ func (ui *BrowserUI) layoutEngineButton(gtx layout.Context) layout.Dimensions {
 			engine = selector.Engine()
 		}
 	}
-	label := "Go"
-	if engine == runtimemodel.EngineJavaScript {
-		label = "JS"
-	}
+	label := engineButtonLabel(engine)
 	gtx.Constraints.Min.Y = gtx.Dp(controlHeight)
 	gtx.Constraints.Max.Y = gtx.Dp(controlHeight)
 	button := material.Button(ui.theme, &ui.engineButton, label)
@@ -1186,6 +1183,13 @@ func (ui *BrowserUI) layoutEngineButton(gtx layout.Context) layout.Dimensions {
 	button.CornerRadius = unit.Dp(10)
 	button.Inset = layout.Inset{Top: unit.Dp(8), Right: unit.Dp(12), Bottom: unit.Dp(8), Left: unit.Dp(12)}
 	return button.Layout(gtx)
+}
+
+func engineButtonLabel(engine runtimemodel.Engine) string {
+	if runtimemodel.NormalizeEngine(engine) == runtimemodel.EngineJavaScript {
+		return "JS"
+	}
+	return "Go"
 }
 
 func (ui *BrowserUI) layoutDevToolsButton(gtx layout.Context) layout.Dimensions {
@@ -1238,6 +1242,16 @@ func (ui *BrowserUI) layoutDevTools(gtx layout.Context) layout.Dimensions {
 					layout.Rigid(ui.devToolsTab(&ui.devToolsConsole, devToolsPanelConsole, state.Panel == devToolsPanelConsole)),
 					layout.Rigid(ui.devToolsTab(&ui.devToolsInspector, devToolsPanelInspector, state.Panel == devToolsPanelInspector)),
 					layout.Rigid(ui.devToolsTab(&ui.devToolsNetwork, devToolsPanelNetwork, state.Panel == devToolsPanelNetwork)),
+					layout.Rigid(layout.Spacer{Width: unit.Dp(12)}.Layout),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						var page *browser.Page
+						if navigator := ui.activeNavigator(); navigator != nil {
+							page = navigator.Page()
+						}
+						label := material.Caption(ui.theme, devToolsRuntimeLabel(page))
+						label.Color = color.NRGBA{R: 148, G: 163, B: 184, A: 255}
+						return label.Layout(gtx)
+					}),
 					layout.Flexed(1, layout.Spacer{}.Layout),
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 						if state.Panel != devToolsPanelConsole {
@@ -1302,8 +1316,28 @@ func (ui *BrowserUI) layoutDevToolsNetwork(gtx layout.Context) layout.Dimensions
 }
 
 func networkRecordLabel(record devtoolsmodel.NetworkRecord, status, flags string) string {
+	kind := record.Kind
+	if record.Kind == "script" && record.Engine != "" {
+		kind += "/" + record.Engine
+	}
 	return fmt.Sprintf("%04d  %-10s %-5s %-15s %8s %7d B  %-18s  %s",
-		record.Sequence, record.Kind, record.Method, status, record.Duration.Round(time.Microsecond), record.ResponseBytes, flags, record.URL)
+		record.Sequence, kind, record.Method, status, record.Duration.Round(time.Microsecond), record.ResponseBytes, flags, record.URL)
+}
+
+func devToolsRuntimeLabel(page *browser.Page) string {
+	if page == nil {
+		return "Engine: - · Runtime: no page"
+	}
+	engine := runtimemodel.NormalizeEngine(page.Engine)
+	state := "idle"
+	if page.RuntimeStarted {
+		state = "running"
+	} else if page.RuntimeError != "" {
+		state = "error"
+	} else if len(page.Scripts) != 0 {
+		state = "stopped"
+	}
+	return fmt.Sprintf("Engine: %s · Runtime: %s", engine, state)
 }
 
 func (ui *BrowserUI) layoutDevToolsInspector(gtx layout.Context, state devToolsTabState) layout.Dimensions {
@@ -1474,7 +1508,11 @@ func (ui *BrowserUI) layoutDevToolsConsole(gtx layout.Context, filter devtoolsmo
 	}
 	return material.List(ui.theme, &ui.devToolsList).Layout(gtx, len(records), func(gtx layout.Context, index int) layout.Dimensions {
 		record := records[index]
-		label := material.Body2(ui.theme, fmt.Sprintf("%04d  %-5s  %-8s  %s", record.Sequence, record.Level, record.Source, record.Message))
+		engine := record.Engine
+		if engine == "" {
+			engine = "-"
+		}
+		label := material.Body2(ui.theme, fmt.Sprintf("%04d  %-5s  %-10s  %-8s  %s", record.Sequence, record.Level, engine, record.Source, record.Message))
 		label.Color = devToolsLevelColor(record.Level)
 		return layout.Inset{Top: unit.Dp(3), Bottom: unit.Dp(3), Left: unit.Dp(6)}.Layout(gtx, label.Layout)
 	})
