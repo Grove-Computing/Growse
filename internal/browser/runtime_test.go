@@ -13,6 +13,7 @@ import (
 	"github.com/Grove-Computing/Growse/internal/events"
 	"github.com/Grove-Computing/Growse/internal/network"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
+	runtimejavascript "github.com/Grove-Computing/Growse/internal/runtime/javascript"
 	runtimeyaegi "github.com/Grove-Computing/Growse/internal/runtime/yaegi"
 	storagecore "github.com/Grove-Computing/Growse/internal/storage"
 )
@@ -23,12 +24,40 @@ type runtimeStub struct {
 	stopCalls        atomic.Int32
 	loadErr          error
 	startErr         error
+	scripts          []runtimemodel.Script
 	environment      runtimemodel.Environment
 	mutateOnStart    bool
 	navigateOnStart  string
 	popStates        []string
 	hashChanges      [][2]string
 	navigationEvents []string
+}
+
+func TestJavaScriptConsoleRecordRetainsSelectedEngine(t *testing.T) {
+	pageURL := mustParseURL(t, "http://localhost/javascript-console.html")
+	loader := stubLoader{response: &network.Response{
+		URL: pageURL, StatusCode: 200, ContentType: "text/html",
+		Body: []byte(`<script>console.warn("from js")</script>`),
+	}}
+	browserState := NewWithEngineFactory(loader, func(engine runtimemodel.Engine) runtimemodel.Runtime {
+		if engine == runtimemodel.EngineJavaScript {
+			return runtimejavascript.New()
+		}
+		return runtimeyaegi.New()
+	})
+	t.Cleanup(func() { _ = browserState.Close() })
+	if _, err := browserState.SetEngine(context.Background(), runtimemodel.EngineJavaScript); err != nil {
+		t.Fatalf("SetEngine() error = %v", err)
+	}
+	page, err := browserState.Navigate(context.Background(), pageURL.String())
+	if err != nil {
+		t.Fatalf("Navigate() error = %v", err)
+	}
+	records := page.DevTools.Console()
+	if len(records) != 1 || records[0].Engine != "javascript" || records[0].Level != devtools.ConsoleWarn ||
+		records[0].Source != "console" || records[0].Message != "from js" {
+		t.Fatalf("Console() = %#v, want JavaScript warn record", records)
+	}
 }
 
 func TestAnimationFrameMutationUsesSharedFrameTimestamp(t *testing.T) {
@@ -97,7 +126,7 @@ func TestBrowserCloseReleasesPageClientStorageAndRuntimeReferences(t *testing.T)
 		t.Fatal(err)
 	}
 	if browserState.page != nil || browserState.client != nil || browserState.storage != nil || browserState.activeRuntime != nil ||
-		browserState.runtimeFactory != nil || browserState.onMutation != nil || len(browserState.history.entries) != 0 {
+		browserState.runtimeFactory != nil || browserState.engineFactory != nil || browserState.onMutation != nil || len(browserState.history.entries) != 0 {
 		t.Fatal("Browser Close retained Page-owned references")
 	}
 	if runtime.stopCalls.Load() != 1 {
@@ -108,10 +137,121 @@ func TestBrowserCloseReleasesPageClientStorageAndRuntimeReferences(t *testing.T)
 	}
 }
 
-func (runtime *runtimeStub) Load(_ context.Context, _ []runtimemodel.Script, environment runtimemodel.Environment) error {
+func (runtime *runtimeStub) Load(_ context.Context, scripts []runtimemodel.Script, environment runtimemodel.Environment) error {
 	runtime.loadCalls.Add(1)
+	runtime.scripts = append([]runtimemodel.Script(nil), scripts...)
 	runtime.environment = environment
 	return runtime.loadErr
+}
+
+func TestEngineSelectionReloadsSelectedScriptsAndRemainsTabScoped(t *testing.T) {
+	pageURL := mustParseURL(t, "http://localhost/dual.html")
+	secondURL := mustParseURL(t, "http://localhost/second.html")
+	body := []byte(`<main id="app"></main>
+<script type="text/go">package main; func main() {}</script>
+<script>globalThis.started = true</script>`)
+	loader := &routeLoader{responses: map[string]*network.Response{
+		pageURL.String():   {URL: pageURL, StatusCode: 200, ContentType: "text/html", Body: body},
+		secondURL.String(): {URL: secondURL, StatusCode: 200, ContentType: "text/html", Body: body},
+	}}
+	created := make(map[runtimemodel.Engine][]*runtimeStub)
+	factory := func(engine runtimemodel.Engine) runtimemodel.Runtime {
+		runtime := &runtimeStub{}
+		created[engine] = append(created[engine], runtime)
+		return runtime
+	}
+	browserState := NewWithEngineFactory(loader, factory)
+	otherTab := NewWithEngineFactory(loader, factory)
+	if browserState.Engine() != runtimemodel.EngineGo || otherTab.Engine() != runtimemodel.EngineGo {
+		t.Fatal("new Browser did not default to Go")
+	}
+	page, err := browserState.Navigate(context.Background(), pageURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Engine != runtimemodel.EngineGo || len(page.Scripts) != 1 || page.Scripts[0].Engine != runtimemodel.EngineGo {
+		t.Fatalf("default Page engine=%q scripts=%#v", page.Engine, page.Scripts)
+	}
+	firstGo := created[runtimemodel.EngineGo][0]
+	page, err = browserState.SetEngine(context.Background(), runtimemodel.EngineJavaScript)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstGo.stopCalls.Load() != 1 {
+		t.Fatalf("old Go Runtime Stop calls = %d, want 1", firstGo.stopCalls.Load())
+	}
+	if page.Engine != runtimemodel.EngineJavaScript || len(page.Scripts) != 1 ||
+		page.Scripts[0].Engine != runtimemodel.EngineJavaScript || !strings.Contains(page.Scripts[0].Source, "globalThis") {
+		t.Fatalf("switched Page engine=%q scripts=%#v", page.Engine, page.Scripts)
+	}
+	if browserState.Engine() != runtimemodel.EngineJavaScript || otherTab.Engine() != runtimemodel.EngineGo {
+		t.Fatal("Engine selection leaked to another Browser tab")
+	}
+	if got := len(browserState.history.entries); got != 1 {
+		t.Fatalf("Engine reload history entries = %d, want 1", got)
+	}
+	if _, err := browserState.Reload(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if browserState.Page().Engine != runtimemodel.EngineJavaScript || len(created[runtimemodel.EngineJavaScript]) != 2 {
+		t.Fatal("normal Reload did not preserve JavaScript Engine")
+	}
+	if _, err := browserState.Navigate(context.Background(), secondURL.String()); err != nil {
+		t.Fatal(err)
+	}
+	if page, err := browserState.Back(context.Background()); err != nil || page.Engine != runtimemodel.EngineJavaScript || page.URL.String() != pageURL.String() {
+		t.Fatalf("Back() = (page=%v, error=%v), want JavaScript first Page", page, err)
+	}
+	if page, err := browserState.Forward(context.Background()); err != nil || page.Engine != runtimemodel.EngineJavaScript || page.URL.String() != secondURL.String() {
+		t.Fatalf("Forward() = (page=%v, error=%v), want JavaScript second Page", page, err)
+	}
+}
+
+func TestEngineCanBeSelectedBeforeFirstNavigationAndRejectsUnknown(t *testing.T) {
+	browserState := NewWithEngineFactory(nil, func(runtimemodel.Engine) runtimemodel.Runtime { return &runtimeStub{} })
+	page, err := browserState.SetEngine(context.Background(), runtimemodel.EngineJavaScript)
+	if err != nil || page != nil || browserState.Engine() != runtimemodel.EngineJavaScript {
+		t.Fatalf("SetEngine before navigation = (%v, %v), engine=%q", page, err, browserState.Engine())
+	}
+	if _, err := browserState.SetEngine(context.Background(), "unknown"); !errors.Is(err, ErrInvalidEngine) {
+		t.Fatalf("unknown SetEngine error = %v, want ErrInvalidEngine", err)
+	}
+}
+
+func TestFailedEngineReloadNeverReusesStoppedRuntime(t *testing.T) {
+	pageURL := mustParseURL(t, "http://localhost/failure.html")
+	loader := &routeLoader{responses: map[string]*network.Response{
+		pageURL.String(): {
+			URL: pageURL, StatusCode: 200, ContentType: "text/html",
+			Body: []byte(`<script type="text/go">package main; func main() {}</script><script>started = true</script>`),
+		},
+	}}
+	goRuntime := &runtimeStub{}
+	createdJavaScript := 0
+	browserState := NewWithEngineFactory(loader, func(engine runtimemodel.Engine) runtimemodel.Runtime {
+		if engine == runtimemodel.EngineGo {
+			return goRuntime
+		}
+		createdJavaScript++
+		return &runtimeStub{}
+	})
+	page, err := browserState.Navigate(context.Background(), pageURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	delete(loader.responses, pageURL.String())
+	if _, err := browserState.SetEngine(context.Background(), runtimemodel.EngineJavaScript); err == nil {
+		t.Fatal("SetEngine reload error = nil, want document failure")
+	}
+	if goRuntime.stopCalls.Load() != 1 || browserState.activeRuntime != nil || page.RuntimeStarted {
+		t.Fatalf("failed switch retained Runtime: stop=%d active=%T started=%t", goRuntime.stopCalls.Load(), browserState.activeRuntime, page.RuntimeStarted)
+	}
+	if browserState.Engine() != runtimemodel.EngineJavaScript || createdJavaScript != 0 {
+		t.Fatalf("failed switch engine=%q JavaScript runtimes=%d", browserState.Engine(), createdJavaScript)
+	}
+	if selected, err := browserState.SetEngine(context.Background(), runtimemodel.EngineJavaScript); err != nil || selected != page || goRuntime.stopCalls.Load() != 1 {
+		t.Fatalf("same Engine no-op = (%v, %v), stop calls=%d", selected, err, goRuntime.stopCalls.Load())
+	}
 }
 
 func (runtime *runtimeStub) Start(context.Context) error {

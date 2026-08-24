@@ -775,9 +775,9 @@ func TestReloadDoesNotAddHistoryEntry(t *testing.T) {
 }
 
 func TestReloadIgnoringCacheRevalidatesDocumentAndSubresources(t *testing.T) {
-	pageURL := mustParseURL(t, "https://example.com/page")
-	stylesheetURL := mustParseURL(t, "https://example.com/app.css")
-	scriptURL := mustParseURL(t, "https://example.com/app.go")
+	pageURL := mustParseURL(t, "http://localhost/page")
+	stylesheetURL := mustParseURL(t, "http://localhost/app.css")
+	scriptURL := mustParseURL(t, "http://localhost/app.go")
 	loader := &requestRouteLoader{routeLoader: routeLoader{responses: map[string]*network.Response{
 		pageURL.String(): {
 			URL: pageURL, StatusCode: 200, ContentType: "text/html",

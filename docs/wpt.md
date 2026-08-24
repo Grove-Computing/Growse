@@ -5,8 +5,8 @@ GrowseはWeb Platform Tests（WPT）をブラウザで直接実行せず、対�
 - Upstream: `web-platform-tests/wpt`
 - Revision: `816bbf3ebae17dc6866deb65b2286b1a1c162819`
 - License: WPTリポジトリの`LICENSE.md`（3-Clause BSD）
-- 配置: `internal/style/wpt_test.go`、`internal/layout/wpt_test.go`、`internal/forms/wpt_test.go`、`internal/browser/wpt_v09_test.go`、`internal/browser/wpt_v10_test.go`、`internal/network/wpt_test.go`、`internal/storage/wpt_test.go`、`internal/webapi/scheduler/wpt_test.go`
-- v0.10.0対象: v0.9.0までの範囲に加え、Top-level Browsing Context、close Lifecycle、Storage Event
+- 配置: `internal/style/wpt_test.go`、`internal/layout/wpt_test.go`、`internal/forms/wpt_test.go`、`internal/browser/wpt_v09_test.go`、`internal/browser/wpt_v10_test.go`、`internal/network/wpt_test.go`、`internal/storage/wpt_test.go`、`internal/webapi/scheduler/wpt_test.go`、`internal/runtime/javascript/*_test.go`
+- v0.13.0対象: v0.11.0までの範囲に加え、JavaScript Promise adapter、Timer callback、Storage Event、History state
 
 ## 対応表
 
@@ -78,3 +78,11 @@ Upstreamのファイル全体はコピーせず、assertionの意味と最小入
 - Fetch は request body の排他指定、forbidden request header、abort、timeout、Response body の一回消費を選定し、Promise、Stream、WebSocket は対象外とする。
 - URLSearchParams と FormData は ordered duplicate field、空値、application/x-www-form-urlencoded serialize を選定し、File / Blob / multipart は対象外とする。
 - Abort と timeout は fake clock / context cancellation へ縮約し、WPT の Window、AbortSignal Event、実時間待機は直接実行しない。
+
+## v0.13.0の選定範囲
+
+- Fetchは既存Network policyの結果をJavaScript Promiseへ接続し、resolve / reject、Response bodyの一回消費、abort、timeout、Page closeを選定する。ReadableStreamとbrowser全体のmicrotask timingは対象外とする。
+- Timersはfunction callback、引数、登録順、clear、Page closeを選定し、文字列callbackは安全上の意図的な非対応として拒否する。
+- Web StorageはJavaScriptの同期Storage操作と更新元以外へのsame-origin `storage` Eventを選定し、複数Process間EventとSession Storage Eventは対象外とする。
+- HistoryはJSONへ変換可能なstate、same-origin URL、size上限、`popstate`、`hashchange`を選定し、Window / iframe joint session historyとBFCacheは対象外とする。
+- WPTのJavaScript harnessは直接実行せず、Growseのgoja adapter、Page queue、fake scheduler、fake network、共有Storage Areaへ最小fixtureを縮約する。

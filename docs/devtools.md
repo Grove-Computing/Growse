@@ -1,10 +1,10 @@
 # WebGo DevTools
 
-Growse v0.12.0は、active TabのPageを観測するread-only DevToolsを提供する。ツールバーの`DevTools`または`F12`で開閉し、Console、Inspector、Networkを切り替える。panel、Console filter、Inspector選択はTabごとに分離する。
+Growse v0.13.0は、active TabのPageを観測するread-only DevToolsを提供する。ツールバーの`DevTools`または`F12`で開閉し、Console、Inspector、Networkを切り替える。panel、Console filter、Inspector選択はTabごとに分離する。Headerには選択中のGo / JavaScript EngineとRuntimeのidle / running / stopped / error状態を表示する。
 
 ## Console
 
-WebGoの`growse/console`は`Log`、`Info`、`Warn`、`Error`を提供する。各recordはPage内sequence、level、source、messageだけを持つ。external script load、compile、runtime startの失敗もsource付きerrorとして同じConsoleへ記録する。
+Goの`growse/console`とJavaScriptの`console`はLog、Info、Warn、Errorを提供する。各recordはPage内sequence、level、Engine、source、messageを持つ。external Script load、compile、runtime start、Event callbackの失敗もsource付きerrorとして同じConsoleへ記録する。
 
 - message: 1件4 KiB
 - retention: Page 1,000件
@@ -22,7 +22,7 @@ InspectorはBrowser RuntimeのPage event queue上でDOMからsnapshotを生成�
 
 ## Network
 
-Network recordはNavigation、stylesheet、image、external WebGo script、Form submission、WebGo Fetchをresource kind付きで記録する。method、開始時刻、duration、status、redirect、cache status、response byte数、error categoryを表示する。
+Network recordはNavigation、stylesheet、image、external Go / JavaScript Script、Form submission、Fetchをresource kind付きで記録する。外部Scriptは`script/go`と`script/javascript`を区別し、method、開始時刻、duration、status、redirect、cache status、response byte数、error categoryを表示する。
 
 Request / Response bodyとHeaderはObservation型にもNetworkRecord型にも存在しない。Cookie、Authorization、API key、raw error本文を保存しない。URL userinfoを除去し、queryはkeyだけを残して全valueを`[REDACTED]`へ置換する。CORS、timeout、cancel、redirect loop / limit、request / response limit、network failureを限定されたcategoryへ変換する。
 

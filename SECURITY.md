@@ -6,7 +6,8 @@
 
 | Version | Supported |
 | --- | --- |
-| 0.12.x | Yes |
+| 0.13.x | Yes |
+| 0.12.x | No |
 | 0.11.x | No |
 | 0.10.x | No |
 | 0.9.x | No |
@@ -67,12 +68,14 @@ Release時は最終imageをdigest指定でscanし、修正の有無にかかわ�
 
 Developer workstationからのCredential窃取、不可視Unicode、未承認Binary／Editor Extension、署名、Release cool-down、感染時の対応は[Developer Supply Chain Security](docs/developer-security.md)を参照してください。
 
-## WebGo Security Boundary
+## Go / JavaScript Runtime Security Boundary
 
-Growse v0.12.0のYaegi Runtimeは、信頼できないGoコードを安全に実行するSandboxではありません。
+Growse v0.13.0のYaegi / goja Runtimeは、信頼できないGoまたはJavaScriptコードを安全に実行するProcess Sandboxではありません。
 プロセス分離、CPU時間制限、メモリ制限、およびGo標準ライブラリ全体に対する完全な制限は提供していません。
 
-WebGoの自動実行は`localhost`、`127.0.0.1`、`::1`のページと、同じく信頼済みOriginから取得したGoスクリプトに限定されます。ただし、ローカルで配信されるページやスクリプトを信頼できることは利用者自身が確認してください。WebGo FetchはSame-Origin PolicyとCORSを適用し、`omit`、`same-origin`、`include`のCredentials Modeに従います。禁止Header、CORS Response Headerの非公開化、preflightとそのcacheを実装していますが、Runtime自体をSandboxにはしません。
+Scriptの自動実行は`localhost`、`127.0.0.1`、`::1`のページと、同じく信頼済みsame-originから取得したGo / JavaScript Scriptに限定されます。redirect後の最終URLにも同じ判定を適用し、選択していないEngineのScriptは取得しません。ただし、ローカルで配信されるページやScriptを信頼できることは利用者自身が確認してください。FetchはSame-Origin PolicyとCORSを適用し、`omit`、`same-origin`、`include`のCredentials Modeに従います。
+
+JavaScript hostはOS、filesystem、process、Go reflection、Node.js APIを公開しません。Pageごとのgoja VMは単一直列queueからだけ呼び出し、Page closeとEngine切替でinterruptし、listener、Timer、Fetch、Storage callbackを解放します。これはhost surfaceの縮小とlifecycle分離であり、CPU・memory・Processを隔離するSandboxではありません。
 
 Navigation、Form Submission、FetchはBrowser Session単位のメモリ内Cookie Jarを共有します。各RequestでDomain、Path、Secure、HttpOnly、SameSite、Origin、Credentialsを再評価し、WebGoからHttpOnly Cookieを参照できないようにします。Request Bodyは1 MiB、Headerは100件かつ64 KiB、Response Bodyは既定4 MiB、Redirectは10回を上限とし、Page終了時は進行中のFetchをcancelします。URLを含むErrorと表示にはuserinfoを残さず、CookieとAuthorizationの値をLogへ出力しません。
 
@@ -86,7 +89,7 @@ HTTP CacheはOSのUser Cache Directory配下にprivate cacheとして保存し�
 
 DevToolsはPageごとのread-only診断境界です。Consoleは1件4 KiB・Page 1,000件、DOM snapshotは2,000 node・深さ128・attribute 64件・文字列4 KiB、NetworkはPage 500件・Browser Session 4,000件を上限とします。Page終了後のcallbackは記録を追加できません。Network recordにはRequest / Response body、Header、Cookie、Authorization、error本文を保持せず、URL userinfoとquery valueをマスクします。Inspectorはpassword inputのvalue、WebGo callback、Runtime objectを公開しません。DevToolsは秘密情報を安全に保管するvaultではないため、URL pathやConsoleへCredentialを意図的に書き込まないでください。
 
-信頼できないWebGoソースを開いたり、Growseを権限の高いユーザーで実行したりしないでください。
+信頼できないGo / JavaScriptソースを開いたり、Growseを権限の高いユーザーで実行したりしないでください。
 
 ## Hoverとカーソル表示
 

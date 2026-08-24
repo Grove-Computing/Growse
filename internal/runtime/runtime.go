@@ -13,8 +13,35 @@ import (
 	fetchapi "github.com/Grove-Computing/Growse/internal/webapi/fetch"
 )
 
-// Script は文書内で見つかった1つのGoソースを表す。
+// Engine はPage Scriptを評価する実行エンジンを識別する。
+type Engine string
+
+const (
+	EngineGo         Engine = "go"
+	EngineJavaScript Engine = "javascript"
+)
+
+// NormalizeEngine は既存呼び出しのzero valueをGoとして扱う。
+func NormalizeEngine(engine Engine) Engine {
+	if engine == "" {
+		return EngineGo
+	}
+	return engine
+}
+
+// Valid はGrowseが選択可能なEngineかを返す。
+func (engine Engine) Valid() bool {
+	switch NormalizeEngine(engine) {
+	case EngineGo, EngineJavaScript:
+		return true
+	default:
+		return false
+	}
+}
+
+// Script は文書内で見つかった1つの実行ソースを表す。
 type Script struct {
+	Engine    Engine
 	SourceURL *url.URL
 	Source    string
 	Inline    bool
@@ -62,3 +89,17 @@ type NavigationEventDispatcher interface {
 
 // Factory はページごとに独立したRuntimeを生成する。
 type Factory func() Runtime
+
+// EngineFactory は選択Engineに対応する独立したRuntimeを生成する。
+type EngineFactory func(Engine) Runtime
+
+// ForGo は既存のGo専用Factoryを言語選択可能なFactoryへ変換する。
+// JavaScriptを要求された場合はnilを返し、暗黙にGoへfallbackしない。
+func ForGo(factory Factory) EngineFactory {
+	return func(engine Engine) Runtime {
+		if NormalizeEngine(engine) != EngineGo || factory == nil {
+			return nil
+		}
+		return factory()
+	}
+}

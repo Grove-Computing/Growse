@@ -1,0 +1,145 @@
+package javascript
+
+import (
+	"context"
+	"strings"
+	"testing"
+
+	"github.com/Grove-Computing/Growse/internal/events"
+	htmlparser "github.com/Grove-Computing/Growse/internal/html"
+	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
+	"github.com/dop251/goja"
+)
+
+func TestEventListenersReceiveSupportedEventsOnPageQueue(t *testing.T) {
+	document, err := htmlparser.Parse(strings.NewReader(`<input id="target" value="initial">`))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	target, _ := document.GetElementByID("target")
+	dispatcher := events.NewDispatcher()
+	runtime := New()
+	t.Cleanup(func() { _ = runtime.Stop() })
+	source := `
+		var received = [];
+		var target = document.getElementById("target");
+		["click", "input", "change", "submit", "reset", "focus", "blur", "mouseenter", "mouseleave"].forEach(function (type) {
+			target.addEventListener(type, function (event) {
+				if (event.target !== target) { throw new Error("wrong target"); }
+				received.push(event.type + ":" + event.value + ":" + event.clientX + ":" + event.clientY);
+			});
+		});`
+	startJavaScriptRuntime(t, runtime, source, runtimemodel.Environment{Document: document, Events: dispatcher})
+
+	types := []events.Type{
+		events.Click, events.Input, events.Change, events.Submit, events.Reset,
+		events.Focus, events.Blur, events.MouseEnter, events.MouseLeave,
+	}
+	for _, eventType := range types {
+		event := events.Event{Type: eventType, Target: target.ID, Value: "typed", X: 12, Y: 34}
+		if !runtime.DispatchPageEvent(func() bool { return dispatcher.Dispatch(event) }) {
+			t.Fatalf("DispatchPageEvent(%q) = false, want true", eventType)
+		}
+	}
+
+	var received []string
+	if err := runtime.runSync(context.Background(), func(vm *goja.Runtime) error {
+		return vm.ExportTo(vm.Get("received"), &received)
+	}); err != nil {
+		t.Fatalf("read received events: %v", err)
+	}
+	if len(received) != len(types) {
+		t.Fatalf("received events = %v, want %d", received, len(types))
+	}
+	if got, want := received[0], "click:initial:12:34"; got != want {
+		t.Fatalf("click event = %q, want %q", got, want)
+	}
+}
+
+func TestEventPreventDefaultDuplicateAndExceptionIsolation(t *testing.T) {
+	document, err := htmlparser.Parse(strings.NewReader(`<form id="target"></form>`))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	target, _ := document.GetElementByID("target")
+	dispatcher := events.NewDispatcher()
+	var records [][2]string
+	runtime := New()
+	t.Cleanup(func() { _ = runtime.Stop() })
+	environment := runtimemodel.Environment{
+		Document: document,
+		Events:   dispatcher,
+		ConsoleRecord: func(level, message string) {
+			records = append(records, [2]string{level, message})
+		},
+	}
+	source := `
+		var calls = 0;
+		var target = document.getElementById("target");
+		function duplicate(event) { calls += 1; event.preventDefault(); throw new Error("listener failure"); }
+		target.addEventListener("submit", duplicate);
+		target.addEventListener("submit", duplicate);
+		target.addEventListener("submit", function () { calls += 10; });`
+	startJavaScriptRuntime(t, runtime, source, environment)
+
+	event := events.Cancelable(events.Submit, target.ID)
+	if !runtime.DispatchPageEvent(func() bool { return dispatcher.Dispatch(event) }) {
+		t.Fatal("DispatchPageEvent() = false, want true")
+	}
+	if !event.DefaultPrevented() {
+		t.Fatal("JavaScript preventDefault() did not cancel the browser default action")
+	}
+	var calls int64
+	if err := runtime.runSync(context.Background(), func(vm *goja.Runtime) error {
+		calls = vm.Get("calls").ToInteger()
+		return nil
+	}); err != nil {
+		t.Fatalf("read calls: %v", err)
+	}
+	if calls != 11 {
+		t.Fatalf("listener calls = %d, want 11 (duplicate ignored and later listener continued)", calls)
+	}
+	if len(records) != 1 || records[0][0] != "error" || !strings.Contains(records[0][1], "listener failure") {
+		t.Fatalf("exception records = %v, want one isolated listener error", records)
+	}
+}
+
+func TestEventListenerLimitAndPageClose(t *testing.T) {
+	document, err := htmlparser.Parse(strings.NewReader(`<button id="target">click</button>`))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	target, _ := document.GetElementByID("target")
+	dispatcher := events.NewDispatcher()
+	runtime := New()
+	runtime.maxListeners = 1
+	source := `
+		var target = document.getElementById("target");
+		target.addEventListener("click", function () {});
+		target.addEventListener("click", function () {});`
+	if err := runtime.Load(context.Background(), []runtimemodel.Script{javaScript(source)}, runtimemodel.Environment{Document: document, Events: dispatcher}); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if err := runtime.Start(context.Background()); err == nil || !strings.Contains(err.Error(), "event listener limit exceeded") {
+		t.Fatalf("Start() error = %v, want listener limit error", err)
+	}
+	if err := runtime.Stop(); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+	if dispatcher.Dispatch(events.Event{Type: events.Click, Target: target.ID}) {
+		t.Fatal("Page close retained a JavaScript Event listener")
+	}
+	if runtime.DispatchPageEvent(func() bool { return true }) {
+		t.Fatal("closed Runtime delivered a Page event")
+	}
+}
+
+func startJavaScriptRuntime(t *testing.T, runtime *Runtime, source string, environment runtimemodel.Environment) {
+	t.Helper()
+	if err := runtime.Load(context.Background(), []runtimemodel.Script{javaScript(source)}, environment); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+}

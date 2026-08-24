@@ -26,6 +26,7 @@ const (
 type ConsoleRecord struct {
 	Sequence uint64
 	Level    ConsoleLevel
+	Engine   string
 	Source   string
 	Message  string
 }
@@ -63,6 +64,11 @@ func newPageStore(maxRecords, maxBytes int) *PageStore {
 
 // AddConsole appends a bounded console record. Calls after Close are ignored.
 func (store *PageStore) AddConsole(level ConsoleLevel, source, message string) {
+	store.AddConsoleForEngine(level, "", source, message)
+}
+
+// AddConsoleForEngine appends a bounded console record with its Page Runtime Engine.
+func (store *PageStore) AddConsoleForEngine(level ConsoleLevel, engine, source, message string) {
 	if store == nil {
 		return
 	}
@@ -76,7 +82,13 @@ func (store *PageStore) AddConsole(level ConsoleLevel, source, message string) {
 		return
 	}
 	store.next++
-	store.console = append(store.console, ConsoleRecord{Sequence: store.next, Level: level, Source: source, Message: message})
+	store.console = append(store.console, ConsoleRecord{
+		Sequence: store.next,
+		Level:    level,
+		Engine:   engine,
+		Source:   source,
+		Message:  message,
+	})
 	if overflow := len(store.console) - store.maxRecords; overflow > 0 {
 		copy(store.console, store.console[overflow:])
 		store.console = store.console[:store.maxRecords]
