@@ -1144,12 +1144,13 @@ type pageResourceLoader struct {
 	loader   requestLoader
 	siteURL  *url.URL
 	kind     network.RequestKind
+	engine   string
 	observer func(network.Observation)
 }
 
 func (loader pageResourceLoader) Get(ctx context.Context, resourceURL *url.URL) (*network.Response, error) {
 	return loader.loader.Do(ctx, &network.Request{
-		Method: http.MethodGet, URL: resourceURL, SiteURL: cloneURL(loader.siteURL), Kind: loader.kind, Observer: loader.observer,
+		Method: http.MethodGet, URL: resourceURL, SiteURL: cloneURL(loader.siteURL), Kind: loader.kind, Engine: loader.engine, Observer: loader.observer,
 	})
 }
 
@@ -1206,10 +1207,11 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	styleResources := resourceClient
 	imageResources := resourceClient
 	scriptResources := resourceClient
+	engine = runtimemodel.NormalizeEngine(engine)
 	if loader, ok := resourceClient.(requestLoader); ok {
 		styleResources = pageResourceLoader{loader: loader, siteURL: response.URL, kind: network.RequestStylesheet, observer: pageStore.ObserveNetwork}
 		imageResources = pageResourceLoader{loader: loader, siteURL: response.URL, kind: network.RequestImage, observer: pageStore.ObserveNetwork}
-		scriptResources = pageResourceLoader{loader: loader, siteURL: response.URL, kind: network.RequestScript, observer: pageStore.ObserveNetwork}
+		scriptResources = pageResourceLoader{loader: loader, siteURL: response.URL, kind: network.RequestScript, engine: string(engine), observer: pageStore.ObserveNetwork}
 	}
 	stylesheet, err := b.loadStyles(ctx, styleResources, response.URL, document)
 	if err != nil {
@@ -1220,7 +1222,6 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 		ColorScheme: "light", Hover: true, Pointer: "fine", ReducedMotion: reducedMotion,
 	})
 	backgroundImages, backgroundErrors := loadBackgroundImages(ctx, imageResources, computedStyles)
-	engine = runtimemodel.NormalizeEngine(engine)
 	scripts, scriptErrors := loadScriptsForEngine(ctx, scriptResources, response.URL, document, engine)
 
 	page := &Page{

@@ -56,6 +56,7 @@ type Request struct {
 	Body        []byte
 	SiteURL     *url.URL
 	Kind        RequestKind
+	Engine      string
 	Credentials CredentialsMode
 	Observer    func(Observation)
 }
@@ -65,6 +66,7 @@ type Observation struct {
 	Method        string
 	URL           *url.URL
 	Kind          RequestKind
+	Engine        string
 	StartedAt     time.Time
 	Duration      time.Duration
 	StatusCode    int
@@ -209,7 +211,7 @@ func (c *Client) Do(ctx context.Context, requestData *Request) (result *Response
 				categoryError = errors.Join(categoryError, cause)
 			}
 			observation := Observation{
-				Method: requestMethod(requestData), URL: cloneURL(requestData.URL), Kind: requestData.Kind,
+				Method: requestMethod(requestData), URL: cloneURL(requestData.URL), Kind: requestData.Kind, Engine: requestData.Engine,
 				StartedAt: startedAt, Duration: c.now().Sub(startedAt), ErrorCategory: observationErrorCategory(categoryError),
 			}
 			if result != nil {

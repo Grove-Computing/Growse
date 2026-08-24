@@ -32,6 +32,18 @@ func TestNetworkRecordRedactsCredentialsAndQueryValues(t *testing.T) {
 	}
 }
 
+func TestNetworkRecordRetainsOnlyScriptEngineMetadata(t *testing.T) {
+	store := NewPageStore()
+	store.ObserveNetwork(network.Observation{
+		Method: "GET", URL: &url.URL{Scheme: "https", Host: "example.test", Path: "/app.js"},
+		Kind: network.RequestScript, Engine: "javascript",
+	})
+	records := store.Network()
+	if len(records) != 1 || records[0].Kind != "script" || records[0].Engine != "javascript" {
+		t.Fatalf("Network() = %#v, want JavaScript script metadata", records)
+	}
+}
+
 func TestNetworkRecordPageSessionAndLifecycleLimits(t *testing.T) {
 	session := &SessionStore{max: 3}
 	first := NewPageStoreForSession(session)
