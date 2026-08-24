@@ -190,6 +190,42 @@ func TestEngineCanBeSelectedBeforeFirstNavigationAndRejectsUnknown(t *testing.T)
 	}
 }
 
+func TestFailedEngineReloadNeverReusesStoppedRuntime(t *testing.T) {
+	pageURL := mustParseURL(t, "http://localhost/failure.html")
+	loader := &routeLoader{responses: map[string]*network.Response{
+		pageURL.String(): {
+			URL: pageURL, StatusCode: 200, ContentType: "text/html",
+			Body: []byte(`<script type="text/go">package main; func main() {}</script><script>started = true</script>`),
+		},
+	}}
+	goRuntime := &runtimeStub{}
+	createdJavaScript := 0
+	browserState := NewWithEngineFactory(loader, func(engine runtimemodel.Engine) runtimemodel.Runtime {
+		if engine == runtimemodel.EngineGo {
+			return goRuntime
+		}
+		createdJavaScript++
+		return &runtimeStub{}
+	})
+	page, err := browserState.Navigate(context.Background(), pageURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	delete(loader.responses, pageURL.String())
+	if _, err := browserState.SetEngine(context.Background(), runtimemodel.EngineJavaScript); err == nil {
+		t.Fatal("SetEngine reload error = nil, want document failure")
+	}
+	if goRuntime.stopCalls.Load() != 1 || browserState.activeRuntime != nil || page.RuntimeStarted {
+		t.Fatalf("failed switch retained Runtime: stop=%d active=%T started=%t", goRuntime.stopCalls.Load(), browserState.activeRuntime, page.RuntimeStarted)
+	}
+	if browserState.Engine() != runtimemodel.EngineJavaScript || createdJavaScript != 0 {
+		t.Fatalf("failed switch engine=%q JavaScript runtimes=%d", browserState.Engine(), createdJavaScript)
+	}
+	if selected, err := browserState.SetEngine(context.Background(), runtimemodel.EngineJavaScript); err != nil || selected != page || goRuntime.stopCalls.Load() != 1 {
+		t.Fatalf("same Engine no-op = (%v, %v), stop calls=%d", selected, err, goRuntime.stopCalls.Load())
+	}
+}
+
 func (runtime *runtimeStub) Start(context.Context) error {
 	runtime.startCalls.Add(1)
 	if runtime.mutateOnStart && runtime.environment.OnMutation != nil {
