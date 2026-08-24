@@ -57,7 +57,7 @@ func (runtime *Runtime) fetchRequest(vm *goja.Runtime, call goja.FunctionCall) (
 			milliseconds = 0
 		}
 		if math.IsInf(milliseconds, 0) || milliseconds > float64((365*24*time.Hour)/time.Millisecond) {
-			return fetchapi.Request{}, errors.New("Fetch timeout exceeds the safety limit")
+			return fetchapi.Request{}, errors.New("fetch timeout exceeds the safety limit")
 		}
 		request.Timeout = time.Duration(milliseconds * float64(time.Millisecond))
 	}
@@ -74,7 +74,7 @@ func (runtime *Runtime) fetchRequest(vm *goja.Runtime, call goja.FunctionCall) (
 	if value := init.Get("signal"); value != nil && !goja.IsUndefined(value) && !goja.IsNull(value) {
 		object, ok := value.(*goja.Object)
 		if !ok || runtime.abortSignals[object] == nil {
-			return fetchapi.Request{}, errors.New("Fetch signal must be a Growse AbortSignal")
+			return fetchapi.Request{}, errors.New("fetch signal must be a Growse AbortSignal")
 		}
 		request.Signal = runtime.abortSignals[object]
 	}
