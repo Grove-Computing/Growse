@@ -13,6 +13,7 @@ import (
 	"github.com/Grove-Computing/Growse/internal/network"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 	domapi "github.com/Grove-Computing/Growse/internal/webapi/dom"
+	fetchapi "github.com/Grove-Computing/Growse/internal/webapi/fetch"
 	schedulerapi "github.com/Grove-Computing/Growse/internal/webapi/scheduler"
 	"github.com/dop251/goja"
 )
@@ -43,8 +44,11 @@ type Runtime struct {
 	scripts        []runtimemodel.Script
 	environment    runtimemodel.Environment
 	domAPI         *domapi.API
+	fetchAPI       *fetchapi.API
+	fetchClock     fetchapi.Clock
 	schedulerAPI   *schedulerapi.API
 	schedulerClock schedulerapi.Clock
+	abortSignals   map[*goja.Object]*fetchapi.AbortSignal
 
 	elements      map[*goja.Object]*domapi.Element
 	elementByID   map[uint64]*goja.Object
@@ -106,6 +110,12 @@ func (runtime *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script,
 	runtime.scripts = cloneScripts(scripts)
 	runtime.environment = environment
 	runtime.domAPI = domapi.New(environment.Document, environment.Events, environment.OnMutation)
+	if runtime.fetchClock != nil {
+		runtime.fetchAPI = fetchapi.NewPageWithClock(runtimeContext, environment.BaseURL, environment.Fetch, runtime.enqueueCallback, runtime.fetchClock)
+	} else {
+		runtime.fetchAPI = fetchapi.NewPage(runtimeContext, environment.BaseURL, environment.Fetch, runtime.enqueueCallback)
+	}
+	runtime.fetchAPI.SetLimiter(environment.FetchLimiter)
 	if runtime.schedulerClock != nil {
 		runtime.schedulerAPI = schedulerapi.NewPageWithClock(runtimeContext, runtime.schedulerClock, runtime.enqueueCallback, environment.RequestFrame)
 	} else {
@@ -114,6 +124,7 @@ func (runtime *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script,
 	runtime.schedulerAPI.SetFrameScope(environment.FrameScope)
 	runtime.elements = make(map[*goja.Object]*domapi.Element)
 	runtime.elementByID = make(map[uint64]*goja.Object)
+	runtime.abortSignals = make(map[*goja.Object]*fetchapi.AbortSignal)
 	runtime.listeners = nil
 	runtime.listenerCount = 0
 	runtime.loaded = true
@@ -127,6 +138,9 @@ func (runtime *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script,
 			return err
 		}
 		if err := runtime.installDOM(vm); err != nil {
+			return err
+		}
+		if err := runtime.installFetch(vm); err != nil {
 			return err
 		}
 		return runtime.installScheduler(vm)
@@ -191,11 +205,15 @@ func (runtime *Runtime) Stop() error {
 	cancel := runtime.cancel
 	vm := runtime.vm
 	done := runtime.done
+	fetch := runtime.fetchAPI
 	scheduler := runtime.schedulerAPI
 	runtime.cancel = nil
 	runtime.mu.Unlock()
 	if cancel != nil {
 		cancel()
+	}
+	if fetch != nil {
+		fetch.Close()
 	}
 	if scheduler != nil {
 		scheduler.Close()
@@ -225,9 +243,11 @@ func (runtime *Runtime) Stop() error {
 	runtime.scripts = nil
 	runtime.environment = runtimemodel.Environment{}
 	runtime.domAPI = nil
+	runtime.fetchAPI = nil
 	runtime.schedulerAPI = nil
 	runtime.elements = nil
 	runtime.elementByID = nil
+	runtime.abortSignals = nil
 	runtime.listeners = nil
 	runtime.listenerCount = 0
 	runtime.loaded = false
