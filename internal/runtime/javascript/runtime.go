@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -14,6 +15,7 @@ import (
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 	domapi "github.com/Grove-Computing/Growse/internal/webapi/dom"
 	fetchapi "github.com/Grove-Computing/Growse/internal/webapi/fetch"
+	navigationapi "github.com/Grove-Computing/Growse/internal/webapi/navigation"
 	schedulerapi "github.com/Grove-Computing/Growse/internal/webapi/scheduler"
 	storageapi "github.com/Grove-Computing/Growse/internal/webapi/storage"
 	"github.com/dop251/goja"
@@ -47,6 +49,7 @@ type Runtime struct {
 	domAPI          *domapi.API
 	fetchAPI        *fetchapi.API
 	fetchClock      fetchapi.Clock
+	navigationAPI   *navigationapi.API
 	schedulerAPI    *schedulerapi.API
 	schedulerClock  schedulerapi.Clock
 	storageAPI      *storageapi.API
@@ -119,6 +122,10 @@ func (runtime *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script,
 		runtime.fetchAPI = fetchapi.NewPage(runtimeContext, environment.BaseURL, environment.Fetch, runtime.enqueueCallback)
 	}
 	runtime.fetchAPI.SetLimiter(environment.FetchLimiter)
+	runtime.navigationAPI = navigationapi.NewPage(environment.BaseURL, environment.Navigate)
+	runtime.navigationAPI.SetPushStateHandler(environment.HistoryPush)
+	runtime.navigationAPI.SetReplaceStateHandler(environment.HistoryReplace)
+	runtime.navigationAPI.SetTraversalHandler(environment.HistoryTraverse, environment.HistoryInfo)
 	if runtime.schedulerClock != nil {
 		runtime.schedulerAPI = schedulerapi.NewPageWithClock(runtimeContext, runtime.schedulerClock, runtime.enqueueCallback, environment.RequestFrame)
 	} else {
@@ -149,6 +156,9 @@ func (runtime *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script,
 			return err
 		}
 		if err := runtime.installStorage(vm); err != nil {
+			return err
+		}
+		if err := runtime.installNavigation(vm); err != nil {
 			return err
 		}
 		return runtime.installScheduler(vm)
@@ -256,6 +266,7 @@ func (runtime *Runtime) Stop() error {
 	runtime.environment = runtimemodel.Environment{}
 	runtime.domAPI = nil
 	runtime.fetchAPI = nil
+	runtime.navigationAPI = nil
 	runtime.schedulerAPI = nil
 	runtime.storageAPI = nil
 	runtime.elements = nil
@@ -270,6 +281,36 @@ func (runtime *Runtime) Stop() error {
 		dispatcher.RemoveEventListeners(listenerIDs...)
 	}
 	return nil
+}
+
+// UpdateLocation reflects a same-document Navigation in JavaScript location.
+func (runtime *Runtime) UpdateLocation(documentURL *url.URL) {
+	runtime.mu.Lock()
+	navigation := runtime.navigationAPI
+	runtime.mu.Unlock()
+	if navigation != nil {
+		navigation.UpdateCurrent(documentURL)
+	}
+}
+
+// DispatchPopState queues a Browser history traversal event for JavaScript.
+func (runtime *Runtime) DispatchPopState(state string) {
+	runtime.mu.Lock()
+	navigation := runtime.navigationAPI
+	runtime.mu.Unlock()
+	if navigation != nil {
+		runtime.enqueueCallback(func() { navigation.DispatchPopState(state) })
+	}
+}
+
+// DispatchHashChange queues a same-document fragment event for JavaScript.
+func (runtime *Runtime) DispatchHashChange(oldURL, newURL string) {
+	runtime.mu.Lock()
+	navigation := runtime.navigationAPI
+	runtime.mu.Unlock()
+	if navigation != nil {
+		runtime.enqueueCallback(func() { navigation.DispatchHashChange(oldURL, newURL) })
+	}
 }
 
 // RunAnimationFrame synchronously delivers one browser frame on the Page queue.

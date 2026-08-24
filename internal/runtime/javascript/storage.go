@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	navigationapi "github.com/Grove-Computing/Growse/internal/webapi/navigation"
 	storageapi "github.com/Grove-Computing/Growse/internal/webapi/storage"
 	"github.com/dop251/goja"
 )
@@ -69,7 +70,7 @@ func (runtime *Runtime) addWindowEventListener(vm *goja.Runtime, eventType strin
 		panic(vm.NewTypeError("window event listener must be a function"))
 	}
 	eventType = strings.ToLower(strings.TrimSpace(eventType))
-	if eventType != "storage" {
+	if eventType != "storage" && eventType != "popstate" && eventType != "hashchange" {
 		panic(vm.NewTypeError("window event type is unsupported"))
 	}
 	runtime.mu.Lock()
@@ -87,12 +88,29 @@ func (runtime *Runtime) addWindowEventListener(vm *goja.Runtime, eventType strin
 	runtime.listenerCount++
 	runtime.mu.Unlock()
 
-	runtime.storageAPI.OnChange(func(event storageapi.Event) {
-		object := runtime.storageEventValue(vm, event)
-		if _, err := callable(goja.Undefined(), object); err != nil {
-			runtime.recordError(fmt.Sprintf("JavaScript storage event handler: %v", err))
-		}
-	})
+	switch eventType {
+	case "storage":
+		runtime.storageAPI.OnChange(func(event storageapi.Event) {
+			object := runtime.storageEventValue(vm, event)
+			if _, err := callable(goja.Undefined(), object); err != nil {
+				runtime.recordError(fmt.Sprintf("JavaScript storage event handler: %v", err))
+			}
+		})
+	case "popstate":
+		runtime.navigationAPI.OnPopState(func(event navigationapi.PopStateEvent) {
+			object := runtime.popStateEventValue(vm, event)
+			if _, err := callable(goja.Undefined(), object); err != nil {
+				runtime.recordError(fmt.Sprintf("JavaScript popstate event handler: %v", err))
+			}
+		})
+	case "hashchange":
+		runtime.navigationAPI.OnHashChange(func(event navigationapi.HashChangeEvent) {
+			object := runtime.hashChangeEventValue(vm, event)
+			if _, err := callable(goja.Undefined(), object); err != nil {
+				runtime.recordError(fmt.Sprintf("JavaScript hashchange event handler: %v", err))
+			}
+		})
+	}
 }
 
 func (runtime *Runtime) storageEventValue(vm *goja.Runtime, event storageapi.Event) goja.Value {
