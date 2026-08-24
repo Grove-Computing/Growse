@@ -18,6 +18,7 @@ import (
 	"unicode/utf8"
 
 	animationmodel "github.com/Grove-Computing/Growse/internal/animation"
+	"github.com/Grove-Computing/Growse/internal/devtools"
 	"github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/events"
 	"github.com/Grove-Computing/Growse/internal/forms"
@@ -80,6 +81,7 @@ type Browser struct {
 	navigationCancel context.CancelFunc
 	storageSourceID  uint64
 	fetchLimiter     *fetchapi.Limiter
+	devToolsSession  *devtools.SessionStore
 }
 
 var nextStorageSourceID atomic.Uint64
@@ -104,7 +106,24 @@ func NewWithRuntimeFactoryAndStorage(client ResourceLoader, factory runtimemodel
 	if manager == nil {
 		manager = storagecore.NewManager()
 	}
-	return &Browser{client: client, runtimeFactory: factory, history: newHistory(), clock: animationmodel.SystemClock{}, storage: manager, active: true, storageSourceID: nextStorageSourceID.Add(1)}
+	return &Browser{client: client, runtimeFactory: factory, history: newHistory(), clock: animationmodel.SystemClock{}, storage: manager, active: true, storageSourceID: nextStorageSourceID.Add(1), devToolsSession: devtools.NewSessionStore()}
+}
+
+// SetDevToolsSession shares the Network diagnostics budget across session tabs.
+func (b *Browser) SetDevToolsSession(session *devtools.SessionStore) {
+	if b == nil || session == nil {
+		return
+	}
+	b.mu.Lock()
+	b.devToolsSession = session
+	b.mu.Unlock()
+}
+
+func (b *Browser) newDevToolsPageStore() *devtools.PageStore {
+	b.mu.RLock()
+	session := b.devToolsSession
+	b.mu.RUnlock()
+	return devtools.NewPageStoreForSession(session)
 }
 
 // SetTabActive controls whether frame-driven page work may run for this Browser.
@@ -595,7 +614,11 @@ func (b *Browser) SetPage(page *Page) {
 	if previousPage != nil && previousPage != page && previousPage.Transitions != nil {
 		previousPage.Transitions.Clear()
 	}
+	if previousPage != nil && previousPage != page {
+		previousPage.closeDevTools()
+	}
 	if page != nil {
+		page.ensureDevTools()
 		if page.ComputedStyles == nil {
 			page.ComputedStyles = computePageStyles(page)
 		}
@@ -641,6 +664,9 @@ func (b *Browser) Close() error {
 	}
 	if page != nil && page.Transitions != nil {
 		page.Transitions.Clear()
+	}
+	if page != nil {
+		page.closeDevTools()
 	}
 	b.page = nil
 	b.client = nil
@@ -717,7 +743,7 @@ func (b *Browser) SubmitGET(ctx context.Context, formID, submitterID dom.NodeID)
 	}
 	target.RawQuery = encoded
 	target.Fragment = ""
-	return b.load(ctx, target, historyPush, -1)
+	return b.loadForm(ctx, target, historyPush, -1)
 }
 
 // SubmitPOST sends URL-encoded entries and navigates to the response document.
@@ -766,9 +792,11 @@ func (b *Browser) SubmitPOST(ctx context.Context, formID, submitterID dom.NodeID
 	onMutation := b.onMutation
 	reducedMotion := b.reducedMotion
 	b.mu.Unlock()
+	pageStore := b.newDevToolsPageStore()
 
 	encoded, err := forms.EncodeURLEncodedLimited(entries)
 	if err != nil {
+		pageStore.Close()
 		return nil, err
 	}
 	body := []byte(encoded)
@@ -776,11 +804,13 @@ func (b *Browser) SubmitPOST(ctx context.Context, formID, submitterID dom.NodeID
 		Method: http.MethodPost, URL: target, Body: body,
 		Header:  http.Header{"Content-Type": []string{forms.URLEncoded}},
 		SiteURL: cloneURL(page.URL), Kind: network.RequestForm,
+		Observer: pageStore.ObserveNetwork,
 	})
 	if err != nil {
+		pageStore.Close()
 		return nil, fmt.Errorf("submit form to %s: %w", network.RedactedURL(target), err)
 	}
-	return b.finishLoad(ctx, target, response, historyPush, -1, navigationID, client, client, runtimeFactory, storageManager, onMutation, reducedMotion)
+	return b.finishLoad(ctx, target, response, historyPush, -1, navigationID, client, client, runtimeFactory, storageManager, onMutation, reducedMotion, pageStore)
 }
 
 // Submit validates and dispatches a cancelable submit event before navigation.
@@ -969,18 +999,22 @@ const (
 )
 
 func (b *Browser) load(ctx context.Context, pageURL *url.URL, commit historyCommit, historyIndex int) (*Page, error) {
-	return b.loadWithClient(ctx, pageURL, commit, historyIndex, false, false)
+	return b.loadWithClient(ctx, pageURL, commit, historyIndex, false, false, network.RequestNavigation)
+}
+
+func (b *Browser) loadForm(ctx context.Context, pageURL *url.URL, commit historyCommit, historyIndex int) (*Page, error) {
+	return b.loadWithClient(ctx, pageURL, commit, historyIndex, false, false, network.RequestForm)
 }
 
 func (b *Browser) loadReloadingDocument(ctx context.Context, pageURL *url.URL, commit historyCommit, historyIndex int) (*Page, error) {
-	return b.loadWithClient(ctx, pageURL, commit, historyIndex, true, false)
+	return b.loadWithClient(ctx, pageURL, commit, historyIndex, true, false, network.RequestNavigation)
 }
 
 func (b *Browser) loadIgnoringCache(ctx context.Context, pageURL *url.URL, commit historyCommit, historyIndex int) (*Page, error) {
-	return b.loadWithClient(ctx, pageURL, commit, historyIndex, true, true)
+	return b.loadWithClient(ctx, pageURL, commit, historyIndex, true, true, network.RequestNavigation)
 }
 
-func (b *Browser) loadWithClient(ctx context.Context, pageURL *url.URL, commit historyCommit, historyIndex int, revalidateDocument, revalidateResources bool) (*Page, error) {
+func (b *Browser) loadWithClient(ctx context.Context, pageURL *url.URL, commit historyCommit, historyIndex int, revalidateDocument, revalidateResources bool, requestKind network.RequestKind) (*Page, error) {
 	navigationContext, cancel := context.WithCancel(ctx)
 	b.mu.Lock()
 	if b.navigationCancel != nil {
@@ -995,9 +1029,11 @@ func (b *Browser) loadWithClient(ctx context.Context, pageURL *url.URL, commit h
 	onMutation := b.onMutation
 	reducedMotion := b.reducedMotion
 	b.mu.Unlock()
+	pageStore := b.newDevToolsPageStore()
 
 	if client == nil {
 		cancel()
+		pageStore.Close()
 		return nil, errors.New("network client is not configured")
 	}
 	documentClient := client
@@ -1009,12 +1045,19 @@ func (b *Browser) loadWithClient(ctx context.Context, pageURL *url.URL, commit h
 		resourceClient = cacheRevalidatingLoader{ResourceLoader: client}
 	}
 
-	response, err := documentClient.Get(navigationContext, pageURL)
+	var response *network.Response
+	var err error
+	if loader, ok := documentClient.(requestLoader); ok {
+		response, err = loader.Do(navigationContext, &network.Request{Method: http.MethodGet, URL: pageURL, Kind: requestKind, Observer: pageStore.ObserveNetwork})
+	} else {
+		response, err = documentClient.Get(navigationContext, pageURL)
+	}
 	if err != nil {
 		cancel()
+		pageStore.Close()
 		return nil, fmt.Errorf("navigate to %s: %w", network.RedactedURL(pageURL), err)
 	}
-	return b.finishLoad(navigationContext, pageURL, response, commit, historyIndex, navigationID, resourceClient, client, runtimeFactory, storageManager, onMutation, reducedMotion)
+	return b.finishLoad(navigationContext, pageURL, response, commit, historyIndex, navigationID, resourceClient, client, runtimeFactory, storageManager, onMutation, reducedMotion, pageStore)
 }
 
 type cacheRevalidatingLoader struct {
@@ -1022,13 +1065,15 @@ type cacheRevalidatingLoader struct {
 }
 
 type pageResourceLoader struct {
-	loader  requestLoader
-	siteURL *url.URL
+	loader   requestLoader
+	siteURL  *url.URL
+	kind     network.RequestKind
+	observer func(network.Observation)
 }
 
 func (loader pageResourceLoader) Get(ctx context.Context, resourceURL *url.URL) (*network.Response, error) {
 	return loader.loader.Do(ctx, &network.Request{
-		Method: http.MethodGet, URL: resourceURL, SiteURL: cloneURL(loader.siteURL), Kind: network.RequestSubresource,
+		Method: http.MethodGet, URL: resourceURL, SiteURL: cloneURL(loader.siteURL), Kind: loader.kind, Observer: loader.observer,
 	})
 }
 
@@ -1061,7 +1106,16 @@ func (loader cacheRevalidatingLoader) Do(ctx context.Context, request *network.R
 	return requestClient.Do(ctx, &copy)
 }
 
-func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *network.Response, commit historyCommit, historyIndex int, navigationID uint64, resourceClient ResourceLoader, runtimeClient ResourceLoader, runtimeFactory runtimemodel.Factory, storageManager *storagecore.Manager, onMutation func(), reducedMotion bool) (*Page, error) {
+func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *network.Response, commit historyCommit, historyIndex int, navigationID uint64, resourceClient ResourceLoader, runtimeClient ResourceLoader, runtimeFactory runtimemodel.Factory, storageManager *storagecore.Manager, onMutation func(), reducedMotion bool, pageStore *devtools.PageStore) (*Page, error) {
+	if pageStore == nil {
+		pageStore = b.newDevToolsPageStore()
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			pageStore.Close()
+		}
+	}()
 	mediaType, _, err := mime.ParseMediaType(response.ContentType)
 	if err != nil {
 		return nil, fmt.Errorf("invalid Content-Type %q: %w", response.ContentType, err)
@@ -1073,11 +1127,15 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	if err != nil {
 		return nil, fmt.Errorf("build DOM for %s: %w", network.RedactedURL(pageURL), err)
 	}
-	pageResources := resourceClient
+	styleResources := resourceClient
+	imageResources := resourceClient
+	scriptResources := resourceClient
 	if loader, ok := resourceClient.(requestLoader); ok {
-		pageResources = pageResourceLoader{loader: loader, siteURL: response.URL}
+		styleResources = pageResourceLoader{loader: loader, siteURL: response.URL, kind: network.RequestStylesheet, observer: pageStore.ObserveNetwork}
+		imageResources = pageResourceLoader{loader: loader, siteURL: response.URL, kind: network.RequestImage, observer: pageStore.ObserveNetwork}
+		scriptResources = pageResourceLoader{loader: loader, siteURL: response.URL, kind: network.RequestScript, observer: pageStore.ObserveNetwork}
 	}
-	stylesheet, err := b.loadStyles(ctx, pageResources, response.URL, document)
+	stylesheet, err := b.loadStyles(ctx, styleResources, response.URL, document)
 	if err != nil {
 		return nil, fmt.Errorf("load styles for %s: %w", network.RedactedURL(pageURL), err)
 	}
@@ -1085,8 +1143,8 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 		ViewportWidth: 1280, ViewportHeight: 720, RootFontSize: 16, ResolutionDPI: 96,
 		ColorScheme: "light", Hover: true, Pointer: "fine", ReducedMotion: reducedMotion,
 	})
-	backgroundImages, backgroundErrors := loadBackgroundImages(ctx, pageResources, computedStyles)
-	scripts, scriptErrors := loadScripts(ctx, pageResources, response.URL, document)
+	backgroundImages, backgroundErrors := loadBackgroundImages(ctx, imageResources, computedStyles)
+	scripts, scriptErrors := loadScripts(ctx, scriptResources, response.URL, document)
 
 	page := &Page{
 		URL:              cloneURL(response.URL),
@@ -1105,6 +1163,10 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 		BackgroundErrors: backgroundErrors,
 		Scripts:          scripts,
 		ScriptErrors:     scriptErrors,
+		DevTools:         pageStore,
+	}
+	for _, scriptError := range scriptErrors {
+		page.DevTools.AddConsole(devtools.ConsoleError, "script", scriptError)
 	}
 	page.Animations.Reconcile(computedStyles, b.currentTime())
 	navigationReady := make(chan struct{})
@@ -1132,6 +1194,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 		if pageRuntime != nil {
 			_ = pageRuntime.Stop()
 		}
+		page.closeDevTools()
 		return nil, err
 	}
 	b.mu.Lock()
@@ -1143,6 +1206,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 		if pageRuntime != nil {
 			_ = pageRuntime.Stop()
 		}
+		page.closeDevTools()
 		return nil, context.Canceled
 	}
 	previousRuntime := b.activeRuntime
@@ -1158,6 +1222,9 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	}
 	if previousPage != nil && previousPage != page && previousPage.Transitions != nil {
 		previousPage.Transitions.Clear()
+	}
+	if previousPage != nil && previousPage != page {
+		previousPage.closeDevTools()
 	}
 	dispatchPopState := false
 	popState := ""
@@ -1191,6 +1258,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 		b.history.replaceEntry(&historyEntry{URL: page.URL, State: state, PageID: page.HistoryID})
 	}
 	b.mu.Unlock()
+	committed = true
 	close(navigationReady)
 	if runtime, ok := pageRuntime.(backgroundRuntime); ok {
 		runtime.SetBackground(background)
@@ -1397,23 +1465,23 @@ func startRuntime(ctx context.Context, factory runtimemodel.Factory, page *Page,
 		return nil
 	}
 	if !IsTrustedOrigin(page.URL) {
-		page.RuntimeError = fmt.Sprintf("blocked Go script execution from untrusted origin: %s", network.RedactedURL(page.URL))
+		setRuntimeError(page, fmt.Sprintf("blocked Go script execution from untrusted origin: %s", network.RedactedURL(page.URL)))
 		return nil
 	}
 	for _, script := range page.Scripts {
 		if !IsTrustedOrigin(script.SourceURL) {
-			page.RuntimeError = fmt.Sprintf("blocked Go script execution from untrusted origin: %s", runtimeOrigin(script.SourceURL))
+			setRuntimeError(page, fmt.Sprintf("blocked Go script execution from untrusted origin: %s", runtimeOrigin(script.SourceURL)))
 			return nil
 		}
 	}
 	if len(page.ScriptErrors) != 0 {
-		page.RuntimeError = "Go script loading failed; runtime was not started"
+		setRuntimeError(page, "Go script loading failed; runtime was not started")
 		return nil
 	}
 
 	pageRuntime := factory()
 	if pageRuntime == nil {
-		page.RuntimeError = "Go runtime factory returned nil"
+		setRuntimeError(page, "Go runtime factory returned nil")
 		return nil
 	}
 	var frameMu sync.RWMutex
@@ -1463,6 +1531,9 @@ func startRuntime(ctx context.Context, factory runtimemodel.Factory, page *Page,
 			}()
 			callback()
 		},
+		ConsoleRecord: func(level, message string) {
+			page.ensureDevTools().AddConsole(devtools.ConsoleLevel(level), "webgo", message)
+		},
 	}
 	if local, session, _ := storageManager.Areas(page.URL); local != nil || session != nil {
 		environment.LocalStorage = local
@@ -1470,20 +1541,32 @@ func startRuntime(ctx context.Context, factory runtimemodel.Factory, page *Page,
 		environment.StorageSource = storagecore.MutationSource{ID: storageSourceID, URL: network.RedactedURL(page.URL)}
 	}
 	if loader, ok := client.(requestLoader); ok {
-		environment.Fetch = loader.Do
+		environment.Fetch = func(fetchContext context.Context, request *network.Request) (*network.Response, error) {
+			if request == nil {
+				return loader.Do(fetchContext, nil)
+			}
+			copy := *request
+			copy.Observer = page.ensureDevTools().ObserveNetwork
+			return loader.Do(fetchContext, &copy)
+		}
 	}
 	if err := pageRuntime.Load(ctx, page.Scripts, environment); err != nil {
-		page.RuntimeError = fmt.Sprintf("load Go runtime: %v", err)
+		setRuntimeError(page, fmt.Sprintf("load Go runtime: %v", err))
 		_ = pageRuntime.Stop()
 		return nil
 	}
 	if err := pageRuntime.Start(ctx); err != nil {
-		page.RuntimeError = fmt.Sprintf("start Go runtime: %v", err)
+		setRuntimeError(page, fmt.Sprintf("start Go runtime: %v", err))
 		_ = pageRuntime.Stop()
 		return nil
 	}
 	page.RuntimeStarted = true
 	return pageRuntime
+}
+
+func setRuntimeError(page *Page, message string) {
+	page.RuntimeError = message
+	page.ensureDevTools().AddConsole(devtools.ConsoleError, "runtime", message)
 }
 
 func hoverPath(document *dom.Document, nodeID dom.NodeID) []dom.NodeID {

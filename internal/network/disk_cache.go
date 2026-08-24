@@ -108,7 +108,7 @@ func newDiskCache(root string, limits diskCacheLimits) (*diskCache, error) {
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		return nil, errors.New("create HTTP cache directory")
 	}
-	if err := os.Chmod(root, 0o700); err != nil {
+	if err := os.Chmod(root, 0o700); err != nil { // #nosec G302 -- this is a directory and 0700 denies group and other access.
 		return nil, errors.New("protect HTTP cache directory")
 	}
 	cache := &diskCache{root: root, limits: limits, records: make(map[string]diskCacheRecord)}

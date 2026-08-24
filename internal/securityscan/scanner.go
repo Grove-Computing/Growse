@@ -35,7 +35,7 @@ func GitFiles(root, diffBase string) ([]string, error) {
 	} else {
 		args = append(args, "diff", "--name-only", "--diff-filter=ACMR", "-z", diffBase+"...HEAD", "--")
 	}
-	output, err := exec.Command("git", args...).Output()
+	output, err := exec.Command("git", args...).Output() // #nosec G204 -- executable is fixed and arguments are passed without a shell.
 	if err != nil {
 		return nil, fmt.Errorf("list tracked files: %w", err)
 	}
@@ -73,7 +73,7 @@ func (s Scanner) Scan(paths []string) ([]Finding, error) {
 		if !info.Mode().IsRegular() {
 			continue
 		}
-		data, err := os.ReadFile(fullPath)
+		data, err := os.ReadFile(fullPath) // #nosec G304 -- fullPath is rooted at Scanner.Root; symlinks are rejected immediately above.
 		if err != nil {
 			return nil, fmt.Errorf("read %s: %w", path, err)
 		}

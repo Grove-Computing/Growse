@@ -7,6 +7,7 @@ examples=(
   css3-core
   dashboard
   data-app
+  devtools
   flexbox
   persistent-app
   todo
@@ -26,8 +27,9 @@ go test \
   ./examples/css3-core \
   ./examples/dashboard \
   ./examples/data-app \
+  ./examples/devtools \
   ./examples/flexbox \
   ./examples/persistent-app \
   ./examples/todo
 
-echo "v0.9.4 Demo回帰検証成功: ${examples[*]}"
+echo "v0.12.0 Demo回帰検証成功: ${examples[*]}"

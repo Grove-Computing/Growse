@@ -16,7 +16,7 @@ require_file_value() {
 }
 
 for value in \
-    "pull_request_target:" \
+    "pull_request:" \
     "permissions:" \
     "contents: read" \
     "Checkout trusted scanner" \
@@ -32,7 +32,7 @@ do
     require_file_value "$workflow" "$value"
 done
 
-if grep -Eq 'secrets\.|(contents|actions|checks|pull-requests|issues|packages): write' "$workflow"; then
+if grep -Eq 'pull_request_target:|secrets\.|(contents|actions|checks|pull-requests|issues|packages): write' "$workflow"; then
     echo "trusted scanner workflowはSecretや書き込み権限を使用できません" >&2
     exit 1
 fi

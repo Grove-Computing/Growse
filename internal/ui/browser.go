@@ -32,12 +32,14 @@ import (
 	xdraw "golang.org/x/image/draw"
 
 	"github.com/Grove-Computing/Growse/internal/browser"
+	devtoolsmodel "github.com/Grove-Computing/Growse/internal/devtools"
 	"github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/forms"
 	layoutengine "github.com/Grove-Computing/Growse/internal/layout"
 	"github.com/Grove-Computing/Growse/internal/network"
 	paintmodel "github.com/Grove-Computing/Growse/internal/paint"
 	stylemodel "github.com/Grove-Computing/Growse/internal/style"
+	"github.com/Grove-Computing/Growse/internal/updater"
 )
 
 //go:embed assets/gopher-blue.png
@@ -49,8 +51,9 @@ const (
 	toolbarHeight      = unit.Dp(92)
 	controlHeight      = unit.Dp(44)
 	addressBarHeight   = unit.Dp(48)
-	gopherButtonWidth  = unit.Dp(92)
+	gopherButtonWidth  = unit.Dp(72)
 	gopherButtonHeight = unit.Dp(52)
+	devToolsHeight     = unit.Dp(280)
 )
 
 // BrowserUI owns the widgets displayed around the page viewport.
@@ -70,10 +73,23 @@ type BrowserUI struct {
 	forwardButton     widget.Clickable
 	reloadButton      widget.Clickable
 	goButton          widget.Clickable
+	updateButton      widget.Clickable
+	devToolsButton    widget.Clickable
+	devToolsClose     widget.Clickable
+	devToolsClear     widget.Clickable
+	devToolsConsole   widget.Clickable
+	devToolsInspector widget.Clickable
+	devToolsNetwork   widget.Clickable
+	devToolsFilter    widget.Clickable
 	newTabButton      widget.Clickable
 	tabRowButtons     map[browser.TabID]*widget.Clickable
 	tabCloseButtons   map[browser.TabID]*widget.Clickable
 	tabShortcutDown   map[key.Name]bool
+	devToolsStates    map[browser.TabID]devToolsTabState
+	inspectorButtons  map[browser.TabID]map[dom.NodeID]*widget.Clickable
+	devToolsList      widget.List
+	inspectorList     widget.List
+	networkList       widget.List
 	pageList          widget.List
 	tabList           widget.List
 	viewportClick     gesture.Click
@@ -99,6 +115,14 @@ type BrowserUI struct {
 	layoutBuild       func(*dom.Document, stylemodel.Map, float32, float32, float32, float32) *layoutengine.Tree
 	layoutCache       documentLayoutCache
 	scrollRevision    uint64
+	updater           ApplicationUpdater
+	updateResults     chan applicationUpdateResult
+	updateContext     context.Context
+	cancelUpdate      context.CancelFunc
+	updateRelease     updater.Release
+	updateAvailable   bool
+	updating          bool
+	onUpdateApplied   func()
 }
 
 type documentLayoutCache struct {
@@ -114,6 +138,22 @@ type browserChromeGeometry struct {
 	tabRail  image.Rectangle
 	toolbar  image.Rectangle
 	viewport image.Rectangle
+	devTools image.Rectangle
+}
+
+type devToolsPanel string
+
+const (
+	devToolsPanelConsole   devToolsPanel = "Console"
+	devToolsPanelInspector devToolsPanel = "Inspector"
+	devToolsPanelNetwork   devToolsPanel = "Network"
+)
+
+type devToolsTabState struct {
+	Open   bool
+	Panel  devToolsPanel
+	Filter devtoolsmodel.ConsoleLevel
+	NodeID dom.NodeID
 }
 
 type tabRenderState struct {
@@ -171,6 +211,10 @@ type activeBrowserSource interface {
 	ActiveBrowserTarget() (browser.TabID, *browser.Browser, bool)
 }
 
+type pageInspector interface {
+	InspectPage(func(*browser.Page) bool) bool
+}
+
 type tabNavigationStateSink interface {
 	BeginTabNavigation(id browser.TabID) (browser.TabSnapshot, error)
 	FinishTabNavigation(id browser.TabID, failed bool) (browser.TabSnapshot, error)
@@ -192,6 +236,19 @@ type navigationResult struct {
 	err   error
 }
 
+// ApplicationUpdater provides the release operations used by browser chrome.
+type ApplicationUpdater interface {
+	Check(context.Context) (updater.Release, bool, error)
+	Apply(context.Context, updater.Release) error
+}
+
+type applicationUpdateResult struct {
+	release   updater.Release
+	available bool
+	applying  bool
+	err       error
+}
+
 type tabNavigation struct {
 	id     uint64
 	cancel context.CancelFunc
@@ -204,12 +261,18 @@ func NewBrowserUI(navigator Navigator, invalidate func()) *BrowserUI {
 
 // NewBrowserUIWithTabs creates browser chrome backed by a tab source.
 func NewBrowserUIWithTabs(navigator Navigator, tabs TabController, invalidate func()) *BrowserUI {
+	return NewBrowserUIWithTabsAndUpdater(navigator, tabs, invalidate, nil, nil)
+}
+
+// NewBrowserUIWithTabsAndUpdater creates browser chrome with automatic release updates.
+func NewBrowserUIWithTabsAndUpdater(navigator Navigator, tabs TabController, invalidate func(), applicationUpdater ApplicationUpdater, onUpdateApplied func()) *BrowserUI {
 	gopherImage, err := png.Decode(bytes.NewReader(gopherPNG))
 	if err != nil {
 		panic("decode embedded Go Gopher image: " + err.Error())
 	}
 
 	cursorImage, cursorErr := loadGopherCursor()
+	updateContext, cancelUpdate := context.WithCancel(context.Background())
 	ui := &BrowserUI{
 		theme:            material.NewTheme(),
 		navigator:        navigator,
@@ -234,7 +297,14 @@ func NewBrowserUIWithTabs(navigator Navigator, tabs TabController, invalidate fu
 		tabRowButtons:    make(map[browser.TabID]*widget.Clickable),
 		tabCloseButtons:  make(map[browser.TabID]*widget.Clickable),
 		tabShortcutDown:  make(map[key.Name]bool),
+		devToolsStates:   make(map[browser.TabID]devToolsTabState),
+		inspectorButtons: make(map[browser.TabID]map[dom.NodeID]*widget.Clickable),
 		layoutBuild:      layoutengine.BuildWithScroll,
+		updater:          applicationUpdater,
+		updateResults:    make(chan applicationUpdateResult, 2),
+		updateContext:    updateContext,
+		cancelUpdate:     cancelUpdate,
+		onUpdateApplied:  onUpdateApplied,
 	}
 	if cursorErr != nil {
 		slog.Error("Gopherカーソルを初期化できませんでした", "component", "ui", "error", cursorErr)
@@ -250,6 +320,10 @@ func NewBrowserUIWithTabs(navigator Navigator, tabs TabController, invalidate fu
 	ui.address.SetText(defaultURL)
 	ui.pageList.Axis = layout.Vertical
 	ui.tabList.Axis = layout.Vertical
+	ui.devToolsList.Axis = layout.Vertical
+	ui.inspectorList.Axis = layout.Vertical
+	ui.networkList.Axis = layout.Vertical
+	ui.startUpdateCheck()
 	return ui
 }
 
@@ -260,8 +334,13 @@ func (ui *BrowserUI) Layout(gtx layout.Context) layout.Dimensions {
 	ui.handleActions(gtx)
 	ui.syncActiveTabChrome()
 
-	geometry := calculateBrowserChromeGeometry(gtx.Constraints.Max, gtx.Dp(tabRailWidth), gtx.Dp(toolbarHeight))
+	panelHeight := 0
+	if ui.devToolsState().Open {
+		panelHeight = gtx.Dp(devToolsHeight)
+	}
+	geometry := calculateBrowserChromeGeometryWithDevTools(gtx.Constraints.Max, gtx.Dp(tabRailWidth), gtx.Dp(toolbarHeight), panelHeight)
 	layoutRegion(gtx, geometry.viewport, ui.layoutViewport)
+	layoutRegion(gtx, geometry.devTools, ui.layoutDevTools)
 	layoutRegion(gtx, geometry.toolbar, ui.layoutToolbar)
 	layoutRegion(gtx, geometry.tabRail, ui.layoutTabRail)
 	ui.layoutGopherCursor(gtx)
@@ -270,15 +349,22 @@ func (ui *BrowserUI) Layout(gtx layout.Context) layout.Dimensions {
 }
 
 func calculateBrowserChromeGeometry(size image.Point, railWidth, toolbarHeight int) browserChromeGeometry {
+	return calculateBrowserChromeGeometryWithDevTools(size, railWidth, toolbarHeight, 0)
+}
+
+func calculateBrowserChromeGeometryWithDevTools(size image.Point, railWidth, toolbarHeight, panelHeight int) browserChromeGeometry {
 	railWidth = min(max(railWidth, 0), max(size.X, 0))
 	contentHeight := max(size.Y, 0)
 	toolbarHeight = min(max(toolbarHeight, 0), contentHeight)
+	panelHeight = min(max(panelHeight, 0), max(contentHeight-toolbarHeight, 0))
 	contentLeft := railWidth
 	contentRight := max(size.X, contentLeft)
+	panelTop := contentHeight - panelHeight
 	return browserChromeGeometry{
 		tabRail:  image.Rect(0, 0, railWidth, contentHeight),
 		toolbar:  image.Rect(contentLeft, 0, contentRight, toolbarHeight),
-		viewport: image.Rect(contentLeft, toolbarHeight, contentRight, contentHeight),
+		viewport: image.Rect(contentLeft, toolbarHeight, contentRight, panelTop),
+		devTools: image.Rect(contentLeft, panelTop, contentRight, contentHeight),
 	}
 }
 
@@ -472,6 +558,18 @@ func tabStateColor(tab browser.TabSnapshot) color.NRGBA {
 func (ui *BrowserUI) handleKeyboardShortcuts(gtx layout.Context) {
 	ui.handleTabKeyboardShortcuts(gtx)
 	for {
+		event, ok := gtx.Event(key.Filter{Name: key.NameF12})
+		if !ok {
+			break
+		}
+		keyEvent, ok := event.(key.Event)
+		if ok && keyEvent.State == key.Press {
+			state := ui.devToolsState()
+			state.Open = !state.Open
+			ui.setDevToolsState(state)
+		}
+	}
+	for {
 		event, ok := gtx.Event(key.Filter{Name: "R", Required: key.ModShortcut, Optional: key.ModShift})
 		if !ok {
 			return
@@ -544,6 +642,7 @@ func (ui *BrowserUI) handleTabKeyboardShortcuts(gtx layout.Context) {
 
 func (ui *BrowserUI) handleActions(gtx layout.Context) {
 	ui.consumeNavigationResult()
+	ui.consumeUpdateResults()
 	ui.handleTabActions(gtx)
 
 	for {
@@ -571,6 +670,115 @@ func (ui *BrowserUI) handleActions(gtx layout.Context) {
 	for ui.reloadButton.Clicked(gtx) {
 		if tabID, navigator := ui.activeNavigationTarget(); navigator != nil && navigator.Page() != nil {
 			ui.startPageLoad(tabID, navigator, "ページを再読み込み中", navigator.Reload)
+		}
+	}
+	for ui.updateButton.Clicked(gtx) {
+		ui.startUpdate()
+	}
+	for ui.devToolsButton.Clicked(gtx) {
+		state := ui.devToolsState()
+		state.Open = !state.Open
+		ui.setDevToolsState(state)
+	}
+	for ui.devToolsClose.Clicked(gtx) {
+		state := ui.devToolsState()
+		state.Open = false
+		ui.setDevToolsState(state)
+	}
+	for ui.devToolsConsole.Clicked(gtx) {
+		state := ui.devToolsState()
+		state.Panel = devToolsPanelConsole
+		ui.setDevToolsState(state)
+	}
+	for ui.devToolsInspector.Clicked(gtx) {
+		state := ui.devToolsState()
+		state.Panel = devToolsPanelInspector
+		ui.setDevToolsState(state)
+	}
+	for ui.devToolsNetwork.Clicked(gtx) {
+		state := ui.devToolsState()
+		state.Panel = devToolsPanelNetwork
+		ui.setDevToolsState(state)
+	}
+	for ui.devToolsFilter.Clicked(gtx) {
+		state := ui.devToolsState()
+		state.Filter = nextConsoleFilter(state.Filter)
+		ui.setDevToolsState(state)
+	}
+	for ui.devToolsClear.Clicked(gtx) {
+		if navigator := ui.activeNavigator(); navigator != nil {
+			if page := navigator.Page(); page != nil && page.DevTools != nil {
+				if ui.devToolsState().Panel == devToolsPanelNetwork {
+					page.DevTools.ClearNetwork()
+				} else {
+					page.DevTools.ClearConsole()
+				}
+			}
+		}
+	}
+	activeID, _ := ui.activeNavigationTarget()
+	for nodeID, button := range ui.inspectorButtons[activeID] {
+		for button.Clicked(gtx) {
+			state := ui.devToolsState()
+			state.NodeID = nodeID
+			ui.setDevToolsState(state)
+		}
+	}
+}
+
+func (ui *BrowserUI) startUpdateCheck() {
+	if ui.updater == nil {
+		return
+	}
+	go func() {
+		release, available, err := ui.updater.Check(ui.updateContext)
+		ui.updateResults <- applicationUpdateResult{release: release, available: available, err: err}
+		ui.invalidate()
+	}()
+}
+
+func (ui *BrowserUI) startUpdate() {
+	if ui.updater == nil || !ui.updateAvailable || ui.updating {
+		return
+	}
+	ui.updating = true
+	ui.statusHasError = false
+	ui.status = "Growse " + ui.updateRelease.Version + " をダウンロードして検証中"
+	release := ui.updateRelease
+	go func() {
+		err := ui.updater.Apply(ui.updateContext, release)
+		ui.updateResults <- applicationUpdateResult{release: release, applying: true, err: err}
+		ui.invalidate()
+	}()
+}
+
+func (ui *BrowserUI) consumeUpdateResults() {
+	for {
+		select {
+		case result := <-ui.updateResults:
+			if !result.applying {
+				if result.err != nil {
+					slog.Warn("Growseの最新版を確認できませんでした", "component", "updater", "error", result.err)
+					continue
+				}
+				ui.updateRelease = result.release
+				ui.updateAvailable = result.available
+				continue
+			}
+			ui.updating = false
+			if result.err != nil {
+				ui.statusHasError = true
+				ui.status = "Growseを更新できませんでした: " + result.err.Error()
+				continue
+			}
+			ui.updateAvailable = false
+			ui.statusHasError = false
+			ui.status = "Growse " + result.release.Version + " へ更新しました。再起動します"
+			if ui.onUpdateApplied != nil {
+				ui.onUpdateApplied()
+			}
+		default:
+			return
 		}
 	}
 }
@@ -623,6 +831,8 @@ func (ui *BrowserUI) closeTab(id browser.TabID) bool {
 		return false
 	}
 	delete(ui.tabRenderStates, id)
+	delete(ui.devToolsStates, id)
+	delete(ui.inspectorButtons, id)
 	delete(ui.tabRowButtons, id)
 	delete(ui.tabCloseButtons, id)
 	if ui.displayedTabID == id {
@@ -854,6 +1064,7 @@ func (ui *BrowserUI) tabIsActive(id browser.TabID) bool {
 
 // Close cancels an in-flight navigation when the window closes.
 func (ui *BrowserUI) Close() {
+	ui.cancelUpdate()
 	if ui.navigator != nil {
 		ui.navigator.ClearHover()
 	}
@@ -877,7 +1088,7 @@ func (ui *BrowserUI) layoutToolbar(gtx layout.Context) layout.Dimensions {
 		clip.Rect{Min: image.Pt(0, height-1), Max: image.Pt(gtx.Constraints.Max.X, height)}.Op(),
 	)
 
-	return layout.Inset{Top: unit.Dp(8), Right: unit.Dp(14), Bottom: unit.Dp(6), Left: unit.Dp(14)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+	return layout.Inset{Top: unit.Dp(8), Right: unit.Dp(8), Bottom: unit.Dp(6), Left: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		navigator := ui.activeNavigator()
 		canBack := navigator != nil && navigator.CanBack()
 		canForward := navigator != nil && navigator.CanForward()
@@ -888,17 +1099,21 @@ func (ui *BrowserUI) layoutToolbar(gtx layout.Context) layout.Dimensions {
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 						return ui.layoutToolbarButton(gtx, &ui.backButton, ui.backIcon, "戻る", canBack)
 					}),
-					layout.Rigid(layout.Spacer{Width: unit.Dp(6)}.Layout),
+					layout.Rigid(layout.Spacer{Width: unit.Dp(4)}.Layout),
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 						return ui.layoutToolbarButton(gtx, &ui.forwardButton, ui.forwardIcon, "次へ", canForward)
 					}),
-					layout.Rigid(layout.Spacer{Width: unit.Dp(6)}.Layout),
+					layout.Rigid(layout.Spacer{Width: unit.Dp(4)}.Layout),
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 						return ui.layoutToolbarButton(gtx, &ui.reloadButton, ui.reloadIcon, "再読込", canReload)
 					}),
-					layout.Rigid(layout.Spacer{Width: unit.Dp(14)}.Layout),
-					layout.Flexed(1, ui.layoutAddressBar),
 					layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
+					layout.Rigid(ui.layoutUpdateButton),
+					layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
+					layout.Rigid(ui.layoutDevToolsButton),
+					layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
+					layout.Flexed(1, ui.layoutAddressBar),
+					layout.Rigid(layout.Spacer{Width: unit.Dp(4)}.Layout),
 					layout.Rigid(ui.layoutGopherButton),
 				)
 			}),
@@ -911,6 +1126,336 @@ func (ui *BrowserUI) layoutToolbar(gtx layout.Context) layout.Dimensions {
 			}),
 		)
 	})
+}
+
+func (ui *BrowserUI) layoutDevToolsButton(gtx layout.Context) layout.Dimensions {
+	gtx.Constraints.Min.Y = gtx.Dp(controlHeight)
+	gtx.Constraints.Max.Y = gtx.Dp(controlHeight)
+	button := material.Button(ui.theme, &ui.devToolsButton, "DevTools")
+	button.Background = color.NRGBA{R: 51, G: 65, B: 85, A: 255}
+	button.Color = color.NRGBA{R: 255, G: 255, B: 255, A: 255}
+	button.CornerRadius = unit.Dp(10)
+	button.Inset = layout.Inset{Top: unit.Dp(8), Right: unit.Dp(12), Bottom: unit.Dp(8), Left: unit.Dp(12)}
+	return button.Layout(gtx)
+}
+
+func (ui *BrowserUI) devToolsState() devToolsTabState {
+	id, _ := ui.activeNavigationTarget()
+	state := ui.devToolsStates[id]
+	if state.Panel == "" {
+		state.Panel = devToolsPanelConsole
+	}
+	return state
+}
+
+func (ui *BrowserUI) setDevToolsState(state devToolsTabState) {
+	id, _ := ui.activeNavigationTarget()
+	ui.devToolsStates[id] = state
+}
+
+func nextConsoleFilter(current devtoolsmodel.ConsoleLevel) devtoolsmodel.ConsoleLevel {
+	switch current {
+	case "":
+		return devtoolsmodel.ConsoleLog
+	case devtoolsmodel.ConsoleLog:
+		return devtoolsmodel.ConsoleInfo
+	case devtoolsmodel.ConsoleInfo:
+		return devtoolsmodel.ConsoleWarn
+	case devtoolsmodel.ConsoleWarn:
+		return devtoolsmodel.ConsoleError
+	default:
+		return ""
+	}
+}
+
+func (ui *BrowserUI) layoutDevTools(gtx layout.Context) layout.Dimensions {
+	paint.Fill(gtx.Ops, color.NRGBA{R: 15, G: 23, B: 42, A: 255})
+	state := ui.devToolsState()
+	return layout.Inset{Top: unit.Dp(8), Right: unit.Dp(10), Bottom: unit.Dp(8), Left: unit.Dp(10)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+					layout.Rigid(ui.devToolsTab(&ui.devToolsConsole, devToolsPanelConsole, state.Panel == devToolsPanelConsole)),
+					layout.Rigid(ui.devToolsTab(&ui.devToolsInspector, devToolsPanelInspector, state.Panel == devToolsPanelInspector)),
+					layout.Rigid(ui.devToolsTab(&ui.devToolsNetwork, devToolsPanelNetwork, state.Panel == devToolsPanelNetwork)),
+					layout.Flexed(1, layout.Spacer{}.Layout),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						if state.Panel != devToolsPanelConsole {
+							return layout.Dimensions{}
+						}
+						return ui.devToolsAction(&ui.devToolsFilter, consoleFilterLabel(state.Filter))(gtx)
+					}),
+					layout.Rigid(layout.Spacer{Width: unit.Dp(6)}.Layout),
+					layout.Rigid(ui.devToolsAction(&ui.devToolsClear, "Clear")),
+					layout.Rigid(layout.Spacer{Width: unit.Dp(6)}.Layout),
+					layout.Rigid(ui.devToolsAction(&ui.devToolsClose, "Close")),
+				)
+			}),
+			layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
+			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+				switch state.Panel {
+				case devToolsPanelInspector:
+					return ui.layoutDevToolsInspector(gtx, state)
+				case devToolsPanelNetwork:
+					return ui.layoutDevToolsNetwork(gtx)
+				default:
+					return ui.layoutDevToolsConsole(gtx, state.Filter)
+				}
+			}),
+		)
+	})
+}
+
+func (ui *BrowserUI) layoutDevToolsNetwork(gtx layout.Context) layout.Dimensions {
+	var records []devtoolsmodel.NetworkRecord
+	if navigator := ui.activeNavigator(); navigator != nil {
+		if page := navigator.Page(); page != nil && page.DevTools != nil {
+			records = page.DevTools.Network()
+		}
+	}
+	if len(records) == 0 {
+		return ui.layoutDevToolsPlaceholder(gtx, "Network has no requests for this page")
+	}
+	return material.List(ui.theme, &ui.networkList).Layout(gtx, len(records), func(gtx layout.Context, index int) layout.Dimensions {
+		record := records[index]
+		status := fmt.Sprint(record.StatusCode)
+		if record.ErrorCategory != "" {
+			status = "error:" + record.ErrorCategory
+		}
+		flags := record.CacheStatus
+		if record.Redirected {
+			if flags != "" {
+				flags += ","
+			}
+			flags += "redirect"
+		}
+		if flags == "" {
+			flags = "-"
+		}
+		label := material.Body2(ui.theme, networkRecordLabel(record, status, flags))
+		label.Color = color.NRGBA{R: 203, G: 213, B: 225, A: 255}
+		if record.ErrorCategory != "" || record.StatusCode >= 400 {
+			label.Color = color.NRGBA{R: 253, G: 164, B: 175, A: 255}
+		}
+		return layout.Inset{Top: unit.Dp(3), Bottom: unit.Dp(3), Left: unit.Dp(6)}.Layout(gtx, label.Layout)
+	})
+}
+
+func networkRecordLabel(record devtoolsmodel.NetworkRecord, status, flags string) string {
+	return fmt.Sprintf("%04d  %-10s %-5s %-15s %8s %7d B  %-18s  %s",
+		record.Sequence, record.Kind, record.Method, status, record.Duration.Round(time.Microsecond), record.ResponseBytes, flags, record.URL)
+}
+
+func (ui *BrowserUI) layoutDevToolsInspector(gtx layout.Context, state devToolsTabState) layout.Dimensions {
+	navigator := ui.activeNavigator()
+	if navigator == nil || navigator.Page() == nil || navigator.Page().Document == nil {
+		return ui.layoutDevToolsPlaceholder(gtx, "Inspector has no active document")
+	}
+	page := navigator.Page()
+	var tree *layoutengine.Tree
+	if ui.layoutCache.page == page {
+		tree = ui.layoutCache.tree
+	}
+	var snapshot devtoolsmodel.InspectorSnapshot
+	inspect := func(current *browser.Page) bool {
+		if current != page {
+			return false
+		}
+		snapshot = devtoolsmodel.SnapshotInspector(current.Document, current.ComputedStyles, tree, state.NodeID)
+		return true
+	}
+	if inspector, ok := navigator.(pageInspector); ok {
+		if !inspector.InspectPage(inspect) {
+			return ui.layoutDevToolsPlaceholder(gtx, "Inspector snapshot is temporarily unavailable")
+		}
+	} else {
+		inspect(page)
+	}
+	if state.NodeID != 0 && snapshot.Selected == 0 {
+		state.NodeID = 0
+		ui.setDevToolsState(state)
+	}
+	tabID, _ := ui.activeNavigationTarget()
+	buttons := ui.inspectorButtons[tabID]
+	if buttons == nil {
+		buttons = make(map[dom.NodeID]*widget.Clickable)
+		ui.inspectorButtons[tabID] = buttons
+	}
+	return layout.Flex{Axis: layout.Horizontal}.Layout(gtx,
+		layout.Flexed(0.58, func(gtx layout.Context) layout.Dimensions {
+			return material.List(ui.theme, &ui.inspectorList).Layout(gtx, len(snapshot.Nodes), func(gtx layout.Context, index int) layout.Dimensions {
+				node := snapshot.Nodes[index]
+				button := buttons[node.ID]
+				if button == nil {
+					button = &widget.Clickable{}
+					buttons[node.ID] = button
+				}
+				return button.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					label := material.Body2(ui.theme, inspectorNodeLabel(node))
+					label.Color = color.NRGBA{R: 203, G: 213, B: 225, A: 255}
+					if snapshot.Selected == node.ID {
+						paint.Fill(gtx.Ops, color.NRGBA{R: 12, G: 74, B: 110, A: 255})
+						label.Color = color.NRGBA{R: 240, G: 249, B: 255, A: 255}
+					}
+					return layout.Inset{Top: unit.Dp(3), Right: unit.Dp(4), Bottom: unit.Dp(3), Left: unit.Dp(6)}.Layout(gtx, label.Layout)
+				})
+			})
+		}),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			width := gtx.Dp(unit.Dp(1))
+			gtx.Constraints = layout.Exact(image.Pt(width, gtx.Constraints.Max.Y))
+			paint.Fill(gtx.Ops, color.NRGBA{R: 51, G: 65, B: 85, A: 255})
+			return layout.Dimensions{Size: gtx.Constraints.Max}
+		}),
+		layout.Flexed(0.42, func(gtx layout.Context) layout.Dimensions {
+			return ui.layoutInspectorDetails(gtx, snapshot)
+		}),
+	)
+}
+
+func inspectorNodeLabel(node devtoolsmodel.DOMNode) string {
+	indent := strings.Repeat("  ", node.Depth)
+	if node.Kind == "text" {
+		text := strings.Join(strings.Fields(node.Text), " ")
+		runes := []rune(text)
+		if len(runes) > 80 {
+			text = string(runes[:80]) + "…"
+		}
+		return fmt.Sprintf("%s#text %q", indent, text)
+	}
+	label := indent + node.Name
+	for _, attribute := range node.Attributes {
+		if attribute.Name == "id" {
+			label += "#" + attribute.Value
+		}
+		if attribute.Name == "class" {
+			label += "." + strings.ReplaceAll(attribute.Value, " ", ".")
+		}
+	}
+	return label
+}
+
+func (ui *BrowserUI) layoutInspectorDetails(gtx layout.Context, snapshot devtoolsmodel.InspectorSnapshot) layout.Dimensions {
+	if snapshot.SelectedNode == nil {
+		return ui.layoutDevToolsPlaceholder(gtx, "Select a DOM node to inspect attributes, styles, and layout")
+	}
+	lines := []string{fmt.Sprintf("%s  node=%d", snapshot.SelectedNode.Name, snapshot.SelectedNode.ID), "", "Attributes"}
+	if len(snapshot.SelectedNode.Attributes) == 0 {
+		lines = append(lines, "  (none)")
+	}
+	for _, attribute := range snapshot.SelectedNode.Attributes {
+		lines = append(lines, fmt.Sprintf("  %s=%q", attribute.Name, attribute.Value))
+	}
+	lines = append(lines, "", "Computed Style")
+	if len(snapshot.Styles) == 0 {
+		lines = append(lines, "  (not available)")
+	}
+	for _, property := range snapshot.Styles {
+		lines = append(lines, fmt.Sprintf("  %-18s %s", property.Name, property.Value))
+	}
+	lines = append(lines, "", "Layout Box")
+	if snapshot.Layout == nil {
+		lines = append(lines, "  (not rendered)")
+	} else {
+		lines = append(lines,
+			fmt.Sprintf("  x %.2f  y %.2f", snapshot.Layout.X, snapshot.Layout.Y),
+			fmt.Sprintf("  width %.2f  height %.2f", snapshot.Layout.Width, snapshot.Layout.Height),
+		)
+	}
+	if snapshot.Truncated {
+		lines = append(lines, "", "Snapshot truncated at safety limit")
+	}
+	label := material.Body2(ui.theme, strings.Join(lines, "\n"))
+	label.Color = color.NRGBA{R: 203, G: 213, B: 225, A: 255}
+	return layout.Inset{Top: unit.Dp(6), Right: unit.Dp(6), Left: unit.Dp(10)}.Layout(gtx, label.Layout)
+}
+
+func (ui *BrowserUI) devToolsTab(button *widget.Clickable, panel devToolsPanel, active bool) layout.Widget {
+	return func(gtx layout.Context) layout.Dimensions {
+		style := material.Button(ui.theme, button, string(panel))
+		style.Background = color.NRGBA{R: 30, G: 41, B: 59, A: 255}
+		if active {
+			style.Background = color.NRGBA{R: 3, G: 105, B: 161, A: 255}
+		}
+		style.Inset = layout.Inset{Top: unit.Dp(6), Right: unit.Dp(12), Bottom: unit.Dp(6), Left: unit.Dp(12)}
+		return style.Layout(gtx)
+	}
+}
+
+func (ui *BrowserUI) devToolsAction(button *widget.Clickable, label string) layout.Widget {
+	return func(gtx layout.Context) layout.Dimensions {
+		style := material.Button(ui.theme, button, label)
+		style.Background = color.NRGBA{R: 51, G: 65, B: 85, A: 255}
+		style.Inset = layout.Inset{Top: unit.Dp(5), Right: unit.Dp(9), Bottom: unit.Dp(5), Left: unit.Dp(9)}
+		return style.Layout(gtx)
+	}
+}
+
+func consoleFilterLabel(filter devtoolsmodel.ConsoleLevel) string {
+	if filter == "" {
+		return "Level: all"
+	}
+	return "Level: " + string(filter)
+}
+
+func (ui *BrowserUI) layoutDevToolsConsole(gtx layout.Context, filter devtoolsmodel.ConsoleLevel) layout.Dimensions {
+	var records []devtoolsmodel.ConsoleRecord
+	if navigator := ui.activeNavigator(); navigator != nil {
+		if page := navigator.Page(); page != nil && page.DevTools != nil {
+			for _, record := range page.DevTools.Console() {
+				if filter == "" || record.Level == filter {
+					records = append(records, record)
+				}
+			}
+		}
+	}
+	if len(records) == 0 {
+		return ui.layoutDevToolsPlaceholder(gtx, "Console has no matching messages")
+	}
+	return material.List(ui.theme, &ui.devToolsList).Layout(gtx, len(records), func(gtx layout.Context, index int) layout.Dimensions {
+		record := records[index]
+		label := material.Body2(ui.theme, fmt.Sprintf("%04d  %-5s  %-8s  %s", record.Sequence, record.Level, record.Source, record.Message))
+		label.Color = devToolsLevelColor(record.Level)
+		return layout.Inset{Top: unit.Dp(3), Bottom: unit.Dp(3), Left: unit.Dp(6)}.Layout(gtx, label.Layout)
+	})
+}
+
+func (ui *BrowserUI) layoutDevToolsPlaceholder(gtx layout.Context, message string) layout.Dimensions {
+	label := material.Body2(ui.theme, message)
+	label.Color = color.NRGBA{R: 148, G: 163, B: 184, A: 255}
+	return layout.Inset{Top: unit.Dp(12), Left: unit.Dp(8)}.Layout(gtx, label.Layout)
+}
+
+func devToolsLevelColor(level devtoolsmodel.ConsoleLevel) color.NRGBA {
+	switch level {
+	case devtoolsmodel.ConsoleWarn:
+		return color.NRGBA{R: 253, G: 224, B: 71, A: 255}
+	case devtoolsmodel.ConsoleError:
+		return color.NRGBA{R: 253, G: 164, B: 175, A: 255}
+	case devtoolsmodel.ConsoleInfo:
+		return color.NRGBA{R: 125, G: 211, B: 252, A: 255}
+	default:
+		return color.NRGBA{R: 226, G: 232, B: 240, A: 255}
+	}
+}
+
+func (ui *BrowserUI) layoutUpdateButton(gtx layout.Context) layout.Dimensions {
+	if !ui.updateAvailable && !ui.updating {
+		return layout.Dimensions{}
+	}
+	label := "更新 " + ui.updateRelease.Version
+	if ui.updating {
+		label = "更新中…"
+		gtx = gtx.Disabled()
+	}
+	gtx.Constraints.Min.Y = gtx.Dp(controlHeight)
+	gtx.Constraints.Max.Y = gtx.Dp(controlHeight)
+	button := material.Button(ui.theme, &ui.updateButton, label)
+	button.Background = color.NRGBA{R: 37, G: 99, B: 235, A: 255}
+	button.Color = color.NRGBA{R: 255, G: 255, B: 255, A: 255}
+	button.CornerRadius = unit.Dp(10)
+	button.Inset = layout.Inset{Top: unit.Dp(8), Right: unit.Dp(12), Bottom: unit.Dp(8), Left: unit.Dp(12)}
+	return button.Layout(gtx)
 }
 
 func (ui *BrowserUI) layoutToolbarButton(gtx layout.Context, button *widget.Clickable, icon *widget.Icon, description string, enabled bool) layout.Dimensions {
@@ -955,6 +1500,10 @@ func (ui *BrowserUI) layoutAddressBar(gtx layout.Context) layout.Dimensions {
 			}),
 			layout.Stacked(func(gtx layout.Context) layout.Dimensions {
 				return layout.UniformInset(unit.Dp(10)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					// Stack children receive a zero minimum width by default. Keep the
+					// editor's hit area as wide as the visible address bar instead of
+					// letting it shrink to its placeholder text.
+					gtx.Constraints.Min.X = gtx.Constraints.Max.X
 					return material.Editor(ui.theme, &ui.address, "URLを入力").Layout(gtx)
 				})
 			}),
