@@ -1611,7 +1611,7 @@ func startRuntime(ctx context.Context, factory runtimemodel.EngineFactory, engin
 			callback()
 		},
 		ConsoleRecord: func(level, message string) {
-			page.ensureDevTools().AddConsole(devtools.ConsoleLevel(level), "webgo", message)
+			page.ensureDevTools().AddConsoleForEngine(devtools.ConsoleLevel(level), string(engine), "console", message)
 		},
 	}
 	if local, session, _ := storageManager.Areas(page.URL); local != nil || session != nil {

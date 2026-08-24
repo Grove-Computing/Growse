@@ -13,6 +13,7 @@ import (
 	"github.com/Grove-Computing/Growse/internal/events"
 	"github.com/Grove-Computing/Growse/internal/network"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
+	runtimejavascript "github.com/Grove-Computing/Growse/internal/runtime/javascript"
 	runtimeyaegi "github.com/Grove-Computing/Growse/internal/runtime/yaegi"
 	storagecore "github.com/Grove-Computing/Growse/internal/storage"
 )
@@ -30,6 +31,33 @@ type runtimeStub struct {
 	popStates        []string
 	hashChanges      [][2]string
 	navigationEvents []string
+}
+
+func TestJavaScriptConsoleRecordRetainsSelectedEngine(t *testing.T) {
+	pageURL := mustParseURL(t, "http://localhost/javascript-console.html")
+	loader := stubLoader{response: &network.Response{
+		URL: pageURL, StatusCode: 200, ContentType: "text/html",
+		Body: []byte(`<script>console.warn("from js")</script>`),
+	}}
+	browserState := NewWithEngineFactory(loader, func(engine runtimemodel.Engine) runtimemodel.Runtime {
+		if engine == runtimemodel.EngineJavaScript {
+			return runtimejavascript.New()
+		}
+		return runtimeyaegi.New()
+	})
+	t.Cleanup(func() { _ = browserState.Close() })
+	if _, err := browserState.SetEngine(context.Background(), runtimemodel.EngineJavaScript); err != nil {
+		t.Fatalf("SetEngine() error = %v", err)
+	}
+	page, err := browserState.Navigate(context.Background(), pageURL.String())
+	if err != nil {
+		t.Fatalf("Navigate() error = %v", err)
+	}
+	records := page.DevTools.Console()
+	if len(records) != 1 || records[0].Engine != "javascript" || records[0].Level != devtools.ConsoleWarn ||
+		records[0].Source != "console" || records[0].Message != "from js" {
+		t.Fatalf("Console() = %#v, want JavaScript warn record", records)
+	}
 }
 
 func TestAnimationFrameMutationUsesSharedFrameTimestamp(t *testing.T) {

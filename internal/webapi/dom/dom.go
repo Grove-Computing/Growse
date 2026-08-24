@@ -34,6 +34,14 @@ type Event struct {
 	preventDefault func()
 }
 
+// ID はElementが参照するPage内Node IDを返す。
+func (element *Element) ID() dommodel.NodeID {
+	if element == nil {
+		return 0
+	}
+	return element.id
+}
+
 // PreventDefault cancels a cancelable browser default action such as form submission.
 func (event Event) PreventDefault() {
 	if event.preventDefault != nil {
@@ -178,6 +186,39 @@ func (element *Element) OnMouseLeave(handler func(Event)) {
 		return
 	}
 	element.addEventListener(events.MouseLeave, func(event events.Event) {
+		handler(element.publicEvent(event))
+	})
+}
+
+// AddEventListener はJavaScript hostを含むRuntime adapter向けに対応Eventを登録する。
+func (element *Element) AddEventListener(eventType string, handler func(Event)) bool {
+	if handler == nil {
+		return false
+	}
+	var internal events.Type
+	switch strings.ToLower(strings.TrimSpace(eventType)) {
+	case string(events.Click):
+		internal = events.Click
+	case string(events.Input):
+		internal = events.Input
+	case string(events.Change):
+		internal = events.Change
+	case string(events.Submit):
+		internal = events.Submit
+	case string(events.Reset):
+		internal = events.Reset
+	case string(events.Focus):
+		internal = events.Focus
+	case string(events.Blur):
+		internal = events.Blur
+	case string(events.MouseEnter):
+		internal = events.MouseEnter
+	case string(events.MouseLeave):
+		internal = events.MouseLeave
+	default:
+		return false
+	}
+	return element.addEventListener(internal, func(event events.Event) {
 		handler(element.publicEvent(event))
 	})
 }
