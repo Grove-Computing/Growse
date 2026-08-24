@@ -12,6 +12,7 @@ import (
 	"github.com/Grove-Computing/Growse/internal/events"
 	"github.com/Grove-Computing/Growse/internal/forms"
 	"github.com/Grove-Computing/Growse/internal/network"
+	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 )
 
 var ErrFormTarget = errors.New("form target is not supported")
@@ -118,7 +119,8 @@ func (b *Browser) submitPreparedForm(ctx context.Context, submission preparedFor
 	}
 	b.navigationID++
 	navigationID := b.navigationID
-	runtimeFactory := b.runtimeFactory
+	engineFactory := b.engineFactory
+	engine := runtimemodel.NormalizeEngine(b.engine)
 	storageManager := b.storage
 	onMutation := b.onMutation
 	reducedMotion := b.reducedMotion
@@ -132,7 +134,7 @@ func (b *Browser) submitPreparedForm(ctx context.Context, submission preparedFor
 		pageStore.Close()
 		return nil, fmt.Errorf("submit form to %s: %w", network.RedactedURL(submission.target), err)
 	}
-	return b.finishLoad(ctx, submission.target, response, historyPush, -1, navigationID, client, client, runtimeFactory, storageManager, onMutation, reducedMotion, pageStore)
+	return b.finishLoad(ctx, submission.target, response, historyPush, -1, navigationID, client, client, engineFactory, engine, storageManager, onMutation, reducedMotion, pageStore)
 }
 
 // SubmitFormToNewTab validates a _blank form submission and executes it in an

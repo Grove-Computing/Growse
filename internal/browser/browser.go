@@ -68,6 +68,8 @@ type Browser struct {
 	page             *Page
 	client           ResourceLoader
 	runtimeFactory   runtimemodel.Factory
+	engineFactory    runtimemodel.EngineFactory
+	engine           runtimemodel.Engine
 	activeRuntime    runtimemodel.Runtime
 	onMutation       func()
 	navigationID     uint64
@@ -89,6 +91,7 @@ var nextStorageSourceID atomic.Uint64
 var (
 	ErrFormValidation      = errors.New("form validation failed")
 	ErrSubmissionPrevented = errors.New("form submission was prevented")
+	ErrInvalidEngine       = errors.New("invalid runtime engine")
 )
 
 // New creates a browser with no page loaded.
@@ -106,7 +109,28 @@ func NewWithRuntimeFactoryAndStorage(client ResourceLoader, factory runtimemodel
 	if manager == nil {
 		manager = storagecore.NewManager()
 	}
-	return &Browser{client: client, runtimeFactory: factory, history: newHistory(), clock: animationmodel.SystemClock{}, storage: manager, active: true, storageSourceID: nextStorageSourceID.Add(1), devToolsSession: devtools.NewSessionStore()}
+	return &Browser{
+		client: client, runtimeFactory: factory, engineFactory: runtimemodel.ForGo(factory), engine: runtimemodel.EngineGo,
+		history: newHistory(), clock: animationmodel.SystemClock{}, storage: manager, active: true,
+		storageSourceID: nextStorageSourceID.Add(1), devToolsSession: devtools.NewSessionStore(),
+	}
+}
+
+// NewWithEngineFactory はGo / JavaScriptを選択できるBrowserを生成する。
+func NewWithEngineFactory(client ResourceLoader, factory runtimemodel.EngineFactory) *Browser {
+	return NewWithEngineFactoryAndStorage(client, factory, storagecore.NewManager())
+}
+
+// NewWithEngineFactoryAndStorage はEngine選択と注入Storage profileを使用するBrowserを生成する。
+func NewWithEngineFactoryAndStorage(client ResourceLoader, factory runtimemodel.EngineFactory, manager *storagecore.Manager) *Browser {
+	if manager == nil {
+		manager = storagecore.NewManager()
+	}
+	return &Browser{
+		client: client, engineFactory: factory, engine: runtimemodel.EngineGo,
+		history: newHistory(), clock: animationmodel.SystemClock{}, storage: manager, active: true,
+		storageSourceID: nextStorageSourceID.Add(1), devToolsSession: devtools.NewSessionStore(),
+	}
 }
 
 // SetDevToolsSession shares the Network diagnostics budget across session tabs.
@@ -174,6 +198,55 @@ func (b *Browser) Page() *Page {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	return b.page
+}
+
+// Engine はこのTabが次のPage loadで使用するEngineを返す。
+func (b *Browser) Engine() runtimemodel.Engine {
+	if b == nil {
+		return runtimemodel.EngineGo
+	}
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return runtimemodel.NormalizeEngine(b.engine)
+}
+
+// SetEngine は旧Runtimeを停止して現在Pageを選択Engineで完全reloadする。
+func (b *Browser) SetEngine(ctx context.Context, engine runtimemodel.Engine) (*Page, error) {
+	if b == nil {
+		return nil, ErrInvalidEngine
+	}
+	engine = runtimemodel.NormalizeEngine(engine)
+	if !engine.Valid() {
+		return nil, ErrInvalidEngine
+	}
+	b.mu.Lock()
+	if runtimemodel.NormalizeEngine(b.engine) == engine {
+		page := b.page
+		b.mu.Unlock()
+		return page, nil
+	}
+	b.engine = engine
+	b.navigationID++
+	if b.navigationCancel != nil {
+		b.navigationCancel()
+		b.navigationCancel = nil
+	}
+	activeRuntime := b.activeRuntime
+	b.activeRuntime = nil
+	page := b.page
+	if page != nil {
+		page.RuntimeStarted = false
+	}
+	b.mu.Unlock()
+	if activeRuntime != nil {
+		if err := activeRuntime.Stop(); err != nil {
+			return nil, err
+		}
+	}
+	if page == nil {
+		return nil, nil
+	}
+	return b.Reload(ctx)
 }
 
 // InspectPage runs a read-only inspection of the active Page on its serialized
@@ -671,6 +744,7 @@ func (b *Browser) Close() error {
 	b.page = nil
 	b.client = nil
 	b.runtimeFactory = nil
+	b.engineFactory = nil
 	b.onMutation = nil
 	b.history = newHistory()
 	b.storage = nil
@@ -787,7 +861,8 @@ func (b *Browser) SubmitPOST(ctx context.Context, formID, submitterID dom.NodeID
 	}
 	b.navigationID++
 	navigationID := b.navigationID
-	runtimeFactory := b.runtimeFactory
+	engineFactory := b.engineFactory
+	engine := runtimemodel.NormalizeEngine(b.engine)
 	storageManager := b.storage
 	onMutation := b.onMutation
 	reducedMotion := b.reducedMotion
@@ -810,7 +885,7 @@ func (b *Browser) SubmitPOST(ctx context.Context, formID, submitterID dom.NodeID
 		pageStore.Close()
 		return nil, fmt.Errorf("submit form to %s: %w", network.RedactedURL(target), err)
 	}
-	return b.finishLoad(ctx, target, response, historyPush, -1, navigationID, client, client, runtimeFactory, storageManager, onMutation, reducedMotion, pageStore)
+	return b.finishLoad(ctx, target, response, historyPush, -1, navigationID, client, client, engineFactory, engine, storageManager, onMutation, reducedMotion, pageStore)
 }
 
 // Submit validates and dispatches a cancelable submit event before navigation.
@@ -1024,7 +1099,8 @@ func (b *Browser) loadWithClient(ctx context.Context, pageURL *url.URL, commit h
 	b.navigationID++
 	navigationID := b.navigationID
 	client := b.client
-	runtimeFactory := b.runtimeFactory
+	engineFactory := b.engineFactory
+	engine := runtimemodel.NormalizeEngine(b.engine)
 	storageManager := b.storage
 	onMutation := b.onMutation
 	reducedMotion := b.reducedMotion
@@ -1057,7 +1133,7 @@ func (b *Browser) loadWithClient(ctx context.Context, pageURL *url.URL, commit h
 		pageStore.Close()
 		return nil, fmt.Errorf("navigate to %s: %w", network.RedactedURL(pageURL), err)
 	}
-	return b.finishLoad(navigationContext, pageURL, response, commit, historyIndex, navigationID, resourceClient, client, runtimeFactory, storageManager, onMutation, reducedMotion, pageStore)
+	return b.finishLoad(navigationContext, pageURL, response, commit, historyIndex, navigationID, resourceClient, client, engineFactory, engine, storageManager, onMutation, reducedMotion, pageStore)
 }
 
 type cacheRevalidatingLoader struct {
@@ -1106,7 +1182,7 @@ func (loader cacheRevalidatingLoader) Do(ctx context.Context, request *network.R
 	return requestClient.Do(ctx, &copy)
 }
 
-func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *network.Response, commit historyCommit, historyIndex int, navigationID uint64, resourceClient ResourceLoader, runtimeClient ResourceLoader, runtimeFactory runtimemodel.Factory, storageManager *storagecore.Manager, onMutation func(), reducedMotion bool, pageStore *devtools.PageStore) (*Page, error) {
+func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *network.Response, commit historyCommit, historyIndex int, navigationID uint64, resourceClient ResourceLoader, runtimeClient ResourceLoader, engineFactory runtimemodel.EngineFactory, engine runtimemodel.Engine, storageManager *storagecore.Manager, onMutation func(), reducedMotion bool, pageStore *devtools.PageStore) (*Page, error) {
 	if pageStore == nil {
 		pageStore = b.newDevToolsPageStore()
 	}
@@ -1144,7 +1220,8 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 		ColorScheme: "light", Hover: true, Pointer: "fine", ReducedMotion: reducedMotion,
 	})
 	backgroundImages, backgroundErrors := loadBackgroundImages(ctx, imageResources, computedStyles)
-	scripts, scriptErrors := loadScripts(ctx, scriptResources, response.URL, document)
+	engine = runtimemodel.NormalizeEngine(engine)
+	scripts, scriptErrors := loadScriptsForEngine(ctx, scriptResources, response.URL, document, engine)
 
 	page := &Page{
 		URL:              cloneURL(response.URL),
@@ -1161,6 +1238,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 		ReducedMotion:    reducedMotion,
 		BackgroundImages: backgroundImages,
 		BackgroundErrors: backgroundErrors,
+		Engine:           engine,
 		Scripts:          scripts,
 		ScriptErrors:     scriptErrors,
 		DevTools:         pageStore,
@@ -1173,7 +1251,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	b.mu.RLock()
 	fetchLimiter := b.fetchLimiter
 	b.mu.RUnlock()
-	pageRuntime := startRuntime(ctx, runtimeFactory, page, runtimeClient, storageManager, b.storageSourceID, fetchLimiter, onMutation, b.currentTime, func(target *url.URL) error {
+	pageRuntime := startRuntime(ctx, engineFactory, engine, page, runtimeClient, storageManager, b.storageSourceID, fetchLimiter, onMutation, b.currentTime, func(target *url.URL) error {
 		resolved := cloneURL(target)
 		go func() {
 			<-navigationReady
@@ -1460,28 +1538,29 @@ func (b *Browser) traverseFromRuntime(source *Page, delta int) {
 	}
 }
 
-func startRuntime(ctx context.Context, factory runtimemodel.Factory, page *Page, client ResourceLoader, storageManager *storagecore.Manager, storageSourceID uint64, fetchLimiter *fetchapi.Limiter, onMutation func(), now func() time.Time, navigate func(*url.URL) error, historyPush, historyReplace func(string, *url.URL) error, historyTraverse func(int) error, historyInfo func() (int, string)) runtimemodel.Runtime {
+func startRuntime(ctx context.Context, factory runtimemodel.EngineFactory, engine runtimemodel.Engine, page *Page, client ResourceLoader, storageManager *storagecore.Manager, storageSourceID uint64, fetchLimiter *fetchapi.Limiter, onMutation func(), now func() time.Time, navigate func(*url.URL) error, historyPush, historyReplace func(string, *url.URL) error, historyTraverse func(int) error, historyInfo func() (int, string)) runtimemodel.Runtime {
 	if factory == nil || page == nil || len(page.Scripts) == 0 {
 		return nil
 	}
+	engine = runtimemodel.NormalizeEngine(engine)
 	if !IsTrustedOrigin(page.URL) {
-		setRuntimeError(page, fmt.Sprintf("blocked Go script execution from untrusted origin: %s", network.RedactedURL(page.URL)))
+		setRuntimeError(page, fmt.Sprintf("blocked %s script execution from untrusted origin: %s", engine, network.RedactedURL(page.URL)))
 		return nil
 	}
 	for _, script := range page.Scripts {
-		if !IsTrustedOrigin(script.SourceURL) {
-			setRuntimeError(page, fmt.Sprintf("blocked Go script execution from untrusted origin: %s", runtimeOrigin(script.SourceURL)))
+		if runtimemodel.NormalizeEngine(script.Engine) != engine || !IsTrustedOrigin(script.SourceURL) || !network.SameOrigin(page.URL, script.SourceURL) {
+			setRuntimeError(page, fmt.Sprintf("blocked %s script execution from untrusted or cross-origin source: %s", engine, runtimeOrigin(script.SourceURL)))
 			return nil
 		}
 	}
 	if len(page.ScriptErrors) != 0 {
-		setRuntimeError(page, "Go script loading failed; runtime was not started")
+		setRuntimeError(page, fmt.Sprintf("%s script loading failed; runtime was not started", engine))
 		return nil
 	}
 
-	pageRuntime := factory()
+	pageRuntime := factory(engine)
 	if pageRuntime == nil {
-		setRuntimeError(page, "Go runtime factory returned nil")
+		setRuntimeError(page, fmt.Sprintf("%s runtime factory returned nil", engine))
 		return nil
 	}
 	var frameMu sync.RWMutex
@@ -1551,12 +1630,12 @@ func startRuntime(ctx context.Context, factory runtimemodel.Factory, page *Page,
 		}
 	}
 	if err := pageRuntime.Load(ctx, page.Scripts, environment); err != nil {
-		setRuntimeError(page, fmt.Sprintf("load Go runtime: %v", err))
+		setRuntimeError(page, fmt.Sprintf("load %s runtime: %v", engine, err))
 		_ = pageRuntime.Stop()
 		return nil
 	}
 	if err := pageRuntime.Start(ctx); err != nil {
-		setRuntimeError(page, fmt.Sprintf("start Go runtime: %v", err))
+		setRuntimeError(page, fmt.Sprintf("start %s runtime: %v", engine, err))
 		_ = pageRuntime.Stop()
 		return nil
 	}
