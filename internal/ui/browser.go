@@ -1174,10 +1174,7 @@ func (ui *BrowserUI) layoutEngineButton(gtx layout.Context) layout.Dimensions {
 			engine = selector.Engine()
 		}
 	}
-	label := "Go"
-	if engine == runtimemodel.EngineJavaScript {
-		label = "JS"
-	}
+	label := engineButtonLabel(engine)
 	gtx.Constraints.Min.Y = gtx.Dp(controlHeight)
 	gtx.Constraints.Max.Y = gtx.Dp(controlHeight)
 	button := material.Button(ui.theme, &ui.engineButton, label)
@@ -1186,6 +1183,13 @@ func (ui *BrowserUI) layoutEngineButton(gtx layout.Context) layout.Dimensions {
 	button.CornerRadius = unit.Dp(10)
 	button.Inset = layout.Inset{Top: unit.Dp(8), Right: unit.Dp(12), Bottom: unit.Dp(8), Left: unit.Dp(12)}
 	return button.Layout(gtx)
+}
+
+func engineButtonLabel(engine runtimemodel.Engine) string {
+	if runtimemodel.NormalizeEngine(engine) == runtimemodel.EngineJavaScript {
+		return "JS"
+	}
+	return "Go"
 }
 
 func (ui *BrowserUI) layoutDevToolsButton(gtx layout.Context) layout.Dimensions {
