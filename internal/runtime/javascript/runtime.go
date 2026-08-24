@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	dommodel "github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/network"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 	domapi "github.com/Grove-Computing/Growse/internal/webapi/dom"
@@ -189,6 +190,17 @@ func (runtime *Runtime) Stop() error {
 		<-done
 	}
 	runtime.mu.Lock()
+	dispatcher := runtime.environment.Events
+	listenerIDs := make([]dommodel.NodeID, 0, len(runtime.listeners))
+	seenListenerIDs := make(map[dommodel.NodeID]struct{}, len(runtime.listeners))
+	for _, listener := range runtime.listeners {
+		id := dommodel.NodeID(listener.elementID)
+		if _, seen := seenListenerIDs[id]; seen {
+			continue
+		}
+		seenListenerIDs[id] = struct{}{}
+		listenerIDs = append(listenerIDs, id)
+	}
 	runtime.vm = nil
 	runtime.runtimeCtx = nil
 	runtime.queue = nil
@@ -202,6 +214,9 @@ func (runtime *Runtime) Stop() error {
 	runtime.listenerCount = 0
 	runtime.loaded = false
 	runtime.mu.Unlock()
+	if dispatcher != nil && len(listenerIDs) != 0 {
+		dispatcher.RemoveEventListeners(listenerIDs...)
+	}
 	return nil
 }
 
