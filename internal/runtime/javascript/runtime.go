@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	dommodel "github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/network"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 	domapi "github.com/Grove-Computing/Growse/internal/webapi/dom"
+	schedulerapi "github.com/Grove-Computing/Growse/internal/webapi/scheduler"
 	"github.com/dop251/goja"
 )
 
@@ -38,9 +40,11 @@ type Runtime struct {
 	queue      chan task
 	done       chan struct{}
 
-	scripts     []runtimemodel.Script
-	environment runtimemodel.Environment
-	domAPI      *domapi.API
+	scripts        []runtimemodel.Script
+	environment    runtimemodel.Environment
+	domAPI         *domapi.API
+	schedulerAPI   *schedulerapi.API
+	schedulerClock schedulerapi.Clock
 
 	elements      map[*goja.Object]*domapi.Element
 	elementByID   map[uint64]*goja.Object
@@ -102,6 +106,12 @@ func (runtime *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script,
 	runtime.scripts = cloneScripts(scripts)
 	runtime.environment = environment
 	runtime.domAPI = domapi.New(environment.Document, environment.Events, environment.OnMutation)
+	if runtime.schedulerClock != nil {
+		runtime.schedulerAPI = schedulerapi.NewPageWithClock(runtimeContext, runtime.schedulerClock, runtime.enqueueCallback, environment.RequestFrame)
+	} else {
+		runtime.schedulerAPI = schedulerapi.NewPage(runtimeContext, runtime.enqueueCallback, environment.RequestFrame)
+	}
+	runtime.schedulerAPI.SetFrameScope(environment.FrameScope)
 	runtime.elements = make(map[*goja.Object]*domapi.Element)
 	runtime.elementByID = make(map[uint64]*goja.Object)
 	runtime.listeners = nil
@@ -116,7 +126,10 @@ func (runtime *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script,
 		if err := runtime.installConsole(vm); err != nil {
 			return err
 		}
-		return runtime.installDOM(vm)
+		if err := runtime.installDOM(vm); err != nil {
+			return err
+		}
+		return runtime.installScheduler(vm)
 	}); err != nil {
 		_ = runtime.Stop()
 		return fmt.Errorf("install JavaScript host API: %w", err)
@@ -178,10 +191,14 @@ func (runtime *Runtime) Stop() error {
 	cancel := runtime.cancel
 	vm := runtime.vm
 	done := runtime.done
+	scheduler := runtime.schedulerAPI
 	runtime.cancel = nil
 	runtime.mu.Unlock()
 	if cancel != nil {
 		cancel()
+	}
+	if scheduler != nil {
+		scheduler.Close()
 	}
 	if vm != nil {
 		vm.Interrupt(context.Canceled)
@@ -208,6 +225,7 @@ func (runtime *Runtime) Stop() error {
 	runtime.scripts = nil
 	runtime.environment = runtimemodel.Environment{}
 	runtime.domAPI = nil
+	runtime.schedulerAPI = nil
 	runtime.elements = nil
 	runtime.elementByID = nil
 	runtime.listeners = nil
@@ -218,6 +236,42 @@ func (runtime *Runtime) Stop() error {
 		dispatcher.RemoveEventListeners(listenerIDs...)
 	}
 	return nil
+}
+
+// RunAnimationFrame synchronously delivers one browser frame on the Page queue.
+func (runtime *Runtime) RunAnimationFrame(current time.Time) bool {
+	runtime.mu.Lock()
+	scheduler := runtime.schedulerAPI
+	runtime.mu.Unlock()
+	if scheduler == nil || !scheduler.HasAnimationFrameCallbacks() {
+		return false
+	}
+	ran := false
+	if err := runtime.runSync(context.Background(), func(*goja.Runtime) error {
+		ran = scheduler.RunAnimationFrame(current)
+		return nil
+	}); err != nil {
+		return false
+	}
+	return ran
+}
+
+// HasAnimationFrameCallbacks reports whether the Page requested another frame.
+func (runtime *Runtime) HasAnimationFrameCallbacks() bool {
+	runtime.mu.Lock()
+	scheduler := runtime.schedulerAPI
+	runtime.mu.Unlock()
+	return scheduler != nil && scheduler.HasAnimationFrameCallbacks()
+}
+
+// SetBackground applies hidden-Tab scheduling policy to the Page.
+func (runtime *Runtime) SetBackground(background bool) {
+	runtime.mu.Lock()
+	scheduler := runtime.schedulerAPI
+	runtime.mu.Unlock()
+	if scheduler != nil {
+		scheduler.SetBackground(background)
+	}
 }
 
 // DispatchPageEvent serializes a browser Event with JavaScript callbacks.
@@ -241,12 +295,54 @@ func (runtime *Runtime) run(ctx context.Context, vm *goja.Runtime, queue <-chan 
 		select {
 		case <-ctx.Done():
 			return
+		default:
+		}
+		select {
+		case <-ctx.Done():
+			return
 		case queued := <-queue:
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
 			runtime.executing.Store(true)
 			err := executeTask(vm, queued.run)
 			runtime.executing.Store(false)
 			queued.result <- err
 		}
+	}
+}
+
+func (runtime *Runtime) enqueueCallback(callback func()) bool {
+	if callback == nil {
+		return false
+	}
+	runtime.mu.Lock()
+	runtimeContext := runtime.runtimeCtx
+	queue := runtime.queue
+	stopped := runtime.stopped
+	runtime.mu.Unlock()
+	if stopped || runtimeContext == nil || queue == nil {
+		return false
+	}
+	queued := task{
+		run: func(*goja.Runtime) error {
+			callback()
+			return nil
+		},
+		result: make(chan error, 1),
+	}
+	select {
+	case <-runtimeContext.Done():
+		return false
+	default:
+	}
+	select {
+	case queue <- queued:
+		return true
+	case <-runtimeContext.Done():
+		return false
 	}
 }
 
