@@ -226,6 +226,55 @@ func TestFetchPageCloseCancelsAndDropsLateCompletion(t *testing.T) {
 	}
 }
 
+func TestFetchRequestPolicyRejectsUnsafeInputAndLimits(t *testing.T) {
+	baseURL, _ := url.Parse("https://example.test/page")
+	messages := make(chan string, 8)
+	environment := runtimemodel.Environment{
+		BaseURL:      baseURL,
+		FetchLimiter: fetchapi.NewLimiter(8),
+		Fetch: func(_ context.Context, request *network.Request) (*network.Response, error) {
+			if request.URL.Path == "/large-response" {
+				return nil, network.ErrResponseTooLarge
+			}
+			return &network.Response{URL: request.URL, StatusCode: http.StatusOK}, nil
+		},
+		ConsoleRecord: func(_, message string) { messages <- message },
+	}
+	runtime := New()
+	t.Cleanup(func() { _ = runtime.Stop() })
+	source := `
+		function rejected(label) {
+			return function (error) { console.log(label + ":" + error.message); };
+		}
+		fetch("/method", {method: "TRACE"}).catch(rejected("method"));
+		fetch("/header", {headers: {Cookie: "secret"}}).catch(rejected("header"));
+		fetch("/credentials", {credentials: "always"}).catch(rejected("credentials"));
+		fetch("/body", {method: "POST", body: Array(1024 * 1024 + 2).join("x")}).catch(rejected("body"));
+		var tooManyHeaders = {};
+		for (var index = 0; index < 101; index += 1) { tooManyHeaders["X-Field-" + index] = "value"; }
+		fetch("/headers", {headers: tooManyHeaders}).catch(rejected("headers"));
+		fetch("/large-response").catch(rejected("response"));`
+	startJavaScriptRuntime(t, runtime, source, environment)
+
+	got := make([]string, 0, 6)
+	for range 6 {
+		got = append(got, receiveMessage(t, messages))
+	}
+	joined := strings.Join(got, "\n")
+	for _, expected := range []string{
+		"method:invalid or unsupported Fetch method",
+		"header:forbidden Fetch request header",
+		"credentials:invalid Fetch credentials mode",
+		"body:Fetch request body exceeds size limit",
+		"headers:Fetch headers exceed size limit",
+		"response:response body is too large",
+	} {
+		if !strings.Contains(joined, expected) {
+			t.Fatalf("Fetch policy records = %v, missing %q", got, expected)
+		}
+	}
+}
+
 func receiveRequest(t *testing.T, requests <-chan *network.Request) *network.Request {
 	t.Helper()
 	select {

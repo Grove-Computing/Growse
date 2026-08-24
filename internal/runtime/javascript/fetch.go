@@ -13,11 +13,12 @@ import (
 
 func (runtime *Runtime) installFetch(vm *goja.Runtime) error {
 	if err := vm.Set("fetch", func(call goja.FunctionCall) goja.Value {
+		promise, resolve, reject := vm.NewPromise()
 		request, err := runtime.fetchRequest(vm, call)
 		if err != nil {
-			panic(vm.NewTypeError(err.Error()))
+			_ = reject(fetchRejection(vm, err.Error()))
+			return vm.ToValue(promise)
 		}
-		promise, resolve, reject := vm.NewPromise()
 		runtime.fetchAPI.Fetch(request, func(response fetchapi.Response) {
 			if err := resolve(runtime.responseValue(vm, response)); err != nil {
 				runtime.recordError(fmt.Sprintf("resolve JavaScript Fetch: %v", err))
