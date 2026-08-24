@@ -1,0 +1,26 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Growse Dual Runtime</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main id="app" class="app">
+    <p class="eyebrow">Growse v0.13.0</p>
+    <h1>Dual Runtime Lab</h1>
+    <p>同じPageをGoまたはJavaScriptで実行します。</p>
+    <section class="grid">
+      <article><h2>Engine</h2><p id="engine">loading</p></article>
+      <article><h2>Counter</h2><button id="increment" type="button">Count: <span id="count">0</span></button></article>
+      <article><h2>Storage</h2><input id="note" placeholder="shared local note"><p id="storage">empty</p></article>
+      <article><h2>Scheduler</h2><p id="timer">pending</p></article>
+      <article><h2>Fetch</h2><p id="fetch-success">pending</p><p id="fetch-failure">pending</p></article>
+      <article><h2>History</h2><button id="route" type="button">Push route</button><p id="location">initial</p></article>
+    </section>
+    <button id="runtime-error" class="danger" type="button">Record runtime error</button>
+  </main>
+  <script type="text/go" src="/_app.go"></script>
+  <script type="text/javascript" src="/app.js"></script>
+</body>
+</html>
