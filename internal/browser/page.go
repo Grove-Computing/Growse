@@ -10,6 +10,7 @@ import (
 	"github.com/Grove-Computing/Growse/internal/devtools"
 	"github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/events"
+	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 	"github.com/Grove-Computing/Growse/internal/style"
 )
 
@@ -35,6 +36,7 @@ type Page struct {
 	Transitions      *style.TransitionRegistry
 	BackgroundImages map[string]image.Image
 	BackgroundErrors []string
+	Engine           runtimemodel.Engine
 	Scripts          []Script
 	ScriptErrors     []string
 	RuntimeStarted   bool
