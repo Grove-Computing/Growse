@@ -6,6 +6,7 @@ import (
 	"sync"
 	"unicode/utf8"
 
+	"github.com/Grove-Computing/Growse/internal/devtools"
 	fetchapi "github.com/Grove-Computing/Growse/internal/webapi/fetch"
 )
 
@@ -105,6 +106,7 @@ type Session struct {
 	policy           SessionPolicy
 	onActiveMutation func()
 	fetchLimiter     *fetchapi.Limiter
+	devToolsSession  *devtools.SessionStore
 }
 
 // NewSession creates an empty browser session.
@@ -137,7 +139,7 @@ func NewSessionWithPolicy(factory BrowserFactory, policy SessionPolicy) *Session
 	if policy.MaxFetches <= 0 {
 		policy.MaxFetches = defaults.MaxFetches
 	}
-	return &Session{factory: factory, policy: policy, fetchLimiter: fetchapi.NewLimiter(policy.MaxFetches)}
+	return &Session{factory: factory, policy: policy, fetchLimiter: fetchapi.NewLimiter(policy.MaxFetches), devToolsSession: devtools.NewSessionStore()}
 }
 
 // NewTab adds an empty tab or a tab with a requested initial URL. Navigation
@@ -257,6 +259,7 @@ func (s *Session) newTabLocked(initialURL *url.URL, state TabState) (*Tab, error
 		return nil, ErrTabBrowser
 	}
 	browser.SetFetchLimiter(s.fetchLimiter)
+	browser.SetDevToolsSession(s.devToolsSession)
 	for _, existing := range s.tabs {
 		if existing != nil && existing.browser == browser && existing.state != TabClosed {
 			return nil, ErrTabBrowserReuse

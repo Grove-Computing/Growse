@@ -107,7 +107,7 @@ func resolveSubmissionNodes(page *Page, formID, submitterID dom.NodeID) (*dom.No
 
 func (b *Browser) submitPreparedForm(ctx context.Context, submission preparedFormSubmission) (*Page, error) {
 	if submission.method == "get" {
-		return b.load(ctx, submission.target, historyPush, -1)
+		return b.loadForm(ctx, submission.target, historyPush, -1)
 	}
 	b.mu.Lock()
 	client := b.client
@@ -123,14 +123,16 @@ func (b *Browser) submitPreparedForm(ctx context.Context, submission preparedFor
 	onMutation := b.onMutation
 	reducedMotion := b.reducedMotion
 	b.mu.Unlock()
+	pageStore := b.newDevToolsPageStore()
 	response, err := loader.Do(ctx, &network.Request{
 		Method: http.MethodPost, URL: submission.target, Body: append([]byte(nil), submission.body...),
-		Header: http.Header{"Content-Type": []string{forms.URLEncoded}}, SiteURL: cloneURL(submission.siteURL), Kind: network.RequestForm,
+		Header: http.Header{"Content-Type": []string{forms.URLEncoded}}, SiteURL: cloneURL(submission.siteURL), Kind: network.RequestForm, Observer: pageStore.ObserveNetwork,
 	})
 	if err != nil {
+		pageStore.Close()
 		return nil, fmt.Errorf("submit form to %s: %w", network.RedactedURL(submission.target), err)
 	}
-	return b.finishLoad(ctx, submission.target, response, historyPush, -1, navigationID, client, client, runtimeFactory, storageManager, onMutation, reducedMotion)
+	return b.finishLoad(ctx, submission.target, response, historyPush, -1, navigationID, client, client, runtimeFactory, storageManager, onMutation, reducedMotion, pageStore)
 }
 
 // SubmitFormToNewTab validates a _blank form submission and executes it in an

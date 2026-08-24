@@ -17,7 +17,8 @@ HTMLとCSSで画面を構築し、`<script type="text/go">`に書いたWebGoか�
 | Scheduler | timeout、interval、Animation Frame、Page終了時の自動解除 |
 | Storage | Tab間で共有する永続Local Storage、Storage Event、Tab単位のSession Storage |
 | HTTP | WebGo Fetch、Cookie、Same-Origin Policy、CORS、Freshness・再検証・Disk対応のHTTP Cache |
-| WebGo | DOM Event、非同期Fetch、Scheduler、History、Navigation、Storage API |
+| WebGo | DOM Event、非同期Fetch、Scheduler、History、Navigation、Storage、Console API |
+| DevTools | Page単位のConsole、read-only DOM / Computed Style / Layout Inspector、credential-safe Network監視 |
 
 詳しい対応範囲と制限は、[CSS対応表](docs/css-support.md)、[Form / Fetch / Cookie対応表](docs/form-fetch-cookie-support.md)、[Storage / Cache対応表](docs/storage-cache-support.md)を参照してください。
 
@@ -42,7 +43,7 @@ wget -qO- https://github.com/Grove-Computing/Growse/releases/latest/download/ins
 Versionとインストール先を指定する場合は、環境変数を利用します。
 
 ```sh
-wget -qO- https://github.com/Grove-Computing/Growse/releases/latest/download/install.sh | GROWSE_VERSION=v0.10.0 GROWSE_INSTALL_DIR=/usr/local/bin bash
+wget -qO- https://github.com/Grove-Computing/Growse/releases/latest/download/install.sh | GROWSE_VERSION=v0.12.0 GROWSE_INSTALL_DIR=/usr/local/bin bash
 ```
 
 GUI Applicationの配置先は、`GROWSE_DATA_HOME`、`GROWSE_APPLICATIONS_DIR`、`GROWSE_WINDOWS_PROGRAMS_DIR`で変更できます。
@@ -52,7 +53,7 @@ GUI Applicationの配置先は、`GROWSE_DATA_HOME`、`GROWSE_APPLICATIONS_DIR`�
 Linux amd64のDocker imageを、GitHub Container Registryから取得できます。
 
 ```sh
-docker pull ghcr.io/grove-computing/growse:v0.10.0
+docker pull ghcr.io/grove-computing/growse:v0.12.0
 ```
 
 GrowseはGUI applicationのため、Containerから起動する場合はホストのDisplay ServerとGPU deviceを接続する必要があります。
@@ -80,7 +81,7 @@ go mod download
 go run ./cmd/growse
 ```
 
-起動すると、左側Vertical Tab Rail、戻る・進む・再読込・URL入力欄・Gopherボタン・状態表示を備えたブラウザウィンドウが開きます。
+起動すると、左側Vertical Tab Rail、戻る・進む・再読込・DevTools・URL入力欄・Gopherボタン・状態表示を備えたブラウザウィンドウが開きます。
 
 ## Demoを試す
 
@@ -103,10 +104,13 @@ python3 -m http.server 8080 --directory examples/data-app
 | Data App Showcase | `examples/data-app` | Form、WebGo Fetch、structured Headers、Session Cookie、DOM更新、Animation |
 | Persistent App Showcase | `examples/persistent-app` | Scheduler、same-document Routing、Local / Session Storage、Fetch、HTTP Cache、offline状態 |
 | Multi-Tab Workspace | `go run ./examples/multi-tab-workspace` | Vertical Tab、Storage Event、共有Cookie / Cache、Tab別Session / Scheduler |
+| DevTools Showcase | `go run ./examples/devtools` | Console 4 level、DOM / Style / Layout、成功Fetch、redirect、cache、HTTP error、timeout |
 
 WebGoソースは通常のGo build対象から除外するため、各Demoでは`_app.go`として配置しています。
 
 Multi-Tab Workspaceは専用のlocal fixture serverを起動し、Growseで`http://localhost:8080`を開きます。Notes画面のリンクからTasksとActivityを新しいVertical Tabへ開けます。外部ServiceやAPI keyは不要です。
+
+DevTools Showcaseも専用のlocal fixture serverだけを使用します。外部通信や実Credentialなしで、Console、Inspector、Networkの通常・error・timeout・cache状態を再現できます。
 
 ## ブラウザの仕組み
 
@@ -144,10 +148,21 @@ Animation中のPaintとHit Testingは、同じFrameの値を参照します。DO
 - `growse/navigation`: 現在URL、pushState / replaceState、History traversalとEventを操作
 - `growse/scheduler`: timeout、interval、Animation Frameを登録・解除
 - `growse/storage`: Origin単位のLocal / Session Storageを操作し、`OnChange`で別TabのLocal Storage更新を受信
+- `growse/console`: `Log`、`Info`、`Warn`、`Error`をPage単位のDevTools Consoleへ記録
 - Fetch callback: PageのEvent Queueで実行
 - Page終了時: Timer、Frame callback、実行中Fetchをcancelし、Runtime参照を解放
 
 WebGo RuntimeはSandboxではありません。信頼できるローカルページだけを開いてください。
+
+### WebGo DevTools
+
+ツールバーの`DevTools`ボタンまたは`F12`で、active Tabの下部へDevToolsを開閉できます。選択panelとfilterはTabごとに保持されます。
+
+- Console: WebGoの4 levelとscript / runtime errorを表示し、level filterとclearを提供
+- Inspector: active PageのDOM snapshotを選択し、公開attribute、主要Computed Style、Layout Boxをread-only表示
+- Network: Navigation、resource、Form、Fetchのmethod、redacted URL、timing、status、redirect、cache、size、error categoryを表示
+
+DevToolsはRequest / Response body、Header、Cookie、Authorizationを保持しません。URL userinfoとquery valueをマスクし、password input valueもInspectorへ公開しません。安全上限と詳細は[WebGo DevTools設計](docs/devtools.md)を参照してください。
 
 ## ドキュメント
 
@@ -160,8 +175,11 @@ WebGo RuntimeはSandboxではありません。信頼できるローカルペー
 | [Performance Baseline](docs/performance.md) | Layout、Paint、Form、Scheduler、History、Storage、CacheのBenchmark基準値 |
 | [WPT由来テスト](docs/wpt.md) | Web Platform Testsから移植したTestと出典 |
 | [Developer Supply Chain Security](docs/developer-security.md) | 不可視Code検査、Extension管理、署名、Credential、Incident Response |
+| [WebGo DevTools設計](docs/devtools.md) | Console、Inspector、Networkのデータ境界、redaction、安全上限 |
 | [v0.9.0リリース定義](docs/v0.9.0.md) | v0.9.0のTheme、Scope、完了条件 |
 | [v0.10.0リリース定義](docs/v0.10.0.md) | v0.10.0のTheme、Scope、完了条件 |
+| [v0.11.0リリース定義](docs/v0.11.0.md) | v0.11.0のTheme、Scope、完了条件 |
+| [v0.12.0リリース定義](docs/v0.12.0.md) | v0.12.0 WebGo DevToolsのTheme、Scope、完了条件 |
 
 ## 品質チェック
 
@@ -192,7 +210,7 @@ GrowseとWebGo Runtimeは、信頼できないGoコードを安全に実行す�
 
 ## リリース成果物
 
-`v0.10.0`のようなVersion tagをpushすると、GitHub Actionsが次の成果物、SHA-256 checksum、SPDX JSON SBOMをGitHub Releaseへ公開します。ArchiveとSBOMにはGitHub Artifact Attestation、Docker imageにはBuildKitのSBOMとSLSA Provenanceを付与します。
+`v0.12.0`のようなVersion tagをpushすると、GitHub Actionsが次の成果物、SHA-256 checksum、SPDX JSON SBOMをGitHub Releaseへ公開します。ArchiveとSBOMにはGitHub Artifact Attestation、Docker imageにはBuildKitのSBOMとSLSA Provenanceを付与します。
 
 - Linux amd64
 - macOS Intel

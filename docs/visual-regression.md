@@ -22,3 +22,11 @@ go test ./internal/paint -run TestDashboardVisualRegression
 ```sh
 go test ./internal/paint ./examples/persistent-app -run 'PersistentApp'
 ```
+
+## v0.12.0 WebGo DevTools
+
+`internal/ui/TestDevToolsPanelsVisualRegression`は1280×800、下部280 pxのDevTools geometryと、Console、Inspector、Networkの通常・空・error・truncated状態をsemantic snapshotとして比較する。password valueとNetwork query valueのmaskも同じReferenceに含める。Integration側は`examples/devtools/TestDevToolsShowcaseExercisesAllPanelsWithoutCredentialLeaks`がlocal fixtureのDOM / Style / Layout、redirect、cache、HTTP error、timeoutを検証する。
+
+```sh
+go test ./internal/ui ./examples/devtools -run DevTools
+```

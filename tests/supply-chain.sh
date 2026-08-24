@@ -42,7 +42,9 @@ for value in \
     "name: Attest SBOM provenance" \
     "name: Attest archive SBOM" \
     'subject-digest: ${{ needs.docker.outputs.digest }}' \
-    'gh attestation verify "oci://${{ needs.docker.outputs.image }}@${{ needs.docker.outputs.digest }}"' \
+    'IMAGE_NAME: ${{ needs.docker.outputs.image }}' \
+    'IMAGE_DIGEST: ${{ needs.docker.outputs.digest }}' \
+    'gh attestation verify "oci://$IMAGE_NAME@$IMAGE_DIGEST"' \
     "Verify OCI SBOM and provenance by digest" \
     "Scan published image by digest"
 do

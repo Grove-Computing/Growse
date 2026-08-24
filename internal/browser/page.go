@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Grove-Computing/Growse/internal/css"
+	"github.com/Grove-Computing/Growse/internal/devtools"
 	"github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/events"
 	"github.com/Grove-Computing/Growse/internal/style"
@@ -46,6 +47,7 @@ type Page struct {
 	ViewportHeight   float32
 	ReducedMotion    bool
 	StyleRevision    uint64
+	DevTools         *devtools.PageStore
 }
 
 // AnimatedStyles samples this page's CSS Animations and Transitions at current without
@@ -73,7 +75,20 @@ func (p *Page) ActiveAnimations(current time.Time) bool {
 // NewPage creates a page for pageURL. A nil URL is allowed for documents such
 // as an in-memory error page that do not have a network location.
 func NewPage(pageURL *url.URL) *Page {
-	return &Page{URL: cloneURL(pageURL)}
+	return &Page{URL: cloneURL(pageURL), DevTools: devtools.NewPageStore()}
+}
+
+func (p *Page) ensureDevTools() *devtools.PageStore {
+	if p.DevTools == nil {
+		p.DevTools = devtools.NewPageStore()
+	}
+	return p.DevTools
+}
+
+func (p *Page) closeDevTools() {
+	if p != nil && p.DevTools != nil {
+		p.DevTools.Close()
+	}
 }
 
 // LinkURL resolves the nearest anchor at nodeID against the page URL.

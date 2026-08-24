@@ -64,12 +64,17 @@ func TestPortableFSNormalizesWindowsSeparators(t *testing.T) {
 
 func TestRuntimeExposesGrowseConsole(t *testing.T) {
 	runtime := New()
-	var messages []string
+	var records [][2]string
 	scripts := []runtimemodel.Script{{Source: `package main
 import "growse/console"
-func main() { console.Log("Hello from Go", 42) }`}}
-	environment := runtimemodel.Environment{ConsoleLog: func(message string) {
-		messages = append(messages, message)
+func main() {
+	console.Log("log")
+	console.Info("info")
+	console.Warn("warn")
+	console.Error("error")
+}`}}
+	environment := runtimemodel.Environment{ConsoleRecord: func(level, message string) {
+		records = append(records, [2]string{level, message})
 	}}
 
 	if err := runtime.Load(context.Background(), scripts, environment); err != nil {
@@ -78,11 +83,14 @@ func main() { console.Log("Hello from Go", 42) }`}}
 	if err := runtime.Start(context.Background()); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
-	if got, want := len(messages), 1; got != want {
-		t.Fatalf("console message count = %d, want %d (%v)", got, want, messages)
+	if got, want := len(records), 4; got != want {
+		t.Fatalf("console record count = %d, want %d (%v)", got, want, records)
 	}
-	if got, want := messages[0], "[WebGo] Hello from Go42"; got != want {
-		t.Fatalf("console message = %q, want %q", got, want)
+	want := [][2]string{{"log", "[WebGo] log"}, {"info", "[WebGo] info"}, {"warn", "[WebGo] warn"}, {"error", "[WebGo] error"}}
+	for index := range want {
+		if records[index] != want[index] {
+			t.Fatalf("console record %d = %q, want %q", index, records[index], want[index])
+		}
 	}
 }
 
