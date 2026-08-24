@@ -6,7 +6,9 @@
 
 | Version | Supported |
 | --- | --- |
-| 0.10.x | Yes |
+| 0.12.x | Yes |
+| 0.11.x | No |
+| 0.10.x | No |
 | 0.9.x | No |
 | 0.8.x | No |
 | 0.7.x | No |
@@ -38,7 +40,7 @@ GitHub Releaseの各Archiveには、同名の`.sha256`と、`growse_<version>_<p
 たとえばLinux amd64のArchiveを検証する場合は、次を実行します。
 
 ```sh
-VERSION=v0.10.0
+VERSION=v0.12.0
 ASSET="growse_${VERSION}_linux_amd64.tar.gz"
 gh release download "$VERSION" --repo Grove-Computing/Growse \
   --pattern "$ASSET" --pattern "$ASSET.sha256" \
@@ -67,7 +69,7 @@ Developer workstationからのCredential窃取、不可視Unicode、未承認Bin
 
 ## WebGo Security Boundary
 
-Growse v0.10.0のYaegi Runtimeは、信頼できないGoコードを安全に実行するSandboxではありません。
+Growse v0.12.0のYaegi Runtimeは、信頼できないGoコードを安全に実行するSandboxではありません。
 プロセス分離、CPU時間制限、メモリ制限、およびGo標準ライブラリ全体に対する完全な制限は提供していません。
 
 WebGoの自動実行は`localhost`、`127.0.0.1`、`::1`のページと、同じく信頼済みOriginから取得したGoスクリプトに限定されます。ただし、ローカルで配信されるページやスクリプトを信頼できることは利用者自身が確認してください。WebGo FetchはSame-Origin PolicyとCORSを適用し、`omit`、`same-origin`、`include`のCredentials Modeに従います。禁止Header、CORS Response Headerの非公開化、preflightとそのcacheを実装していますが、Runtime自体をSandboxにはしません。
@@ -81,6 +83,8 @@ Local StorageはOSのUser Config Directory配下へOriginごとのJSONとして�
 TabはDOM、Runtime、History、Session Storageを分離しますが、OS ProcessやSecurity Sandboxを分離する境界ではありません。1つのBrowser SessionではLocal Storage、Cookie Jar、HTTP Cacheを仕様の範囲で共有するため、同じProfileで開くPageはすべて信頼できるものに限定してください。
 
 HTTP CacheはOSのUser Cache Directory配下にprivate cacheとして保存します。Authorization、Cookie、Set-Cookieを含むentryは保存せず、Cache hit時もMIME、Origin、CORS、Credentials Policyを再適用します。memoryは1,024 entryかつCache keyごと32 variant、diskは1 entry 4 MiB、Originごと32 MiB、全体128 MiBを上限とし、schema versionとBody SHA-256が一致しないentryを破棄します。
+
+DevToolsはPageごとのread-only診断境界です。Consoleは1件4 KiB・Page 1,000件、DOM snapshotは2,000 node・深さ128・attribute 64件・文字列4 KiB、NetworkはPage 500件・Browser Session 4,000件を上限とします。Page終了後のcallbackは記録を追加できません。Network recordにはRequest / Response body、Header、Cookie、Authorization、error本文を保持せず、URL userinfoとquery valueをマスクします。Inspectorはpassword inputのvalue、WebGo callback、Runtime objectを公開しません。DevToolsは秘密情報を安全に保管するvaultではないため、URL pathやConsoleへCredentialを意図的に書き込まないでください。
 
 信頼できないWebGoソースを開いたり、Growseを権限の高いユーザーで実行したりしないでください。
 

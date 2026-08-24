@@ -39,7 +39,7 @@ func ensurePrivateDirectory(path string) error {
 	if err := os.MkdirAll(path, 0o700); err != nil {
 		return storageIOError("create directory")
 	}
-	if err := os.Chmod(path, 0o700); err != nil {
+	if err := os.Chmod(path, 0o700); err != nil { // #nosec G302 -- this is a directory and 0700 denies group and other access.
 		return storageIOError("protect directory")
 	}
 	return nil
@@ -47,7 +47,7 @@ func ensurePrivateDirectory(path string) error {
 
 func loadPersistentArea(directory, origin string) (*Area, error) {
 	path := persistentFilePath(directory, origin)
-	file, err := os.Open(path)
+	file, err := os.Open(path) // #nosec G304 -- path is derived from the SHA-256 filename produced by persistentFilePath.
 	if errors.Is(err, os.ErrNotExist) {
 		return newPersistentArea(nil, func(entries []Entry) error {
 			return savePersistentArea(directory, origin, entries)
@@ -114,7 +114,7 @@ func savePersistentArea(directory, origin string, entries []Entry) error {
 		return storageIOError("commit transaction")
 	}
 	committed = true
-	if directoryHandle, err := os.Open(directory); err == nil {
+	if directoryHandle, err := os.Open(directory); err == nil { // #nosec G304 -- directory is the configured private storage root.
 		_ = directoryHandle.Sync()
 		_ = directoryHandle.Close()
 	}

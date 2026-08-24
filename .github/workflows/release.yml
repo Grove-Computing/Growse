@@ -36,6 +36,7 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache-dependency-path: go.sum
+          cache: false
 
       - name: Scan source tree for hidden payloads
         run: go run ./cmd/securityscan
@@ -109,6 +110,7 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache-dependency-path: go.sum
+          cache: false
 
       - name: Install Gio Linux dependencies
         if: runner.os == 'Linux'
@@ -283,7 +285,7 @@ jobs:
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679fd # v4.6.0
+        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -305,10 +307,12 @@ jobs:
           provenance: mode=max
 
       - name: Verify OCI SBOM and provenance by digest
+        env:
+          BUILD_DIGEST: ${{ steps.build.outputs.digest }}
         shell: bash
         run: |
-          image_ref="$IMAGE_NAME@${{ steps.build.outputs.digest }}"
-          echo "Container digest: ${{ steps.build.outputs.digest }}"
+          image_ref="$IMAGE_NAME@$BUILD_DIGEST"
+          echo "Container digest: $BUILD_DIGEST"
           test "$(docker buildx imagetools inspect "$image_ref" --format '{{ json .SBOM.SPDX }}')" != "null"
           test "$(docker buildx imagetools inspect "$image_ref" --format '{{ json .Provenance.SLSA }}')" != "null"
 
@@ -321,12 +325,14 @@ jobs:
           output-format: table
 
       - name: Promote verified image tags by digest
+        env:
+          BUILD_DIGEST: ${{ steps.build.outputs.digest }}
         shell: bash
         run: |
           docker buildx imagetools create \
             --tag "$IMAGE_NAME:$RELEASE_TAG" \
             --tag "$IMAGE_NAME:latest" \
-            "$IMAGE_NAME@${{ steps.build.outputs.digest }}"
+            "$IMAGE_NAME@$BUILD_DIGEST"
 
   container-attest:
     name: Attest Docker image
@@ -340,7 +346,7 @@ jobs:
       attestations: write
     steps:
       - name: Log in to GitHub Container Registry for attestation
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679fd # v4.6.0
+        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -356,8 +362,10 @@ jobs:
       - name: Verify GitHub attestation by digest
         env:
           GH_TOKEN: ${{ github.token }}
+          IMAGE_NAME: ${{ needs.docker.outputs.image }}
+          IMAGE_DIGEST: ${{ needs.docker.outputs.digest }}
         shell: bash
-        run: gh attestation verify "oci://${{ needs.docker.outputs.image }}@${{ needs.docker.outputs.digest }}" --repo "$GITHUB_REPOSITORY"
+        run: gh attestation verify "oci://$IMAGE_NAME@$IMAGE_DIGEST" --repo "$GITHUB_REPOSITORY"
 
   publish:
     name: Publish GitHub Release

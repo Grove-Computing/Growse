@@ -5,6 +5,7 @@ import (
 	"log"
 
 	gioapp "gioui.org/app"
+	"gioui.org/io/system"
 	"gioui.org/op"
 	"gioui.org/unit"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/Grove-Computing/Growse/internal/runtime/yaegi"
 	storagecore "github.com/Grove-Computing/Growse/internal/storage"
 	"github.com/Grove-Computing/Growse/internal/ui"
+	"github.com/Grove-Computing/Growse/internal/updater"
 )
 
 // Run opens the Growse browser window and starts its event loop.
@@ -66,7 +68,9 @@ func runWindow(window *gioapp.Window) error {
 		return err
 	}
 	defer session.Close()
-	browserUI := ui.NewBrowserUIWithTabs(nil, session, window.Invalidate)
+	browserUI := ui.NewBrowserUIWithTabsAndUpdater(nil, session, window.Invalidate, updater.New(), func() {
+		window.Perform(system.ActionClose)
+	})
 	defer browserUI.Close()
 
 	for {
