@@ -7,6 +7,7 @@ import (
 
 	"github.com/Grove-Computing/Growse/internal/html"
 	"github.com/Grove-Computing/Growse/internal/network"
+	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 )
 
 func TestNavigateCollectsInlineAndExternalGoScripts(t *testing.T) {
@@ -74,6 +75,51 @@ func TestCollectScriptsPreservesDocumentOrderAndExternalPriority(t *testing.T) {
 	}
 }
 
+func TestCollectJavaScriptRecognizesDefaultAndExplicitTypes(t *testing.T) {
+	document, err := html.Parse(strings.NewReader(`
+<script>first()</script>
+<script type="">second()</script>
+<script type="text/javascript" src="app.js"></script>
+<script type="application/javascript">fourth()</script>
+<script type="module">ignored()</script>
+<script type="text/go">package main</script>
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sources := collectScriptsForEngine(document.Root, runtimemodel.EngineJavaScript)
+	if got, want := len(sources), 4; got != want {
+		t.Fatalf("JavaScript source count = %d, want %d", got, want)
+	}
+	if strings.TrimSpace(sources[0].source) != "first()" || strings.TrimSpace(sources[1].source) != "second()" ||
+		sources[2].src != "app.js" || strings.TrimSpace(sources[3].source) != "fourth()" {
+		t.Fatalf("JavaScript sources = %#v", sources)
+	}
+}
+
+func TestLoadScriptsForEngineAppliesCountAndTotalLimits(t *testing.T) {
+	pageURL := mustParseURL(t, "http://localhost/index.html")
+	tooMany := strings.Repeat(`<script type="text/javascript">x()</script>`, maxScriptsPerEngine+1)
+	document, err := html.Parse(strings.NewReader(tooMany))
+	if err != nil {
+		t.Fatal(err)
+	}
+	scripts, loadErrors := loadScriptsForEngine(context.Background(), &routeLoader{}, pageURL, document, runtimemodel.EngineJavaScript)
+	if len(scripts) != maxScriptsPerEngine || len(loadErrors) != 1 || !strings.Contains(loadErrors[0], "count") {
+		t.Fatalf("count-limited scripts=%d errors=%v", len(scripts), loadErrors)
+	}
+
+	large := strings.Repeat("x", maxScriptBytes)
+	document, err = html.Parse(strings.NewReader(strings.Repeat(`<script type="text/javascript">`+large+`</script>`, maxScriptTotalBytes/maxScriptBytes+1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	scripts, loadErrors = loadScriptsForEngine(context.Background(), &routeLoader{}, pageURL, document, runtimemodel.EngineJavaScript)
+	if len(scripts) != maxScriptTotalBytes/maxScriptBytes || len(loadErrors) != 1 || !strings.Contains(loadErrors[0], "total") {
+		t.Fatalf("total-limited scripts=%d errors=%v", len(scripts), loadErrors)
+	}
+}
+
 func TestIsTrustedOriginAllowsOnlyLoopbackHosts(t *testing.T) {
 	tests := []struct {
 		url  string
@@ -108,5 +154,16 @@ func TestIsGoContentTypeAcceptsCommonGoMIMETypes(t *testing.T) {
 	}
 	if isGoContentType("application/javascript") {
 		t.Fatal("isGoContentType(application/javascript) = true, want false")
+	}
+}
+
+func TestIsJavaScriptContentTypeAcceptsSupportedMIMETypes(t *testing.T) {
+	for _, contentType := range []string{"text/javascript", "application/javascript; charset=utf-8", "text/plain", ""} {
+		if !isJavaScriptContentType(contentType) {
+			t.Errorf("isJavaScriptContentType(%q) = false, want true", contentType)
+		}
+	}
+	if isJavaScriptContentType("text/go") {
+		t.Fatal("isJavaScriptContentType(text/go) = true, want false")
 	}
 }
