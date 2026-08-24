@@ -15,6 +15,7 @@ import (
 	domapi "github.com/Grove-Computing/Growse/internal/webapi/dom"
 	fetchapi "github.com/Grove-Computing/Growse/internal/webapi/fetch"
 	schedulerapi "github.com/Grove-Computing/Growse/internal/webapi/scheduler"
+	storageapi "github.com/Grove-Computing/Growse/internal/webapi/storage"
 	"github.com/dop251/goja"
 )
 
@@ -41,14 +42,16 @@ type Runtime struct {
 	queue      chan task
 	done       chan struct{}
 
-	scripts        []runtimemodel.Script
-	environment    runtimemodel.Environment
-	domAPI         *domapi.API
-	fetchAPI       *fetchapi.API
-	fetchClock     fetchapi.Clock
-	schedulerAPI   *schedulerapi.API
-	schedulerClock schedulerapi.Clock
-	abortSignals   map[*goja.Object]*fetchapi.AbortSignal
+	scripts         []runtimemodel.Script
+	environment     runtimemodel.Environment
+	domAPI          *domapi.API
+	fetchAPI        *fetchapi.API
+	fetchClock      fetchapi.Clock
+	schedulerAPI    *schedulerapi.API
+	schedulerClock  schedulerapi.Clock
+	storageAPI      *storageapi.API
+	abortSignals    map[*goja.Object]*fetchapi.AbortSignal
+	windowListeners []listenerRecord
 
 	elements      map[*goja.Object]*domapi.Element
 	elementByID   map[uint64]*goja.Object
@@ -122,10 +125,12 @@ func (runtime *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script,
 		runtime.schedulerAPI = schedulerapi.NewPage(runtimeContext, runtime.enqueueCallback, environment.RequestFrame)
 	}
 	runtime.schedulerAPI.SetFrameScope(environment.FrameScope)
+	runtime.storageAPI = storageapi.NewPage(environment.LocalStorage, environment.SessionStorage, environment.StorageSource, runtime.enqueueCallback)
 	runtime.elements = make(map[*goja.Object]*domapi.Element)
 	runtime.elementByID = make(map[uint64]*goja.Object)
 	runtime.abortSignals = make(map[*goja.Object]*fetchapi.AbortSignal)
 	runtime.listeners = nil
+	runtime.windowListeners = nil
 	runtime.listenerCount = 0
 	runtime.loaded = true
 	queue, done := runtime.queue, runtime.done
@@ -141,6 +146,9 @@ func (runtime *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script,
 			return err
 		}
 		if err := runtime.installFetch(vm); err != nil {
+			return err
+		}
+		if err := runtime.installStorage(vm); err != nil {
 			return err
 		}
 		return runtime.installScheduler(vm)
@@ -207,6 +215,7 @@ func (runtime *Runtime) Stop() error {
 	done := runtime.done
 	fetch := runtime.fetchAPI
 	scheduler := runtime.schedulerAPI
+	storage := runtime.storageAPI
 	runtime.cancel = nil
 	runtime.mu.Unlock()
 	if cancel != nil {
@@ -217,6 +226,9 @@ func (runtime *Runtime) Stop() error {
 	}
 	if scheduler != nil {
 		scheduler.Close()
+	}
+	if storage != nil {
+		storage.Close()
 	}
 	if vm != nil {
 		vm.Interrupt(context.Canceled)
@@ -245,10 +257,12 @@ func (runtime *Runtime) Stop() error {
 	runtime.domAPI = nil
 	runtime.fetchAPI = nil
 	runtime.schedulerAPI = nil
+	runtime.storageAPI = nil
 	runtime.elements = nil
 	runtime.elementByID = nil
 	runtime.abortSignals = nil
 	runtime.listeners = nil
+	runtime.windowListeners = nil
 	runtime.listenerCount = 0
 	runtime.loaded = false
 	runtime.mu.Unlock()
