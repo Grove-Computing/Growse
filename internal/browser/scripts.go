@@ -25,10 +25,6 @@ type scriptSource struct {
 	src    string
 }
 
-func loadScripts(ctx context.Context, client ResourceLoader, pageURL *url.URL, document *dom.Document) ([]Script, []string) {
-	return loadScriptsForEngine(ctx, client, pageURL, document, runtimemodel.EngineGo)
-}
-
 func loadScriptsForEngine(ctx context.Context, client ResourceLoader, pageURL *url.URL, document *dom.Document, engine runtimemodel.Engine) ([]Script, []string) {
 	if client == nil || pageURL == nil || document == nil || document.Root == nil {
 		return nil, nil
@@ -149,11 +145,6 @@ func scriptEngine(value string, hasType bool) runtimemodel.Engine {
 	default:
 		return ""
 	}
-}
-
-func isGoScriptType(value string) bool {
-	mediaType, _, err := mime.ParseMediaType(strings.TrimSpace(value))
-	return err == nil && strings.EqualFold(mediaType, "text/go")
 }
 
 func isGoContentType(value string) bool {
