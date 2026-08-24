@@ -4,10 +4,14 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/Grove-Computing/Growse/internal/events"
+	htmlparser "github.com/Grove-Computing/Growse/internal/html"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
+	"github.com/dop251/goja"
 )
 
 func TestRuntimeEvaluatesScriptsInDocumentOrder(t *testing.T) {
@@ -97,6 +101,83 @@ func TestRuntimeRejectsWrongEngineAndUseAfterStop(t *testing.T) {
 	}
 	if err := runtime.Load(context.Background(), []runtimemodel.Script{javaScript(`true`)}, runtimemodel.Environment{}); !errors.Is(err, errRuntimeStopped) {
 		t.Fatalf("Load() error = %v, want errRuntimeStopped", err)
+	}
+}
+
+func TestRuntimeDoesNotExposeProcessOrGoHostAPIs(t *testing.T) {
+	runtime := New()
+	t.Cleanup(func() { _ = runtime.Stop() })
+	var message string
+	environment := runtimemodel.Environment{ConsoleRecord: func(_, value string) { message = value }}
+	source := `console.log([
+		typeof process,
+		typeof require,
+		typeof Deno,
+		typeof os,
+		typeof fs,
+		typeof Go,
+		typeof GrowseGo
+	].join(","))`
+	if err := runtime.Load(context.Background(), []runtimemodel.Script{javaScript(source)}, environment); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if got, want := message, "undefined,undefined,undefined,undefined,undefined,undefined,undefined"; got != want {
+		t.Fatalf("host globals = %q, want %q", got, want)
+	}
+}
+
+func TestRuntimeSerializesConcurrentPageEvents(t *testing.T) {
+	document, err := htmlparser.Parse(strings.NewReader(`<button id="counter">count</button>`))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	button, ok := document.GetElementByID("counter")
+	if !ok {
+		t.Fatal("counter button was not parsed")
+	}
+	dispatcher := events.NewDispatcher()
+	runtime := New()
+	t.Cleanup(func() { _ = runtime.Stop() })
+	environment := runtimemodel.Environment{Document: document, Events: dispatcher}
+	source := `
+		var eventCount = 0;
+		document.getElementById("counter").addEventListener("click", function () {
+			eventCount += 1;
+		});`
+	if err := runtime.Load(context.Background(), []runtimemodel.Script{javaScript(source)}, environment); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	const eventCount = 128
+	var wait sync.WaitGroup
+	wait.Add(eventCount)
+	for range eventCount {
+		go func() {
+			defer wait.Done()
+			if !runtime.DispatchPageEvent(func() bool {
+				return dispatcher.Dispatch(events.Event{Type: events.Click, Target: button.ID})
+			}) {
+				t.Errorf("DispatchPageEvent() = false, want true")
+			}
+		}()
+	}
+	wait.Wait()
+
+	var got int64
+	if err := runtime.runSync(context.Background(), func(vm *goja.Runtime) error {
+		got = vm.Get("eventCount").ToInteger()
+		return nil
+	}); err != nil {
+		t.Fatalf("read eventCount: %v", err)
+	}
+	if got != eventCount {
+		t.Fatalf("eventCount = %d, want %d", got, eventCount)
 	}
 }
 
