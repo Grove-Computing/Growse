@@ -65,6 +65,10 @@ func loadScriptsForEngine(ctx context.Context, client ResourceLoader, pageURL *u
 			loadErrors = append(loadErrors, fmt.Sprintf("resolve %s script %q: %v", engine, candidate.src, err))
 			continue
 		}
+		if !IsTrustedOrigin(scriptURL) || !network.SameOrigin(pageURL, scriptURL) {
+			loadErrors = append(loadErrors, fmt.Sprintf("block %s script from untrusted or cross-origin URL %s", engine, network.RedactedURL(scriptURL)))
+			continue
+		}
 		response, err := client.Get(ctx, scriptURL)
 		if err != nil {
 			loadErrors = append(loadErrors, fmt.Sprintf("load %s script %s: %v", engine, network.RedactedURL(scriptURL), err))
@@ -85,6 +89,10 @@ func loadScriptsForEngine(ctx context.Context, client ResourceLoader, pageURL *u
 		finalURL := response.URL
 		if finalURL == nil {
 			finalURL = scriptURL
+		}
+		if !IsTrustedOrigin(finalURL) || !network.SameOrigin(pageURL, finalURL) {
+			loadErrors = append(loadErrors, fmt.Sprintf("block redirected %s script from untrusted or cross-origin URL %s", engine, network.RedactedURL(finalURL)))
+			continue
 		}
 		totalBytes += len(response.Body)
 		scripts = append(scripts, Script{Engine: engine, SourceURL: cloneURL(finalURL), Source: string(response.Body)})

@@ -11,9 +11,9 @@ import (
 )
 
 func TestNavigateCollectsInlineAndExternalGoScripts(t *testing.T) {
-	pageURL := mustParseURL(t, "https://example.com/index.html")
-	externalURL := mustParseURL(t, "https://cdn.example.org/app.go")
-	missingURL := mustParseURL(t, "https://example.com/missing.go")
+	pageURL := mustParseURL(t, "http://localhost:8080/index.html")
+	externalURL := mustParseURL(t, "http://localhost:8080/app.go")
+	missingURL := mustParseURL(t, "http://localhost:8080/missing.go")
 	loader := &routeLoader{responses: map[string]*network.Response{
 		pageURL.String(): {
 			URL: pageURL, StatusCode: 200, ContentType: "text/html",
@@ -21,7 +21,7 @@ func TestNavigateCollectsInlineAndExternalGoScripts(t *testing.T) {
 <script>console.log("ignored")</script>
 <script type="text/go">package main
 func inline() {}</script>
-<script type="text/go" src="https://cdn.example.org/app.go">ignored inline fallback</script>
+<script type="text/go" src="/app.go">ignored inline fallback</script>
 <script type="text/go" src="/missing.go"></script>
 </body></html>`),
 		},
@@ -50,6 +50,33 @@ func inline() {}</script>
 	}
 	if !strings.Contains(page.ScriptErrors[0], missingURL.String()) {
 		t.Fatalf("script error = %q, want missing URL", page.ScriptErrors[0])
+	}
+}
+
+func TestLoadScriptsBlocksCrossOriginAndRedirectedSources(t *testing.T) {
+	pageURL := mustParseURL(t, "http://localhost:8080/index.html")
+	crossOriginURL := mustParseURL(t, "http://localhost:9090/cross.go")
+	redirectURL := mustParseURL(t, "http://localhost:8080/redirect.go")
+	redirectedFinalURL := mustParseURL(t, "http://127.0.0.1:8080/final.go")
+	document, err := html.Parse(strings.NewReader(`
+<script type="text/go" src="http://localhost:9090/cross.go"></script>
+<script type="text/go" src="/redirect.go"></script>`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	loader := &routeLoader{responses: map[string]*network.Response{
+		crossOriginURL.String(): {URL: crossOriginURL, StatusCode: 200, ContentType: "text/go", Body: []byte("package main")},
+		redirectURL.String():    {URL: redirectedFinalURL, StatusCode: 200, ContentType: "text/go", Body: []byte("package main")},
+	}}
+	scripts, loadErrors := loadScriptsForEngine(context.Background(), loader, pageURL, document, runtimemodel.EngineGo)
+	if len(scripts) != 0 || len(loadErrors) != 2 {
+		t.Fatalf("scripts=%v errors=%v, want no scripts and two policy errors", scripts, loadErrors)
+	}
+	if len(loader.requested) != 1 || loader.requested[0] != redirectURL.String() {
+		t.Fatalf("requested scripts=%v, want only same-origin redirect source", loader.requested)
+	}
+	if !strings.Contains(loadErrors[1], "redirected") {
+		t.Fatalf("redirect policy errors=%v", loadErrors)
 	}
 }
 
