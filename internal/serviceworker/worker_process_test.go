@@ -138,7 +138,6 @@ func TestServiceWorkerInternalFetchDoesNotRecurseAndSurvivesPageCloseCancellatio
 
 func TestServiceWorkerTimeoutIsContainedAndStopsOnlyTargetProcess(t *testing.T) {
 	manager := NewManager()
-	manager.taskTimeout = 50 * time.Millisecond
 	t.Cleanup(func() { _ = manager.Close() })
 	hangingClient := parseServiceWorkerURL(t, "https://hang.example/app/page")
 	hangingScript := parseServiceWorkerURL(t, "https://hang.example/app/sw.js")
@@ -149,6 +148,7 @@ func TestServiceWorkerTimeoutIsContainedAndStopsOnlyTargetProcess(t *testing.T) 
 	if _, err := manager.Register(context.Background(), hangingClient, hangingScript.String(), "", scriptResponse(hangingScript, &hangingSource)); err != nil {
 		t.Fatal(err)
 	}
+	manager.taskTimeout = 50 * time.Millisecond
 	_, err := manager.DispatchFetch(context.Background(), &network.Request{
 		Method: http.MethodGet, URL: parseServiceWorkerURL(t, "https://hang.example/app/data"), Kind: network.RequestNavigation,
 	}, func(context.Context, *network.Request) (*network.Response, error) {

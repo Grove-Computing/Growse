@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/Grove-Computing/Growse/internal/network"
@@ -39,7 +40,7 @@ func TestPersistentManagerRestoresRegistrationCacheUpdateAndUnregister(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o600 {
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("profile mode = %o", info.Mode().Perm())
 	}
 
