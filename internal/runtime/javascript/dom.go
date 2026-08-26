@@ -110,6 +110,7 @@ func (runtime *Runtime) dispatchLifecycleEvent(vm *goja.Runtime, eventType strin
 			runtime.recordError(fmt.Sprintf("JavaScript %s event handler: %v", eventType, err))
 		}
 	}
+	runtime.drainMicrotasks(vm)
 }
 
 func (runtime *Runtime) elementValue(vm *goja.Runtime, element *domapi.Element) goja.Value {

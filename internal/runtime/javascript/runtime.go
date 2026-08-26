@@ -26,6 +26,7 @@ const (
 	MaxEventListeners = 10_000
 	maxCallStackSize  = 1_000
 	callbackQueueSize = 64
+	maxMicrotaskQueue = 4_096
 )
 
 var errRuntimeStopped = errors.New("javascript runtime is stopped")
@@ -57,6 +58,8 @@ type Runtime struct {
 	abortSignals      map[*goja.Object]*fetchapi.AbortSignal
 	windowListeners   []listenerRecord
 	documentListeners []listenerRecord
+	microtasks        []goja.Value
+	maxMicrotasks     int
 
 	elements      map[*goja.Object]*domapi.Element
 	elementByID   map[uint64]*goja.Object
@@ -78,7 +81,7 @@ type listenerRecord struct {
 
 // New returns an unloaded page-scoped JavaScript Runtime.
 func New() *Runtime {
-	return &Runtime{maxListeners: MaxEventListeners}
+	return &Runtime{maxListeners: MaxEventListeners, maxMicrotasks: maxMicrotaskQueue}
 }
 
 // Load prepares a VM and host objects without evaluating Page scripts.
@@ -141,6 +144,7 @@ func (runtime *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script,
 	runtime.listeners = nil
 	runtime.windowListeners = nil
 	runtime.documentListeners = nil
+	runtime.microtasks = nil
 	runtime.listenerCount = 0
 	runtime.loaded = true
 	queue, done := runtime.queue, runtime.done
@@ -162,6 +166,9 @@ func (runtime *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script,
 			return err
 		}
 		if err := runtime.installNavigation(vm); err != nil {
+			return err
+		}
+		if err := runtime.installGlobals(vm); err != nil {
 			return err
 		}
 		return runtime.installScheduler(vm)
@@ -284,6 +291,7 @@ func (runtime *Runtime) Stop() error {
 	runtime.listeners = nil
 	runtime.windowListeners = nil
 	runtime.documentListeners = nil
+	runtime.microtasks = nil
 	runtime.listenerCount = 0
 	runtime.loaded = false
 	runtime.mu.Unlock()
@@ -331,14 +339,16 @@ func (runtime *Runtime) evaluateScripts(vm *goja.Runtime, scripts []runtimemodel
 		if script.SourceURL != nil {
 			name = network.RedactedURL(script.SourceURL)
 		}
-		if _, err := vm.RunScript(name, script.Source); err != nil {
+		_, scriptErr := vm.RunScript(name, script.Source)
+		runtime.drainMicrotasks(vm)
+		if scriptErr != nil {
 			runtime.mu.Lock()
 			runtimeContext := runtime.runtimeCtx
 			runtime.mu.Unlock()
 			if runtimeContext != nil && runtimeContext.Err() != nil {
 				return context.Cause(runtimeContext)
 			}
-			runtime.recordError(fmt.Sprintf("execute %s: %v", name, err))
+			runtime.recordError(fmt.Sprintf("execute %s: %v", name, scriptErr))
 		}
 	}
 	return nil
@@ -444,6 +454,9 @@ func (runtime *Runtime) run(ctx context.Context, vm *goja.Runtime, queue <-chan 
 			}
 			runtime.executing.Store(true)
 			err := executeTask(vm, queued.run)
+			if ctx.Err() == nil {
+				runtime.drainMicrotasks(vm)
+			}
 			runtime.executing.Store(false)
 			queued.result <- err
 		}

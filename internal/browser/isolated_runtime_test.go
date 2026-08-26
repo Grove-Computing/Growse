@@ -65,7 +65,11 @@ func TestBrowserExecutesExternalClassicJavaScriptOnOrdinaryHTTPSPage(t *testing.
 		},
 		scriptURL.String(): {
 			URL: scriptURL, StatusCode: 200, ContentType: "text/javascript",
-			Body: []byte(`document.getElementById("result").textContent = "external executed";`),
+			Body: []byte(`
+				if (window !== self || self !== globalThis || origin !== "https://www.example.test" || navigator.userAgent !== "Growse/0.14") {
+					throw new Error("invalid Page global");
+				}
+				queueMicrotask(function () { document.getElementById("result").textContent = "external executed"; });`),
 		},
 	}}
 	browserState := NewWithEngineFactory(loader, func(engine runtimemodel.Engine) runtimemodel.Runtime { return isolated.New(engine) })
