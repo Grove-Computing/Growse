@@ -108,7 +108,11 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 		}
 	})
 	dom := domapi.New(environment.Document, environment.Events, environment.OnMutation)
-	fetch := fetchapi.NewPage(r.runtimeCtx, environment.BaseURL, environment.Fetch, r.enqueueCallback)
+	resourceBaseURL := environment.ResourceBaseURL
+	if resourceBaseURL == nil {
+		resourceBaseURL = environment.BaseURL
+	}
+	fetch := fetchapi.NewPage(r.runtimeCtx, resourceBaseURL, environment.Fetch, r.enqueueCallback)
 	fetch.SetLimiter(environment.FetchLimiter)
 	navigation := navigationapi.NewPage(environment.BaseURL, environment.Navigate)
 	navigation.SetPushStateHandler(environment.HistoryPush)

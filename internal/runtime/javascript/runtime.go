@@ -132,10 +132,14 @@ func (runtime *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script,
 	runtime.scripts = cloneScripts(scripts)
 	runtime.environment = environment
 	runtime.domAPI = domapi.New(environment.Document, environment.Events, environment.OnMutation)
+	resourceBaseURL := environment.ResourceBaseURL
+	if resourceBaseURL == nil {
+		resourceBaseURL = environment.BaseURL
+	}
 	if runtime.fetchClock != nil {
-		runtime.fetchAPI = fetchapi.NewPageWithClock(runtimeContext, environment.BaseURL, environment.Fetch, runtime.enqueueCallback, runtime.fetchClock)
+		runtime.fetchAPI = fetchapi.NewPageWithClock(runtimeContext, resourceBaseURL, environment.Fetch, runtime.enqueueCallback, runtime.fetchClock)
 	} else {
-		runtime.fetchAPI = fetchapi.NewPage(runtimeContext, environment.BaseURL, environment.Fetch, runtime.enqueueCallback)
+		runtime.fetchAPI = fetchapi.NewPage(runtimeContext, resourceBaseURL, environment.Fetch, runtime.enqueueCallback)
 	}
 	runtime.fetchAPI.SetLimiter(environment.FetchLimiter)
 	runtime.navigationAPI = navigationapi.NewPage(environment.BaseURL, environment.Navigate)

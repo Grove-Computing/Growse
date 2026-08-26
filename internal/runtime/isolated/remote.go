@@ -112,6 +112,9 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 	if environment.BaseURL != nil {
 		request.BaseURL = publicRuntimeURL(environment.BaseURL).String()
 	}
+	if environment.ResourceBaseURL != nil {
+		request.ResourceBaseURL = publicRuntimeURL(environment.ResourceBaseURL).String()
+	}
 	if environment.LocalStorage != nil {
 		request.LocalStorage = environment.LocalStorage.Entries()
 	}

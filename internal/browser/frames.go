@@ -125,7 +125,7 @@ func (state *frameLoadState) loadOne(parentPage *Page, element *dom.Node, parent
 		return frame
 	}
 
-	response, err := state.frameResponse(frameContext, parentPage.URL, element)
+	response, err := state.frameResponse(frameContext, pageBaseURL(parentPage), element)
 	if err != nil {
 		frame.LoadError = err.Error()
 		return frame
@@ -216,6 +216,7 @@ func (state *frameLoadState) buildPage(ctx context.Context, response *network.Re
 	if err != nil {
 		return nil, fmt.Errorf("build iframe DOM: %w", err)
 	}
+	baseURL := documentBaseURL(document, response.URL)
 	pageStore := state.browser.newDevToolsPageStore()
 	styleResources, imageResources, scriptResources := state.resourceClient, state.resourceClient, state.resourceClient
 	if loader, ok := state.resourceClient.(requestLoader); ok {
@@ -223,7 +224,7 @@ func (state *frameLoadState) buildPage(ctx context.Context, response *network.Re
 		imageResources = pageResourceLoader{loader: loader, siteURL: response.URL, kind: network.RequestImage, observer: pageStore.ObserveNetwork}
 		scriptResources = pageResourceLoader{loader: loader, siteURL: response.URL, kind: network.RequestScript, engine: string(state.engine), observer: pageStore.ObserveNetwork}
 	}
-	stylesheet, err := state.browser.loadStyles(ctx, styleResources, response.URL, document)
+	stylesheet, err := state.browser.loadStylesWithBase(ctx, styleResources, response.URL, baseURL, document)
 	if err != nil {
 		pageStore.Close()
 		return nil, fmt.Errorf("load iframe styles: %w", err)
@@ -237,15 +238,15 @@ func (state *frameLoadState) buildPage(ctx context.Context, response *network.Re
 	var scriptErrors []string
 	var importMap map[string]string
 	if policy.AllowsScripts() {
-		scripts, scriptErrors = loadScriptsForEngine(ctx, scriptResources, response.URL, document, state.engine)
+		scripts, scriptErrors = loadScriptsForEngineWithBase(ctx, scriptResources, response.URL, baseURL, document, state.engine)
 	}
 	if policy.AllowsScripts() && state.engine == runtimemodel.EngineJavaScript {
 		var importErrors []string
-		importMap, importErrors = loadImportMap(document, response.URL)
+		importMap, importErrors = loadImportMap(document, baseURL)
 		scriptErrors = append(scriptErrors, importErrors...)
 	}
 	page := &Page{
-		URL: cloneURL(response.URL), StatusCode: response.StatusCode, ContentType: response.ContentType, Source: append([]byte(nil), response.Body...),
+		URL: cloneURL(response.URL), BaseURL: cloneURL(baseURL), StatusCode: response.StatusCode, ContentType: response.ContentType, Source: append([]byte(nil), response.Body...),
 		Document: document, Events: events.NewDispatcher(), Stylesheet: stylesheet, ComputedStyles: computed,
 		Animations: style.NewAnimationRegistry(), Transitions: style.NewTransitionRegistry(), BackgroundImages: backgroundImages,
 		BackgroundErrors: backgroundErrors, Engine: state.engine, Scripts: scripts, ImportMap: importMap, ScriptErrors: scriptErrors,

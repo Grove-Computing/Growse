@@ -10,9 +10,40 @@ import (
 	"github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/events"
 	htmlparser "github.com/Grove-Computing/Growse/internal/html"
+	"github.com/Grove-Computing/Growse/internal/network"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 	storagecore "github.com/Grove-Computing/Growse/internal/storage"
 )
+
+func TestIsolatedJavaScriptFetchUsesDocumentResourceBaseURL(t *testing.T) {
+	documentURL := mustURL(t, "https://example.test/root/page.html")
+	resourceBaseURL := mustURL(t, "https://example.test/assets/")
+	requests := make(chan *network.Request, 1)
+	runtime := New(runtimemodel.EngineJavaScript)
+	t.Cleanup(func() { _ = runtime.Stop() })
+	environment := runtimemodel.Environment{
+		Document: dom.NewDocument(), Events: events.NewDispatcher(), BaseURL: documentURL, ResourceBaseURL: resourceBaseURL,
+		Fetch: func(_ context.Context, request *network.Request) (*network.Response, error) {
+			requests <- request
+			return &network.Response{URL: request.URL, StatusCode: 200, Body: []byte("ok")}, nil
+		},
+	}
+	script := runtimemodel.Script{Engine: runtimemodel.EngineJavaScript, SourceURL: documentURL, Source: `fetch("data.json")`, Inline: true}
+	if err := runtime.Load(context.Background(), []runtimemodel.Script{script}, environment); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case request := <-requests:
+		if got, want := request.URL.String(), "https://example.test/assets/data.json"; got != want {
+			t.Fatalf("isolated Fetch URL = %q, want %q", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("isolated Fetch did not reach the Browser broker")
+	}
+}
 
 func TestIsolatedJavaScriptPreservesDOMEventStorageAndConsoleBehavior(t *testing.T) {
 	document, err := htmlparser.Parse(strings.NewReader(`<button id="target">idle</button>`))

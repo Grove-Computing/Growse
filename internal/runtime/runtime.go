@@ -87,6 +87,7 @@ type Environment struct {
 	Document        *dom.Document
 	Events          *events.Dispatcher
 	BaseURL         *url.URL
+	ResourceBaseURL *url.URL
 	ImportMap       map[string]string
 	Fetch           func(context.Context, *network.Request) (*network.Response, error)
 	FetchLimiter    *fetchapi.Limiter

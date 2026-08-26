@@ -32,6 +32,10 @@ type stylesheetLoadState struct {
 }
 
 func (b *Browser) loadStyles(ctx context.Context, client ResourceLoader, pageURL *url.URL, document *dom.Document) (*css.Stylesheet, error) {
+	return b.loadStylesWithBase(ctx, client, pageURL, pageURL, document)
+}
+
+func (b *Browser) loadStylesWithBase(ctx context.Context, client ResourceLoader, pageURL, baseURL *url.URL, document *dom.Document) (*css.Stylesheet, error) {
 	combined := &css.Stylesheet{}
 	state := &stylesheetLoadState{client: client, origin: pageURL, activeURLs: make(map[string]bool)}
 	for _, source := range collectStylesheets(document.Root) {
@@ -40,14 +44,14 @@ func (b *Browser) loadStyles(ctx context.Context, client ResourceLoader, pageURL
 			if !state.consumeBytes(len(content)) {
 				continue
 			}
-			parsed, err := state.loadContent(ctx, content, pageURL, 0)
+			parsed, err := state.loadContent(ctx, content, baseURL, 0)
 			if err != nil {
 				return nil, fmt.Errorf("parse stylesheet: %w", err)
 			}
 			combined.Append(parsed)
 			continue
 		}
-		stylesheetURL, err := pageURL.Parse(source.href)
+		stylesheetURL, err := baseURL.Parse(source.href)
 		if err != nil {
 			continue
 		}

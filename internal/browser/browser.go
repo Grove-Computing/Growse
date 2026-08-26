@@ -863,7 +863,7 @@ func (b *Browser) SubmitGET(ctx context.Context, formID, submitterID dom.NodeID)
 		return nil, errors.New("form is not a GET submission")
 	}
 	entries := forms.CollectEntries(page.Document, form, submitter)
-	baseURL := cloneURL(page.URL)
+	baseURL := cloneURL(pageBaseURL(page))
 	b.mu.RUnlock()
 
 	target, err := resolveFormAction(baseURL, config.Action)
@@ -906,7 +906,7 @@ func (b *Browser) SubmitPOST(ctx context.Context, formID, submitterID dom.NodeID
 		return nil, errors.New("unsupported POST form configuration")
 	}
 	entries := forms.CollectEntries(page.Document, form, submitter)
-	target, err := resolveFormAction(page.URL, config.Action)
+	target, err := resolveFormAction(pageBaseURL(page), config.Action)
 	if err != nil {
 		b.mu.Unlock()
 		return nil, err
@@ -1284,6 +1284,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	if err != nil {
 		return nil, fmt.Errorf("build DOM for %s: %w", network.RedactedURL(pageURL), err)
 	}
+	baseURL := documentBaseURL(document, response.URL)
 	styleResources := resourceClient
 	imageResources := resourceClient
 	scriptResources := resourceClient
@@ -1293,7 +1294,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 		imageResources = pageResourceLoader{loader: loader, siteURL: response.URL, kind: network.RequestImage, observer: pageStore.ObserveNetwork}
 		scriptResources = pageResourceLoader{loader: loader, siteURL: response.URL, kind: network.RequestScript, engine: string(engine), observer: pageStore.ObserveNetwork}
 	}
-	stylesheet, err := b.loadStyles(ctx, styleResources, response.URL, document)
+	stylesheet, err := b.loadStylesWithBase(ctx, styleResources, response.URL, baseURL, document)
 	if err != nil {
 		return nil, fmt.Errorf("load styles for %s: %w", network.RedactedURL(pageURL), err)
 	}
@@ -1302,16 +1303,17 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 		ColorScheme: "light", Hover: true, Pointer: "fine", ReducedMotion: reducedMotion,
 	})
 	backgroundImages, backgroundErrors := loadBackgroundImages(ctx, imageResources, computedStyles)
-	scripts, scriptErrors := loadScriptsForEngine(ctx, scriptResources, response.URL, document, engine)
+	scripts, scriptErrors := loadScriptsForEngineWithBase(ctx, scriptResources, response.URL, baseURL, document, engine)
 	var importMap map[string]string
 	if engine == runtimemodel.EngineJavaScript {
 		var importMapErrors []string
-		importMap, importMapErrors = loadImportMap(document, response.URL)
+		importMap, importMapErrors = loadImportMap(document, baseURL)
 		scriptErrors = append(scriptErrors, importMapErrors...)
 	}
 
 	page := &Page{
 		URL:              cloneURL(response.URL),
+		BaseURL:          cloneURL(baseURL),
 		StatusCode:       response.StatusCode,
 		ContentType:      response.ContentType,
 		Source:           append([]byte(nil), response.Body...),
@@ -1684,6 +1686,7 @@ func startRuntime(ctx context.Context, factory runtimemodel.EngineFactory, engin
 		Document:        page.Document,
 		Events:          page.Events,
 		BaseURL:         cloneURL(page.URL),
+		ResourceBaseURL: cloneURL(pageBaseURL(page)),
 		ImportMap:       cloneStringMap(page.ImportMap),
 		FetchLimiter:    fetchLimiter,
 		Navigate:        navigate,
