@@ -20,6 +20,7 @@ type sandboxStatusResponse struct {
 
 type wireScript struct {
 	Engine        runtimemodel.Engine         `json:"engine"`
+	Kind          runtimemodel.ScriptKind     `json:"kind,omitempty"`
 	SourceURL     string                      `json:"sourceUrl,omitempty"`
 	Source        string                      `json:"source"`
 	Inline        bool                        `json:"inline,omitempty"`

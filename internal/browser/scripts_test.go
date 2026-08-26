@@ -112,19 +112,36 @@ func TestCollectJavaScriptRecognizesDefaultAndExplicitTypes(t *testing.T) {
 <script type="">second()</script>
 <script type="text/javascript" src="app.js"></script>
 <script type="application/javascript">fourth()</script>
-<script type="module">ignored()</script>
+<script type="module">fifth()</script>
 <script type="text/go">package main</script>
 `))
 	if err != nil {
 		t.Fatal(err)
 	}
 	sources := collectScriptsForEngine(document.Root, runtimemodel.EngineJavaScript)
-	if got, want := len(sources), 4; got != want {
+	if got, want := len(sources), 5; got != want {
 		t.Fatalf("JavaScript source count = %d, want %d", got, want)
 	}
 	if strings.TrimSpace(sources[0].source) != "first()" || strings.TrimSpace(sources[1].source) != "second()" ||
-		sources[2].src != "app.js" || strings.TrimSpace(sources[3].source) != "fourth()" {
+		sources[2].src != "app.js" || strings.TrimSpace(sources[3].source) != "fourth()" ||
+		sources[4].kind != runtimemodel.ScriptModule || sources[4].schedule != runtimemodel.ScriptDefer || strings.TrimSpace(sources[4].source) != "fifth()" {
 		t.Fatalf("JavaScript sources = %#v", sources)
+	}
+}
+
+func TestJavaScriptModuleUsesCORSAndDeferredScheduling(t *testing.T) {
+	pageURL := mustParseURL(t, "https://site.example/page")
+	moduleURL := mustParseURL(t, "https://cdn.example/app.js")
+	document, _ := html.Parse(strings.NewReader(`<script type="module" src="https://cdn.example/app.js"></script>`))
+	loader := &requestRouteLoader{routeLoader: routeLoader{responses: map[string]*network.Response{
+		moduleURL.String(): {URL: moduleURL, StatusCode: 200, ContentType: "text/javascript", Body: []byte(`export const ready = true`)},
+	}}}
+	scripts, loadErrors := loadScriptsForEngine(context.Background(), loader, pageURL, document, runtimemodel.EngineJavaScript)
+	if len(loadErrors) != 0 || len(scripts) != 1 || scripts[0].Kind != runtimemodel.ScriptModule || scripts[0].Schedule != runtimemodel.ScriptDefer {
+		t.Fatalf("scripts=%#v errors=%v", scripts, loadErrors)
+	}
+	if loader.request == nil || loader.request.Kind != network.RequestModule || !loader.request.CORS || loader.request.Credentials != network.CredentialsSameOrigin {
+		t.Fatalf("module request = %#v", loader.request)
 	}
 }
 

@@ -1168,7 +1168,9 @@ func (loader pageResourceLoader) Do(ctx context.Context, request *network.Reques
 	copy := *request
 	copy.Header = request.Header.Clone()
 	copy.SiteURL = cloneURL(loader.siteURL)
-	copy.Kind = loader.kind
+	if loader.kind != network.RequestScript || request.Kind != network.RequestModule {
+		copy.Kind = loader.kind
+	}
 	copy.Engine = loader.engine
 	copy.Observer = loader.observer
 	return loader.loader.Do(ctx, &copy)

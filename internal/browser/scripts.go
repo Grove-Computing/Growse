@@ -25,6 +25,7 @@ const (
 
 type scriptSource struct {
 	engine      runtimemodel.Engine
+	kind        runtimemodel.ScriptKind
 	inline      bool
 	source      string
 	src         string
@@ -96,7 +97,7 @@ func loadScriptsForEngine(ctx context.Context, client ResourceLoader, pageURL *u
 }
 
 func loadScriptCandidate(ctx context.Context, client ResourceLoader, pageURL *url.URL, engine runtimemodel.Engine, candidate scriptSource, documentOrder int) (Script, int, error) {
-	script := Script{Engine: engine, Schedule: candidate.schedule, DocumentOrder: documentOrder}
+	script := Script{Engine: engine, Kind: candidate.kind, Schedule: candidate.schedule, DocumentOrder: documentOrder}
 	if candidate.inline {
 		if len(candidate.source) > maxScriptBytes {
 			return Script{}, 0, fmt.Errorf("inline %s script exceeds %d bytes", engine, maxScriptBytes)
@@ -120,10 +121,18 @@ func loadScriptCandidate(ctx context.Context, client ResourceLoader, pageURL *ur
 		return Script{}, 0, fmt.Errorf("block %s script from untrusted or cross-origin URL %s", engine, network.RedactedURL(scriptURL))
 	}
 	credentials := scriptCredentials(candidate)
-	if engine == runtimemodel.EngineJavaScript && candidate.integrity != "" && !network.SameOrigin(pageURL, scriptURL) && !candidate.hasCORS {
+	if candidate.kind == runtimemodel.ScriptModule && candidate.crossOrigin != "use-credentials" {
+		credentials = network.CredentialsSameOrigin
+	}
+	if engine == runtimemodel.EngineJavaScript && candidate.kind != runtimemodel.ScriptModule && candidate.integrity != "" && !network.SameOrigin(pageURL, scriptURL) && !candidate.hasCORS {
 		return Script{}, 0, fmt.Errorf("cross-origin JavaScript integrity requires crossorigin for %s", network.RedactedURL(scriptURL))
 	}
-	response, err := loadScriptResource(ctx, client, scriptURL, candidate.hasCORS, credentials)
+	cors := candidate.hasCORS || candidate.kind == runtimemodel.ScriptModule
+	requestKind := network.RequestScript
+	if candidate.kind == runtimemodel.ScriptModule {
+		requestKind = network.RequestModule
+	}
+	response, err := loadScriptResource(ctx, client, scriptURL, requestKind, cors, credentials)
 	if err != nil {
 		return Script{}, 0, fmt.Errorf("load %s script %s: %v", engine, network.RedactedURL(scriptURL), err)
 	}
@@ -150,7 +159,7 @@ func loadScriptCandidate(ctx context.Context, client ResourceLoader, pageURL *ur
 		return Script{}, 0, fmt.Errorf("block redirected %s script from untrusted or cross-origin URL %s", engine, network.RedactedURL(finalURL))
 	}
 	if engine == runtimemodel.EngineJavaScript {
-		if candidate.integrity != "" && !network.SameOrigin(pageURL, finalURL) && !candidate.hasCORS {
+		if candidate.kind != runtimemodel.ScriptModule && candidate.integrity != "" && !network.SameOrigin(pageURL, finalURL) && !candidate.hasCORS {
 			return Script{}, 0, fmt.Errorf("redirected cross-origin JavaScript integrity requires crossorigin for %s", network.RedactedURL(finalURL))
 		}
 		if err := verifyScriptIntegrity(response.Body, candidate.integrity); err != nil {
@@ -158,7 +167,7 @@ func loadScriptCandidate(ctx context.Context, client ResourceLoader, pageURL *ur
 		}
 	}
 	script = Script{
-		Engine: engine, SourceURL: cloneURL(finalURL), Source: string(response.Body),
+		Engine: engine, Kind: candidate.kind, SourceURL: cloneURL(finalURL), Source: string(response.Body),
 		Integrity: candidate.integrity, CrossOrigin: candidate.crossOrigin, Schedule: candidate.schedule, DocumentOrder: documentOrder,
 	}
 	return script, len(response.Body), nil
@@ -178,7 +187,8 @@ func collectScriptsForEngine(root *dom.Node, engine runtimemodel.Engine) []scrip
 		}
 		if node.Type == dom.NodeElement && node.TagName == "script" {
 			typeValue, hasType := node.Attribute("type")
-			if scriptEngine(typeValue, hasType) == engine {
+			scriptEngine, kind := classifyScript(typeValue, hasType)
+			if scriptEngine == engine {
 				src, _ := node.Attribute("src")
 				src = strings.TrimSpace(src)
 				if src != "" {
@@ -186,6 +196,8 @@ func collectScriptsForEngine(root *dom.Node, engine runtimemodel.Engine) []scrip
 					if engine == runtimemodel.EngineJavaScript {
 						if _, async := node.Attribute("async"); async {
 							schedule = runtimemodel.ScriptAsync
+						} else if kind == runtimemodel.ScriptModule {
+							schedule = runtimemodel.ScriptDefer
 						} else if _, deferred := node.Attribute("defer"); deferred {
 							schedule = runtimemodel.ScriptDefer
 						}
@@ -193,13 +205,18 @@ func collectScriptsForEngine(root *dom.Node, engine runtimemodel.Engine) []scrip
 					integrity, _ := node.Attribute("integrity")
 					crossOrigin, hasCORS := node.Attribute("crossorigin")
 					result = append(result, scriptSource{
-						engine: engine, src: src, integrity: strings.TrimSpace(integrity),
+						engine: engine, kind: kind, src: src, integrity: strings.TrimSpace(integrity),
 						crossOrigin: normalizeCrossOrigin(crossOrigin, hasCORS), hasCORS: hasCORS, schedule: schedule,
 					})
 				} else {
-					result = append(result, scriptSource{
-						engine: engine, inline: true, source: node.TextContent(), schedule: runtimemodel.ScriptParserBlocking,
-					})
+					schedule := runtimemodel.ScriptParserBlocking
+					if kind == runtimemodel.ScriptModule {
+						schedule = runtimemodel.ScriptDefer
+						if _, async := node.Attribute("async"); async {
+							schedule = runtimemodel.ScriptAsync
+						}
+					}
+					result = append(result, scriptSource{engine: engine, kind: kind, inline: true, source: node.TextContent(), schedule: schedule})
 				}
 			}
 		}
@@ -212,21 +229,29 @@ func collectScriptsForEngine(root *dom.Node, engine runtimemodel.Engine) []scrip
 }
 
 func scriptEngine(value string, hasType bool) runtimemodel.Engine {
+	engine, _ := classifyScript(value, hasType)
+	return engine
+}
+
+func classifyScript(value string, hasType bool) (runtimemodel.Engine, runtimemodel.ScriptKind) {
 	value = strings.TrimSpace(value)
 	if !hasType || value == "" {
-		return runtimemodel.EngineJavaScript
+		return runtimemodel.EngineJavaScript, runtimemodel.ScriptClassic
+	}
+	if strings.EqualFold(value, "module") {
+		return runtimemodel.EngineJavaScript, runtimemodel.ScriptModule
 	}
 	mediaType, _, err := mime.ParseMediaType(value)
 	if err != nil {
-		return ""
+		return "", ""
 	}
 	switch strings.ToLower(mediaType) {
 	case "text/go":
-		return runtimemodel.EngineGo
+		return runtimemodel.EngineGo, runtimemodel.ScriptClassic
 	case "text/javascript", "application/javascript":
-		return runtimemodel.EngineJavaScript
+		return runtimemodel.EngineJavaScript, runtimemodel.ScriptClassic
 	default:
-		return ""
+		return "", ""
 	}
 }
 
@@ -290,10 +315,10 @@ func scriptCredentials(source scriptSource) network.CredentialsMode {
 	return network.CredentialsInclude
 }
 
-func loadScriptResource(ctx context.Context, client ResourceLoader, target *url.URL, cors bool, credentials network.CredentialsMode) (*network.Response, error) {
+func loadScriptResource(ctx context.Context, client ResourceLoader, target *url.URL, kind network.RequestKind, cors bool, credentials network.CredentialsMode) (*network.Response, error) {
 	if loader, ok := client.(requestLoader); ok {
 		return loader.Do(ctx, &network.Request{
-			Method: http.MethodGet, URL: target, Kind: network.RequestScript, CORS: cors, Credentials: credentials,
+			Method: http.MethodGet, URL: target, Kind: kind, CORS: cors, Credentials: credentials,
 		})
 	}
 	return client.Get(ctx, target)

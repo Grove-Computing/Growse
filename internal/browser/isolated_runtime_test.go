@@ -120,6 +120,52 @@ func TestBrowserExecutesCORSAndIntegrityCheckedClassicJavaScript(t *testing.T) {
 	}
 }
 
+func TestBrowserExecutesCrossOriginModuleGraphInIsolatedWorker(t *testing.T) {
+	allowedOrigin := ""
+	moduleServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
+		response.Header().Set("Content-Type", "text/javascript")
+		switch request.URL.Path {
+		case "/main.js":
+			_, _ = response.Write([]byte(`import { value } from "./dependency.js"; document.getElementById("result").textContent = value;`))
+		case "/dependency.js":
+			_, _ = response.Write([]byte(`export const value = "module graph executed";`))
+		default:
+			http.NotFound(response, request)
+		}
+	}))
+	defer moduleServer.Close()
+	pageServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.Header().Set("Content-Type", "text/html")
+		_, _ = response.Write([]byte(`<p id="result">idle</p><script type="module" src="` + moduleServer.URL + `/main.js"></script>`))
+	}))
+	defer pageServer.Close()
+	allowedOrigin = pageServer.URL
+
+	browserState := NewWithEngineFactory(network.NewClient(), func(engine runtimemodel.Engine) runtimemodel.Runtime { return isolated.New(engine) })
+	t.Cleanup(func() { _ = browserState.Close() })
+	if _, err := browserState.SetEngine(context.Background(), runtimemodel.EngineJavaScript); err != nil {
+		t.Fatal(err)
+	}
+	page, err := browserState.Navigate(context.Background(), pageServer.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, _ := page.Document.GetElementByID("result")
+	if got := result.TextContent(); got != "module graph executed" || !page.RuntimeStarted || page.RuntimeError != "" || len(page.ScriptErrors) != 0 {
+		t.Fatalf("cross-origin module = text:%q started:%t runtimeError:%q scriptErrors:%v", got, page.RuntimeStarted, page.RuntimeError, page.ScriptErrors)
+	}
+	moduleRecords := 0
+	for _, record := range page.DevTools.Network() {
+		if record.Kind == "module" {
+			moduleRecords++
+		}
+	}
+	if moduleRecords != 2 {
+		t.Fatalf("module Network records = %d, want 2", moduleRecords)
+	}
+}
+
 func TestBrowserContinuesValidJavaScriptAfterIndependentLoadFailure(t *testing.T) {
 	pageURL := mustParseURL(t, "https://www.example.test/page")
 	loader := &routeLoader{responses: map[string]*network.Response{

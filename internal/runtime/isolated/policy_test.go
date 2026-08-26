@@ -46,6 +46,28 @@ func TestBrokerOverwritesWorkerControlledRequestAuthority(t *testing.T) {
 	}
 }
 
+func TestBrokerForcesModuleFetchPolicy(t *testing.T) {
+	pageURL := parsePolicyURL(t, "https://app.example/page")
+	request := &network.Request{
+		Method: http.MethodGet, URL: parsePolicyURL(t, "https://cdn.example/module.js"),
+		Kind: network.RequestModule, Engine: "forged", Credentials: network.CredentialsInclude,
+	}
+	if err := validateBrokeredFetch(request, pageURL, "javascript"); err != nil {
+		t.Fatalf("validateBrokeredFetch() error = %v", err)
+	}
+	if request.Kind != network.RequestModule || !request.CORS || request.Credentials != network.CredentialsInclude || request.Engine != "javascript" {
+		t.Fatalf("module broker policy = %#v", request)
+	}
+	for _, invalid := range []*network.Request{
+		{Method: http.MethodPost, URL: request.URL, Kind: network.RequestModule},
+		{Method: http.MethodGet, URL: request.URL, Kind: network.RequestModule, Header: http.Header{"X-Test": {"value"}}},
+	} {
+		if err := validateBrokeredFetch(invalid, pageURL, "javascript"); err == nil {
+			t.Fatalf("invalid module request passed: %#v", invalid)
+		}
+	}
+}
+
 func TestWorkerEnvironmentDoesNotInheritBrowserSecrets(t *testing.T) {
 	const secretName = "GROWSE_TEST_BROWSER_SECRET"
 	t.Setenv(secretName, "credential")

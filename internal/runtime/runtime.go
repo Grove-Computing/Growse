@@ -20,6 +20,9 @@ type Engine string
 // loading. The zero value is parser-blocking for compatibility.
 type ScriptSchedule string
 
+// ScriptKind distinguishes classic scripts from ECMAScript modules.
+type ScriptKind string
+
 const (
 	EngineGo         Engine = "go"
 	EngineJavaScript Engine = "javascript"
@@ -27,6 +30,9 @@ const (
 	ScriptParserBlocking ScriptSchedule = "parser-blocking"
 	ScriptDefer          ScriptSchedule = "defer"
 	ScriptAsync          ScriptSchedule = "async"
+
+	ScriptClassic ScriptKind = "classic"
+	ScriptModule  ScriptKind = "module"
 )
 
 // NormalizeEngine は既存呼び出しのzero valueをGoとして扱う。
@@ -50,6 +56,7 @@ func (engine Engine) Valid() bool {
 // Script は文書内で見つかった1つの実行ソースを表す。
 type Script struct {
 	Engine        Engine
+	Kind          ScriptKind
 	SourceURL     *url.URL
 	Source        string
 	Inline        bool

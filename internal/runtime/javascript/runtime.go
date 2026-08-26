@@ -24,6 +24,7 @@ import (
 
 const (
 	MaxEventListeners = 10_000
+	maxModuleBytes    = 2 << 20
 	maxCallStackSize  = 1_000
 	callbackQueueSize = 64
 	maxMicrotaskQueue = 4_096
@@ -339,7 +340,19 @@ func (runtime *Runtime) evaluateScripts(vm *goja.Runtime, scripts []runtimemodel
 		if script.SourceURL != nil {
 			name = network.RedactedURL(script.SourceURL)
 		}
-		_, scriptErr := vm.RunScript(name, script.Source)
+		source := script.Source
+		if script.Kind == runtimemodel.ScriptModule {
+			runtime.mu.Lock()
+			runtimeContext, environment := runtime.runtimeCtx, runtime.environment
+			runtime.mu.Unlock()
+			var bundleErr error
+			source, bundleErr = bundleModule(runtimeContext, script, environment)
+			if bundleErr != nil {
+				runtime.recordError(fmt.Sprintf("link %s: %v", name, bundleErr))
+				continue
+			}
+		}
+		_, scriptErr := vm.RunScript(name, source)
 		runtime.drainMicrotasks(vm)
 		if scriptErr != nil {
 			runtime.mu.Lock()
