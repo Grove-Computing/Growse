@@ -398,7 +398,7 @@ func TestBrowsersShareServiceWorkerProfileAcrossTabs(t *testing.T) {
 	}
 	first := newTab()
 	second := newTab()
-	t.Cleanup(func() { _ = first.Close(); _ = second.Close() })
+	t.Cleanup(func() { _ = first.Close(); _ = second.Close(); _ = profile.Close() })
 	if _, err := first.SetEngine(context.Background(), runtimemodel.EngineJavaScript); err != nil {
 		t.Fatal(err)
 	}
@@ -406,6 +406,9 @@ func TestBrowsersShareServiceWorkerProfileAcrossTabs(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := first.Navigate(context.Background(), installURL.String()); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Close(); err != nil {
 		t.Fatal(err)
 	}
 	page, err := second.Navigate(context.Background(), controlledURL.String())

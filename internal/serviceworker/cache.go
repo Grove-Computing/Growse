@@ -52,6 +52,20 @@ type Cache struct {
 	name    string
 }
 
+func (storage *CacheStorage) cache(origin, name string) (*Cache, bool) {
+	if storage == nil {
+		return nil, false
+	}
+	storage.mu.RLock()
+	partition := storage.origins[origin]
+	found := partition != nil && partition.buckets[name] != nil
+	storage.mu.RUnlock()
+	if !found {
+		return nil, false
+	}
+	return &Cache{storage: storage, origin: origin, name: name}, true
+}
+
 func newCacheStorage() *CacheStorage {
 	return &CacheStorage{origins: make(map[string]*originCaches)}
 }

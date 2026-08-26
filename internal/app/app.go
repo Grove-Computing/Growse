@@ -55,6 +55,7 @@ func runWindow(window *gioapp.Window) error {
 	} else {
 		log.Printf("Browser profile data directoryを解決できませんでした: %v", dataRootErr)
 	}
+	defer serviceWorkerManager.Close()
 	networkClient := network.NewClient()
 	if cacheRoot, err := network.DefaultCacheRoot(); err == nil {
 		if persistent, persistentErr := network.NewClientWithCacheRoot(nil, 0, cacheRoot); persistentErr == nil {

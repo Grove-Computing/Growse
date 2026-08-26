@@ -12,6 +12,7 @@ import (
 	"path"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Grove-Computing/Growse/internal/network"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
@@ -57,15 +58,23 @@ type Manager struct {
 	mu            sync.RWMutex
 	operationMu   sync.Mutex
 	persistMu     sync.Mutex
+	workerMu      sync.Mutex
 	registrations map[string]*registration
 	nextID        uint64
 	caches        *CacheStorage
 	dataDir       string
+	workers       map[string]*serviceWorkerProcess
+	idleTimeout   time.Duration
+	taskTimeout   time.Duration
+	workerStarts  uint64
 }
 
 // NewManager creates an empty in-memory registration store.
 func NewManager() *Manager {
-	return &Manager{registrations: make(map[string]*registration), caches: newCacheStorage()}
+	return &Manager{
+		registrations: make(map[string]*registration), caches: newCacheStorage(), workers: make(map[string]*serviceWorkerProcess),
+		idleTimeout: defaultServiceWorkerIdleTimeout, taskTimeout: defaultServiceWorkerTaskTimeout,
+	}
 }
 
 // Caches returns the origin-partitioned Cache Storage owned by this profile.
@@ -135,7 +144,7 @@ func (manager *Manager) Register(ctx context.Context, clientURL *url.URL, script
 	}
 	activateWithoutWaiting := existing == nil || !existing.active
 	manager.mu.Unlock()
-	lifecycle, err := evaluateLifecycle(ctx, response.Body, activateWithoutWaiting, response.URL, manager.Caches(), NetworkFallback(fetch))
+	candidate, lifecycle, err := manager.startCandidateWorker(ctx, key, origin, response.URL, response.Body, activateWithoutWaiting, NetworkFallback(fetch))
 	if err != nil {
 		return runtimemodel.ServiceWorkerRegistration{}, err
 	}
@@ -148,7 +157,8 @@ func (manager *Manager) Register(ctx context.Context, clientURL *url.URL, script
 	}
 	existing.scriptURL = cloneURL(response.URL)
 	existing.generation++
-	if !existing.active || lifecycle.skipWaiting {
+	activateCandidate := !existing.active || lifecycle.skipWaiting
+	if activateCandidate {
 		existing.active = true
 		existing.waiting = false
 		existing.activeURL = cloneURL(response.URL)
@@ -166,6 +176,11 @@ func (manager *Manager) Register(ctx context.Context, clientURL *url.URL, script
 	}
 	value := snapshot(existing)
 	manager.mu.Unlock()
+	if activateCandidate {
+		manager.installServiceWorker(key, candidate)
+	} else {
+		candidate.stop()
+	}
 	if err := manager.persistOrigin(origin); err != nil {
 		return runtimemodel.ServiceWorkerRegistration{}, err
 	}
@@ -195,6 +210,7 @@ func (manager *Manager) Unregister(clientURL *url.URL, scopeValue string) (bool,
 	manager.mu.Lock()
 	delete(manager.registrations, registrationKey(registration.origin, registration.scope))
 	manager.mu.Unlock()
+	manager.evictServiceWorker(registrationKey(registration.origin, registration.scope), nil)
 	if err := manager.persistOrigin(registration.origin); err != nil {
 		return false, err
 	}
@@ -283,7 +299,27 @@ func (manager *Manager) DispatchFetch(ctx context.Context, request *network.Requ
 	if !ok {
 		return fallback(ctx, request)
 	}
-	response, fetchErr := evaluateFetch(ctx, worker.source, worker.scriptURL, request, fallback, manager.Caches())
+	process, processErr := manager.activeServiceWorker(worker, fallback)
+	var response *network.Response
+	var fetchErr error
+	if processErr == nil {
+		response, fetchErr = process.fetch(ctx, request, fallback)
+		if errors.Is(fetchErr, ErrServiceWorkerProcess) {
+			manager.crashServiceWorker(worker.key, process)
+			if !errors.Is(fetchErr, context.DeadlineExceeded) && !errors.Is(fetchErr, context.Canceled) {
+				if restarted, restartErr := manager.activeServiceWorker(worker, fallback); restartErr == nil {
+					response, fetchErr = restarted.fetch(ctx, request, fallback)
+					if errors.Is(fetchErr, ErrServiceWorkerProcess) {
+						manager.crashServiceWorker(worker.key, restarted)
+					}
+				} else {
+					fetchErr = errors.Join(fetchErr, restartErr)
+				}
+			}
+		}
+	} else {
+		fetchErr = processErr
+	}
 	persistErr := manager.persistOrigin(worker.origin)
 	if fetchErr != nil || persistErr != nil {
 		return nil, errors.Join(fetchErr, persistErr)
@@ -293,6 +329,7 @@ func (manager *Manager) DispatchFetch(ctx context.Context, request *network.Requ
 
 type activeWorker struct {
 	origin    string
+	key       string
 	scriptURL *url.URL
 	source    []byte
 }
@@ -319,7 +356,10 @@ func (manager *Manager) activeWorkerFor(clientURL *url.URL) (activeWorker, bool)
 		manager.mu.RUnlock()
 		return activeWorker{}, false
 	}
-	result := activeWorker{origin: best.origin, scriptURL: cloneURL(best.activeURL), source: append([]byte(nil), best.activeScript...)}
+	result := activeWorker{
+		origin: best.origin, key: registrationKey(best.origin, best.scope),
+		scriptURL: cloneURL(best.activeURL), source: append([]byte(nil), best.activeScript...),
+	}
 	manager.mu.RUnlock()
 	return result, result.scriptURL != nil
 }

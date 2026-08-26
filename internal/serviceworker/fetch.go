@@ -7,23 +7,25 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 
 	"github.com/Grove-Computing/Growse/internal/network"
 	"github.com/dop251/goja"
 )
 
 const (
-	maxFetchEventTime     = 5 * time.Second
 	maxSyntheticBodyBytes = 4 << 20
 )
+
+type lifecycleResult struct {
+	skipWaiting bool
+	claim       bool
+}
 
 type fetchEvaluator struct {
 	vm            *goja.Runtime
 	workerURL     *url.URL
-	origin        string
 	fallback      NetworkFallback
-	cacheStorage  *CacheStorage
+	caches        scriptCacheStorage
 	responses     map[*goja.Object]*network.Response
 	requests      map[*goja.Object]*network.Request
 	listeners     []goja.Callable
@@ -33,62 +35,19 @@ type fetchEvaluator struct {
 	responseValue goja.Value
 }
 
-func evaluateFetch(ctx context.Context, source []byte, workerURL *url.URL, request *network.Request, fallback NetworkFallback, cacheStorage *CacheStorage) (*network.Response, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	eventContext, cancel := context.WithTimeout(ctx, maxFetchEventTime)
-	defer cancel()
-	vm := goja.New()
-	evaluator := &fetchEvaluator{
-		vm: vm, workerURL: cloneURL(workerURL), origin: originString(workerURL), fallback: fallback, cacheStorage: cacheStorage, ctx: eventContext,
-		responses: make(map[*goja.Object]*network.Response), requests: make(map[*goja.Object]*network.Request),
-	}
-	timer := time.AfterFunc(maxFetchEventTime, func() { vm.Interrupt("service worker fetch event timeout") })
-	defer timer.Stop()
-	stopContext := context.AfterFunc(eventContext, func() { vm.Interrupt(eventContext.Err()) })
-	defer stopContext()
-	if err := evaluator.installGlobals(); err != nil {
-		return nil, err
-	}
-	if _, err := vm.RunScript(workerURL.String(), string(source)); err != nil {
-		return nil, fmt.Errorf("evaluate service worker fetch script: %w", err)
-	}
-	return evaluator.dispatch(eventContext, request)
+type scriptCacheStorage interface {
+	Open(string) (scriptCache, error)
+	Match(*network.Request) (*network.Response, bool, error)
+	Has(string) (bool, error)
+	Delete(string) (bool, error)
+	Keys() ([]string, error)
 }
 
-func (evaluator *fetchEvaluator) installGlobals() error {
-	global := evaluator.vm.GlobalObject()
-	if err := global.Set("self", global); err != nil {
-		return err
-	}
-	if err := global.Set("addEventListener", func(call goja.FunctionCall) goja.Value {
-		if call.Argument(0).String() != "fetch" {
-			return goja.Undefined()
-		}
-		listener, ok := goja.AssertFunction(call.Argument(1))
-		if !ok {
-			panic(evaluator.vm.NewTypeError("Service Worker listener must be a function"))
-		}
-		evaluator.listeners = append(evaluator.listeners, listener)
-		return goja.Undefined()
-	}); err != nil {
-		return err
-	}
-	if err := global.Set("fetch", evaluator.fetch); err != nil {
-		return err
-	}
-	_ = global.Set("skipWaiting", func(goja.FunctionCall) goja.Value { return goja.Undefined() })
-	clients := evaluator.vm.NewObject()
-	_ = clients.Set("claim", func(goja.FunctionCall) goja.Value { return goja.Undefined() })
-	_ = global.Set("clients", clients)
-	if err := global.Set("Request", evaluator.requestConstructor); err != nil {
-		return err
-	}
-	if err := global.Set("Response", evaluator.responseConstructor); err != nil {
-		return err
-	}
-	return evaluator.installCacheStorage(global)
+type scriptCache interface {
+	Match(*network.Request) (*network.Response, bool, error)
+	Put(*network.Request, *network.Response) error
+	Delete(*network.Request) (bool, error)
+	Keys() ([]*network.Request, error)
 }
 
 func (evaluator *fetchEvaluator) installFetchPrimitives(global *goja.Object) error {
@@ -105,13 +64,13 @@ func (evaluator *fetchEvaluator) installFetchPrimitives(global *goja.Object) err
 }
 
 func (evaluator *fetchEvaluator) installCacheStorage(global *goja.Object) error {
-	if evaluator.cacheStorage == nil || evaluator.origin == "" {
+	if evaluator.caches == nil {
 		return nil
 	}
 	storage := evaluator.vm.NewObject()
 	_ = storage.Set("open", func(call goja.FunctionCall) goja.Value {
 		return evaluator.promiseAction(func() (any, error) {
-			cache, err := evaluator.cacheStorage.Open(evaluator.origin, call.Argument(0).String())
+			cache, err := evaluator.caches.Open(call.Argument(0).String())
 			if err != nil {
 				return nil, err
 			}
@@ -124,7 +83,10 @@ func (evaluator *fetchEvaluator) installCacheStorage(global *goja.Object) error 
 			if err != nil {
 				return nil, err
 			}
-			response, found := evaluator.cacheStorage.Match(evaluator.origin, request)
+			response, found, err := evaluator.caches.Match(request)
+			if err != nil {
+				return nil, err
+			}
 			if !found {
 				return goja.Undefined(), nil
 			}
@@ -132,13 +94,16 @@ func (evaluator *fetchEvaluator) installCacheStorage(global *goja.Object) error 
 		})
 	})
 	_ = storage.Set("has", func(call goja.FunctionCall) goja.Value {
-		return evaluator.resolvedPromise(evaluator.cacheStorage.Has(evaluator.origin, call.Argument(0).String()))
+		return evaluator.promiseAction(func() (any, error) { return evaluator.caches.Has(call.Argument(0).String()) })
 	})
 	_ = storage.Set("delete", func(call goja.FunctionCall) goja.Value {
-		return evaluator.resolvedPromise(evaluator.cacheStorage.Delete(evaluator.origin, call.Argument(0).String()))
+		return evaluator.promiseAction(func() (any, error) { return evaluator.caches.Delete(call.Argument(0).String()) })
 	})
 	_ = storage.Set("keys", func(goja.FunctionCall) goja.Value {
-		names := evaluator.cacheStorage.Keys(evaluator.origin)
+		names, err := evaluator.caches.Keys()
+		if err != nil {
+			return evaluator.promiseAction(func() (any, error) { return nil, err })
+		}
 		values := make([]any, len(names))
 		for index, name := range names {
 			values[index] = name
@@ -148,7 +113,7 @@ func (evaluator *fetchEvaluator) installCacheStorage(global *goja.Object) error 
 	return global.Set("caches", storage)
 }
 
-func (evaluator *fetchEvaluator) cacheValue(cache *Cache) *goja.Object {
+func (evaluator *fetchEvaluator) cacheValue(cache scriptCache) *goja.Object {
 	object := evaluator.vm.NewObject()
 	_ = object.Set("match", func(call goja.FunctionCall) goja.Value {
 		return evaluator.promiseAction(func() (any, error) {
@@ -156,7 +121,10 @@ func (evaluator *fetchEvaluator) cacheValue(cache *Cache) *goja.Object {
 			if err != nil {
 				return nil, err
 			}
-			response, found := cache.Match(request)
+			response, found, err := cache.Match(request)
+			if err != nil {
+				return nil, err
+			}
 			if !found {
 				return goja.Undefined(), nil
 			}
@@ -185,11 +153,14 @@ func (evaluator *fetchEvaluator) cacheValue(cache *Cache) *goja.Object {
 			if err != nil {
 				return nil, err
 			}
-			return cache.Delete(request), nil
+			return cache.Delete(request)
 		})
 	})
 	_ = object.Set("keys", func(goja.FunctionCall) goja.Value {
-		requests := cache.Keys()
+		requests, err := cache.Keys()
+		if err != nil {
+			return evaluator.promiseAction(func() (any, error) { return nil, err })
+		}
 		values := make([]any, 0, len(requests))
 		for _, request := range requests {
 			values = append(values, evaluator.requestValue(request))
@@ -202,6 +173,8 @@ func (evaluator *fetchEvaluator) cacheValue(cache *Cache) *goja.Object {
 func (evaluator *fetchEvaluator) dispatch(ctx context.Context, request *network.Request) (*network.Response, error) {
 	evaluator.ctx = ctx
 	defer func() { evaluator.ctx = nil }()
+	evaluator.responded = false
+	evaluator.responseValue = nil
 	requestCopy := cloneRequest(request)
 	event := evaluator.vm.NewObject()
 	_ = event.Set("type", "fetch")
