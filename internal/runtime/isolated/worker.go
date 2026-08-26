@@ -82,9 +82,10 @@ func runWorkerProcess() error {
 	if err != nil {
 		return err
 	}
-	p := newPeer(os.Stdin, os.Stdout)
+	p := newPausedPeer(os.Stdin, os.Stdout)
 	state := &workerState{peer: p, sandbox: workerSandboxStatus(constraints)}
 	state.installHandlers()
+	p.start()
 	<-p.done
 	_ = state.stop()
 	p.mu.Lock()

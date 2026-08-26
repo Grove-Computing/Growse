@@ -3,6 +3,7 @@ package isolated
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"strings"
@@ -68,6 +69,27 @@ func TestPeerRejectsUnregisteredHostMethod(t *testing.T) {
 	_ = newPeer(rightConnection, rightConnection)
 	if err := left.call(context.Background(), "host.filesystem", nil, nil); err == nil || !strings.Contains(err.Error(), "unsupported") {
 		t.Fatalf("unregistered host call error = %v", err)
+	}
+}
+
+func TestPausedPeerRegistersHandlersBeforeReading(t *testing.T) {
+	leftConnection, rightConnection := net.Pipe()
+	t.Cleanup(func() { _ = leftConnection.Close(); _ = rightConnection.Close() })
+	left := newPeer(leftConnection, leftConnection)
+	right := newPausedPeer(rightConnection, rightConnection)
+	result := make(chan error, 1)
+	go func() {
+		var response string
+		err := left.call(context.Background(), "ready", nil, &response)
+		if err == nil && response != "registered" {
+			err = fmt.Errorf("response = %q", response)
+		}
+		result <- err
+	}()
+	right.handleRequest("ready", func(context.Context, json.RawMessage) (any, error) { return "registered", nil })
+	right.start()
+	if err := <-result; err != nil {
+		t.Fatal(err)
 	}
 }
 

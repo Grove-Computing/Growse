@@ -33,16 +33,26 @@ type peer struct {
 	nextID   atomic.Uint64
 	done     chan struct{}
 	handlers chan struct{}
+	readOnce sync.Once
 }
 
 func newPeer(reader io.Reader, writer io.Writer) *peer {
+	p := newPausedPeer(reader, writer)
+	p.start()
+	return p
+}
+
+func newPausedPeer(reader io.Reader, writer io.Writer) *peer {
 	p := &peer{
 		codec: workerproto.NewCodec(reader, writer), pending: make(map[uint64]chan workerproto.Envelope),
 		requests: make(map[string]requestHandler), events: make(map[string]eventHandler),
 		done: make(chan struct{}), handlers: make(chan struct{}, maxConcurrentHandlers),
 	}
-	go p.readLoop()
 	return p
+}
+
+func (p *peer) start() {
+	p.readOnce.Do(func() { go p.readLoop() })
 }
 
 func (p *peer) handleRequest(method string, handler requestHandler) {
