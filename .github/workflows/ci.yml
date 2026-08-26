@@ -86,6 +86,9 @@ jobs:
       - name: Validate v0.10.0 documentation
         run: bash tests/docs.sh
 
+      - name: Run v0.14.0 deterministic conformance tests
+        run: bash tests/v014-conformance.sh
+
       - name: Run race tests with coverage
         run: go test -race -covermode=atomic -coverprofile=coverage.out ./...
 

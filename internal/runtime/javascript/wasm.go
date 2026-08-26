@@ -83,18 +83,29 @@ type wasmAPI struct {
 	memoryConstructor   *goja.Object
 	globalConstructor   *goja.Object
 	tableConstructor    *goja.Object
+	errorConstructors   map[string]goja.Value
 }
 
 func newWasmAPI(ctx context.Context, responses map[*goja.Object]fetchapi.Response) *wasmAPI {
 	return &wasmAPI{
 		ctx: ctx, modules: make(map[*goja.Object]*wasmModuleValue), instances: make(map[*goja.Object]*wasmInstanceValue),
 		memories: make(map[*goja.Object]*wasmMemoryValue), globals: make(map[*goja.Object]*wasmGlobalValue), tables: make(map[*goja.Object]*wasmTableValue),
-		responses: responses, callTimeout: defaultWasmCallTimeout,
+		responses: responses, callTimeout: defaultWasmCallTimeout, errorConstructors: make(map[string]goja.Value),
 	}
 }
 
 func (api *wasmAPI) install(vm *goja.Runtime) error {
 	namespace := vm.NewObject()
+	for _, name := range []string{"CompileError", "LinkError", "RuntimeError"} {
+		constructor, err := vm.RunString(fmt.Sprintf(`(class %s extends Error { constructor(message) { super(message); this.name = %q; } })`, name, name))
+		if err != nil {
+			return err
+		}
+		api.errorConstructors[name] = constructor
+		if err := namespace.Set(name, constructor); err != nil {
+			return err
+		}
+	}
 	if err := namespace.Set("validate", func(call goja.FunctionCall) goja.Value {
 		source, err := wasmBytes(vm, call.Argument(0))
 		if err != nil {
@@ -112,7 +123,7 @@ func (api *wasmAPI) install(vm *goja.Runtime) error {
 		}
 		module, err := api.compile(binary)
 		if err != nil {
-			panic(vm.NewGoError(fmt.Errorf("WebAssembly.CompileError: %w", err)))
+			panic(api.errorObject(vm, "CompileError", err))
 		}
 		api.modules[call.This] = module
 		return call.This
@@ -123,7 +134,7 @@ func (api *wasmAPI) install(vm *goja.Runtime) error {
 		module := api.requireModule(vm, call.Argument(0))
 		instance, err := api.instantiate(vm, module, call.Argument(1))
 		if err != nil {
-			panic(vm.NewGoError(fmt.Errorf("WebAssembly.LinkError: %w", err)))
+			panic(api.errorObject(vm, "LinkError", err))
 		}
 		api.instances[call.This] = instance
 		api.defineInstanceExports(vm, call.This, instance, module)
@@ -181,7 +192,7 @@ func (api *wasmAPI) install(vm *goja.Runtime) error {
 			}
 		}
 		if err != nil {
-			_ = reject(vm.NewGoError(fmt.Errorf("WebAssembly.CompileError: %w", err)))
+			_ = reject(api.errorObject(vm, "CompileError", err))
 		}
 		return vm.ToValue(promise)
 	}); err != nil {
@@ -192,11 +203,15 @@ func (api *wasmAPI) install(vm *goja.Runtime) error {
 		value := call.Argument(0)
 		module, fromModule := api.modules[value.ToObject(vm)]
 		var err error
+		errorName := "LinkError"
 		if !fromModule {
 			var source []byte
 			source, err = wasmBytes(vm, value)
 			if err == nil {
 				module, err = api.compile(source)
+			}
+			if err != nil {
+				errorName = "CompileError"
 			}
 		}
 		if err == nil {
@@ -215,7 +230,7 @@ func (api *wasmAPI) install(vm *goja.Runtime) error {
 			}
 		}
 		if err != nil {
-			_ = reject(vm.NewGoError(fmt.Errorf("WebAssembly.LinkError: %w", err)))
+			_ = reject(api.errorObject(vm, errorName, err))
 		}
 		return vm.ToValue(promise)
 	}); err != nil {
@@ -371,7 +386,7 @@ func (api *wasmAPI) functionValue(vm *goja.Runtime, function wazeroapi.Function)
 		defer cancel()
 		results, err := function.Call(callContext, params...)
 		if err != nil {
-			panic(vm.NewGoError(fmt.Errorf("WebAssembly.RuntimeError: %w", err)))
+			panic(api.errorObject(vm, "RuntimeError", err))
 		}
 		values := make([]goja.Value, len(results))
 		for index, result := range results {
@@ -385,6 +400,18 @@ func (api *wasmAPI) functionValue(vm *goja.Runtime, function wazeroapi.Function)
 		}
 		return vm.ToValue(values)
 	})
+}
+
+func (api *wasmAPI) errorObject(vm *goja.Runtime, name string, cause error) *goja.Object {
+	message := fmt.Sprintf("WebAssembly.%s: %v", name, cause)
+	if constructor := api.errorConstructors[name]; constructor != nil {
+		if object, err := vm.New(constructor, vm.ToValue(message)); err == nil {
+			return object
+		}
+	}
+	object := vm.NewTypeError(message)
+	_ = object.Set("name", name)
+	return object
 }
 
 func wasmBytes(vm *goja.Runtime, value goja.Value) ([]byte, error) {
