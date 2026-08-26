@@ -32,10 +32,6 @@ type stylesheetLoadState struct {
 	totalBytes int
 }
 
-func (b *Browser) loadStyles(ctx context.Context, client ResourceLoader, pageURL *url.URL, document *dom.Document) (*css.Stylesheet, error) {
-	return b.loadStylesWithBase(ctx, client, pageURL, pageURL, document)
-}
-
 func (b *Browser) loadStylesWithBase(ctx context.Context, client ResourceLoader, pageURL, baseURL *url.URL, document *dom.Document) (*css.Stylesheet, error) {
 	combined := &css.Stylesheet{}
 	state := &stylesheetLoadState{client: client, origin: pageURL, activeURLs: make(map[string]bool)}
