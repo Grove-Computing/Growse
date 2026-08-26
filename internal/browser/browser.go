@@ -1706,6 +1706,12 @@ func startRuntime(ctx context.Context, factory runtimemodel.EngineFactory, engin
 			return applyFrameMutation(page, frameID, generation, snapshot, onMutation, runtimeNow())
 		},
 		FramePolicy: page.FramePolicy,
+		Window:      page.window,
+	}
+	if page.windows != nil {
+		environment.PostMessage = func(target runtimemodel.WindowReference, targetOrigin string, payload []byte) error {
+			return page.windows.post(page.window.Self, target, targetOrigin, payload)
+		}
 	}
 	if local, session, _ := storageManager.Areas(page.URL); !page.FramePolicy.HasOpaqueOrigin() && (local != nil || session != nil) {
 		environment.LocalStorage = local
@@ -1733,8 +1739,14 @@ func startRuntime(ctx context.Context, factory runtimemodel.EngineFactory, engin
 	}
 	if err := pageRuntime.Start(ctx); err != nil {
 		setRuntimeError(page, fmt.Sprintf("start %s runtime: %v", engine, err))
+		if page.windows != nil {
+			page.windows.unregister(page.window.Self)
+		}
 		_ = pageRuntime.Stop()
 		return nil
+	}
+	if page.windows != nil {
+		page.windows.register(page.window.Self, pageRuntime)
 	}
 	page.RuntimeStarted = true
 	return pageRuntime

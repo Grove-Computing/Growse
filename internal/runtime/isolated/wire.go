@@ -45,6 +45,7 @@ type loadRequest struct {
 	HistoryState   string                     `json:"historyState,omitempty"`
 	Frames         []wireFrame                `json:"frames,omitempty"`
 	FramePolicy    runtimemodel.FramePolicy   `json:"framePolicy,omitempty"`
+	Window         runtimemodel.WindowContext `json:"window"`
 }
 
 type wireFrame struct {
@@ -61,6 +62,16 @@ type frameMutationRequest struct {
 	ID         uint64               `json:"id"`
 	Generation uint64               `json:"generation"`
 	Document   dom.DocumentSnapshot `json:"document"`
+}
+
+type postMessageRequest struct {
+	Target       runtimemodel.WindowReference `json:"target"`
+	TargetOrigin string                       `json:"targetOrigin"`
+	Payload      []byte                       `json:"payload"`
+}
+
+type messageRequest struct {
+	Event runtimemodel.MessageEvent `json:"event"`
 }
 
 type mutationEvent struct {

@@ -47,6 +47,8 @@ type frameLoadState struct {
 	documentBytes  int
 	nextID         uint64
 	generation     uint64
+	registry       *windowRegistry
+	rootPage       *Page
 }
 
 func (b *Browser) loadFrames(ctx context.Context, page *Page, resourceClient, runtimeClient ResourceLoader, engineFactory runtimemodel.EngineFactory, engine runtimemodel.Engine, storageManager *storagecore.Manager, fetchLimiter *fetchapi.Limiter, onMutation func(), reducedMotion bool) {
@@ -57,8 +59,14 @@ func (b *Browser) loadFrames(ctx context.Context, page *Page, resourceClient, ru
 		browser: b, ctx: ctx, rootURL: cloneURL(page.URL), resourceClient: resourceClient, runtimeClient: runtimeClient,
 		engineFactory: engineFactory, engine: engine, storage: storageManager, fetchLimiter: fetchLimiter,
 		onMutation: onMutation, reducedMotion: reducedMotion, generation: page.HistoryID + 1,
+		registry: newWindowRegistry(), rootPage: page,
 	}
+	top := windowReference(0, state.generation, page)
+	page.windows = state.registry
+	page.window = runtimemodel.WindowContext{Self: top, Parent: top, Top: top}
+	state.registry.define(top)
 	page.Frames = state.loadChildren(page, page.Document.Root, 0, 0)
+	page.window.Children = childWindowReferences(page, page)
 }
 
 func (state *frameLoadState) loadChildren(parentPage *Page, root *dom.Node, parentID uint64, depth int) []*Frame {
@@ -117,7 +125,15 @@ func (state *frameLoadState) loadOne(parentPage *Page, element *dom.Node, parent
 	}
 	frame.URL = cloneURL(page.URL)
 	frame.Page = page
+	self := windowReference(frame.ID, frame.Generation, page)
+	page.windows = state.registry
+	page.window = runtimemodel.WindowContext{
+		Self: self, Parent: relativeWindowReference(parentPage.window.Self, page),
+		Top: relativeWindowReference(state.rootPage.window.Self, page),
+	}
+	state.registry.define(self)
 	page.Frames = state.loadChildren(page, page.Document.Root, frame.ID, depth)
+	page.window.Children = childWindowReferences(page, page)
 	frame.runtime = state.startFrameRuntime(frameContext, frame)
 	page.RuntimeStarted = frame.runtime != nil
 	page.Document.SetReadyState("complete")
@@ -277,11 +293,20 @@ func (frame *Frame) navigate(ctx context.Context, target *url.URL) error {
 		frame.LoadError = err.Error()
 		return err
 	}
+	nextGeneration := frame.Generation + 1
+	self := windowReference(frame.ID, nextGeneration, page)
+	page.windows = state.registry
+	page.window = runtimemodel.WindowContext{
+		Self: self, Parent: relativeWindowReference(frame.parentPage.window.Self, page),
+		Top: relativeWindowReference(state.rootPage.window.Self, page),
+	}
+	state.registry.define(self)
 	page.Frames = state.loadChildren(page, page.Document.Root, frame.ID, frame.Depth)
+	page.window.Children = childWindowReferences(page, page)
 	oldPage, oldRuntime, oldCancel := frame.Page, frame.runtime, frame.cancel
 	frameContext, frameCancel := context.WithCancel(state.ctx)
 	frame.Page, frame.URL, frame.cancel = page, cloneURL(page.URL), frameCancel
-	frame.Generation++
+	frame.Generation = nextGeneration
 	frame.LoadError = ""
 	frame.runtime = state.startFrameRuntime(frameContext, frame)
 	page.RuntimeStarted = frame.runtime != nil
@@ -291,6 +316,7 @@ func (frame *Frame) navigate(ctx context.Context, target *url.URL) error {
 		oldCancel()
 	}
 	if oldRuntime != nil {
+		state.registry.unregister(oldPage.window.Self)
 		_ = oldRuntime.Stop()
 	}
 	_ = closePageFrames(oldPage)
@@ -305,6 +331,41 @@ func (frame *Frame) navigate(ctx context.Context, target *url.URL) error {
 		state.browser.dispatchPageEvent(frame.parentPage, events.Event{Type: events.Type("load"), Target: frame.ElementID})
 	}
 	return nil
+}
+
+func windowReference(id, generation uint64, page *Page) runtimemodel.WindowReference {
+	reference := runtimemodel.WindowReference{ID: id, Generation: generation, SameOrigin: true}
+	if page == nil || page.URL == nil {
+		return reference
+	}
+	reference.URL = page.URL.String()
+	if page.FramePolicy.HasOpaqueOrigin() {
+		reference.Origin = "null"
+		return reference
+	}
+	if origin, err := network.OriginFromURL(page.URL); err == nil {
+		reference.Origin = origin.String()
+	}
+	return reference
+}
+
+func relativeWindowReference(reference runtimemodel.WindowReference, viewer *Page) runtimemodel.WindowReference {
+	reference.SameOrigin = viewer != nil && !viewer.FramePolicy.HasOpaqueOrigin() && originsMatch(reference.Origin, windowReference(0, 0, viewer).Origin)
+	return reference
+}
+
+func childWindowReferences(page, viewer *Page) []runtimemodel.WindowReference {
+	if page == nil {
+		return nil
+	}
+	result := make([]runtimemodel.WindowReference, 0, len(page.Frames))
+	for _, frame := range page.Frames {
+		if frame == nil || frame.Page == nil || frame.Closed {
+			continue
+		}
+		result = append(result, relativeWindowReference(frame.Page.window.Self, viewer))
+	}
+	return result
 }
 
 func runtimeFrameAccess(page *Page) []runtimemodel.FrameAccess {
@@ -367,6 +428,10 @@ func (b *Browser) refreshFrameAccess(parent *Page) {
 	b.mu.RUnlock()
 	if updater, ok := runtime.(runtimemodel.FrameUpdater); ok {
 		updater.UpdateFrames(runtimeFrameAccess(parent))
+	}
+	parent.window.Children = childWindowReferences(parent, parent)
+	if updater, ok := runtime.(runtimemodel.WindowUpdater); ok {
+		updater.UpdateWindow(parent.window)
 	}
 }
 
@@ -515,6 +580,9 @@ func (frame *Frame) Close() error {
 			frame.Page.Transitions.Clear()
 		}
 		frame.Page.closeDevTools()
+		if frame.Page.windows != nil {
+			frame.Page.windows.unregister(frame.Page.window.Self)
+		}
 	}
 	if frame.runtime != nil {
 		if err := frame.runtime.Stop(); err != nil && result == nil {
@@ -536,6 +604,9 @@ func closePageFrames(page *Page) error {
 		}
 	}
 	page.Frames = nil
+	if page.window.Self.ID == 0 && page.windows != nil {
+		page.windows.close()
+	}
 	return result
 }
 

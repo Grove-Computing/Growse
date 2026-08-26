@@ -55,6 +55,8 @@ type Page struct {
 	DevTools         *devtools.PageStore
 	Frames           []*Frame
 	FramePolicy      runtimemodel.FramePolicy
+	window           runtimemodel.WindowContext
+	windows          *windowRegistry
 }
 
 // Frame is one nested browsing context owned by a parent Page.

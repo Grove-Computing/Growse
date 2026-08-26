@@ -74,6 +74,10 @@ func (runtime *Runtime) frameWindowValue(vm *goja.Runtime, frame runtimemodel.Fr
 		return vm.ToValue(!ok || current.Generation != frame.Generation)
 	})
 	_ = window.DefineAccessorProperty("closed", closed, nil, goja.FLAG_FALSE, goja.FLAG_TRUE)
+	reference := runtimemodel.WindowReference{
+		ID: frame.ID, Generation: frame.Generation, Origin: frame.Origin, URL: frame.URL, SameOrigin: frame.SameOrigin,
+	}
+	runtime.installPostMessage(vm, window, reference)
 	if frame.SameOrigin {
 		document := vm.ToValue(func(goja.FunctionCall) goja.Value {
 			current := runtime.requireCurrentFrame(vm, frame.ID, frame.Generation, true)

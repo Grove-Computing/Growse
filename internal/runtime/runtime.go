@@ -107,6 +107,8 @@ type Environment struct {
 	Frames          []FrameAccess
 	FrameMutation   func(frameID, generation uint64, document dom.DocumentSnapshot) error
 	FramePolicy     FramePolicy
+	Window          WindowContext
+	PostMessage     func(target WindowReference, targetOrigin string, payload []byte) error
 }
 
 // FramePolicy contains the capabilities granted by an iframe sandbox.
@@ -149,6 +151,31 @@ type FrameAccess struct {
 	Document   *dom.Document
 }
 
+// WindowReference identifies one generation of a browsing context without
+// exposing cross-origin DOM state.
+type WindowReference struct {
+	ID         uint64
+	Generation uint64
+	Origin     string
+	URL        string
+	SameOrigin bool
+}
+
+// WindowContext defines the self, parent, top, and direct child relationships.
+type WindowContext struct {
+	Self     WindowReference
+	Parent   WindowReference
+	Top      WindowReference
+	Children []WindowReference
+}
+
+// MessageEvent is a bounded serialized structured-clone subset.
+type MessageEvent struct {
+	Data   []byte
+	Origin string
+	Source WindowReference
+}
+
 // Runtime は1ページに属するGoスクリプトを実行する。
 type Runtime interface {
 	Load(ctx context.Context, scripts []Script, environment Environment) error
@@ -170,6 +197,16 @@ type LocationUpdater interface {
 // FrameUpdater receives generation-scoped child Frame access changes.
 type FrameUpdater interface {
 	UpdateFrames([]FrameAccess)
+}
+
+// MessageDispatcher receives one postMessage event on the Page queue.
+type MessageDispatcher interface {
+	DispatchMessage(MessageEvent) error
+}
+
+// WindowUpdater refreshes generation-scoped child WindowProxy relationships.
+type WindowUpdater interface {
+	UpdateWindow(WindowContext)
 }
 
 // NavigationEventDispatcher はNavigation Eventを現在Runtimeへ配送する。

@@ -87,7 +87,7 @@ func (runtime *Runtime) addWindowEventListener(vm *goja.Runtime, eventType strin
 		panic(vm.NewTypeError("window event listener must be a function"))
 	}
 	eventType = strings.ToLower(strings.TrimSpace(eventType))
-	if eventType != "storage" && eventType != "popstate" && eventType != "hashchange" && eventType != "load" {
+	if eventType != "storage" && eventType != "popstate" && eventType != "hashchange" && eventType != "load" && eventType != "message" {
 		panic(vm.NewTypeError("window event type is unsupported"))
 	}
 	runtime.mu.Lock()
