@@ -9,6 +9,7 @@ import (
 	"math/big"
 	"sort"
 
+	fetchapi "github.com/Grove-Computing/Growse/internal/webapi/fetch"
 	"github.com/dop251/goja"
 	wabinbinary "github.com/tetratelabs/wabin/binary"
 	"github.com/tetratelabs/wabin/leb128"
@@ -59,6 +60,7 @@ type wasmAPI struct {
 	globals   map[*goja.Object]*wasmGlobalValue
 	tables    map[*goja.Object]*wasmTableValue
 	runtimes  []wazero.Runtime
+	responses map[*goja.Object]fetchapi.Response
 
 	moduleConstructor   *goja.Object
 	instanceConstructor *goja.Object
@@ -67,10 +69,11 @@ type wasmAPI struct {
 	tableConstructor    *goja.Object
 }
 
-func newWasmAPI(ctx context.Context) *wasmAPI {
+func newWasmAPI(ctx context.Context, responses map[*goja.Object]fetchapi.Response) *wasmAPI {
 	return &wasmAPI{
 		ctx: ctx, modules: make(map[*goja.Object]*wasmModuleValue), instances: make(map[*goja.Object]*wasmInstanceValue),
 		memories: make(map[*goja.Object]*wasmMemoryValue), globals: make(map[*goja.Object]*wasmGlobalValue), tables: make(map[*goja.Object]*wasmTableValue),
+		responses: responses,
 	}
 }
 
@@ -200,6 +203,9 @@ func (api *wasmAPI) install(vm *goja.Runtime) error {
 		}
 		return vm.ToValue(promise)
 	}); err != nil {
+		return err
+	}
+	if err := api.installStreaming(vm, namespace); err != nil {
 		return err
 	}
 	return vm.Set("WebAssembly", namespace)

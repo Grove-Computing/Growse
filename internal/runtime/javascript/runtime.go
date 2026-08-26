@@ -58,6 +58,7 @@ type Runtime struct {
 	schedulerClock    schedulerapi.Clock
 	storageAPI        *storageapi.API
 	wasmAPI           *wasmAPI
+	responseValues    map[*goja.Object]fetchapi.Response
 	abortSignals      map[*goja.Object]*fetchapi.AbortSignal
 	windowListeners   []listenerRecord
 	documentListeners []listenerRecord
@@ -142,7 +143,8 @@ func (runtime *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script,
 	}
 	runtime.schedulerAPI.SetFrameScope(environment.FrameScope)
 	runtime.storageAPI = storageapi.NewPage(environment.LocalStorage, environment.SessionStorage, environment.StorageSource, runtime.enqueueCallback)
-	runtime.wasmAPI = newWasmAPI(runtimeContext)
+	runtime.responseValues = make(map[*goja.Object]fetchapi.Response)
+	runtime.wasmAPI = newWasmAPI(runtimeContext, runtime.responseValues)
 	runtime.elements = make(map[*goja.Object]*domapi.Element)
 	runtime.elementByID = make(map[uint64]*goja.Object)
 	runtime.abortSignals = make(map[*goja.Object]*fetchapi.AbortSignal)
@@ -308,6 +310,7 @@ func (runtime *Runtime) Stop() error {
 	runtime.schedulerAPI = nil
 	runtime.storageAPI = nil
 	runtime.wasmAPI = nil
+	runtime.responseValues = nil
 	runtime.elements = nil
 	runtime.elementByID = nil
 	runtime.abortSignals = nil

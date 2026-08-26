@@ -4,9 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/url"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/Grove-Computing/Growse/internal/network"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
+	fetchapi "github.com/Grove-Computing/Growse/internal/webapi/fetch"
 	wabinbinary "github.com/tetratelabs/wabin/binary"
 	wabinwasm "github.com/tetratelabs/wabin/wasm"
 )
@@ -72,6 +78,80 @@ func TestWebAssemblyImportsFunctionsMemoryGlobalAndTable(t *testing.T) {
 	want := []string{"14|17|4|1|1|2|4"}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("console records = %v, want %v", got, want)
+	}
+}
+
+func TestWebAssemblyStreamingUsesFetchMIMEAndDoesNotProvideWASI(t *testing.T) {
+	moduleBinary := exportedWasmBinary(t)
+	wasiBinary := wasiImportWasmBinary()
+	baseURL, _ := url.Parse("https://page.example/app/index.html")
+	requests := make(chan *network.Request, 4)
+	messages := make(chan string, 4)
+	environment := runtimemodel.Environment{
+		BaseURL:      baseURL,
+		FetchLimiter: fetchapi.NewLimiter(8),
+		Fetch: func(_ context.Context, request *network.Request) (*network.Response, error) {
+			requests <- request
+			body := moduleBinary
+			contentType := "application/wasm; charset=binary"
+			if request.URL.Path == "/app/wrong.wasm" {
+				contentType = "application/octet-stream"
+			}
+			if request.URL.Path == "/app/wasi.wasm" {
+				body = wasiBinary
+			}
+			return &network.Response{
+				URL: request.URL, StatusCode: http.StatusOK, Status: "OK",
+				Header: http.Header{"Content-Type": {contentType}}, Body: body,
+			}, nil
+		},
+		ConsoleRecord: func(_, message string) { messages <- message },
+	}
+	source := `
+		WebAssembly.compileStreaming(fetch("compile.wasm", {credentials: "omit"})).then(function (module) {
+			console.log("compile:" + new WebAssembly.Instance(module).exports.add(20, 22));
+		});
+		WebAssembly.instantiateStreaming(fetch("instantiate.wasm")).then(function (result) {
+			console.log("instantiate:" + result.instance.exports.add(21, 21));
+		});
+		WebAssembly.compileStreaming(fetch("wrong.wasm")).catch(function (error) {
+			console.log("mime:" + error.message);
+		});
+		WebAssembly.instantiateStreaming(fetch("wasi.wasm")).catch(function (error) {
+			console.log("wasi:" + error.message);
+		});`
+	runtime := New()
+	t.Cleanup(func() { _ = runtime.Stop() })
+	startJavaScriptRuntime(t, runtime, source, environment)
+
+	var got []string
+	for range 4 {
+		select {
+		case message := <-messages:
+			got = append(got, message)
+		case <-time.After(time.Second):
+			t.Fatalf("streaming results timed out: %v", got)
+		}
+	}
+	joined := strings.Join(got, "\n")
+	for _, want := range []string{"compile:42", "instantiate:42", "mime:WebAssembly streaming response MIME must be application/wasm", `wasi:WebAssembly.LinkError: missing import object for wasi_snapshot_preview1.proc_exit`} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("streaming records = %v, missing %q", got, want)
+		}
+	}
+	seenOmit := false
+	for range 4 {
+		select {
+		case request := <-requests:
+			if request.URL.String() == "https://page.example/app/compile.wasm" && request.Credentials == network.CredentialsOmit {
+				seenOmit = true
+			}
+		case <-time.After(time.Second):
+			t.Fatal("streaming Fetch request timed out")
+		}
+	}
+	if !seenOmit {
+		t.Fatal("compileStreaming did not use the page Fetch policy")
 	}
 }
 
@@ -160,4 +240,13 @@ func importedWasmBinary(t *testing.T) []byte {
 		}}},
 	}
 	return wabinbinary.EncodeModule(module)
+}
+
+func wasiImportWasmBinary() []byte {
+	return wabinbinary.EncodeModule(&wabinwasm.Module{
+		TypeSection: []*wabinwasm.FunctionType{{Params: []wabinwasm.ValueType{wabinwasm.ValueTypeI32}}},
+		ImportSection: []*wabinwasm.Import{{
+			Module: "wasi_snapshot_preview1", Name: "proc_exit", Type: wabinwasm.ExternTypeFunc, DescFunc: 0,
+		}},
+	})
 }
