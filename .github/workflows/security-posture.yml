@@ -33,7 +33,7 @@ jobs:
           ./internal/events ./internal/forms ./internal/html ./internal/layout
           ./internal/network ./internal/paint ./internal/securityscan ./internal/storage
           ./internal/style ./internal/supplychain ./internal/updater ./internal/webapi/...
-      - uses: github/codeql-action/upload-sarif@181d5eefc20863364f96762470ba6f862bdef56b # v3.29.2
+      - uses: github/codeql-action/upload-sarif@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8
         with:
           sarif_file: gosec.sarif
 
@@ -84,6 +84,6 @@ jobs:
           results_file: scorecard.sarif
           results_format: sarif
           publish_results: true
-      - uses: github/codeql-action/upload-sarif@181d5eefc20863364f96762470ba6f862bdef56b # v3.29.2
+      - uses: github/codeql-action/upload-sarif@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8
         with:
           sarif_file: scorecard.sarif
