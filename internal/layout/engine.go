@@ -110,6 +110,13 @@ func Build(document *dom.Document, computed stylemodel.Map, viewportWidth float3
 	return build(document, computed, viewportWidth, 0, 0, 0)
 }
 
+// BuildAtRevision lays out one immutable DOM/style revision.
+func BuildAtRevision(document *dom.Document, computed stylemodel.Map, viewportWidth float32, revision uint64) *Tree {
+	tree := Build(document, computed, viewportWidth)
+	tree.Revision = revision
+	return tree
+}
+
 // BuildWithViewport lays out a document with definite viewport dimensions.
 func BuildWithViewport(document *dom.Document, computed stylemodel.Map, viewportWidth, viewportHeight float32) *Tree {
 	return build(document, computed, viewportWidth, viewportHeight, 0, 0)
@@ -118,6 +125,13 @@ func BuildWithViewport(document *dom.Document, computed stylemodel.Map, viewport
 // BuildWithScroll lays out viewport-attached and sticky elements at a scroll offset.
 func BuildWithScroll(document *dom.Document, computed stylemodel.Map, viewportWidth, viewportHeight, scrollX, scrollY float32) *Tree {
 	return build(document, computed, viewportWidth, viewportHeight, max(scrollX, float32(0)), max(scrollY, float32(0)))
+}
+
+// BuildWithScrollAtRevision lays out one immutable DOM/style revision at a scroll offset.
+func BuildWithScrollAtRevision(document *dom.Document, computed stylemodel.Map, viewportWidth, viewportHeight, scrollX, scrollY float32, revision uint64) *Tree {
+	tree := BuildWithScroll(document, computed, viewportWidth, viewportHeight, scrollX, scrollY)
+	tree.Revision = revision
+	return tree
 }
 
 func build(document *dom.Document, computed stylemodel.Map, viewportWidth, viewportHeight, scrollX, scrollY float32) *Tree {

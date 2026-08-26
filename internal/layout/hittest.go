@@ -5,6 +5,21 @@ import (
 	stylemodel "github.com/Grove-Computing/Growse/internal/style"
 )
 
+// Hit is a hit-test result tied to the layout revision that produced it.
+type Hit struct {
+	NodeID   dom.NodeID
+	Revision uint64
+}
+
+// HitTestWithRevision returns a result that callers can compare with paint and inspector snapshots.
+func HitTestWithRevision(tree *Tree, x, y float32) (Hit, bool) {
+	nodeID, ok := HitTest(tree, x, y)
+	if !ok {
+		return Hit{}, false
+	}
+	return Hit{NodeID: nodeID, Revision: tree.Revision}, true
+}
+
 // HitTest returns the deepest visible DOM node at document coordinates.
 func HitTest(tree *Tree, x, y float32) (dom.NodeID, bool) {
 	if tree == nil {
