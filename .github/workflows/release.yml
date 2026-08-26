@@ -315,6 +315,12 @@ jobs:
           test "$(docker buildx imagetools inspect "$image_ref" --format '{{ json .SBOM.SPDX }}')" != "null"
           test "$(docker buildx imagetools inspect "$image_ref" --format '{{ json .Provenance.SLSA }}')" != "null"
 
+      - name: Run sandbox Web Platform smoke by digest
+        env:
+          BUILD_DIGEST: ${{ steps.build.outputs.digest }}
+        shell: bash
+        run: docker run --rm --entrypoint growse-smoke "$IMAGE_NAME@$BUILD_DIGEST" /usr/local/share/growse/examples/external-web-platform
+
       - name: Scan published image by digest
         uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
         with:
