@@ -84,6 +84,25 @@ func TestLoadScriptsBlocksCrossOriginAndRedirectedSources(t *testing.T) {
 	}
 }
 
+func TestGoEngineDoesNotFetchTextGoFromArbitraryInternetOrigin(t *testing.T) {
+	pageURL := mustParseURL(t, "https://public.example/page.html")
+	scriptURL := mustParseURL(t, "https://public.example/app.go")
+	document, err := html.Parse(strings.NewReader(`<script type="text/go" src="/app.go"></script>`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	loader := &routeLoader{responses: map[string]*network.Response{
+		scriptURL.String(): {URL: scriptURL, StatusCode: 200, ContentType: "text/go", Body: []byte(`package main; func main() {}`)},
+	}}
+	scripts, loadErrors := loadScriptsForEngine(context.Background(), loader, pageURL, document, runtimemodel.EngineGo)
+	if len(scripts) != 0 || len(loadErrors) != 1 || !strings.Contains(loadErrors[0], "untrusted") {
+		t.Fatalf("external Go scripts=%v errors=%v", scripts, loadErrors)
+	}
+	if len(loader.requested) != 0 {
+		t.Fatalf("untrusted text/go was fetched: %v", loader.requested)
+	}
+}
+
 func TestCollectScriptsPreservesDocumentOrderAndExternalPriority(t *testing.T) {
 	document, err := html.Parse(strings.NewReader(`
 <script type="text/go">first</script>
