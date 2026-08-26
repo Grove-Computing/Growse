@@ -897,8 +897,8 @@ func (b *Browser) SubmitPOST(ctx context.Context, formID, submitterID dom.NodeID
 	}
 	target.Fragment = ""
 	client := b.client
-	loader, ok := client.(requestLoader)
-	if !ok {
+	_, supportsRequests := client.(requestLoader)
+	if !supportsRequests {
 		b.mu.Unlock()
 		return nil, errors.New("network client does not support POST")
 	}
@@ -907,6 +907,7 @@ func (b *Browser) SubmitPOST(ctx context.Context, formID, submitterID dom.NodeID
 	engineFactory := b.engineFactory
 	engine := runtimemodel.NormalizeEngine(b.engine)
 	storageManager := b.storage
+	serviceWorkers := b.serviceWorkers
 	onMutation := b.onMutation
 	reducedMotion := b.reducedMotion
 	b.mu.Unlock()
@@ -918,7 +919,8 @@ func (b *Browser) SubmitPOST(ctx context.Context, formID, submitterID dom.NodeID
 		return nil, err
 	}
 	body := []byte(encoded)
-	response, err := loader.Do(ctx, &network.Request{
+	intercepted := serviceWorkerLoader{ResourceLoader: client, manager: serviceWorkers}
+	response, err := intercepted.Do(ctx, &network.Request{
 		Method: http.MethodPost, URL: target, Body: body,
 		Header:  http.Header{"Content-Type": []string{forms.URLEncoded}},
 		SiteURL: cloneURL(page.URL), Kind: network.RequestForm,
@@ -928,7 +930,7 @@ func (b *Browser) SubmitPOST(ctx context.Context, formID, submitterID dom.NodeID
 		pageStore.Close()
 		return nil, fmt.Errorf("submit form to %s: %w", network.RedactedURL(target), err)
 	}
-	return b.finishLoad(ctx, target, response, historyPush, -1, navigationID, client, client, engineFactory, engine, storageManager, onMutation, reducedMotion, pageStore)
+	return b.finishLoad(ctx, target, response, historyPush, -1, navigationID, intercepted, intercepted, engineFactory, engine, storageManager, onMutation, reducedMotion, pageStore)
 }
 
 // Submit validates and dispatches a cancelable submit event before navigation.
@@ -1145,6 +1147,7 @@ func (b *Browser) loadWithClient(ctx context.Context, pageURL *url.URL, commit h
 	engineFactory := b.engineFactory
 	engine := runtimemodel.NormalizeEngine(b.engine)
 	storageManager := b.storage
+	serviceWorkers := b.serviceWorkers
 	onMutation := b.onMutation
 	reducedMotion := b.reducedMotion
 	b.mu.Unlock()
@@ -1163,6 +1166,9 @@ func (b *Browser) loadWithClient(ctx context.Context, pageURL *url.URL, commit h
 	if revalidateResources {
 		resourceClient = cacheRevalidatingLoader{ResourceLoader: client}
 	}
+	documentClient = serviceWorkerLoader{ResourceLoader: documentClient, manager: serviceWorkers}
+	resourceClient = serviceWorkerLoader{ResourceLoader: resourceClient, manager: serviceWorkers}
+	runtimeClient := ResourceLoader(serviceWorkerLoader{ResourceLoader: client, manager: serviceWorkers})
 
 	var response *network.Response
 	var err error
@@ -1176,7 +1182,7 @@ func (b *Browser) loadWithClient(ctx context.Context, pageURL *url.URL, commit h
 		pageStore.Close()
 		return nil, fmt.Errorf("navigate to %s: %w", network.RedactedURL(pageURL), err)
 	}
-	return b.finishLoad(navigationContext, pageURL, response, commit, historyIndex, navigationID, resourceClient, client, engineFactory, engine, storageManager, onMutation, reducedMotion, pageStore)
+	return b.finishLoad(navigationContext, pageURL, response, commit, historyIndex, navigationID, resourceClient, runtimeClient, engineFactory, engine, storageManager, onMutation, reducedMotion, pageStore)
 }
 
 type cacheRevalidatingLoader struct {

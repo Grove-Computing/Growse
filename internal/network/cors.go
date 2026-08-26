@@ -204,7 +204,7 @@ func validateCORSResponse(response *http.Response, requestData *Request) error {
 }
 
 func requiresCORS(request *Request) bool {
-	return request != nil && (request.Kind == RequestFetch || request.CORS)
+	return request != nil && (request.Kind == RequestFetch || request.Kind == RequestServiceWorkerFetch || request.CORS)
 }
 
 func isSimpleCORSRequest(request *http.Request) bool {

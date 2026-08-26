@@ -32,6 +32,9 @@ var (
 // FetchScript retrieves one Service Worker script through Browser-owned I/O.
 type FetchScript func(context.Context, *network.Request) (*network.Response, error)
 
+// NetworkFallback performs a request without re-entering Service Worker dispatch.
+type NetworkFallback func(context.Context, *network.Request) (*network.Response, error)
+
 type registration struct {
 	id            uint64
 	origin        string
@@ -237,6 +240,58 @@ func (manager *Manager) Controller(clientURL *url.URL) *runtimemodel.ServiceWork
 		return nil
 	}
 	return value
+}
+
+// DispatchFetch delivers a controlled request to the longest matching active
+// worker. A worker that does not synchronously call respondWith uses fallback.
+func (manager *Manager) DispatchFetch(ctx context.Context, request *network.Request, fallback NetworkFallback) (*network.Response, error) {
+	if fallback == nil {
+		return nil, errors.New("service worker network fallback is unavailable")
+	}
+	if request == nil || request.URL == nil || request.Kind == network.RequestServiceWorker || request.Kind == network.RequestServiceWorkerFetch {
+		return fallback(ctx, request)
+	}
+	controlURL := request.SiteURL
+	if request.Kind == network.RequestNavigation || request.Kind == network.RequestForm || controlURL == nil {
+		controlURL = request.URL
+	}
+	worker, ok := manager.activeWorkerFor(controlURL)
+	if !ok {
+		return fallback(ctx, request)
+	}
+	return evaluateFetch(ctx, worker.source, worker.scriptURL, request, fallback)
+}
+
+type activeWorker struct {
+	scriptURL *url.URL
+	source    []byte
+}
+
+func (manager *Manager) activeWorkerFor(clientURL *url.URL) (activeWorker, bool) {
+	if manager == nil || !IsSecureContext(clientURL) {
+		return activeWorker{}, false
+	}
+	origin, err := network.OriginFromURL(clientURL)
+	if err != nil {
+		return activeWorker{}, false
+	}
+	manager.mu.RLock()
+	var best *registration
+	for _, item := range manager.registrations {
+		if !item.active || item.origin != origin.String() || !strings.HasPrefix(clientURL.EscapedPath(), item.scope.EscapedPath()) {
+			continue
+		}
+		if best == nil || len(item.scope.EscapedPath()) > len(best.scope.EscapedPath()) {
+			best = item
+		}
+	}
+	if best == nil {
+		manager.mu.RUnlock()
+		return activeWorker{}, false
+	}
+	result := activeWorker{scriptURL: cloneURL(best.activeURL), source: append([]byte(nil), best.activeScript...)}
+	manager.mu.RUnlock()
+	return result, result.scriptURL != nil && len(result.source) != 0
 }
 
 func (manager *Manager) registrationForScope(clientURL *url.URL, scopeValue string) (*registration, bool) {

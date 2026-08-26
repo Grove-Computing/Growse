@@ -219,9 +219,9 @@ func (state *frameLoadState) buildPage(ctx context.Context, response *network.Re
 	pageStore := state.browser.newDevToolsPageStore()
 	styleResources, imageResources, scriptResources := state.resourceClient, state.resourceClient, state.resourceClient
 	if loader, ok := state.resourceClient.(requestLoader); ok {
-		styleResources = pageResourceLoader{loader: loader, siteURL: state.rootURL, kind: network.RequestStylesheet, observer: pageStore.ObserveNetwork}
-		imageResources = pageResourceLoader{loader: loader, siteURL: state.rootURL, kind: network.RequestImage, observer: pageStore.ObserveNetwork}
-		scriptResources = pageResourceLoader{loader: loader, siteURL: state.rootURL, kind: network.RequestScript, engine: string(state.engine), observer: pageStore.ObserveNetwork}
+		styleResources = pageResourceLoader{loader: loader, siteURL: response.URL, kind: network.RequestStylesheet, observer: pageStore.ObserveNetwork}
+		imageResources = pageResourceLoader{loader: loader, siteURL: response.URL, kind: network.RequestImage, observer: pageStore.ObserveNetwork}
+		scriptResources = pageResourceLoader{loader: loader, siteURL: response.URL, kind: network.RequestScript, engine: string(state.engine), observer: pageStore.ObserveNetwork}
 	}
 	stylesheet, err := state.browser.loadStyles(ctx, styleResources, response.URL, document)
 	if err != nil {

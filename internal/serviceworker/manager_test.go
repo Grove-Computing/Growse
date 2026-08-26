@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/Grove-Computing/Growse/internal/network"
@@ -82,6 +83,64 @@ func TestRegistrationRejectsInsecureCrossOriginAndWideScope(t *testing.T) {
 	}
 	if !IsSecureContext(parseServiceWorkerURL(t, "http://localhost:8080/app")) || !IsSecureContext(parseServiceWorkerURL(t, "http://127.0.0.1/app")) {
 		t.Fatal("loopback development origin was not secure")
+	}
+}
+
+func TestActiveWorkerDispatchesFetchResponseAndNetworkFallback(t *testing.T) {
+	manager := NewManager()
+	clientURL := parseServiceWorkerURL(t, "https://app.example/app/page.html")
+	scriptURL := parseServiceWorkerURL(t, "https://app.example/app/sw.js")
+	source := []byte(`
+		self.addEventListener("install", () => self.skipWaiting());
+		self.addEventListener("activate", () => clients.claim());
+		self.addEventListener("fetch", event => {
+			if (event.request.url.endsWith("/offline")) {
+				event.respondWith(Promise.resolve(new Response("offline", {
+					status: 203, headers: {"Content-Type": "text/html", "X-Service-Worker": "yes"}
+				})));
+			} else if (event.request.url.endsWith("/passthrough")) {
+				event.respondWith(fetch(event.request));
+			}
+		});`)
+	_, err := manager.Register(context.Background(), clientURL, scriptURL.String(), "", func(context.Context, *network.Request) (*network.Response, error) {
+		return &network.Response{URL: scriptURL, StatusCode: http.StatusOK, ContentType: "text/javascript", Body: source}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fallbackCalls := 0
+	fallback := func(_ context.Context, request *network.Request) (*network.Response, error) {
+		fallbackCalls++
+		if strings.HasSuffix(request.URL.Path, "/passthrough") && request.Kind != network.RequestServiceWorkerFetch {
+			t.Fatalf("internal fetch kind = %v", request.Kind)
+		}
+		return &network.Response{
+			URL: request.URL, StatusCode: http.StatusOK, Status: "OK", ContentType: "text/plain",
+			Header: http.Header{"Content-Type": []string{"text/plain"}}, Body: []byte("network"),
+		}, nil
+	}
+	offlineURL := parseServiceWorkerURL(t, "https://app.example/app/offline")
+	response, err := manager.DispatchFetch(context.Background(), &network.Request{Method: http.MethodGet, URL: offlineURL, Kind: network.RequestNavigation}, fallback)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(response.Body) != "offline" || response.StatusCode != 203 || response.Header.Get("X-Service-Worker") != "yes" || fallbackCalls != 0 {
+		t.Fatalf("synthetic response = %#v, fallback calls = %d", response, fallbackCalls)
+	}
+	passURL := parseServiceWorkerURL(t, "https://app.example/app/passthrough")
+	response, err = manager.DispatchFetch(context.Background(), &network.Request{Method: http.MethodGet, URL: passURL, Kind: network.RequestFetch, SiteURL: clientURL}, fallback)
+	if err != nil || string(response.Body) != "network" || fallbackCalls != 1 {
+		t.Fatalf("respondWith(fetch()) = %#v, %v, fallback calls = %d", response, err, fallbackCalls)
+	}
+	networkURL := parseServiceWorkerURL(t, "https://app.example/app/network")
+	response, err = manager.DispatchFetch(context.Background(), &network.Request{Method: http.MethodGet, URL: networkURL, Kind: network.RequestSubresource, SiteURL: clientURL}, fallback)
+	if err != nil || string(response.Body) != "network" || fallbackCalls != 2 {
+		t.Fatalf("implicit fallback = %#v, %v, fallback calls = %d", response, err, fallbackCalls)
+	}
+	outsideURL := parseServiceWorkerURL(t, "https://app.example/outside/page")
+	_, err = manager.DispatchFetch(context.Background(), &network.Request{Method: http.MethodGet, URL: outsideURL, Kind: network.RequestNavigation}, fallback)
+	if err != nil || fallbackCalls != 3 {
+		t.Fatalf("outside fallback = %v, calls = %d", err, fallbackCalls)
 	}
 }
 

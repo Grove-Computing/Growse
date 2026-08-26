@@ -258,6 +258,71 @@ func TestBrowserRegistersAndControlsServiceWorkerThroughIsolatedRuntime(t *testi
 	}
 }
 
+func TestBrowserUsesActiveServiceWorkerForNavigationResourceAndFetch(t *testing.T) {
+	installURL := mustParseURL(t, "https://app.example/app/install.html")
+	workerURL := mustParseURL(t, "https://app.example/app/sw.js")
+	controlledURL := mustParseURL(t, "https://app.example/app/controlled.html")
+	loader := &requestRouteLoader{routeLoader: routeLoader{responses: map[string]*network.Response{
+		installURL.String(): {
+			URL: installURL, StatusCode: http.StatusOK, ContentType: "text/html",
+			Body: []byte(`<p id="result">installing</p><script>
+				navigator.serviceWorker.register("/app/sw.js").then(function() {
+					document.getElementById("result").textContent = "installed";
+				});
+			</script>`),
+		},
+		workerURL.String(): {
+			URL: workerURL, StatusCode: http.StatusOK, ContentType: "text/javascript",
+			Body: []byte(`
+				self.addEventListener("install", () => self.skipWaiting());
+				self.addEventListener("activate", () => clients.claim());
+				self.addEventListener("fetch", event => {
+					if (event.request.url.endsWith("/controlled.html")) {
+						event.respondWith(new Response('<p id="result">navigation</p><script src="/app/app.js"></' + 'script><script>fetch("/app/api").then(r => r.text()).then(value => console.log("service-worker-" + value));</' + 'script>', {headers: {"Content-Type": "text/html"}}));
+					} else if (event.request.url.endsWith("/app.js")) {
+						event.respondWith(Promise.resolve(new Response('document.getElementById("result").textContent += "|resource";', {headers: {"Content-Type": "text/javascript"}})));
+					} else if (event.request.url.endsWith("/api")) {
+						event.respondWith(new Response("fetch", {headers: {"Content-Type": "text/plain"}}));
+					}
+				});`),
+		},
+	}}}
+	browserState := NewWithEngineFactory(loader, func(engine runtimemodel.Engine) runtimemodel.Runtime { return isolated.New(engine) })
+	t.Cleanup(func() { _ = browserState.Close() })
+	if _, err := browserState.SetEngine(context.Background(), runtimemodel.EngineJavaScript); err != nil {
+		t.Fatal(err)
+	}
+	installPage, err := browserState.Navigate(context.Background(), installURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	installResult, _ := installPage.Document.GetElementByID("result")
+	if got := installResult.TextContent(); got != "installed" {
+		t.Fatalf("installation result = %q", got)
+	}
+	page, err := browserState.Navigate(context.Background(), controlledURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, _ := page.Document.GetElementByID("result")
+	if got := result.TextContent(); got != "navigation|resource" || page.RuntimeError != "" {
+		t.Fatalf("controlled page = text:%q runtimeError:%q scriptErrors:%v", got, page.RuntimeError, page.ScriptErrors)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for len(page.DevTools.Console()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	records := page.DevTools.Console()
+	if len(records) != 1 || records[0].Message != "service-worker-fetch" {
+		t.Fatalf("controlled Fetch console = %#v", records)
+	}
+	for _, request := range loader.requests {
+		if request.URL.String() == controlledURL.String() || request.URL.Path == "/app/app.js" || request.URL.Path == "/app/api" {
+			t.Fatalf("controlled request reached network fallback: %#v", request)
+		}
+	}
+}
+
 func TestBrowserExecutesCORSAndIntegrityCheckedClassicJavaScript(t *testing.T) {
 	scriptBody := []byte(`document.getElementById("result").textContent = "cors integrity";`)
 	digest := sha512.Sum384(scriptBody)
