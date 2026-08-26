@@ -105,6 +105,7 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 
 	request := loadRequest{
 		Engine: r.engine, Document: environment.Document.Snapshot(), StorageSource: environment.StorageSource,
+		ImportMap: cloneStringMap(environment.ImportMap),
 	}
 	if environment.BaseURL != nil {
 		request.BaseURL = publicRuntimeURL(environment.BaseURL).String()
@@ -146,6 +147,17 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 		_ = r.Stop()
 	}()
 	return nil
+}
+
+func cloneStringMap(source map[string]string) map[string]string {
+	if len(source) == 0 {
+		return nil
+	}
+	result := make(map[string]string, len(source))
+	for key, value := range source {
+		result[key] = value
+	}
+	return result
 }
 
 func (r *Runtime) Start(ctx context.Context) error {

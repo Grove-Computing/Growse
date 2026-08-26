@@ -23,11 +23,12 @@ import (
 )
 
 const (
-	MaxEventListeners = 10_000
-	maxModuleBytes    = 2 << 20
-	maxCallStackSize  = 1_000
-	callbackQueueSize = 64
-	maxMicrotaskQueue = 4_096
+	MaxEventListeners    = 10_000
+	maxModuleBytes       = 2 << 20
+	maxCallStackSize     = 1_000
+	callbackQueueSize    = 64
+	maxMicrotaskQueue    = 4_096
+	defaultModuleTimeout = 5 * time.Second
 )
 
 var errRuntimeStopped = errors.New("javascript runtime is stopped")
@@ -61,6 +62,7 @@ type Runtime struct {
 	documentListeners []listenerRecord
 	microtasks        []goja.Value
 	maxMicrotasks     int
+	moduleTimeout     time.Duration
 
 	elements      map[*goja.Object]*domapi.Element
 	elementByID   map[uint64]*goja.Object
@@ -82,7 +84,7 @@ type listenerRecord struct {
 
 // New returns an unloaded page-scoped JavaScript Runtime.
 func New() *Runtime {
-	return &Runtime{maxListeners: MaxEventListeners, maxMicrotasks: maxMicrotaskQueue}
+	return &Runtime{maxListeners: MaxEventListeners, maxMicrotasks: maxMicrotaskQueue, moduleTimeout: defaultModuleTimeout}
 }
 
 // Load prepares a VM and host objects without evaluating Page scripts.
@@ -203,19 +205,29 @@ func (runtime *Runtime) Start(ctx context.Context) error {
 	scripts := cloneScripts(runtime.scripts)
 	runtime.mu.Unlock()
 
-	err := runtime.runSync(ctx, func(vm *goja.Runtime) error {
-		blocking, deferred, asynchronous := orderClassicScripts(scripts)
-		if err := runtime.evaluateScripts(vm, blocking); err != nil {
-			return err
-		}
+	blocking, deferred, asynchronous := orderClassicScripts(scripts)
+	if err := runtime.evaluateScripts(ctx, blocking); err != nil {
+		return fmt.Errorf("execute JavaScript scripts: %w", err)
+	}
+	if err := runtime.runSync(ctx, func(vm *goja.Runtime) error {
 		runtime.setDocumentReadyState(vm, "interactive")
-		if err := runtime.evaluateScripts(vm, deferred); err != nil {
-			return err
-		}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("execute JavaScript scripts: %w", err)
+	}
+	if err := runtime.evaluateScripts(ctx, deferred); err != nil {
+		return fmt.Errorf("execute JavaScript scripts: %w", err)
+	}
+	if err := runtime.runSync(ctx, func(vm *goja.Runtime) error {
 		runtime.dispatchLifecycleEvent(vm, "DOMContentLoaded", true)
-		if err := runtime.evaluateScripts(vm, asynchronous); err != nil {
-			return err
-		}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("execute JavaScript scripts: %w", err)
+	}
+	if err := runtime.evaluateScripts(ctx, asynchronous); err != nil {
+		return fmt.Errorf("execute JavaScript scripts: %w", err)
+	}
+	err := runtime.runSync(ctx, func(vm *goja.Runtime) error {
 		runtime.setDocumentReadyState(vm, "complete")
 		runtime.dispatchLifecycleEvent(vm, "load", false)
 		return nil
@@ -334,37 +346,105 @@ func orderClassicScripts(scripts []runtimemodel.Script) (blocking, deferred, asy
 	return blocking, deferred, asynchronous
 }
 
-func (runtime *Runtime) evaluateScripts(vm *goja.Runtime, scripts []runtimemodel.Script) error {
+func (runtime *Runtime) evaluateScripts(ctx context.Context, scripts []runtimemodel.Script) error {
 	for index, script := range scripts {
 		name := fmt.Sprintf("inline-script-%03d.js", index)
 		if script.SourceURL != nil {
 			name = network.RedactedURL(script.SourceURL)
 		}
-		source := script.Source
+		var settled chan error
+		var containedErr error
+		evaluationContext := ctx
+		cancel := func() {}
+		timeout := defaultModuleTimeout
 		if script.Kind == runtimemodel.ScriptModule {
 			runtime.mu.Lock()
-			runtimeContext, environment := runtime.runtimeCtx, runtime.environment
+			timeout = runtime.moduleTimeout
+			runtime.mu.Unlock()
+			if timeout <= 0 {
+				timeout = defaultModuleTimeout
+			}
+			evaluationContext, cancel = context.WithTimeout(ctx, timeout)
+		}
+		err := runtime.runSync(evaluationContext, func(vm *goja.Runtime) error {
+			source := script.Source
+			if script.Kind != runtimemodel.ScriptModule {
+				_, scriptErr := vm.RunScript(name, source)
+				if scriptErr != nil {
+					containedErr = scriptErr
+				}
+				return nil
+			}
+			runtime.mu.Lock()
+			environment := runtime.environment
 			runtime.mu.Unlock()
 			var bundleErr error
-			source, bundleErr = bundleModule(runtimeContext, script, environment)
+			source, bundleErr = bundleModule(evaluationContext, script, environment)
 			if bundleErr != nil {
 				runtime.recordError(fmt.Sprintf("link %s: %v", name, bundleErr))
-				continue
+				return nil
+			}
+			value, scriptErr := vm.RunScript(name, source)
+			if scriptErr != nil {
+				containedErr = scriptErr
+				return nil
+			}
+			promise, ok := value.Export().(*goja.Promise)
+			if !ok {
+				runtime.recordError(fmt.Sprintf("evaluate %s: module did not return a Promise", name))
+				return nil
+			}
+			settled = make(chan error, 1)
+			promiseObject := vm.ToValue(promise).ToObject(vm)
+			then, ok := goja.AssertFunction(promiseObject.Get("then"))
+			if !ok {
+				return errors.New("module Promise has no then method")
+			}
+			resolve := vm.ToValue(func(goja.FunctionCall) goja.Value {
+				settled <- nil
+				return goja.Undefined()
+			})
+			reject := vm.ToValue(func(call goja.FunctionCall) goja.Value {
+				settled <- errors.New(call.Argument(0).String())
+				return goja.Undefined()
+			})
+			_, scriptErr = then(promiseObject, resolve, reject)
+			return scriptErr
+		})
+		if err != nil {
+			cancel()
+			return err
+		}
+		if containedErr != nil {
+			runtime.recordScriptError(name, containedErr)
+		}
+		if settled != nil {
+			select {
+			case evaluationErr := <-settled:
+				if evaluationErr != nil {
+					runtime.recordError(fmt.Sprintf("evaluate %s: %v", name, evaluationErr))
+				}
+			case <-evaluationContext.Done():
+				if ctx.Err() != nil {
+					cancel()
+					return context.Cause(ctx)
+				}
+				runtime.recordError(fmt.Sprintf("evaluate %s: module graph exceeded %s", name, timeout))
 			}
 		}
-		_, scriptErr := vm.RunScript(name, source)
-		runtime.drainMicrotasks(vm)
-		if scriptErr != nil {
-			runtime.mu.Lock()
-			runtimeContext := runtime.runtimeCtx
-			runtime.mu.Unlock()
-			if runtimeContext != nil && runtimeContext.Err() != nil {
-				return context.Cause(runtimeContext)
-			}
-			runtime.recordError(fmt.Sprintf("execute %s: %v", name, scriptErr))
-		}
+		cancel()
 	}
 	return nil
+}
+
+func (runtime *Runtime) recordScriptError(name string, scriptErr error) {
+	runtime.mu.Lock()
+	runtimeContext := runtime.runtimeCtx
+	runtime.mu.Unlock()
+	if runtimeContext != nil && runtimeContext.Err() != nil {
+		return
+	}
+	runtime.recordError(fmt.Sprintf("execute %s: %v", name, scriptErr))
 }
 
 // UpdateLocation reflects a same-document Navigation in JavaScript location.

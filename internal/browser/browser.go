@@ -1245,6 +1245,12 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	})
 	backgroundImages, backgroundErrors := loadBackgroundImages(ctx, imageResources, computedStyles)
 	scripts, scriptErrors := loadScriptsForEngine(ctx, scriptResources, response.URL, document, engine)
+	var importMap map[string]string
+	if engine == runtimemodel.EngineJavaScript {
+		var importMapErrors []string
+		importMap, importMapErrors = loadImportMap(document, response.URL)
+		scriptErrors = append(scriptErrors, importMapErrors...)
+	}
 
 	page := &Page{
 		URL:              cloneURL(response.URL),
@@ -1263,6 +1269,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 		BackgroundErrors: backgroundErrors,
 		Engine:           engine,
 		Scripts:          scripts,
+		ImportMap:        importMap,
 		ScriptErrors:     scriptErrors,
 		DevTools:         pageStore,
 	}
@@ -1606,6 +1613,7 @@ func startRuntime(ctx context.Context, factory runtimemodel.EngineFactory, engin
 		Document:        page.Document,
 		Events:          page.Events,
 		BaseURL:         cloneURL(page.URL),
+		ImportMap:       cloneStringMap(page.ImportMap),
 		FetchLimiter:    fetchLimiter,
 		Navigate:        navigate,
 		HistoryPush:     historyPush,

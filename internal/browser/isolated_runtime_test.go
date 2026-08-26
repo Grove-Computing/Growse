@@ -127,7 +127,7 @@ func TestBrowserExecutesCrossOriginModuleGraphInIsolatedWorker(t *testing.T) {
 		response.Header().Set("Content-Type", "text/javascript")
 		switch request.URL.Path {
 		case "/main.js":
-			_, _ = response.Write([]byte(`import { value } from "./dependency.js"; document.getElementById("result").textContent = value;`))
+			_, _ = response.Write([]byte(`const module = await import("fixture"); await new Promise(resolve => setTimeout(resolve, 5)); document.getElementById("result").textContent = module.value;`))
 		case "/dependency.js":
 			_, _ = response.Write([]byte(`export const value = "module graph executed";`))
 		default:
@@ -137,7 +137,7 @@ func TestBrowserExecutesCrossOriginModuleGraphInIsolatedWorker(t *testing.T) {
 	defer moduleServer.Close()
 	pageServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
 		response.Header().Set("Content-Type", "text/html")
-		_, _ = response.Write([]byte(`<p id="result">idle</p><script type="module" src="` + moduleServer.URL + `/main.js"></script>`))
+		_, _ = response.Write([]byte(`<p id="result">idle</p><script type="importmap">{"imports":{"fixture":"` + moduleServer.URL + `/dependency.js"}}</script><script type="module" src="` + moduleServer.URL + `/main.js"></script>`))
 	}))
 	defer pageServer.Close()
 	allowedOrigin = pageServer.URL
@@ -163,6 +163,42 @@ func TestBrowserExecutesCrossOriginModuleGraphInIsolatedWorker(t *testing.T) {
 	}
 	if moduleRecords != 2 {
 		t.Fatalf("module Network records = %d, want 2", moduleRecords)
+	}
+}
+
+func TestBrowserRejectsCrossOriginModuleDependencyWithoutCORS(t *testing.T) {
+	moduleServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.Header().Set("Content-Type", "text/javascript")
+		_, _ = response.Write([]byte(`export const value = "must not execute";`))
+	}))
+	defer moduleServer.Close()
+	pageServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.Header().Set("Content-Type", "text/html")
+		_, _ = response.Write([]byte(`<p id="result">idle</p><script type="module">import { value } from "` + moduleServer.URL + `/dependency.js"; document.getElementById("result").textContent = value;</script>`))
+	}))
+	defer pageServer.Close()
+
+	browserState := NewWithEngineFactory(network.NewClient(), func(engine runtimemodel.Engine) runtimemodel.Runtime { return isolated.New(engine) })
+	t.Cleanup(func() { _ = browserState.Close() })
+	if _, err := browserState.SetEngine(context.Background(), runtimemodel.EngineJavaScript); err != nil {
+		t.Fatal(err)
+	}
+	page, err := browserState.Navigate(context.Background(), pageServer.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, _ := page.Document.GetElementByID("result")
+	if got := result.TextContent(); got != "idle" || !page.RuntimeStarted || page.RuntimeError != "" {
+		t.Fatalf("CORS-rejected module = text:%q started:%t runtimeError:%q", got, page.RuntimeStarted, page.RuntimeError)
+	}
+	foundCORSError := false
+	for _, record := range page.DevTools.Network() {
+		if record.Kind == "module" && record.ErrorCategory == "cors" {
+			foundCORSError = true
+		}
+	}
+	if !foundCORSError {
+		t.Fatalf("module CORS failure was not recorded: %+v", page.DevTools.Network())
 	}
 }
 

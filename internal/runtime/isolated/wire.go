@@ -36,6 +36,7 @@ type loadRequest struct {
 	Scripts        []wireScript               `json:"scripts"`
 	Document       dom.DocumentSnapshot       `json:"document"`
 	BaseURL        string                     `json:"baseUrl"`
+	ImportMap      map[string]string          `json:"importMap,omitempty"`
 	LocalStorage   []storagecore.Entry        `json:"localStorage,omitempty"`
 	SessionStorage []storagecore.Entry        `json:"sessionStorage,omitempty"`
 	StorageSource  storagecore.MutationSource `json:"storageSource"`
