@@ -228,11 +228,6 @@ func collectScriptsForEngine(root *dom.Node, engine runtimemodel.Engine) []scrip
 	return result
 }
 
-func scriptEngine(value string, hasType bool) runtimemodel.Engine {
-	engine, _ := classifyScript(value, hasType)
-	return engine
-}
-
 func classifyScript(value string, hasType bool) (runtimemodel.Engine, runtimemodel.ScriptKind) {
 	value = strings.TrimSpace(value)
 	if !hasType || value == "" {
