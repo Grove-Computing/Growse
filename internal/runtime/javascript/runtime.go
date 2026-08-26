@@ -57,6 +57,8 @@ type Runtime struct {
 	schedulerAPI      *schedulerapi.API
 	schedulerClock    schedulerapi.Clock
 	storageAPI        *storageapi.API
+	wasmAPI           *wasmAPI
+	responseValues    map[*goja.Object]fetchapi.Response
 	abortSignals      map[*goja.Object]*fetchapi.AbortSignal
 	windowListeners   []listenerRecord
 	documentListeners []listenerRecord
@@ -141,6 +143,8 @@ func (runtime *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script,
 	}
 	runtime.schedulerAPI.SetFrameScope(environment.FrameScope)
 	runtime.storageAPI = storageapi.NewPage(environment.LocalStorage, environment.SessionStorage, environment.StorageSource, runtime.enqueueCallback)
+	runtime.responseValues = make(map[*goja.Object]fetchapi.Response)
+	runtime.wasmAPI = newWasmAPI(runtimeContext, runtime.responseValues)
 	runtime.elements = make(map[*goja.Object]*domapi.Element)
 	runtime.elementByID = make(map[uint64]*goja.Object)
 	runtime.abortSignals = make(map[*goja.Object]*fetchapi.AbortSignal)
@@ -172,6 +176,9 @@ func (runtime *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script,
 			return err
 		}
 		if err := runtime.installGlobals(vm); err != nil {
+			return err
+		}
+		if err := runtime.wasmAPI.install(vm); err != nil {
 			return err
 		}
 		return runtime.installScheduler(vm)
@@ -255,6 +262,7 @@ func (runtime *Runtime) Stop() error {
 	fetch := runtime.fetchAPI
 	scheduler := runtime.schedulerAPI
 	storage := runtime.storageAPI
+	wasm := runtime.wasmAPI
 	runtime.cancel = nil
 	runtime.mu.Unlock()
 	if cancel != nil {
@@ -268,6 +276,9 @@ func (runtime *Runtime) Stop() error {
 	}
 	if storage != nil {
 		storage.Close()
+	}
+	if wasm != nil {
+		wasm.close()
 	}
 	if vm != nil {
 		vm.Interrupt(context.Canceled)
@@ -298,6 +309,8 @@ func (runtime *Runtime) Stop() error {
 	runtime.navigationAPI = nil
 	runtime.schedulerAPI = nil
 	runtime.storageAPI = nil
+	runtime.wasmAPI = nil
+	runtime.responseValues = nil
 	runtime.elements = nil
 	runtime.elementByID = nil
 	runtime.abortSignals = nil
