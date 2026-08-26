@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Grove-Computing/Growse/internal/devtools"
@@ -24,31 +25,38 @@ import (
 )
 
 const (
-	defaultFrameWidth  = 300
-	defaultFrameHeight = 150
-	maxFrameDepth      = 8
-	maxFramesPerPage   = 32
-	maxFrameDocuments  = 32 << 20
+	defaultFrameWidth   = 300
+	defaultFrameHeight  = 150
+	maxFrameDepth       = 8
+	maxFramesPerPage    = 32
+	maxFrameDocuments   = 32 << 20
+	maxFrameNavigations = 64
+	maxFrameCallbacks   = 256
 )
 
 type frameLoadState struct {
-	browser        *Browser
-	ctx            context.Context
-	rootURL        *url.URL
-	resourceClient ResourceLoader
-	runtimeClient  ResourceLoader
-	engineFactory  runtimemodel.EngineFactory
-	engine         runtimemodel.Engine
-	storage        *storagecore.Manager
-	fetchLimiter   *fetchapi.Limiter
-	onMutation     func()
-	reducedMotion  bool
-	count          int
-	documentBytes  int
-	nextID         uint64
-	generation     uint64
-	registry       *windowRegistry
-	rootPage       *Page
+	browser         *Browser
+	ctx             context.Context
+	rootURL         *url.URL
+	resourceClient  ResourceLoader
+	runtimeClient   ResourceLoader
+	engineFactory   runtimemodel.EngineFactory
+	engine          runtimemodel.Engine
+	storage         *storagecore.Manager
+	fetchLimiter    *fetchapi.Limiter
+	onMutation      func()
+	reducedMotion   bool
+	count           int
+	documentBytes   int
+	nextID          uint64
+	generation      uint64
+	registry        *windowRegistry
+	rootPage        *Page
+	callbackMu      sync.Mutex
+	callbackWG      sync.WaitGroup
+	callbacks       int
+	callbacksClosed bool
+	limitMu         sync.Mutex
 }
 
 func (b *Browser) loadFrames(ctx context.Context, page *Page, resourceClient, runtimeClient ResourceLoader, engineFactory runtimemodel.EngineFactory, engine runtimemodel.Engine, storageManager *storagecore.Manager, fetchLimiter *fetchapi.Limiter, onMutation func(), reducedMotion bool) {
@@ -76,12 +84,14 @@ func (state *frameLoadState) loadChildren(parentPage *Page, root *dom.Node, pare
 	var frames []*Frame
 	var walk func(*dom.Node)
 	walk = func(node *dom.Node) {
-		if node == nil || state.count >= maxFramesPerPage {
+		if node == nil || state.frameLimitReached() {
 			return
 		}
 		if node.Type == dom.NodeElement && node.TagName == "iframe" {
 			frame := state.loadOne(parentPage, node, parentID, depth+1)
-			frames = append(frames, frame)
+			if frame != nil {
+				frames = append(frames, frame)
+			}
 			return
 		}
 		for _, child := range node.Children {
@@ -93,15 +103,22 @@ func (state *frameLoadState) loadChildren(parentPage *Page, root *dom.Node, pare
 }
 
 func (state *frameLoadState) loadOne(parentPage *Page, element *dom.Node, parentID uint64, depth int) *Frame {
+	state.limitMu.Lock()
+	if state.count >= maxFramesPerPage {
+		state.limitMu.Unlock()
+		return nil
+	}
 	state.count++
 	state.nextID++
+	frameID := state.nextID
+	state.limitMu.Unlock()
 	frameContext, cancel := context.WithCancel(state.ctx)
 	width, height := frameDimensions(element)
 	policy := parseFramePolicy(element)
 	frame := &Frame{
-		ID: state.nextID, ElementID: element.ID, ParentID: parentID, Depth: depth, Generation: state.generation,
+		ID: frameID, ElementID: element.ID, ParentID: parentID, Depth: depth, Generation: state.generation,
 		Viewport: FrameViewport{Width: width, Height: height, ClipWidth: width, ClipHeight: height}, cancel: cancel,
-		state: state, parentPage: parentPage, Sandbox: policy,
+		state: state, parentPage: parentPage, Sandbox: policy, lifecycle: frameContext,
 	}
 	if depth > maxFrameDepth {
 		frame.LoadError = fmt.Sprintf("iframe depth exceeds %d", maxFrameDepth)
@@ -113,8 +130,7 @@ func (state *frameLoadState) loadOne(parentPage *Page, element *dom.Node, parent
 		frame.LoadError = err.Error()
 		return frame
 	}
-	state.documentBytes += len(response.Body)
-	if state.documentBytes > maxFrameDocuments {
+	if !state.reserveDocumentBytes(len(response.Body)) {
 		frame.LoadError = fmt.Sprintf("iframe documents exceed %d bytes", maxFrameDocuments)
 		return frame
 	}
@@ -139,6 +155,21 @@ func (state *frameLoadState) loadOne(parentPage *Page, element *dom.Node, parent
 	page.Document.SetReadyState("complete")
 	frame.Loaded = true
 	return frame
+}
+
+func (state *frameLoadState) frameLimitReached() bool {
+	state.limitMu.Lock()
+	reached := state.count >= maxFramesPerPage
+	state.limitMu.Unlock()
+	return reached
+}
+
+func (state *frameLoadState) reserveDocumentBytes(size int) bool {
+	state.limitMu.Lock()
+	state.documentBytes += size
+	allowed := state.documentBytes <= maxFrameDocuments
+	state.limitMu.Unlock()
+	return allowed
 }
 
 func (state *frameLoadState) frameResponse(ctx context.Context, parentURL *url.URL, element *dom.Node) (*network.Response, error) {
@@ -240,12 +271,14 @@ func (state *frameLoadState) startFrameRuntime(ctx context.Context, frame *Frame
 				return errors.New("iframe navigation URL is invalid")
 			}
 			resolved := cloneURL(target)
-			go func() {
-				if err := frame.navigate(context.Background(), resolved); err != nil {
-					frame.LoadError = err.Error()
+			if err := frame.reserveNavigation(); err != nil {
+				return err
+			}
+			return state.queueCallback(func() {
+				if err := frame.navigateReserved(context.Background(), resolved); err != nil && !errors.Is(err, context.Canceled) {
+					frame.setLoadError(err.Error())
 				}
-			}()
-			return nil
+			})
 		},
 		func(value string, target *url.URL) error { return frame.updateHistory(value, target, false) },
 		func(value string, target *url.URL) error { return frame.updateHistory(value, target, true) },
@@ -255,42 +288,139 @@ func (state *frameLoadState) startFrameRuntime(ctx context.Context, frame *Frame
 	return runtime
 }
 
+func (state *frameLoadState) queueCallback(callback func()) error {
+	if state == nil || callback == nil || state.ctx == nil || state.ctx.Err() != nil {
+		return errors.New("iframe parent lifecycle is closed")
+	}
+	state.callbackMu.Lock()
+	if state.callbacksClosed || state.ctx.Err() != nil {
+		state.callbackMu.Unlock()
+		return errors.New("iframe parent lifecycle is closed")
+	}
+	if state.callbacks >= maxFrameCallbacks {
+		state.callbackMu.Unlock()
+		return fmt.Errorf("iframe callback limit exceeds %d", maxFrameCallbacks)
+	}
+	state.callbacks++
+	state.callbackWG.Add(1)
+	state.callbackMu.Unlock()
+	go func() {
+		defer func() {
+			state.callbackMu.Lock()
+			state.callbacks--
+			state.callbackMu.Unlock()
+			state.callbackWG.Done()
+		}()
+		if state.ctx.Err() == nil {
+			callback()
+		}
+	}()
+	return nil
+}
+
+func (state *frameLoadState) waitCallbacks() {
+	if state != nil {
+		state.callbackMu.Lock()
+		state.callbacksClosed = true
+		state.callbackMu.Unlock()
+		state.callbackWG.Wait()
+	}
+}
+
 // Navigate loads a new independent Document into this Frame.
 func (frame *Frame) Navigate(ctx context.Context, rawURL string) error {
-	if frame == nil || frame.Closed || frame.Page == nil || frame.Page.URL == nil {
+	if frame == nil {
+		return errors.New("iframe is closed")
+	}
+	frame.lifecycleMu.Lock()
+	closed := frame.Closed || frame.Page == nil || frame.Page.URL == nil
+	var currentURL *url.URL
+	if !closed {
+		currentURL = cloneURL(frame.Page.URL)
+	}
+	frame.lifecycleMu.Unlock()
+	if closed {
 		return errors.New("iframe is closed")
 	}
 	reference, err := url.Parse(strings.TrimSpace(rawURL))
 	if err != nil {
 		return errors.New("iframe navigation URL is invalid")
 	}
-	return frame.navigate(ctx, frame.Page.URL.ResolveReference(reference))
+	return frame.navigate(ctx, currentURL.ResolveReference(reference))
 }
 
 // Reload reloads this Frame without replacing its parent element identity.
 func (frame *Frame) Reload(ctx context.Context) error {
-	if frame == nil || frame.URL == nil {
+	if frame == nil {
 		return errors.New("iframe is unavailable")
 	}
-	return frame.navigate(ctx, cloneURL(frame.URL))
+	frame.lifecycleMu.Lock()
+	target := cloneURL(frame.URL)
+	closed := frame.Closed || target == nil
+	frame.lifecycleMu.Unlock()
+	if closed {
+		return errors.New("iframe is unavailable")
+	}
+	return frame.navigate(ctx, target)
 }
 
 func (frame *Frame) navigate(ctx context.Context, target *url.URL) error {
+	if err := frame.reserveNavigation(); err != nil {
+		return err
+	}
+	return frame.navigateReserved(ctx, target)
+}
+
+func (frame *Frame) reserveNavigation() error {
+	if frame == nil {
+		return errors.New("iframe navigation is unavailable")
+	}
+	frame.lifecycleMu.Lock()
+	closed := frame.Closed || frame.lifecycle == nil || frame.lifecycle.Err() != nil
+	frame.lifecycleMu.Unlock()
+	if closed {
+		return errors.New("iframe is closed")
+	}
+	frame.quotaMu.Lock()
+	defer frame.quotaMu.Unlock()
+	if frame.navigations >= maxFrameNavigations {
+		return fmt.Errorf("iframe navigation limit exceeds %d", maxFrameNavigations)
+	}
+	frame.navigations++
+	return nil
+}
+
+func (frame *Frame) navigateReserved(ctx context.Context, target *url.URL) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if frame == nil || frame.Closed || frame.state == nil || target == nil || !isHTTPURL(target) || target.User != nil {
+	if frame == nil || frame.state == nil || target == nil || !isHTTPURL(target) || target.User != nil {
 		return errors.New("iframe navigation is unavailable")
 	}
+	frame.navigationMu.Lock()
+	defer frame.navigationMu.Unlock()
+	frame.lifecycleMu.Lock()
+	lifecycle := frame.lifecycle
+	closed := frame.Closed || lifecycle == nil
+	frame.lifecycleMu.Unlock()
+	if closed {
+		return errors.New("iframe is closed")
+	}
+	navigationContext, cancelNavigation := context.WithCancel(ctx)
+	stopLifecycle := context.AfterFunc(lifecycle, cancelNavigation)
+	defer func() {
+		stopLifecycle()
+		cancelNavigation()
+	}()
 	state := frame.state
-	response, err := state.fetchFrameURL(ctx, target)
+	response, err := state.fetchFrameURL(navigationContext, target)
 	if err != nil {
-		frame.LoadError = err.Error()
+		frame.setLoadError(err.Error())
 		return err
 	}
-	page, err := state.buildPage(ctx, response, frame.Sandbox)
+	page, err := state.buildPage(navigationContext, response, frame.Sandbox)
 	if err != nil {
-		frame.LoadError = err.Error()
+		frame.setLoadError(err.Error())
 		return err
 	}
 	nextGeneration := frame.Generation + 1
@@ -303,15 +433,35 @@ func (frame *Frame) navigate(ctx context.Context, target *url.URL) error {
 	state.registry.define(self)
 	page.Frames = state.loadChildren(page, page.Document.Root, frame.ID, frame.Depth)
 	page.window.Children = childWindowReferences(page, page)
+	frame.lifecycleMu.Lock()
+	if frame.Closed || frame.lifecycle != lifecycle || navigationContext.Err() != nil {
+		frame.lifecycleMu.Unlock()
+		_ = closePageFrames(page)
+		page.closeDevTools()
+		return context.Canceled
+	}
 	oldPage, oldRuntime, oldCancel := frame.Page, frame.runtime, frame.cancel
 	frameContext, frameCancel := context.WithCancel(state.ctx)
-	frame.Page, frame.URL, frame.cancel = page, cloneURL(page.URL), frameCancel
+	frame.Page, frame.URL, frame.cancel, frame.lifecycle = page, cloneURL(page.URL), frameCancel, frameContext
 	frame.Generation = nextGeneration
 	frame.LoadError = ""
-	frame.runtime = state.startFrameRuntime(frameContext, frame)
-	page.RuntimeStarted = frame.runtime != nil
 	page.Document.SetReadyState("complete")
 	frame.Loaded = true
+	frame.lifecycleMu.Unlock()
+	newRuntime := state.startFrameRuntime(frameContext, frame)
+	frame.lifecycleMu.Lock()
+	if frame.Closed || frame.Page != page || frame.Generation != nextGeneration {
+		frame.lifecycleMu.Unlock()
+		if newRuntime != nil {
+			_ = newRuntime.Stop()
+		}
+		_ = closePageFrames(page)
+		page.closeDevTools()
+		return context.Canceled
+	}
+	frame.runtime = newRuntime
+	page.RuntimeStarted = newRuntime != nil
+	frame.lifecycleMu.Unlock()
 	if oldCancel != nil {
 		oldCancel()
 	}
@@ -331,6 +481,17 @@ func (frame *Frame) navigate(ctx context.Context, target *url.URL) error {
 		state.browser.dispatchPageEvent(frame.parentPage, events.Event{Type: events.Type("load"), Target: frame.ElementID})
 	}
 	return nil
+}
+
+func (frame *Frame) setLoadError(message string) {
+	if frame == nil {
+		return
+	}
+	frame.lifecycleMu.Lock()
+	if !frame.Closed {
+		frame.LoadError = message
+	}
+	frame.lifecycleMu.Unlock()
 }
 
 func windowReference(id, generation uint64, page *Page) runtimemodel.WindowReference {
@@ -464,7 +625,12 @@ func (state *frameLoadState) fetchFrameURL(ctx context.Context, target *url.URL)
 }
 
 func (frame *Frame) updateHistory(_ string, target *url.URL, replace bool) error {
-	if frame == nil || frame.Closed || frame.Page == nil || target == nil || frame.Page.URL == nil || !network.SameOrigin(frame.Page.URL, target) {
+	if frame == nil {
+		return errors.New("iframe history update is unavailable")
+	}
+	frame.lifecycleMu.Lock()
+	defer frame.lifecycleMu.Unlock()
+	if frame.Closed || frame.Page == nil || target == nil || frame.Page.URL == nil || !network.SameOrigin(frame.Page.URL, target) {
 		return errors.New("iframe history update is unavailable")
 	}
 	frame.Page.URL = cloneURL(target)
@@ -560,35 +726,45 @@ func (frame *Frame) SetViewport(x, y, width, height float32) {
 
 // Close stops this Frame and every descendant exactly once.
 func (frame *Frame) Close() error {
-	if frame == nil || frame.Closed {
+	if frame == nil {
+		return nil
+	}
+	frame.lifecycleMu.Lock()
+	if frame.Closed {
+		frame.lifecycleMu.Unlock()
 		return nil
 	}
 	frame.Closed = true
-	if frame.cancel != nil {
-		frame.cancel()
-		frame.cancel = nil
+	cancel, page, pageRuntime := frame.cancel, frame.Page, frame.runtime
+	frame.cancel = nil
+	frame.lifecycle = nil
+	frame.runtime = nil
+	frame.lifecycleMu.Unlock()
+	if cancel != nil {
+		cancel()
 	}
+	frame.navigationMu.Lock()
+	defer frame.navigationMu.Unlock()
 	var result error
-	if frame.Page != nil {
-		if err := closePageFrames(frame.Page); err != nil {
+	if page != nil {
+		if err := closePageFrames(page); err != nil {
 			result = err
 		}
-		if frame.Page.Animations != nil {
-			frame.Page.Animations.Clear()
+		if page.Animations != nil {
+			page.Animations.Clear()
 		}
-		if frame.Page.Transitions != nil {
-			frame.Page.Transitions.Clear()
+		if page.Transitions != nil {
+			page.Transitions.Clear()
 		}
-		frame.Page.closeDevTools()
-		if frame.Page.windows != nil {
-			frame.Page.windows.unregister(frame.Page.window.Self)
+		page.closeDevTools()
+		if page.windows != nil {
+			page.windows.unregister(page.window.Self)
 		}
 	}
-	if frame.runtime != nil {
-		if err := frame.runtime.Stop(); err != nil && result == nil {
+	if pageRuntime != nil {
+		if err := pageRuntime.Stop(); err != nil && result == nil {
 			result = err
 		}
-		frame.runtime = nil
 	}
 	return result
 }
@@ -598,6 +774,10 @@ func closePageFrames(page *Page) error {
 		return nil
 	}
 	var result error
+	var state *frameLoadState
+	if page.window.Self.ID == 0 && len(page.Frames) != 0 && page.Frames[0] != nil {
+		state = page.Frames[0].state
+	}
 	for _, frame := range page.Frames {
 		if err := frame.Close(); err != nil && result == nil {
 			result = err
@@ -605,6 +785,7 @@ func closePageFrames(page *Page) error {
 	}
 	page.Frames = nil
 	if page.window.Self.ID == 0 && page.windows != nil {
+		state.waitCallbacks()
 		page.windows.close()
 	}
 	return result

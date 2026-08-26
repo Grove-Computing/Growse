@@ -2,7 +2,12 @@ package browser
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"net/url"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/layout"
@@ -10,6 +15,28 @@ import (
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 	"github.com/Grove-Computing/Growse/internal/runtime/isolated"
 )
+
+type frameLifecycleLoader struct {
+	responses map[string]*network.Response
+	started   chan struct{}
+}
+
+func (loader *frameLifecycleLoader) Get(ctx context.Context, target *url.URL) (*network.Response, error) {
+	if target.Path == "/slow.html" {
+		select {
+		case <-loader.started:
+		default:
+			close(loader.started)
+		}
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	response, ok := loader.responses[target.String()]
+	if !ok {
+		return nil, errors.New("unexpected URL")
+	}
+	return response, nil
+}
 
 func TestIframeLoadsSrcSrcdocNestedDocumentsAndIndependentRuntimes(t *testing.T) {
 	parentURL := mustParseURL(t, "https://page.example/app/index.html")
@@ -229,5 +256,122 @@ func TestIframeSandboxTokensFailClosedBeforeCapabilitiesRun(t *testing.T) {
 	access := runtimeFrameAccess(page)
 	if access[0].SameOrigin || access[1].SameOrigin || access[2].SameOrigin || !access[3].SameOrigin || same.Page.FramePolicy.HasOpaqueOrigin() {
 		t.Fatalf("sandbox Origin access = %#v", access)
+	}
+}
+
+func TestIframeDepthCountDocumentNavigationAndCallbackLimits(t *testing.T) {
+	countURL := mustParseURL(t, "https://limits.example/count.html")
+	countHTML := strings.Repeat(`<iframe srcdoc="<p>frame</p>"></iframe>`, maxFramesPerPage+8)
+	countBrowser := New(&routeLoader{responses: map[string]*network.Response{
+		countURL.String(): {URL: countURL, StatusCode: 200, ContentType: "text/html", Body: []byte(countHTML)},
+	}})
+	countPage, err := countBrowser.Navigate(context.Background(), countURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(countPage.Frames) != maxFramesPerPage {
+		t.Fatalf("Frame count = %d, want %d", len(countPage.Frames), maxFramesPerPage)
+	}
+	if err := countBrowser.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	depthURL := mustParseURL(t, "https://limits.example/root.html")
+	responses := map[string]*network.Response{
+		depthURL.String(): {URL: depthURL, StatusCode: 200, ContentType: "text/html", Body: []byte(`<iframe src="/depth-1.html"></iframe>`)},
+	}
+	for depth := 1; depth <= maxFrameDepth; depth++ {
+		current := mustParseURL(t, fmt.Sprintf("https://limits.example/depth-%d.html", depth))
+		body := `<p>last</p>`
+		if depth <= maxFrameDepth {
+			body = fmt.Sprintf(`<iframe src="/depth-%d.html"></iframe>`, depth+1)
+		}
+		responses[current.String()] = &network.Response{URL: current, StatusCode: 200, ContentType: "text/html", Body: []byte(body)}
+	}
+	depthBrowser := New(&routeLoader{responses: responses})
+	depthPage, err := depthBrowser.Navigate(context.Background(), depthURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	deepest := depthPage.Frames[0]
+	for deepest.Depth <= maxFrameDepth && deepest.Page != nil && len(deepest.Page.Frames) != 0 {
+		deepest = deepest.Page.Frames[0]
+	}
+	if deepest.Depth != maxFrameDepth+1 || deepest.Loaded || !strings.Contains(deepest.LoadError, "depth") {
+		t.Fatalf("deepest Frame = depth:%d loaded:%t error:%q", deepest.Depth, deepest.Loaded, deepest.LoadError)
+	}
+	if err := depthBrowser.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	state := &frameLoadState{documentBytes: maxFrameDocuments - 1}
+	if !state.reserveDocumentBytes(1) || state.reserveDocumentBytes(1) {
+		t.Fatal("Frame document byte limit was not enforced at 32 MiB")
+	}
+	frame := &Frame{lifecycle: context.Background()}
+	for index := 0; index < maxFrameNavigations; index++ {
+		if err := frame.reserveNavigation(); err != nil {
+			t.Fatalf("Navigation reservation %d: %v", index, err)
+		}
+	}
+	if err := frame.reserveNavigation(); err == nil || !strings.Contains(err.Error(), "navigation limit") {
+		t.Fatalf("Navigation overflow error = %v", err)
+	}
+
+	callbackContext, cancelCallbacks := context.WithCancel(context.Background())
+	callbackState := &frameLoadState{ctx: callbackContext}
+	release := make(chan struct{})
+	for index := 0; index < maxFrameCallbacks; index++ {
+		if err := callbackState.queueCallback(func() { <-release }); err != nil {
+			t.Fatalf("callback reservation %d: %v", index, err)
+		}
+	}
+	if err := callbackState.queueCallback(func() {}); err == nil || !strings.Contains(err.Error(), "callback limit") {
+		t.Fatalf("callback overflow error = %v", err)
+	}
+	close(release)
+	callbackState.waitCallbacks()
+	cancelCallbacks()
+	if err := callbackState.queueCallback(func() {}); err == nil {
+		t.Fatal("callback was accepted after parent lifecycle cancellation")
+	}
+}
+
+func TestIframeCloseCancelsNavigationAndWaitsForIt(t *testing.T) {
+	parentURL := mustParseURL(t, "https://lifecycle.example/index.html")
+	frameURL := mustParseURL(t, "https://lifecycle.example/frame.html")
+	loader := &frameLifecycleLoader{
+		started: make(chan struct{}),
+		responses: map[string]*network.Response{
+			parentURL.String(): {URL: parentURL, StatusCode: 200, ContentType: "text/html", Body: []byte(`<iframe src="/frame.html"></iframe>`)},
+			frameURL.String():  {URL: frameURL, StatusCode: 200, ContentType: "text/html", Body: []byte(`<p>frame</p>`)},
+		},
+	}
+	browserState := New(loader)
+	page, err := browserState.Navigate(context.Background(), parentURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	frame := page.Frames[0]
+	navigationDone := make(chan error, 1)
+	go func() { navigationDone <- frame.Navigate(context.Background(), "/slow.html") }()
+	select {
+	case <-loader.started:
+	case <-time.After(time.Second):
+		t.Fatal("Frame navigation did not start")
+	}
+	if err := frame.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-navigationDone:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("canceled Frame navigation error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Frame Close did not wait for navigation callback")
+	}
+	if err := browserState.Close(); err != nil {
+		t.Fatal(err)
 	}
 }

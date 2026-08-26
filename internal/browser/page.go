@@ -1,9 +1,11 @@
 package browser
 
 import (
+	"context"
 	"image"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Grove-Computing/Growse/internal/css"
@@ -61,24 +63,29 @@ type Page struct {
 
 // Frame is one nested browsing context owned by a parent Page.
 type Frame struct {
-	ID         uint64
-	ElementID  dom.NodeID
-	ParentID   uint64
-	Depth      int
-	Generation uint64
-	URL        *url.URL
-	Page       *Page
-	Viewport   FrameViewport
-	ScrollX    float32
-	ScrollY    float32
-	LoadError  string
-	Loaded     bool
-	Closed     bool
-	Sandbox    runtimemodel.FramePolicy
-	runtime    runtimemodel.Runtime
-	cancel     func()
-	state      *frameLoadState
-	parentPage *Page
+	ID           uint64
+	ElementID    dom.NodeID
+	ParentID     uint64
+	Depth        int
+	Generation   uint64
+	URL          *url.URL
+	Page         *Page
+	Viewport     FrameViewport
+	ScrollX      float32
+	ScrollY      float32
+	LoadError    string
+	Loaded       bool
+	Closed       bool
+	Sandbox      runtimemodel.FramePolicy
+	runtime      runtimemodel.Runtime
+	cancel       func()
+	state        *frameLoadState
+	parentPage   *Page
+	lifecycle    context.Context
+	lifecycleMu  sync.Mutex
+	navigationMu sync.Mutex
+	quotaMu      sync.Mutex
+	navigations  int
 }
 
 // FrameViewport is the iframe border box and its clipped child viewport.
