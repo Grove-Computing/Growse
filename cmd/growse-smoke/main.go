@@ -89,11 +89,11 @@ func run(root string) error {
 	for _, diagnostic := range page.RuntimeDiagnostics() {
 		kinds[diagnostic.Kind]++
 		if strings.Contains(diagnostic.URL, "container-secret") || strings.Contains(diagnostic.URL, "token=") {
-			return errors.New("Runtime diagnostic leaked fixture query")
+			return errors.New("runtime diagnostic leaked fixture query")
 		}
 	}
 	if kinds["page"] != 1 || kinds["frame"] != 3 || kinds["service-worker"] != 1 {
-		return fmt.Errorf("Runtime diagnostic contexts = %v", kinds)
+		return fmt.Errorf("runtime diagnostic contexts = %v", kinds)
 	}
 	return nil
 }
