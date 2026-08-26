@@ -98,6 +98,51 @@ func TestIsolatedJavaScriptPreservesDOMEventStorageAndConsoleBehavior(t *testing
 	}
 }
 
+func TestIsolatedJavaScriptAppliesDOMCollectionsAndInnerHTMLSnapshot(t *testing.T) {
+	document, err := htmlparser.Parse(strings.NewReader(`<main id="app"><p class="card">old</p></main>`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := New(runtimemodel.EngineJavaScript)
+	t.Cleanup(func() { _ = runtime.Stop() })
+	records := make(chan string, 8)
+	environment := runtimemodel.Environment{
+		Document: document, Events: events.NewDispatcher(), BaseURL: mustURL(t, "https://example.test/page"),
+		ConsoleRecord: func(_, message string) { records <- message },
+	}
+	source := `
+		var app = document.getElementById("app");
+		var heading = document.createElement("h1");
+		heading.id = "heading";
+		heading.append(document.createTextNode("created"));
+		app.replaceChildren(heading);
+		app.innerHTML = '<section id="result" class="ready"><strong>isolated</strong></section>';
+		if (document.querySelectorAll(".ready").length !== 1) throw new Error("collection mismatch");`
+	if err := runtime.Load(context.Background(), []runtimemodel.Script{{Engine: runtimemodel.EngineJavaScript, SourceURL: environment.BaseURL, Source: source, Inline: true}}, environment); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if result, ok := document.GetElementByID("result"); ok && result.TextContent() == "isolated" {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	result, _ := document.GetElementByID("result")
+	var messages []string
+	for {
+		select {
+		case message := <-records:
+			messages = append(messages, message)
+		default:
+			t.Fatalf("isolated innerHTML snapshot = %#v console=%v", result, messages)
+		}
+	}
+}
+
 func TestIsolatedGoRuntimeMutatesBrowserOwnedDocument(t *testing.T) {
 	document, err := htmlparser.Parse(strings.NewReader(`<p id="result">idle</p>`))
 	if err != nil {
