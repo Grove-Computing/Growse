@@ -52,6 +52,7 @@ type Runtime struct {
 	stopped     bool
 	unsubscribe func()
 	taskTimeout time.Duration
+	sandbox     runtimemodel.SandboxStatus
 }
 
 // New returns a runtime proxy for engine. The worker is started by Load.
@@ -93,6 +94,14 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 	r.mu.Unlock()
 	r.installHostHandlers(workerPeer)
 	r.monitorWorker(workerPeer)
+	if err := r.verifySandbox(ctx); err != nil {
+		r.mu.Lock()
+		r.sandbox.Failure = err.Error()
+		r.sandbox.Ready = false
+		r.mu.Unlock()
+		_ = r.Stop()
+		return err
+	}
 
 	request := loadRequest{
 		Engine: r.engine, Document: environment.Document.Snapshot(), StorageSource: environment.StorageSource,
@@ -158,6 +167,18 @@ func (r *Runtime) Start(ctx context.Context) error {
 		return fmt.Errorf("start isolated %s runtime: %w", r.engine, err)
 	}
 	return nil
+}
+
+// SandboxStatus returns the last verified worker capability report.
+func (r *Runtime) SandboxStatus() runtimemodel.SandboxStatus {
+	if r == nil {
+		return runtimemodel.SandboxStatus{Failure: "isolated runtime is nil"}
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	status := r.sandbox
+	status.Constraints = append([]string(nil), status.Constraints...)
+	return status
 }
 
 func (r *Runtime) Stop() error {
@@ -302,6 +323,20 @@ func (r *Runtime) callTask(ctx context.Context, method string, request, response
 		return fmt.Errorf("runtime worker task %s exceeded %s", method, timeout)
 	}
 	return err
+}
+
+func (r *Runtime) verifySandbox(ctx context.Context) error {
+	var response sandboxStatusResponse
+	if err := r.callTask(ctx, "sandbox.status", nil, &response); err != nil {
+		return fmt.Errorf("verify runtime sandbox: %w", err)
+	}
+	if err := validateSandboxStatus(response, os.Getpid()); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	r.sandbox = response.SandboxStatus
+	r.mu.Unlock()
+	return nil
 }
 
 func (r *Runtime) terminateWorker() {
@@ -530,6 +565,9 @@ func startWorkerProcess() (*peer, *exec.Cmd, io.WriteCloser, chan error, *limite
 	}
 	command := exec.Command(executable) // #nosec G204 -- os.Executable is the verified current Growse/test binary.
 	command.Env = workerEnvironment()
+	if err := configureWorkerCommand(command); err != nil {
+		return nil, nil, nil, nil, nil, fmt.Errorf("configure runtime worker sandbox: %w", err)
+	}
 	stdin, err := command.StdinPipe()
 	if err != nil {
 		return nil, nil, nil, nil, nil, err

@@ -1646,8 +1646,12 @@ func startRuntime(ctx context.Context, factory runtimemodel.EngineFactory, engin
 			return loader.Do(fetchContext, &copy)
 		}
 	}
-	if err := pageRuntime.Load(ctx, page.Scripts, environment); err != nil {
-		setRuntimeError(page, fmt.Sprintf("load %s runtime: %v", engine, err))
+	loadErr := pageRuntime.Load(ctx, page.Scripts, environment)
+	if reporter, ok := pageRuntime.(runtimemodel.SandboxReporter); ok {
+		page.Sandbox = reporter.SandboxStatus()
+	}
+	if loadErr != nil {
+		setRuntimeError(page, fmt.Sprintf("load %s runtime: %v", engine, loadErr))
 		_ = pageRuntime.Stop()
 		return nil
 	}

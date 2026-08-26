@@ -49,7 +49,8 @@ type navigationEventRuntime interface {
 }
 
 type workerState struct {
-	peer *peer
+	peer    *peer
+	sandbox sandboxStatusResponse
 
 	commandMu sync.Mutex
 	mu        sync.Mutex
@@ -77,13 +78,17 @@ func init() {
 
 func runWorkerProcess() error {
 	debug.SetMemoryLimit(maxWorkerHeapBytes)
+	constraints, err := applyWorkerPlatformSandbox()
+	if err != nil {
+		return err
+	}
 	p := newPeer(os.Stdin, os.Stdout)
-	state := &workerState{peer: p}
+	state := &workerState{peer: p, sandbox: workerSandboxStatus(constraints)}
 	state.installHandlers()
 	<-p.done
 	_ = state.stop()
 	p.mu.Lock()
-	err := p.readErr
+	err = p.readErr
 	p.mu.Unlock()
 	if err != nil && !errors.Is(err, os.ErrClosed) {
 		return nil
@@ -92,6 +97,9 @@ func runWorkerProcess() error {
 }
 
 func (state *workerState) installHandlers() {
+	state.peer.handleRequest("sandbox.status", func(context.Context, json.RawMessage) (any, error) {
+		return state.sandbox, nil
+	})
 	state.peer.handleRequest("runtime.load", state.load)
 	state.peer.handleRequest("runtime.start", state.start)
 	state.peer.handleRequest("runtime.stop", func(context.Context, json.RawMessage) (any, error) { return nil, state.stop() })

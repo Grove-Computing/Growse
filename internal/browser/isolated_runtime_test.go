@@ -34,6 +34,9 @@ func main() { dom.GetElementByID("result").SetText("go isolated") }</script>
 	if got := result.TextContent(); got != "go isolated" || !page.RuntimeStarted {
 		t.Fatalf("Go isolated state = text:%q started:%t error:%q", got, page.RuntimeStarted, page.RuntimeError)
 	}
+	if !page.Sandbox.Ready || !page.Sandbox.ProcessBoundary || !page.Sandbox.BrokeredHostIO {
+		t.Fatalf("Go sandbox status = %#v", page.Sandbox)
+	}
 
 	page, err = browser.SetEngine(context.Background(), runtimemodel.EngineJavaScript)
 	if err != nil {
@@ -42,5 +45,8 @@ func main() { dom.GetElementByID("result").SetText("go isolated") }</script>
 	result, _ = page.Document.GetElementByID("result")
 	if got := result.TextContent(); got != "javascript isolated" || !page.RuntimeStarted {
 		t.Fatalf("JavaScript isolated state = text:%q started:%t error:%q", got, page.RuntimeStarted, page.RuntimeError)
+	}
+	if !page.Sandbox.Ready || len(page.Sandbox.Constraints) == 0 {
+		t.Fatalf("JavaScript sandbox status = %#v", page.Sandbox)
 	}
 }

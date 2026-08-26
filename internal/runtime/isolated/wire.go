@@ -11,6 +11,13 @@ import (
 	storagecore "github.com/Grove-Computing/Growse/internal/storage"
 )
 
+type sandboxStatusResponse struct {
+	runtimemodel.SandboxStatus
+	ProfileVersion  int `json:"profileVersion"`
+	ProtocolVersion int `json:"protocolVersion"`
+	WorkerPID       int `json:"workerPid"`
+}
+
 type wireScript struct {
 	Engine    runtimemodel.Engine `json:"engine"`
 	SourceURL string              `json:"sourceUrl,omitempty"`

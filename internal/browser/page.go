@@ -41,6 +41,7 @@ type Page struct {
 	ScriptErrors     []string
 	RuntimeStarted   bool
 	RuntimeError     string
+	Sandbox          runtimemodel.SandboxStatus
 	HoverTarget      dom.NodeID
 	HoverPath        []dom.NodeID
 	FocusTarget      dom.NodeID
