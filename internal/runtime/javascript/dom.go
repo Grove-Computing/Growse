@@ -12,6 +12,21 @@ import (
 
 func (runtime *Runtime) installDOM(vm *goja.Runtime) error {
 	document := vm.NewObject()
+	readyStateGetter := vm.ToValue(func(goja.FunctionCall) goja.Value {
+		if runtime.environment.Document == nil {
+			return vm.ToValue("loading")
+		}
+		return vm.ToValue(runtime.environment.Document.ReadyState())
+	})
+	if err := document.DefineAccessorProperty("readyState", readyStateGetter, nil, goja.FLAG_FALSE, goja.FLAG_TRUE); err != nil {
+		return err
+	}
+	if err := document.Set("addEventListener", func(call goja.FunctionCall) goja.Value {
+		runtime.addDocumentEventListener(vm, call.Argument(0).String(), call.Argument(1))
+		return goja.Undefined()
+	}); err != nil {
+		return err
+	}
 	if err := document.Set("getElementById", func(call goja.FunctionCall) goja.Value {
 		element := runtime.domAPI.GetElementByID(call.Argument(0).String())
 		return runtime.elementValue(vm, element)
@@ -31,6 +46,71 @@ func (runtime *Runtime) installDOM(vm *goja.Runtime) error {
 		return err
 	}
 	return vm.Set("document", document)
+}
+
+func (runtime *Runtime) addDocumentEventListener(vm *goja.Runtime, eventType string, value goja.Value) {
+	_, ok := goja.AssertFunction(value)
+	if !ok {
+		panic(vm.NewTypeError("document event listener must be a function"))
+	}
+	eventType = strings.ToLower(strings.TrimSpace(eventType))
+	if eventType != "readystatechange" && eventType != "domcontentloaded" {
+		panic(vm.NewTypeError("document event type is unsupported"))
+	}
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	for _, listener := range runtime.documentListeners {
+		if listener.eventType == eventType && listener.function.SameAs(value) {
+			return
+		}
+	}
+	if runtime.listenerCount >= runtime.maxListeners {
+		panic(vm.NewTypeError("event listener limit exceeded"))
+	}
+	runtime.documentListeners = append(runtime.documentListeners, listenerRecord{eventType: eventType, function: value})
+	runtime.listenerCount++
+}
+
+func (runtime *Runtime) setDocumentReadyState(vm *goja.Runtime, state string) {
+	document := runtime.environment.Document
+	if document == nil || !document.SetReadyState(state) {
+		return
+	}
+	if runtime.environment.OnMutation != nil {
+		runtime.environment.OnMutation()
+	}
+	runtime.dispatchLifecycleEvent(vm, "readystatechange", true)
+}
+
+func (runtime *Runtime) dispatchLifecycleEvent(vm *goja.Runtime, eventType string, documentTarget bool) {
+	lower := strings.ToLower(eventType)
+	runtime.mu.Lock()
+	listeners := runtime.windowListeners
+	target := vm.GlobalObject()
+	if documentTarget {
+		listeners = runtime.documentListeners
+		if document, ok := vm.Get("document").(*goja.Object); ok {
+			target = document
+		}
+	}
+	listeners = append([]listenerRecord(nil), listeners...)
+	runtime.mu.Unlock()
+	event := vm.NewObject()
+	_ = event.Set("type", eventType)
+	_ = event.Set("target", target)
+	for _, listener := range listeners {
+		if listener.eventType != lower {
+			continue
+		}
+		callable, ok := goja.AssertFunction(listener.function)
+		if !ok {
+			continue
+		}
+		if _, err := callable(target, event); err != nil {
+			runtime.recordError(fmt.Sprintf("JavaScript %s event handler: %v", eventType, err))
+		}
+	}
+	runtime.drainMicrotasks(vm)
 }
 
 func (runtime *Runtime) elementValue(vm *goja.Runtime, element *domapi.Element) goja.Value {

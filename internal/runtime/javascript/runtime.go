@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -22,9 +23,12 @@ import (
 )
 
 const (
-	MaxEventListeners = 10_000
-	maxCallStackSize  = 1_000
-	callbackQueueSize = 64
+	MaxEventListeners    = 10_000
+	maxModuleBytes       = 2 << 20
+	maxCallStackSize     = 1_000
+	callbackQueueSize    = 64
+	maxMicrotaskQueue    = 4_096
+	defaultModuleTimeout = 5 * time.Second
 )
 
 var errRuntimeStopped = errors.New("javascript runtime is stopped")
@@ -44,17 +48,21 @@ type Runtime struct {
 	queue      chan task
 	done       chan struct{}
 
-	scripts         []runtimemodel.Script
-	environment     runtimemodel.Environment
-	domAPI          *domapi.API
-	fetchAPI        *fetchapi.API
-	fetchClock      fetchapi.Clock
-	navigationAPI   *navigationapi.API
-	schedulerAPI    *schedulerapi.API
-	schedulerClock  schedulerapi.Clock
-	storageAPI      *storageapi.API
-	abortSignals    map[*goja.Object]*fetchapi.AbortSignal
-	windowListeners []listenerRecord
+	scripts           []runtimemodel.Script
+	environment       runtimemodel.Environment
+	domAPI            *domapi.API
+	fetchAPI          *fetchapi.API
+	fetchClock        fetchapi.Clock
+	navigationAPI     *navigationapi.API
+	schedulerAPI      *schedulerapi.API
+	schedulerClock    schedulerapi.Clock
+	storageAPI        *storageapi.API
+	abortSignals      map[*goja.Object]*fetchapi.AbortSignal
+	windowListeners   []listenerRecord
+	documentListeners []listenerRecord
+	microtasks        []goja.Value
+	maxMicrotasks     int
+	moduleTimeout     time.Duration
 
 	elements      map[*goja.Object]*domapi.Element
 	elementByID   map[uint64]*goja.Object
@@ -76,7 +84,7 @@ type listenerRecord struct {
 
 // New returns an unloaded page-scoped JavaScript Runtime.
 func New() *Runtime {
-	return &Runtime{maxListeners: MaxEventListeners}
+	return &Runtime{maxListeners: MaxEventListeners, maxMicrotasks: maxMicrotaskQueue, moduleTimeout: defaultModuleTimeout}
 }
 
 // Load prepares a VM and host objects without evaluating Page scripts.
@@ -138,6 +146,8 @@ func (runtime *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script,
 	runtime.abortSignals = make(map[*goja.Object]*fetchapi.AbortSignal)
 	runtime.listeners = nil
 	runtime.windowListeners = nil
+	runtime.documentListeners = nil
+	runtime.microtasks = nil
 	runtime.listenerCount = 0
 	runtime.loaded = true
 	queue, done := runtime.queue, runtime.done
@@ -161,6 +171,9 @@ func (runtime *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script,
 		if err := runtime.installNavigation(vm); err != nil {
 			return err
 		}
+		if err := runtime.installGlobals(vm); err != nil {
+			return err
+		}
 		return runtime.installScheduler(vm)
 	}); err != nil {
 		_ = runtime.Stop()
@@ -169,7 +182,8 @@ func (runtime *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script,
 	return nil
 }
 
-// Start evaluates selected Page scripts in document order.
+// Start evaluates selected Page scripts according to classic script loading
+// semantics and delivers the document lifecycle exactly once.
 func (runtime *Runtime) Start(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -191,16 +205,31 @@ func (runtime *Runtime) Start(ctx context.Context) error {
 	scripts := cloneScripts(runtime.scripts)
 	runtime.mu.Unlock()
 
+	blocking, deferred, asynchronous := orderClassicScripts(scripts)
+	if err := runtime.evaluateScripts(ctx, blocking); err != nil {
+		return fmt.Errorf("execute JavaScript scripts: %w", err)
+	}
+	if err := runtime.runSync(ctx, func(vm *goja.Runtime) error {
+		runtime.setDocumentReadyState(vm, "interactive")
+		return nil
+	}); err != nil {
+		return fmt.Errorf("execute JavaScript scripts: %w", err)
+	}
+	if err := runtime.evaluateScripts(ctx, deferred); err != nil {
+		return fmt.Errorf("execute JavaScript scripts: %w", err)
+	}
+	if err := runtime.runSync(ctx, func(vm *goja.Runtime) error {
+		runtime.dispatchLifecycleEvent(vm, "DOMContentLoaded", true)
+		return nil
+	}); err != nil {
+		return fmt.Errorf("execute JavaScript scripts: %w", err)
+	}
+	if err := runtime.evaluateScripts(ctx, asynchronous); err != nil {
+		return fmt.Errorf("execute JavaScript scripts: %w", err)
+	}
 	err := runtime.runSync(ctx, func(vm *goja.Runtime) error {
-		for index, script := range scripts {
-			name := fmt.Sprintf("inline-script-%03d.js", index)
-			if script.SourceURL != nil {
-				name = network.RedactedURL(script.SourceURL)
-			}
-			if _, err := vm.RunScript(name, script.Source); err != nil {
-				return fmt.Errorf("execute %s: %w", name, err)
-			}
-		}
+		runtime.setDocumentReadyState(vm, "complete")
+		runtime.dispatchLifecycleEvent(vm, "load", false)
 		return nil
 	})
 	if err != nil {
@@ -274,6 +303,8 @@ func (runtime *Runtime) Stop() error {
 	runtime.abortSignals = nil
 	runtime.listeners = nil
 	runtime.windowListeners = nil
+	runtime.documentListeners = nil
+	runtime.microtasks = nil
 	runtime.listenerCount = 0
 	runtime.loaded = false
 	runtime.mu.Unlock()
@@ -281,6 +312,139 @@ func (runtime *Runtime) Stop() error {
 		dispatcher.RemoveEventListeners(listenerIDs...)
 	}
 	return nil
+}
+
+func orderClassicScripts(scripts []runtimemodel.Script) (blocking, deferred, asynchronous []runtimemodel.Script) {
+	for _, script := range scripts {
+		switch script.Schedule {
+		case runtimemodel.ScriptDefer:
+			deferred = append(deferred, script)
+		case runtimemodel.ScriptAsync:
+			asynchronous = append(asynchronous, script)
+		default:
+			blocking = append(blocking, script)
+		}
+	}
+	byDocumentOrder := func(values []runtimemodel.Script) {
+		sort.SliceStable(values, func(left, right int) bool { return values[left].DocumentOrder < values[right].DocumentOrder })
+	}
+	byDocumentOrder(blocking)
+	byDocumentOrder(deferred)
+	sort.SliceStable(asynchronous, func(left, right int) bool {
+		leftOrder, rightOrder := asynchronous[left].FetchOrder, asynchronous[right].FetchOrder
+		if leftOrder <= 0 {
+			leftOrder = len(asynchronous) + asynchronous[left].DocumentOrder + 1
+		}
+		if rightOrder <= 0 {
+			rightOrder = len(asynchronous) + asynchronous[right].DocumentOrder + 1
+		}
+		if leftOrder == rightOrder {
+			return asynchronous[left].DocumentOrder < asynchronous[right].DocumentOrder
+		}
+		return leftOrder < rightOrder
+	})
+	return blocking, deferred, asynchronous
+}
+
+func (runtime *Runtime) evaluateScripts(ctx context.Context, scripts []runtimemodel.Script) error {
+	for index, script := range scripts {
+		name := fmt.Sprintf("inline-script-%03d.js", index)
+		if script.SourceURL != nil {
+			name = network.RedactedURL(script.SourceURL)
+		}
+		var settled chan error
+		var containedErr error
+		evaluationContext := ctx
+		cancel := func() {}
+		timeout := defaultModuleTimeout
+		if script.Kind == runtimemodel.ScriptModule {
+			runtime.mu.Lock()
+			timeout = runtime.moduleTimeout
+			runtime.mu.Unlock()
+			if timeout <= 0 {
+				timeout = defaultModuleTimeout
+			}
+			evaluationContext, cancel = context.WithTimeout(ctx, timeout)
+		}
+		err := runtime.runSync(evaluationContext, func(vm *goja.Runtime) error {
+			source := script.Source
+			if script.Kind != runtimemodel.ScriptModule {
+				_, scriptErr := vm.RunScript(name, source)
+				if scriptErr != nil {
+					containedErr = scriptErr
+				}
+				return nil
+			}
+			runtime.mu.Lock()
+			environment := runtime.environment
+			runtime.mu.Unlock()
+			var bundleErr error
+			source, bundleErr = bundleModule(evaluationContext, script, environment)
+			if bundleErr != nil {
+				runtime.recordError(fmt.Sprintf("link %s: %v", name, bundleErr))
+				return nil
+			}
+			value, scriptErr := vm.RunScript(name, source)
+			if scriptErr != nil {
+				containedErr = scriptErr
+				return nil
+			}
+			promise, ok := value.Export().(*goja.Promise)
+			if !ok {
+				runtime.recordError(fmt.Sprintf("evaluate %s: module did not return a Promise", name))
+				return nil
+			}
+			settled = make(chan error, 1)
+			promiseObject := vm.ToValue(promise).ToObject(vm)
+			then, ok := goja.AssertFunction(promiseObject.Get("then"))
+			if !ok {
+				return errors.New("module Promise has no then method")
+			}
+			resolve := vm.ToValue(func(goja.FunctionCall) goja.Value {
+				settled <- nil
+				return goja.Undefined()
+			})
+			reject := vm.ToValue(func(call goja.FunctionCall) goja.Value {
+				settled <- errors.New(call.Argument(0).String())
+				return goja.Undefined()
+			})
+			_, scriptErr = then(promiseObject, resolve, reject)
+			return scriptErr
+		})
+		if err != nil {
+			cancel()
+			return err
+		}
+		if containedErr != nil {
+			runtime.recordScriptError(name, containedErr)
+		}
+		if settled != nil {
+			select {
+			case evaluationErr := <-settled:
+				if evaluationErr != nil {
+					runtime.recordError(fmt.Sprintf("evaluate %s: %v", name, evaluationErr))
+				}
+			case <-evaluationContext.Done():
+				if ctx.Err() != nil {
+					cancel()
+					return context.Cause(ctx)
+				}
+				runtime.recordError(fmt.Sprintf("evaluate %s: module graph exceeded %s", name, timeout))
+			}
+		}
+		cancel()
+	}
+	return nil
+}
+
+func (runtime *Runtime) recordScriptError(name string, scriptErr error) {
+	runtime.mu.Lock()
+	runtimeContext := runtime.runtimeCtx
+	runtime.mu.Unlock()
+	if runtimeContext != nil && runtimeContext.Err() != nil {
+		return
+	}
+	runtime.recordError(fmt.Sprintf("execute %s: %v", name, scriptErr))
 }
 
 // UpdateLocation reflects a same-document Navigation in JavaScript location.
@@ -383,6 +547,9 @@ func (runtime *Runtime) run(ctx context.Context, vm *goja.Runtime, queue <-chan 
 			}
 			runtime.executing.Store(true)
 			err := executeTask(vm, queued.run)
+			if ctx.Err() == nil {
+				runtime.drainMicrotasks(vm)
+			}
 			runtime.executing.Store(false)
 			queued.result <- err
 		}

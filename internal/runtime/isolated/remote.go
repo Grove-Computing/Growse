@@ -105,6 +105,7 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 
 	request := loadRequest{
 		Engine: r.engine, Document: environment.Document.Snapshot(), StorageSource: environment.StorageSource,
+		ImportMap: cloneStringMap(environment.ImportMap),
 	}
 	if environment.BaseURL != nil {
 		request.BaseURL = publicRuntimeURL(environment.BaseURL).String()
@@ -120,7 +121,11 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 	}
 	request.Scripts = make([]wireScript, len(scripts))
 	for index, script := range scripts {
-		request.Scripts[index] = wireScript{Engine: script.Engine, Source: script.Source, Inline: script.Inline}
+		request.Scripts[index] = wireScript{
+			Engine: script.Engine, Kind: script.Kind, Source: script.Source, Inline: script.Inline,
+			Integrity: script.Integrity, CrossOrigin: script.CrossOrigin,
+			Schedule: script.Schedule, DocumentOrder: script.DocumentOrder, FetchOrder: script.FetchOrder,
+		}
 		if script.SourceURL != nil {
 			request.Scripts[index].SourceURL = publicRuntimeURL(script.SourceURL).String()
 		}
@@ -142,6 +147,17 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 		_ = r.Stop()
 	}()
 	return nil
+}
+
+func cloneStringMap(source map[string]string) map[string]string {
+	if len(source) == 0 {
+		return nil
+	}
+	result := make(map[string]string, len(source))
+	for key, value := range source {
+		result[key] = value
+	}
+	return result
 }
 
 func (r *Runtime) Start(ctx context.Context) error {

@@ -19,10 +19,16 @@ type sandboxStatusResponse struct {
 }
 
 type wireScript struct {
-	Engine    runtimemodel.Engine `json:"engine"`
-	SourceURL string              `json:"sourceUrl,omitempty"`
-	Source    string              `json:"source"`
-	Inline    bool                `json:"inline,omitempty"`
+	Engine        runtimemodel.Engine         `json:"engine"`
+	Kind          runtimemodel.ScriptKind     `json:"kind,omitempty"`
+	SourceURL     string                      `json:"sourceUrl,omitempty"`
+	Source        string                      `json:"source"`
+	Inline        bool                        `json:"inline,omitempty"`
+	Integrity     string                      `json:"integrity,omitempty"`
+	CrossOrigin   string                      `json:"crossOrigin,omitempty"`
+	Schedule      runtimemodel.ScriptSchedule `json:"schedule,omitempty"`
+	DocumentOrder int                         `json:"documentOrder,omitempty"`
+	FetchOrder    int                         `json:"fetchOrder,omitempty"`
 }
 
 type loadRequest struct {
@@ -30,6 +36,7 @@ type loadRequest struct {
 	Scripts        []wireScript               `json:"scripts"`
 	Document       dom.DocumentSnapshot       `json:"document"`
 	BaseURL        string                     `json:"baseUrl"`
+	ImportMap      map[string]string          `json:"importMap,omitempty"`
 	LocalStorage   []storagecore.Entry        `json:"localStorage,omitempty"`
 	SessionStorage []storagecore.Entry        `json:"sessionStorage,omitempty"`
 	StorageSource  storagecore.MutationSource `json:"storageSource"`

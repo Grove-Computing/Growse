@@ -5,6 +5,7 @@ go 1.26.6
 require (
 	gioui.org v0.10.2
 	github.com/dop251/goja v0.0.0-20260822123354-58e940e0d230
+	github.com/evanw/esbuild v0.28.2
 	github.com/srwiley/oksvg v0.0.0-20221011165216-be6e8873101c
 	github.com/srwiley/rasterx v0.0.0-20220730225603-2ab79fcdd4ef
 	github.com/tdewolff/parse/v2 v2.8.16

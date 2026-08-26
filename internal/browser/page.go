@@ -38,6 +38,7 @@ type Page struct {
 	BackgroundErrors []string
 	Engine           runtimemodel.Engine
 	Scripts          []Script
+	ImportMap        map[string]string
 	ScriptErrors     []string
 	RuntimeStarted   bool
 	RuntimeError     string

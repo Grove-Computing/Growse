@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/url"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -204,6 +205,33 @@ func TestEngineSelectionReloadsSelectedScriptsAndRemainsTabScoped(t *testing.T) 
 	}
 	if page, err := browserState.Forward(context.Background()); err != nil || page.Engine != runtimemodel.EngineJavaScript || page.URL.String() != secondURL.String() {
 		t.Fatalf("Forward() = (page=%v, error=%v), want JavaScript second Page", page, err)
+	}
+}
+
+func TestEngineSelectionFetchesOnlySelectedExternalSource(t *testing.T) {
+	pageURL := mustParseURL(t, "http://localhost/dual-external.html")
+	goURL := mustParseURL(t, "http://localhost/app.go")
+	javaScriptURL := mustParseURL(t, "http://localhost/app.js")
+	loader := &routeLoader{responses: map[string]*network.Response{
+		pageURL.String(): {
+			URL: pageURL, StatusCode: 200, ContentType: "text/html",
+			Body: []byte(`<script type="text/go" src="/app.go"></script><script src="/app.js"></script>`),
+		},
+		goURL.String():         {URL: goURL, StatusCode: 200, ContentType: "text/go", Body: []byte(`package main; func main() {}`)},
+		javaScriptURL.String(): {URL: javaScriptURL, StatusCode: 200, ContentType: "text/javascript", Body: []byte(`globalThis.loaded = true`)},
+	}}
+	browserState := NewWithEngineFactory(loader, func(runtimemodel.Engine) runtimemodel.Runtime { return &runtimeStub{} })
+	if _, err := browserState.Navigate(context.Background(), pageURL.String()); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := loader.requested, []string{pageURL.String(), goURL.String()}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Go Engine requests = %v, want %v", got, want)
+	}
+	if _, err := browserState.SetEngine(context.Background(), runtimemodel.EngineJavaScript); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := loader.requested, []string{pageURL.String(), goURL.String(), pageURL.String(), javaScriptURL.String()}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Engine switch requests = %v, want %v", got, want)
 	}
 }
 

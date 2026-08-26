@@ -135,7 +135,11 @@ func (state *workerState) load(ctx context.Context, payload json.RawMessage) (an
 	}
 	scripts := make([]runtimemodel.Script, len(request.Scripts))
 	for index, script := range request.Scripts {
-		scripts[index] = runtimemodel.Script{Engine: script.Engine, Source: script.Source, Inline: script.Inline}
+		scripts[index] = runtimemodel.Script{
+			Engine: script.Engine, Kind: script.Kind, Source: script.Source, Inline: script.Inline,
+			Integrity: script.Integrity, CrossOrigin: script.CrossOrigin,
+			Schedule: script.Schedule, DocumentOrder: script.DocumentOrder, FetchOrder: script.FetchOrder,
+		}
 		if script.SourceURL != "" {
 			scripts[index].SourceURL, err = url.Parse(script.SourceURL)
 			if err != nil {
@@ -169,6 +173,7 @@ func (state *workerState) load(ctx context.Context, payload json.RawMessage) (an
 
 	environment := runtimemodel.Environment{
 		Document: document, Events: dispatcher, BaseURL: baseURL,
+		ImportMap:    cloneStringMap(request.ImportMap),
 		LocalStorage: local, SessionStorage: session, StorageSource: request.StorageSource,
 		OnMutation: func() {
 			_ = state.peer.event("dom.mutation", mutationEvent{Document: document.Snapshot()})

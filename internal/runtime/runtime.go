@@ -16,9 +16,23 @@ import (
 // Engine はPage Scriptを評価する実行エンジンを識別する。
 type Engine string
 
+// ScriptSchedule identifies when a classic script participates in document
+// loading. The zero value is parser-blocking for compatibility.
+type ScriptSchedule string
+
+// ScriptKind distinguishes classic scripts from ECMAScript modules.
+type ScriptKind string
+
 const (
 	EngineGo         Engine = "go"
 	EngineJavaScript Engine = "javascript"
+
+	ScriptParserBlocking ScriptSchedule = "parser-blocking"
+	ScriptDefer          ScriptSchedule = "defer"
+	ScriptAsync          ScriptSchedule = "async"
+
+	ScriptClassic ScriptKind = "classic"
+	ScriptModule  ScriptKind = "module"
 )
 
 // NormalizeEngine は既存呼び出しのzero valueをGoとして扱う。
@@ -41,10 +55,16 @@ func (engine Engine) Valid() bool {
 
 // Script は文書内で見つかった1つの実行ソースを表す。
 type Script struct {
-	Engine    Engine
-	SourceURL *url.URL
-	Source    string
-	Inline    bool
+	Engine        Engine
+	Kind          ScriptKind
+	SourceURL     *url.URL
+	Source        string
+	Inline        bool
+	Integrity     string
+	CrossOrigin   string
+	Schedule      ScriptSchedule
+	DocumentOrder int
+	FetchOrder    int
 }
 
 // SandboxStatus reports the process boundary that was verified before page
@@ -67,6 +87,7 @@ type Environment struct {
 	Document        *dom.Document
 	Events          *events.Dispatcher
 	BaseURL         *url.URL
+	ImportMap       map[string]string
 	Fetch           func(context.Context, *network.Request) (*network.Response, error)
 	FetchLimiter    *fetchapi.Limiter
 	Navigate        func(*url.URL) error

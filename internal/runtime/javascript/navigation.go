@@ -103,11 +103,7 @@ func (runtime *Runtime) installNavigation(vm *goja.Runtime) error {
 	if err := vm.Set("history", history); err != nil {
 		return err
 	}
-	global := vm.GlobalObject()
-	if err := vm.Set("window", global); err != nil {
-		return err
-	}
-	return vm.Set("self", global)
+	return nil
 }
 
 func (runtime *Runtime) mustNavigate(vm *goja.Runtime, err error) {

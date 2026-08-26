@@ -1161,6 +1161,21 @@ func (loader pageResourceLoader) Get(ctx context.Context, resourceURL *url.URL) 
 	})
 }
 
+func (loader pageResourceLoader) Do(ctx context.Context, request *network.Request) (*network.Response, error) {
+	if request == nil {
+		return loader.loader.Do(ctx, nil)
+	}
+	copy := *request
+	copy.Header = request.Header.Clone()
+	copy.SiteURL = cloneURL(loader.siteURL)
+	if loader.kind != network.RequestScript || request.Kind != network.RequestModule {
+		copy.Kind = loader.kind
+	}
+	copy.Engine = loader.engine
+	copy.Observer = loader.observer
+	return loader.loader.Do(ctx, &copy)
+}
+
 func (loader cacheRevalidatingLoader) Get(ctx context.Context, resourceURL *url.URL) (*network.Response, error) {
 	if requestClient, ok := loader.ResourceLoader.(requestLoader); ok {
 		return requestClient.Do(ctx, &network.Request{
@@ -1230,6 +1245,12 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	})
 	backgroundImages, backgroundErrors := loadBackgroundImages(ctx, imageResources, computedStyles)
 	scripts, scriptErrors := loadScriptsForEngine(ctx, scriptResources, response.URL, document, engine)
+	var importMap map[string]string
+	if engine == runtimemodel.EngineJavaScript {
+		var importMapErrors []string
+		importMap, importMapErrors = loadImportMap(document, response.URL)
+		scriptErrors = append(scriptErrors, importMapErrors...)
+	}
 
 	page := &Page{
 		URL:              cloneURL(response.URL),
@@ -1248,6 +1269,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 		BackgroundErrors: backgroundErrors,
 		Engine:           engine,
 		Scripts:          scripts,
+		ImportMap:        importMap,
 		ScriptErrors:     scriptErrors,
 		DevTools:         pageStore,
 	}
@@ -1273,6 +1295,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	}, func(delta int) error {
 		return b.queueHistoryTraversal(page, navigationReady, delta)
 	}, b.historyInfo)
+	document.SetReadyState("complete")
 	if err := ctx.Err(); err != nil {
 		close(navigationReady)
 		page.Animations.Clear()
@@ -1551,21 +1574,24 @@ func startRuntime(ctx context.Context, factory runtimemodel.EngineFactory, engin
 		return nil
 	}
 	engine = runtimemodel.NormalizeEngine(engine)
-	if !IsTrustedOrigin(page.URL) {
+	if engine == runtimemodel.EngineGo && !IsTrustedOrigin(page.URL) {
 		setRuntimeError(page, fmt.Sprintf("blocked %s script execution from untrusted origin: %s", engine, network.RedactedURL(page.URL)))
 		return nil
 	}
+	if engine == runtimemodel.EngineJavaScript && !isHTTPURL(page.URL) {
+		setRuntimeError(page, fmt.Sprintf("blocked %s script execution from non-HTTP(S) origin: %s", engine, network.RedactedURL(page.URL)))
+		return nil
+	}
 	for _, script := range page.Scripts {
-		if runtimemodel.NormalizeEngine(script.Engine) != engine || !IsTrustedOrigin(script.SourceURL) || !network.SameOrigin(page.URL, script.SourceURL) {
+		invalidSource := !isHTTPURL(script.SourceURL)
+		if engine == runtimemodel.EngineGo {
+			invalidSource = !IsTrustedOrigin(script.SourceURL) || !network.SameOrigin(page.URL, script.SourceURL)
+		}
+		if runtimemodel.NormalizeEngine(script.Engine) != engine || invalidSource {
 			setRuntimeError(page, fmt.Sprintf("blocked %s script execution from untrusted or cross-origin source: %s", engine, runtimeOrigin(script.SourceURL)))
 			return nil
 		}
 	}
-	if len(page.ScriptErrors) != 0 {
-		setRuntimeError(page, fmt.Sprintf("%s script loading failed; runtime was not started", engine))
-		return nil
-	}
-
 	pageRuntime := factory(engine)
 	if pageRuntime == nil {
 		setRuntimeError(page, fmt.Sprintf("%s runtime factory returned nil", engine))
@@ -1587,6 +1613,7 @@ func startRuntime(ctx context.Context, factory runtimemodel.EngineFactory, engin
 		Document:        page.Document,
 		Events:          page.Events,
 		BaseURL:         cloneURL(page.URL),
+		ImportMap:       cloneStringMap(page.ImportMap),
 		FetchLimiter:    fetchLimiter,
 		Navigate:        navigate,
 		HistoryPush:     historyPush,

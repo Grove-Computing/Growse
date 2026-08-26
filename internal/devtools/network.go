@@ -111,6 +111,8 @@ func requestKindName(kind network.RequestKind) string {
 		return "image"
 	case network.RequestScript:
 		return "script"
+	case network.RequestModule:
+		return "module"
 	default:
 		return "subresource"
 	}

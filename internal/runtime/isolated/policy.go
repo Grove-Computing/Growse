@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/Grove-Computing/Growse/internal/network"
+	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 )
 
 const (
@@ -26,6 +27,7 @@ func validateBrokeredFetch(request *network.Request, pageURL *url.URL, engine st
 	if !httpURL(request.URL) || request.URL.User != nil {
 		return errors.New("sandbox fetch URL must be HTTP(S) without userinfo")
 	}
+	requestedKind := request.Kind
 	method := strings.ToUpper(strings.TrimSpace(request.Method))
 	if method == "" {
 		method = http.MethodGet
@@ -34,6 +36,15 @@ func validateBrokeredFetch(request *network.Request, pageURL *url.URL, engine st
 	case http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
 	default:
 		return fmt.Errorf("sandbox fetch method %q is not allowed", method)
+	}
+	if requestedKind == network.RequestModule {
+		if engine != string(runtimemodel.EngineJavaScript) || method != http.MethodGet || len(request.Body) != 0 || len(request.Header) != 0 {
+			return errors.New("sandbox module fetch must be a header-free JavaScript GET")
+		}
+		if request.Credentials != network.CredentialsInclude {
+			request.Credentials = network.CredentialsSameOrigin
+		}
+		request.CORS = true
 	}
 	if len(request.Body) > maxBrokerRequestBodyBytes {
 		return errors.New("sandbox fetch body exceeds size limit")
@@ -48,7 +59,11 @@ func validateBrokeredFetch(request *network.Request, pageURL *url.URL, engine st
 	}
 	request.Method = method
 	request.SiteURL = publicRuntimeURL(pageURL)
-	request.Kind = network.RequestFetch
+	if requestedKind == network.RequestModule {
+		request.Kind = network.RequestModule
+	} else {
+		request.Kind = network.RequestFetch
+	}
 	request.Engine = engine
 	return nil
 }

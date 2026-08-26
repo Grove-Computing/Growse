@@ -188,3 +188,36 @@ func TestCORSFiltersResponseHeadersAndHidesRejectedResponse(t *testing.T) {
 		t.Fatalf("rejected CORS response = %#v error = %v", response, err)
 	}
 }
+
+func TestScriptCORSModeUsesOriginAndCredentialPolicy(t *testing.T) {
+	siteURL := parseOriginURL(t, "https://site.example/page")
+	targetURL := parseOriginURL(t, "https://cdn.example/app.js")
+	request, err := http.NewRequest(http.MethodGet, targetURL.String(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestData := &Request{
+		Method: http.MethodGet, URL: targetURL, SiteURL: siteURL, Kind: RequestScript,
+		CORS: true, Credentials: CredentialsSameOrigin,
+	}
+	if err := applyCORSRequest(request, requestData); err != nil {
+		t.Fatal(err)
+	}
+	if got := request.Header.Get("Origin"); got != "https://site.example" {
+		t.Fatalf("script Origin = %q", got)
+	}
+	response := &http.Response{
+		StatusCode: http.StatusOK, Request: request,
+		Header: http.Header{"Access-Control-Allow-Origin": []string{"https://site.example"}},
+	}
+	if err := validateCORSResponse(response, requestData); err != nil {
+		t.Fatalf("script CORS response = %v", err)
+	}
+	if credentialsAllowed(targetURL, requestData) {
+		t.Fatal("anonymous cross-origin script was allowed credentials")
+	}
+	requestData.Credentials = CredentialsInclude
+	if !credentialsAllowed(targetURL, requestData) {
+		t.Fatal("use-credentials script was denied credentials")
+	}
+}

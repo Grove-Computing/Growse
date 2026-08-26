@@ -7,7 +7,8 @@ import (
 
 // Document owns a DOM tree and its node indexes.
 type Document struct {
-	Root *Node
+	Root       *Node
+	readyState string
 
 	byID   map[string]*Node
 	nodes  map[NodeID]*Node
@@ -17,12 +18,30 @@ type Document struct {
 // NewDocument creates an empty document with a document root node.
 func NewDocument() *Document {
 	document := &Document{
-		byID:   make(map[string]*Node),
-		nodes:  make(map[NodeID]*Node),
-		nextID: 1,
+		byID:       make(map[string]*Node),
+		nodes:      make(map[NodeID]*Node),
+		nextID:     1,
+		readyState: "loading",
 	}
 	document.Root = document.newNode(NodeDocument)
 	return document
+}
+
+// ReadyState reports the document loading lifecycle exposed to scripts.
+func (d *Document) ReadyState() string {
+	if d == nil || d.readyState == "" {
+		return "loading"
+	}
+	return d.readyState
+}
+
+// SetReadyState advances the document loading lifecycle.
+func (d *Document) SetReadyState(state string) bool {
+	if d == nil || state != "loading" && state != "interactive" && state != "complete" || d.ReadyState() == state {
+		return false
+	}
+	d.readyState = state
+	return true
 }
 
 // NodeByID returns the node with the internal document-scoped identifier.
