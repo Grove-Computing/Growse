@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -41,7 +43,7 @@ func TestExternalWebPlatformShowcaseRunsOfflineAcrossOrigins(t *testing.T) {
 		default:
 		}
 	})
-	page, err := engine.Navigate(context.Background(), top.URL+"/app/")
+	page, err := engine.Navigate(context.Background(), top.URL+"/app/?token=showcase-secret")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,6 +74,33 @@ func TestExternalWebPlatformShowcaseRunsOfflineAcrossOrigins(t *testing.T) {
 	}
 	if value := externalText(sandboxFrame.Page.Document, "sandbox-state"); value != "script blocked by sandbox" {
 		t.Fatalf("sandbox script result = %q", value)
+	}
+	assertRuntimeDiagnostics(t, page)
+}
+
+func assertRuntimeDiagnostics(t *testing.T, page *browser.Page) {
+	t.Helper()
+	contexts := page.RuntimeDiagnostics()
+	kinds := make(map[string]int)
+	workerGenerations := make(map[uint64]bool)
+	foundModule := false
+	for _, context := range contexts {
+		kinds[context.Kind]++
+		if context.Sandbox.Generation != 0 {
+			workerGenerations[context.Sandbox.Generation] = true
+		}
+		if context.Kind == "service-worker" && (context.BrowsingGeneration == 0 || context.State != "activated") {
+			t.Fatalf("Service Worker diagnostic = %+v", context)
+		}
+		for _, script := range context.Scripts {
+			foundModule = foundModule || script.Kind == "module"
+		}
+	}
+	if kinds["page"] != 1 || kinds["frame"] != 3 || kinds["service-worker"] != 1 || !foundModule || len(workerGenerations) < 3 {
+		t.Fatalf("runtime diagnostics kinds=%v generations=%v module=%v contexts=%+v", kinds, workerGenerations, foundModule, contexts)
+	}
+	if output := fmt.Sprintf("%+v", contexts); strings.Contains(output, "showcase-secret") || strings.Contains(output, "token=") {
+		t.Fatalf("runtime diagnostics leaked query secret: %s", output)
 	}
 }
 

@@ -82,6 +82,7 @@ type BrowserUI struct {
 	devToolsConsole   widget.Clickable
 	devToolsInspector widget.Clickable
 	devToolsNetwork   widget.Clickable
+	devToolsRuntime   widget.Clickable
 	devToolsFilter    widget.Clickable
 	newTabButton      widget.Clickable
 	tabRowButtons     map[browser.TabID]*widget.Clickable
@@ -92,6 +93,7 @@ type BrowserUI struct {
 	devToolsList      widget.List
 	inspectorList     widget.List
 	networkList       widget.List
+	runtimeList       widget.List
 	pageList          widget.List
 	tabList           widget.List
 	viewportClick     gesture.Click
@@ -149,6 +151,7 @@ const (
 	devToolsPanelConsole   devToolsPanel = "Console"
 	devToolsPanelInspector devToolsPanel = "Inspector"
 	devToolsPanelNetwork   devToolsPanel = "Network"
+	devToolsPanelRuntime   devToolsPanel = "Runtime"
 )
 
 type devToolsTabState struct {
@@ -710,6 +713,11 @@ func (ui *BrowserUI) handleActions(gtx layout.Context) {
 		state.Panel = devToolsPanelNetwork
 		ui.setDevToolsState(state)
 	}
+	for ui.devToolsRuntime.Clicked(gtx) {
+		state := ui.devToolsState()
+		state.Panel = devToolsPanelRuntime
+		ui.setDevToolsState(state)
+	}
 	for ui.devToolsFilter.Clicked(gtx) {
 		state := ui.devToolsState()
 		state.Filter = nextConsoleFilter(state.Filter)
@@ -1242,6 +1250,7 @@ func (ui *BrowserUI) layoutDevTools(gtx layout.Context) layout.Dimensions {
 					layout.Rigid(ui.devToolsTab(&ui.devToolsConsole, devToolsPanelConsole, state.Panel == devToolsPanelConsole)),
 					layout.Rigid(ui.devToolsTab(&ui.devToolsInspector, devToolsPanelInspector, state.Panel == devToolsPanelInspector)),
 					layout.Rigid(ui.devToolsTab(&ui.devToolsNetwork, devToolsPanelNetwork, state.Panel == devToolsPanelNetwork)),
+					layout.Rigid(ui.devToolsTab(&ui.devToolsRuntime, devToolsPanelRuntime, state.Panel == devToolsPanelRuntime)),
 					layout.Rigid(layout.Spacer{Width: unit.Dp(12)}.Layout),
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 						var page *browser.Page
@@ -1272,12 +1281,59 @@ func (ui *BrowserUI) layoutDevTools(gtx layout.Context) layout.Dimensions {
 					return ui.layoutDevToolsInspector(gtx, state)
 				case devToolsPanelNetwork:
 					return ui.layoutDevToolsNetwork(gtx)
+				case devToolsPanelRuntime:
+					return ui.layoutDevToolsRuntime(gtx)
 				default:
 					return ui.layoutDevToolsConsole(gtx, state.Filter)
 				}
 			}),
 		)
 	})
+}
+
+func (ui *BrowserUI) layoutDevToolsRuntime(gtx layout.Context) layout.Dimensions {
+	var contexts []devtoolsmodel.RuntimeContext
+	if navigator := ui.activeNavigator(); navigator != nil {
+		if page := navigator.Page(); page != nil {
+			contexts = page.RuntimeDiagnostics()
+		}
+	}
+	if len(contexts) == 0 {
+		return ui.layoutDevToolsPlaceholder(gtx, "Runtime has no execution contexts for this page")
+	}
+	return material.List(ui.theme, &ui.runtimeList).Layout(gtx, len(contexts), func(gtx layout.Context, index int) layout.Dimensions {
+		label := material.Body2(ui.theme, runtimeContextLabel(contexts[index]))
+		label.Color = color.NRGBA{R: 203, G: 213, B: 225, A: 255}
+		if len(contexts[index].ErrorCategories) != 0 || contexts[index].Sandbox.Failure {
+			label.Color = color.NRGBA{R: 253, G: 164, B: 175, A: 255}
+		}
+		return layout.Inset{Top: unit.Dp(4), Bottom: unit.Dp(4), Left: unit.Dp(6)}.Layout(gtx, label.Layout)
+	})
+}
+
+func runtimeContextLabel(context devtoolsmodel.RuntimeContext) string {
+	sandbox := "not-reported"
+	if context.Sandbox.Failure {
+		sandbox = "failed"
+	} else if context.Sandbox.Ready {
+		sandbox = "ready"
+	} else if context.Sandbox.ProcessBoundary {
+		sandbox = "process"
+	}
+	errors := "-"
+	if len(context.ErrorCategories) != 0 {
+		errors = strings.Join(context.ErrorCategories, ",")
+	}
+	scripts := make([]string, 0, len(context.Scripts))
+	for _, script := range context.Scripts {
+		scripts = append(scripts, fmt.Sprintf("%s/%s %s", script.Kind, script.Schedule, script.Location))
+	}
+	if len(scripts) == 0 {
+		scripts = append(scripts, "-")
+	}
+	return fmt.Sprintf("%s#%d parent=%d browsing=%d engine=%s state=%s worker=%d sandbox=%s constraints=%d errors=%s\n%s\nscripts: %s",
+		context.Kind, context.ID, context.ParentID, context.BrowsingGeneration, context.Engine, context.State,
+		context.Sandbox.Generation, sandbox, context.Sandbox.ConstraintCount, errors, context.URL, strings.Join(scripts, "; "))
 }
 
 func (ui *BrowserUI) layoutDevToolsNetwork(gtx layout.Context) layout.Dimensions {
