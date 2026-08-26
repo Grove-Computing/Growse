@@ -104,6 +104,20 @@ type Environment struct {
 	ConsoleLog      func(message string)
 	ConsoleRecord   func(level, message string)
 	RuntimeFailure  func(error)
+	Frames          []FrameAccess
+	FrameMutation   func(frameID, generation uint64, document dom.DocumentSnapshot) error
+}
+
+// FrameAccess is the least-privilege view of one direct child browsing context.
+// Document is present only while same-origin access is allowed.
+type FrameAccess struct {
+	ID         uint64
+	ElementID  dom.NodeID
+	Generation uint64
+	Origin     string
+	URL        string
+	SameOrigin bool
+	Document   *dom.Document
 }
 
 // Runtime は1ページに属するGoスクリプトを実行する。
@@ -122,6 +136,11 @@ type SandboxReporter interface {
 // LocationUpdater はsame-document Navigationを現在Runtimeへ通知する。
 type LocationUpdater interface {
 	UpdateLocation(*url.URL)
+}
+
+// FrameUpdater receives generation-scoped child Frame access changes.
+type FrameUpdater interface {
+	UpdateFrames([]FrameAccess)
 }
 
 // NavigationEventDispatcher はNavigation Eventを現在Runtimeへ配送する。

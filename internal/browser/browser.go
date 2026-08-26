@@ -1701,6 +1701,10 @@ func startRuntime(ctx context.Context, factory runtimemodel.EngineFactory, engin
 				onMutation()
 			}
 		},
+		Frames: runtimeFrameAccess(page),
+		FrameMutation: func(frameID, generation uint64, snapshot dom.DocumentSnapshot) error {
+			return applyFrameMutation(page, frameID, generation, snapshot, onMutation, runtimeNow())
+		},
 	}
 	if local, session, _ := storageManager.Areas(page.URL); local != nil || session != nil {
 		environment.LocalStorage = local

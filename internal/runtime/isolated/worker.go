@@ -111,6 +111,7 @@ func (state *workerState) installHandlers() {
 	state.peer.handleEvent("runtime.location", state.updateLocation)
 	state.peer.handleEvent("runtime.popstate", state.dispatchPopState)
 	state.peer.handleEvent("runtime.hashchange", state.dispatchHashChange)
+	state.peer.handleEvent("runtime.frames", state.updateFrames)
 	state.peer.handleEvent("storage.external", state.applyExternalStorage)
 }
 
@@ -171,9 +172,16 @@ func (state *workerState) load(ctx context.Context, payload json.RawMessage) (an
 	state.local, state.session, state.cancel = local, session, cancel
 	state.mu.Unlock()
 
+	frames, err := wireToFrameAccess(request.Frames)
+	if err != nil {
+		cancel()
+		_ = pageRuntime.Stop()
+		state.reset()
+		return nil, err
+	}
 	environment := runtimemodel.Environment{
 		Document: document, Events: dispatcher, BaseURL: baseURL,
-		ImportMap:    cloneStringMap(request.ImportMap),
+		ImportMap: cloneStringMap(request.ImportMap), Frames: frames,
 		LocalStorage: local, SessionStorage: session, StorageSource: request.StorageSource,
 		OnMutation: func() {
 			_ = state.peer.event("dom.mutation", mutationEvent{Document: document.Snapshot()})
@@ -206,6 +214,9 @@ func (state *workerState) load(ctx context.Context, payload json.RawMessage) (an
 				return request.HistoryLength, request.HistoryState
 			}
 			return response.Length, response.State
+		},
+		FrameMutation: func(frameID, generation uint64, document dom.DocumentSnapshot) error {
+			return state.peer.call(runtimeContext, "host.frame-mutation", frameMutationRequest{ID: frameID, Generation: generation, Document: document}, nil)
 		},
 	}
 	if err := pageRuntime.Load(runtimeContext, scripts, environment); err != nil {
@@ -386,6 +397,23 @@ func (state *workerState) dispatchHashChange(payload json.RawMessage) {
 	state.mu.Unlock()
 	if dispatcher, ok := runtime.(navigationEventRuntime); ok {
 		dispatcher.DispatchHashChange(event.OldURL, event.NewURL)
+	}
+}
+
+func (state *workerState) updateFrames(payload json.RawMessage) {
+	var frames []wireFrame
+	if workerproto.DecodePayload(payload, &frames) != nil {
+		return
+	}
+	access, err := wireToFrameAccess(frames)
+	if err != nil {
+		return
+	}
+	state.mu.Lock()
+	runtime := state.runtime
+	state.mu.Unlock()
+	if updater, ok := runtime.(runtimemodel.FrameUpdater); ok {
+		updater.UpdateFrames(access)
 	}
 }
 

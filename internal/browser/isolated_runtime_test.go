@@ -87,6 +87,54 @@ func TestBrowserExecutesExternalClassicJavaScriptOnOrdinaryHTTPSPage(t *testing.
 	}
 }
 
+func TestBrowserBridgesSameOriginIframeDOMThroughIsolatedWorker(t *testing.T) {
+	pageURL := mustParseURL(t, "https://page.example/index.html")
+	sameURL := mustParseURL(t, "https://page.example/frame.html")
+	crossURL := mustParseURL(t, "https://other.example/frame.html")
+	loader := &routeLoader{responses: map[string]*network.Response{
+		pageURL.String(): {
+			URL: pageURL, StatusCode: http.StatusOK, ContentType: "text/html",
+			Body: []byte(`<iframe id="same" src="/frame.html"></iframe>
+				<iframe id="cross" src="https://other.example/frame.html"></iframe>
+				<script>
+					const same = document.getElementById("same");
+					const cross = document.getElementById("cross");
+					same.contentDocument.getElementById("result").textContent = "changed through worker";
+					console.log([same.contentWindow.location.origin, cross.contentDocument === null,
+						typeof cross.contentWindow.document].join("|"));
+				</script>`),
+		},
+		sameURL.String(): {
+			URL: sameURL, StatusCode: http.StatusOK, ContentType: "text/html",
+			Body: []byte(`<p id="result">before</p>`),
+		},
+		crossURL.String(): {
+			URL: crossURL, StatusCode: http.StatusOK, ContentType: "text/html",
+			Body: []byte(`<p id="secret">cross-origin</p>`),
+		},
+	}}
+	browserState := NewWithEngineFactory(loader, func(engine runtimemodel.Engine) runtimemodel.Runtime { return isolated.New(engine) })
+	t.Cleanup(func() { _ = browserState.Close() })
+	if _, err := browserState.SetEngine(context.Background(), runtimemodel.EngineJavaScript); err != nil {
+		t.Fatal(err)
+	}
+	page, err := browserState.Navigate(context.Background(), pageURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Frames) != 2 || page.Frames[0].Page == nil {
+		t.Fatalf("Frames = %#v", page.Frames)
+	}
+	result, _ := page.Frames[0].Page.Document.GetElementByID("result")
+	if got := result.TextContent(); got != "changed through worker" {
+		t.Fatalf("same-origin Frame text = %q", got)
+	}
+	records := page.DevTools.Console()
+	if len(records) != 1 || records[0].Message != "https://page.example|true|undefined" {
+		t.Fatalf("Frame access Console() = %#v", records)
+	}
+}
+
 func TestBrowserExecutesCORSAndIntegrityCheckedClassicJavaScript(t *testing.T) {
 	scriptBody := []byte(`document.getElementById("result").textContent = "cors integrity";`)
 	digest := sha512.Sum384(scriptBody)

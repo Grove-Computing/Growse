@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Grove-Computing/Growse/internal/devtools"
 	"github.com/Grove-Computing/Growse/internal/dom"
@@ -294,7 +295,89 @@ func (frame *Frame) navigate(ctx context.Context, target *url.URL) error {
 		state.onMutation()
 	}
 	if frame.parentPage != nil {
+		state.browser.refreshFrameAccess(frame.parentPage)
 		state.browser.dispatchPageEvent(frame.parentPage, events.Event{Type: events.Type("load"), Target: frame.ElementID})
+	}
+	return nil
+}
+
+func runtimeFrameAccess(page *Page) []runtimemodel.FrameAccess {
+	if page == nil || page.URL == nil {
+		return nil
+	}
+	result := make([]runtimemodel.FrameAccess, 0, len(page.Frames))
+	for _, frame := range page.Frames {
+		if frame == nil || frame.Closed {
+			continue
+		}
+		access := runtimemodel.FrameAccess{ID: frame.ID, ElementID: frame.ElementID, Generation: frame.Generation}
+		if frame.Page != nil && frame.URL != nil {
+			if origin, err := network.OriginFromURL(frame.URL); err == nil {
+				access.Origin = origin.String()
+			}
+			access.SameOrigin = network.SameOrigin(page.URL, frame.URL)
+			if access.SameOrigin {
+				access.URL = frame.URL.String()
+				access.Document = frame.Page.Document
+			}
+		}
+		result = append(result, access)
+	}
+	return result
+}
+
+func applyFrameMutation(parent *Page, frameID, generation uint64, snapshot dom.DocumentSnapshot, onMutation func(), current time.Time) error {
+	if parent == nil {
+		return errors.New("frame parent is unavailable")
+	}
+	for _, frame := range parent.Frames {
+		if frame == nil || frame.ID != frameID {
+			continue
+		}
+		if frame.Closed || frame.Generation != generation || frame.Page == nil || !network.SameOrigin(parent.URL, frame.URL) {
+			return errors.New("stale or cross-origin Frame mutation was rejected")
+		}
+		if err := frame.Page.Document.ApplySnapshot(snapshot); err != nil {
+			return err
+		}
+		recomputePageStyles(frame.Page, current)
+		if onMutation != nil {
+			onMutation()
+		}
+		return nil
+	}
+	return errors.New("frame mutation target was not found")
+}
+
+func (b *Browser) refreshFrameAccess(parent *Page) {
+	if b == nil || parent == nil {
+		return
+	}
+	b.mu.RLock()
+	runtime := b.activeRuntime
+	if b.page != parent {
+		runtime = runtimeForFramePage(b.page, parent)
+	}
+	b.mu.RUnlock()
+	if updater, ok := runtime.(runtimemodel.FrameUpdater); ok {
+		updater.UpdateFrames(runtimeFrameAccess(parent))
+	}
+}
+
+func runtimeForFramePage(root, target *Page) runtimemodel.Runtime {
+	if root == nil || target == nil {
+		return nil
+	}
+	for _, frame := range root.Frames {
+		if frame == nil || frame.Closed {
+			continue
+		}
+		if frame.Page == target {
+			return frame.runtime
+		}
+		if runtime := runtimeForFramePage(frame.Page, target); runtime != nil {
+			return runtime
+		}
 	}
 	return nil
 }

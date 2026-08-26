@@ -59,6 +59,10 @@ type Runtime struct {
 	storageAPI        *storageapi.API
 	wasmAPI           *wasmAPI
 	responseValues    map[*goja.Object]fetchapi.Response
+	frameAccess       map[uint64]runtimemodel.FrameAccess
+	frameByElement    map[uint64]uint64
+	frameWindows      map[frameObjectKey]*goja.Object
+	frameDocuments    map[frameObjectKey]*goja.Object
 	abortSignals      map[*goja.Object]*fetchapi.AbortSignal
 	windowListeners   []listenerRecord
 	documentListeners []listenerRecord
@@ -144,6 +148,7 @@ func (runtime *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script,
 	runtime.schedulerAPI.SetFrameScope(environment.FrameScope)
 	runtime.storageAPI = storageapi.NewPage(environment.LocalStorage, environment.SessionStorage, environment.StorageSource, runtime.enqueueCallback)
 	runtime.responseValues = make(map[*goja.Object]fetchapi.Response)
+	runtime.setFrameAccess(environment.Frames)
 	runtime.wasmAPI = newWasmAPI(runtimeContext, runtime.responseValues)
 	runtime.elements = make(map[*goja.Object]*domapi.Element)
 	runtime.elementByID = make(map[uint64]*goja.Object)
@@ -311,6 +316,10 @@ func (runtime *Runtime) Stop() error {
 	runtime.storageAPI = nil
 	runtime.wasmAPI = nil
 	runtime.responseValues = nil
+	runtime.frameAccess = nil
+	runtime.frameByElement = nil
+	runtime.frameWindows = nil
+	runtime.frameDocuments = nil
 	runtime.elements = nil
 	runtime.elementByID = nil
 	runtime.abortSignals = nil
