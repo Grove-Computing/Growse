@@ -59,6 +59,10 @@ type pageEventRuntime interface {
 	DispatchPageEvent(func() bool) bool
 }
 
+type isolatedDOMEventRuntime interface {
+	DispatchDOMEvent(events.Event) bool
+}
+
 // Browser owns the state for one browser window.
 //
 // MVPでは1つのアクティブページ、線形の閲覧履歴、信頼済みページごとに
@@ -314,6 +318,9 @@ func (b *Browser) dispatchPageEvent(page *Page, event events.Event) bool {
 	activeRuntime := b.activeRuntime
 	active := b.page == page
 	b.mu.RUnlock()
+	if runtime, ok := activeRuntime.(isolatedDOMEventRuntime); ok && active {
+		return runtime.DispatchDOMEvent(event)
+	}
 	if runtime, ok := activeRuntime.(pageEventRuntime); ok && active {
 		return runtime.DispatchPageEvent(func() bool {
 			return page.Events.Dispatch(event)
@@ -1614,6 +1621,15 @@ func startRuntime(ctx context.Context, factory runtimemodel.EngineFactory, engin
 		ConsoleRecord: func(level, message string) {
 			page.ensureDevTools().AddConsoleForEngine(devtools.ConsoleLevel(level), string(engine), "console", message)
 		},
+		RuntimeFailure: func(err error) {
+			if err == nil {
+				return
+			}
+			setRuntimeError(page, fmt.Sprintf("%s runtime worker failed: %v", engine, err))
+			if onMutation != nil {
+				onMutation()
+			}
+		},
 	}
 	if local, session, _ := storageManager.Areas(page.URL); local != nil || session != nil {
 		environment.LocalStorage = local
@@ -1630,8 +1646,12 @@ func startRuntime(ctx context.Context, factory runtimemodel.EngineFactory, engin
 			return loader.Do(fetchContext, &copy)
 		}
 	}
-	if err := pageRuntime.Load(ctx, page.Scripts, environment); err != nil {
-		setRuntimeError(page, fmt.Sprintf("load %s runtime: %v", engine, err))
+	loadErr := pageRuntime.Load(ctx, page.Scripts, environment)
+	if reporter, ok := pageRuntime.(runtimemodel.SandboxReporter); ok {
+		page.Sandbox = reporter.SandboxStatus()
+	}
+	if loadErr != nil {
+		setRuntimeError(page, fmt.Sprintf("load %s runtime: %v", engine, loadErr))
 		_ = pageRuntime.Stop()
 		return nil
 	}

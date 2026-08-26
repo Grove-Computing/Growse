@@ -47,6 +47,21 @@ type Script struct {
 	Inline    bool
 }
 
+// SandboxStatus reports the process boundary that was verified before page
+// code was accepted by a Runtime. Constraints only contains OS controls that
+// the worker actually applied; optional controls are never treated as required.
+type SandboxStatus struct {
+	Platform           string   `json:"platform"`
+	Ready              bool     `json:"ready"`
+	ProcessBoundary    bool     `json:"processBoundary"`
+	BrokeredHostIO     bool     `json:"brokeredHostIo"`
+	MinimalEnvironment bool     `json:"minimalEnvironment"`
+	ParentLifecycle    bool     `json:"parentLifecycle"`
+	MemoryLimitBytes   int64    `json:"memoryLimitBytes"`
+	Constraints        []string `json:"constraints,omitempty"`
+	Failure            string   `json:"failure,omitempty"`
+}
+
 // Environment はRuntimeへ公開するページの状態を保持する。
 type Environment struct {
 	Document        *dom.Document
@@ -67,6 +82,7 @@ type Environment struct {
 	FrameScope      func(time.Time, func())
 	ConsoleLog      func(message string)
 	ConsoleRecord   func(level, message string)
+	RuntimeFailure  func(error)
 }
 
 // Runtime は1ページに属するGoスクリプトを実行する。
@@ -74,6 +90,12 @@ type Runtime interface {
 	Load(ctx context.Context, scripts []Script, environment Environment) error
 	Start(ctx context.Context) error
 	Stop() error
+}
+
+// SandboxReporter is implemented by runtimes that verify an out-of-process
+// sandbox before evaluating page code.
+type SandboxReporter interface {
+	SandboxStatus() SandboxStatus
 }
 
 // LocationUpdater はsame-document Navigationを現在Runtimeへ通知する。

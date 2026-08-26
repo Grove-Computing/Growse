@@ -353,3 +353,14 @@ func (area *Area) Key(index int) (string, bool) {
 	}
 	return area.ordered[index], true
 }
+
+// Entries returns a defensive insertion-ordered snapshot for persistence and
+// isolated runtime synchronization.
+func (area *Area) Entries() []Entry {
+	if area == nil {
+		return nil
+	}
+	area.mu.RLock()
+	defer area.mu.RUnlock()
+	return area.entriesLocked()
+}

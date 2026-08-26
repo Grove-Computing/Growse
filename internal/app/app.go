@@ -12,8 +12,7 @@ import (
 	"github.com/Grove-Computing/Growse/internal/browser"
 	"github.com/Grove-Computing/Growse/internal/network"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
-	"github.com/Grove-Computing/Growse/internal/runtime/javascript"
-	"github.com/Grove-Computing/Growse/internal/runtime/yaegi"
+	"github.com/Grove-Computing/Growse/internal/runtime/isolated"
 	storagecore "github.com/Grove-Computing/Growse/internal/storage"
 	"github.com/Grove-Computing/Growse/internal/ui"
 	"github.com/Grove-Computing/Growse/internal/updater"
@@ -60,14 +59,10 @@ func runWindow(window *gioapp.Window) error {
 	}
 	session := browser.NewSession(func() *browser.Browser {
 		state := browser.NewWithEngineFactoryAndStorage(networkClient, func(engine runtimemodel.Engine) runtimemodel.Runtime {
-			switch runtimemodel.NormalizeEngine(engine) {
-			case runtimemodel.EngineGo:
-				return yaegi.New()
-			case runtimemodel.EngineJavaScript:
-				return javascript.New()
-			default:
+			if !runtimemodel.NormalizeEngine(engine).Valid() {
 				return nil
 			}
+			return isolated.New(engine)
 		}, storageManager.NewPageSession())
 		return state
 	})
