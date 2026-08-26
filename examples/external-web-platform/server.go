@@ -72,6 +72,9 @@ func externalCDNHandler() http.Handler {
 	})
 	mux.HandleFunc("/", func(response http.ResponseWriter, request *http.Request) {
 		response.Header().Set("Access-Control-Allow-Origin", "*")
+		if strings.HasSuffix(request.URL.Path, ".mjs") {
+			response.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		}
 		files.ServeHTTP(response, request)
 	})
 	return mux

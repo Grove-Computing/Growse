@@ -165,6 +165,9 @@ func cdnHandler(root string) http.Handler {
 			response.Header().Set("Content-Type", "text/css; charset=utf-8")
 			_, _ = response.Write([]byte(`.cdn-style { border-color: #15aabf; }`))
 		default:
+			if strings.HasSuffix(request.URL.Path, ".mjs") {
+				response.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+			}
 			files.ServeHTTP(response, request)
 		}
 	})

@@ -20,6 +20,14 @@ import (
 func TestExternalWebPlatformShowcaseRunsOfflineAcrossOrigins(t *testing.T) {
 	cdn := httptest.NewServer(externalCDNHandler())
 	defer cdn.Close()
+	moduleResponse, err := cdn.Client().Get(cdn.URL + "/app.mjs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer moduleResponse.Body.Close()
+	if contentType := moduleResponse.Header.Get("Content-Type"); contentType != "text/javascript; charset=utf-8" {
+		t.Fatalf("module Content-Type = %q", contentType)
+	}
 	frameOrigin := httptest.NewServer(externalFrameHandler())
 	defer frameOrigin.Close()
 	top := httptest.NewServer(externalWebPlatformHandler(cdn.URL, frameOrigin.URL))
