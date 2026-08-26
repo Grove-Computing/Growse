@@ -14,13 +14,19 @@ func main() {
 			showActivityNote()
 		}
 	})
-	fetch.Fetch(fetch.Request{URL: "/login"}, func(fetch.Response) {
-		fetch.Fetch(fetch.Request{URL: "/api/activity"}, activityLoaded, activityFailed)
-	}, activityFailed)
+	fetch.Fetch(fetch.Request{URL: "/login"}, loginLoaded, activityFailed)
 	_, _ = scheduler.RequestAnimationFrame(func(timestamp scheduler.Timestamp) {
 		_ = timestamp
 		dom.GetElementByID("frame-state").SetText("active tab frame committed")
 	})
+}
+
+func loginLoaded(response fetch.Response) {
+	if response.Status < 200 || response.Status >= 300 {
+		activityFailed("login failed")
+		return
+	}
+	fetch.Fetch(fetch.Request{URL: "/api/activity"}, activityLoaded, activityFailed)
 }
 
 func activityLoaded(response fetch.Response) {

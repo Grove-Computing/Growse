@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Grove-Computing/Growse/internal/browser"
 	"github.com/Grove-Computing/Growse/internal/network"
@@ -80,12 +81,48 @@ func TestWorkspaceWebGoStartsInThreeIsolatedTabs(t *testing.T) {
 		if !ok {
 			t.Fatal("active Browser missing")
 		}
+		mutations := make(chan struct{}, 32)
+		state.SetOnMutation(func() {
+			select {
+			case mutations <- struct{}{}:
+			default:
+			}
+		})
 		page, err := state.Navigate(context.Background(), server.URL+"/"+pageName)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if len(page.ScriptErrors) != 0 || !page.RuntimeStarted || page.RuntimeError != "" {
 			t.Fatalf("%s WebGo state = started:%t load:%v runtime:%q", pageName, page.RuntimeStarted, page.ScriptErrors, page.RuntimeError)
+		}
+		if pageName == "activity.html" {
+			waitForWorkspaceActivity(t, state, mutations)
+		}
+	}
+}
+
+func waitForWorkspaceActivity(t *testing.T, engine *browser.Browser, mutations <-chan struct{}) {
+	t.Helper()
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	for {
+		ready := false
+		engine.InspectPage(func(page *browser.Page) bool {
+			status, statusOK := page.Document.GetElementByID("status")
+			feed, feedOK := page.Document.GetElementByID("activity-feed")
+			ready = statusOK && feedOK && status.TextContent() == "online" && feed.TextContent() == "workspace profile synchronized"
+			return true
+		})
+		if ready {
+			return
+		}
+		select {
+		case <-mutations:
+		case <-deadline.C:
+			page := engine.Page()
+			status, _ := page.Document.GetElementByID("status")
+			feed, _ := page.Document.GetElementByID("activity-feed")
+			t.Fatalf("activity callback did not finish: status=%q feed=%q errors=%v runtime=%q", status.TextContent(), feed.TextContent(), page.ScriptErrors, page.RuntimeError)
 		}
 	}
 }
