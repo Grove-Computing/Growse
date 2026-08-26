@@ -21,7 +21,9 @@ const (
 type fetchEvaluator struct {
 	vm            *goja.Runtime
 	workerURL     *url.URL
+	origin        string
 	fallback      NetworkFallback
+	cacheStorage  *CacheStorage
 	responses     map[*goja.Object]*network.Response
 	requests      map[*goja.Object]*network.Request
 	listeners     []goja.Callable
@@ -31,7 +33,7 @@ type fetchEvaluator struct {
 	responseValue goja.Value
 }
 
-func evaluateFetch(ctx context.Context, source []byte, workerURL *url.URL, request *network.Request, fallback NetworkFallback) (*network.Response, error) {
+func evaluateFetch(ctx context.Context, source []byte, workerURL *url.URL, request *network.Request, fallback NetworkFallback, cacheStorage *CacheStorage) (*network.Response, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -39,7 +41,7 @@ func evaluateFetch(ctx context.Context, source []byte, workerURL *url.URL, reque
 	defer cancel()
 	vm := goja.New()
 	evaluator := &fetchEvaluator{
-		vm: vm, workerURL: cloneURL(workerURL), fallback: fallback, ctx: eventContext,
+		vm: vm, workerURL: cloneURL(workerURL), origin: originString(workerURL), fallback: fallback, cacheStorage: cacheStorage, ctx: eventContext,
 		responses: make(map[*goja.Object]*network.Response), requests: make(map[*goja.Object]*network.Request),
 	}
 	timer := time.AfterFunc(maxFetchEventTime, func() { vm.Interrupt("service worker fetch event timeout") })
@@ -83,7 +85,118 @@ func (evaluator *fetchEvaluator) installGlobals() error {
 	if err := global.Set("Request", evaluator.requestConstructor); err != nil {
 		return err
 	}
-	return global.Set("Response", evaluator.responseConstructor)
+	if err := global.Set("Response", evaluator.responseConstructor); err != nil {
+		return err
+	}
+	return evaluator.installCacheStorage(global)
+}
+
+func (evaluator *fetchEvaluator) installFetchPrimitives(global *goja.Object) error {
+	if err := global.Set("fetch", evaluator.fetch); err != nil {
+		return err
+	}
+	if err := global.Set("Request", evaluator.requestConstructor); err != nil {
+		return err
+	}
+	if err := global.Set("Response", evaluator.responseConstructor); err != nil {
+		return err
+	}
+	return evaluator.installCacheStorage(global)
+}
+
+func (evaluator *fetchEvaluator) installCacheStorage(global *goja.Object) error {
+	if evaluator.cacheStorage == nil || evaluator.origin == "" {
+		return nil
+	}
+	storage := evaluator.vm.NewObject()
+	_ = storage.Set("open", func(call goja.FunctionCall) goja.Value {
+		return evaluator.promiseAction(func() (any, error) {
+			cache, err := evaluator.cacheStorage.Open(evaluator.origin, call.Argument(0).String())
+			if err != nil {
+				return nil, err
+			}
+			return evaluator.cacheValue(cache), nil
+		})
+	})
+	_ = storage.Set("match", func(call goja.FunctionCall) goja.Value {
+		return evaluator.promiseAction(func() (any, error) {
+			request, err := evaluator.requestFromValue(call.Argument(0), goja.Undefined())
+			if err != nil {
+				return nil, err
+			}
+			response, found := evaluator.cacheStorage.Match(evaluator.origin, request)
+			if !found {
+				return goja.Undefined(), nil
+			}
+			return evaluator.responseValueFor(response), nil
+		})
+	})
+	_ = storage.Set("has", func(call goja.FunctionCall) goja.Value {
+		return evaluator.resolvedPromise(evaluator.cacheStorage.Has(evaluator.origin, call.Argument(0).String()))
+	})
+	_ = storage.Set("delete", func(call goja.FunctionCall) goja.Value {
+		return evaluator.resolvedPromise(evaluator.cacheStorage.Delete(evaluator.origin, call.Argument(0).String()))
+	})
+	_ = storage.Set("keys", func(goja.FunctionCall) goja.Value {
+		names := evaluator.cacheStorage.Keys(evaluator.origin)
+		values := make([]any, len(names))
+		for index, name := range names {
+			values[index] = name
+		}
+		return evaluator.resolvedPromise(evaluator.vm.NewArray(values...))
+	})
+	return global.Set("caches", storage)
+}
+
+func (evaluator *fetchEvaluator) cacheValue(cache *Cache) *goja.Object {
+	object := evaluator.vm.NewObject()
+	_ = object.Set("match", func(call goja.FunctionCall) goja.Value {
+		return evaluator.promiseAction(func() (any, error) {
+			request, err := evaluator.requestFromValue(call.Argument(0), goja.Undefined())
+			if err != nil {
+				return nil, err
+			}
+			response, found := cache.Match(request)
+			if !found {
+				return goja.Undefined(), nil
+			}
+			return evaluator.responseValueFor(response), nil
+		})
+	})
+	_ = object.Set("put", func(call goja.FunctionCall) goja.Value {
+		return evaluator.promiseAction(func() (any, error) {
+			request, err := evaluator.requestFromValue(call.Argument(0), goja.Undefined())
+			if err != nil {
+				return nil, err
+			}
+			responseObject, ok := call.Argument(1).(*goja.Object)
+			if !ok || evaluator.responses[responseObject] == nil {
+				return nil, errors.New("service worker Cache.put requires a Response")
+			}
+			if err := cache.Put(request, evaluator.responses[responseObject]); err != nil {
+				return nil, err
+			}
+			return goja.Undefined(), nil
+		})
+	})
+	_ = object.Set("delete", func(call goja.FunctionCall) goja.Value {
+		return evaluator.promiseAction(func() (any, error) {
+			request, err := evaluator.requestFromValue(call.Argument(0), goja.Undefined())
+			if err != nil {
+				return nil, err
+			}
+			return cache.Delete(request), nil
+		})
+	})
+	_ = object.Set("keys", func(goja.FunctionCall) goja.Value {
+		requests := cache.Keys()
+		values := make([]any, 0, len(requests))
+		for _, request := range requests {
+			values = append(values, evaluator.requestValue(request))
+		}
+		return evaluator.resolvedPromise(evaluator.vm.NewArray(values...))
+	})
+	return object
 }
 
 func (evaluator *fetchEvaluator) dispatch(ctx context.Context, request *network.Request) (*network.Response, error) {
@@ -217,7 +330,7 @@ func (evaluator *fetchEvaluator) requestFromValue(input, init goja.Value) (*netw
 		request.Method = http.MethodGet
 	}
 	if (request.Method == http.MethodGet || request.Method == http.MethodHead) && len(request.Body) != 0 {
-		return nil, errors.New("GET and HEAD Service Worker requests cannot have a body")
+		return nil, errors.New("GET and HEAD service worker requests cannot have a body")
 	}
 	return request, nil
 }
@@ -312,6 +425,17 @@ func (evaluator *fetchEvaluator) headersValue(header http.Header) *goja.Object {
 func (evaluator *fetchEvaluator) resolvedPromise(value any) goja.Value {
 	promise, resolve, _ := evaluator.vm.NewPromise()
 	_ = resolve(value)
+	return evaluator.vm.ToValue(promise)
+}
+
+func (evaluator *fetchEvaluator) promiseAction(action func() (any, error)) goja.Value {
+	promise, resolve, reject := evaluator.vm.NewPromise()
+	value, err := action()
+	if err != nil {
+		_ = reject(evaluator.vm.NewTypeError(err.Error()))
+	} else {
+		_ = resolve(value)
+	}
 	return evaluator.vm.ToValue(promise)
 }
 

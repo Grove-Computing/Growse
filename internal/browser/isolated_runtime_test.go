@@ -323,6 +323,54 @@ func TestBrowserUsesActiveServiceWorkerForNavigationResourceAndFetch(t *testing.
 	}
 }
 
+func TestBrowserRestoresNavigationFromServiceWorkerCacheStorage(t *testing.T) {
+	installURL := mustParseURL(t, "https://cache.example/app/install.html")
+	workerURL := mustParseURL(t, "https://cache.example/app/sw.js")
+	offlineURL := mustParseURL(t, "https://cache.example/app/offline.html")
+	loader := &requestRouteLoader{routeLoader: routeLoader{responses: map[string]*network.Response{
+		installURL.String(): {
+			URL: installURL, StatusCode: http.StatusOK, ContentType: "text/html",
+			Body: []byte(`<script>navigator.serviceWorker.register("/app/sw.js")</script>`),
+		},
+		workerURL.String(): {
+			URL: workerURL, StatusCode: http.StatusOK, ContentType: "text/javascript",
+			Body: []byte(`
+				self.addEventListener("install", event => {
+					event.waitUntil(caches.open("offline-v1").then(cache => cache.put(
+						"/app/offline.html",
+						new Response('<p id="result">cache-storage</p>', {headers: {"Content-Type": "text/html"}})
+					)));
+					self.skipWaiting();
+				});
+				self.addEventListener("activate", event => event.waitUntil(clients.claim()));
+				self.addEventListener("fetch", event => event.respondWith(
+					caches.match(event.request).then(response => response || fetch(event.request))
+				));`),
+		},
+	}}}
+	browserState := NewWithEngineFactory(loader, func(engine runtimemodel.Engine) runtimemodel.Runtime { return isolated.New(engine) })
+	t.Cleanup(func() { _ = browserState.Close() })
+	if _, err := browserState.SetEngine(context.Background(), runtimemodel.EngineJavaScript); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := browserState.Navigate(context.Background(), installURL.String()); err != nil {
+		t.Fatal(err)
+	}
+	page, err := browserState.Navigate(context.Background(), offlineURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, _ := page.Document.GetElementByID("result")
+	if got := result.TextContent(); got != "cache-storage" {
+		t.Fatalf("cached navigation text = %q", got)
+	}
+	for _, request := range loader.requests {
+		if request.URL.String() == offlineURL.String() {
+			t.Fatalf("cached navigation reached the network: %#v", request)
+		}
+	}
+}
+
 func TestBrowserExecutesCORSAndIntegrityCheckedClassicJavaScript(t *testing.T) {
 	scriptBody := []byte(`document.getElementById("result").textContent = "cors integrity";`)
 	digest := sha512.Sum384(scriptBody)

@@ -58,11 +58,26 @@ type Manager struct {
 	operationMu   sync.Mutex
 	registrations map[string]*registration
 	nextID        uint64
+	caches        *CacheStorage
 }
 
 // NewManager creates an empty in-memory registration store.
 func NewManager() *Manager {
-	return &Manager{registrations: make(map[string]*registration)}
+	return &Manager{registrations: make(map[string]*registration), caches: newCacheStorage()}
+}
+
+// Caches returns the origin-partitioned Cache Storage owned by this profile.
+func (manager *Manager) Caches() *CacheStorage {
+	if manager == nil {
+		return nil
+	}
+	manager.mu.Lock()
+	if manager.caches == nil {
+		manager.caches = newCacheStorage()
+	}
+	result := manager.caches
+	manager.mu.Unlock()
+	return result
 }
 
 // IsSecureContext accepts HTTPS and HTTP loopback development origins.
@@ -118,7 +133,7 @@ func (manager *Manager) Register(ctx context.Context, clientURL *url.URL, script
 	}
 	activateWithoutWaiting := existing == nil || !existing.active
 	manager.mu.Unlock()
-	lifecycle, err := evaluateLifecycle(ctx, response.Body, activateWithoutWaiting)
+	lifecycle, err := evaluateLifecycle(ctx, response.Body, activateWithoutWaiting, response.URL, manager.Caches(), NetworkFallback(fetch))
 	if err != nil {
 		return runtimemodel.ServiceWorkerRegistration{}, err
 	}
@@ -259,7 +274,7 @@ func (manager *Manager) DispatchFetch(ctx context.Context, request *network.Requ
 	if !ok {
 		return fallback(ctx, request)
 	}
-	return evaluateFetch(ctx, worker.source, worker.scriptURL, request, fallback)
+	return evaluateFetch(ctx, worker.source, worker.scriptURL, request, fallback, manager.Caches())
 }
 
 type activeWorker struct {
