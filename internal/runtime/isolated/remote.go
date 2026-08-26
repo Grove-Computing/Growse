@@ -91,7 +91,7 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 		Engine: r.engine, Document: environment.Document.Snapshot(), StorageSource: environment.StorageSource,
 	}
 	if environment.BaseURL != nil {
-		request.BaseURL = environment.BaseURL.String()
+		request.BaseURL = publicRuntimeURL(environment.BaseURL).String()
 	}
 	if environment.LocalStorage != nil {
 		request.LocalStorage = environment.LocalStorage.Entries()
@@ -106,7 +106,7 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 	for index, script := range scripts {
 		request.Scripts[index] = wireScript{Engine: script.Engine, Source: script.Source, Inline: script.Inline}
 		if script.SourceURL != nil {
-			request.Scripts[index].SourceURL = script.SourceURL.String()
+			request.Scripts[index].SourceURL = publicRuntimeURL(script.SourceURL).String()
 		}
 	}
 	if err := workerPeer.call(ctx, "runtime.load", request, nil); err != nil {
@@ -334,17 +334,17 @@ func (r *Runtime) handleFetch(ctx context.Context, payload json.RawMessage) (any
 	if err != nil {
 		return nil, err
 	}
-	var siteURL *url.URL
-	if request.SiteURL != "" {
-		siteURL, err = url.Parse(request.SiteURL)
-		if err != nil {
-			return nil, err
-		}
-	}
-	response, err := do(ctx, &network.Request{
-		Method: request.Method, URL: target, Header: request.Header, Body: request.Body, SiteURL: siteURL,
+	r.mu.Lock()
+	pageURL, engine := r.environment.BaseURL, string(r.engine)
+	r.mu.Unlock()
+	brokered := &network.Request{
+		Method: request.Method, URL: target, Header: request.Header, Body: request.Body,
 		Kind: request.Kind, Engine: request.Engine, Credentials: request.Credentials,
-	})
+	}
+	if err := validateBrokeredFetch(brokered, pageURL, engine); err != nil {
+		return nil, err
+	}
+	response, err := do(ctx, brokered)
 	if err != nil {
 		return nil, err
 	}
@@ -366,6 +366,9 @@ func (r *Runtime) handleNavigate(_ context.Context, payload json.RawMessage) (an
 	target, err := url.Parse(request.URL)
 	if err != nil {
 		return nil, err
+	}
+	if !httpURL(target) || target.User != nil {
+		return nil, errors.New("sandbox navigation URL must be HTTP(S) without userinfo")
 	}
 	r.mu.Lock()
 	navigate := r.environment.Navigate

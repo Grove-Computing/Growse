@@ -110,6 +110,43 @@ func TestIsolatedRuntimeStopTerminatesWorkerAndRejectsCallbacks(t *testing.T) {
 	}
 }
 
+func TestIsolatedRuntimeDoesNotExposeProcessFilesystemOrEnvironment(t *testing.T) {
+	document, _ := htmlparser.Parse(strings.NewReader(`<p id="result">idle</p>`))
+	var record string
+	runtime := New(runtimemodel.EngineJavaScript)
+	t.Cleanup(func() { _ = runtime.Stop() })
+	environment := runtimemodel.Environment{
+		Document: document, Events: events.NewDispatcher(), BaseURL: mustURL(t, "https://example.test/"),
+		ConsoleRecord: func(_, message string) { record = message },
+	}
+	source := `console.log([typeof process, typeof require, typeof Deno, typeof os, typeof fs, typeof Go, typeof GrowseGo].join(","));`
+	if err := runtime.Load(context.Background(), []runtimemodel.Script{{Engine: runtimemodel.EngineJavaScript, SourceURL: environment.BaseURL, Source: source}}, environment); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if want := "undefined,undefined,undefined,undefined,undefined,undefined,undefined"; record != want {
+		t.Fatalf("isolated host globals = %q, want %q", record, want)
+	}
+}
+
+func TestIsolatedGoRuntimeRejectsOSImports(t *testing.T) {
+	document, _ := htmlparser.Parse(strings.NewReader(`<p>safe</p>`))
+	runtime := New(runtimemodel.EngineGo)
+	t.Cleanup(func() { _ = runtime.Stop() })
+	environment := runtimemodel.Environment{Document: document, Events: events.NewDispatcher(), BaseURL: mustURL(t, "http://localhost/")}
+	source := `package main
+import "os"
+func main() { _ = os.Getenv("HOME") }`
+	if err := runtime.Load(context.Background(), []runtimemodel.Script{{Engine: runtimemodel.EngineGo, SourceURL: environment.BaseURL, Source: source}}, environment); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Start(context.Background()); err == nil || !strings.Contains(err.Error(), "os") {
+		t.Fatalf("isolated Go OS import error = %v", err)
+	}
+}
+
 func mustURL(t *testing.T, value string) *url.URL {
 	t.Helper()
 	parsed, err := url.Parse(value)

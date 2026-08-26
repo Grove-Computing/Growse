@@ -61,6 +61,16 @@ func TestPeerClosesPendingCallWhenTransportFails(t *testing.T) {
 	}
 }
 
+func TestPeerRejectsUnregisteredHostMethod(t *testing.T) {
+	leftConnection, rightConnection := net.Pipe()
+	t.Cleanup(func() { _ = leftConnection.Close(); _ = rightConnection.Close() })
+	left := newPeer(leftConnection, leftConnection)
+	_ = newPeer(rightConnection, rightConnection)
+	if err := left.call(context.Background(), "host.filesystem", nil, nil); err == nil || !strings.Contains(err.Error(), "unsupported") {
+		t.Fatalf("unregistered host call error = %v", err)
+	}
+}
+
 func decode(payload []byte, target any) error {
 	return workerproto.DecodePayload(payload, target)
 }
