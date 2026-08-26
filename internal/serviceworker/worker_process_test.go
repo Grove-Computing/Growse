@@ -163,6 +163,7 @@ func TestServiceWorkerTimeoutIsContainedAndStopsOnlyTargetProcess(t *testing.T) 
 	if remaining != 0 {
 		t.Fatalf("timed out worker count = %d", remaining)
 	}
+	manager.taskTimeout = defaultServiceWorkerTaskTimeout
 
 	healthyClient := parseServiceWorkerURL(t, "https://healthy-worker.example/app/page")
 	healthyScript := parseServiceWorkerURL(t, "https://healthy-worker.example/app/sw.js")
