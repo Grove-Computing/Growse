@@ -44,6 +44,7 @@ type loadRequest struct {
 	HistoryLength  int                        `json:"historyLength"`
 	HistoryState   string                     `json:"historyState,omitempty"`
 	Frames         []wireFrame                `json:"frames,omitempty"`
+	FramePolicy    runtimemodel.FramePolicy   `json:"framePolicy,omitempty"`
 }
 
 type wireFrame struct {

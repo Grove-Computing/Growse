@@ -54,6 +54,7 @@ type Page struct {
 	StyleRevision    uint64
 	DevTools         *devtools.PageStore
 	Frames           []*Frame
+	FramePolicy      runtimemodel.FramePolicy
 }
 
 // Frame is one nested browsing context owned by a parent Page.
@@ -71,6 +72,7 @@ type Frame struct {
 	LoadError  string
 	Loaded     bool
 	Closed     bool
+	Sandbox    runtimemodel.FramePolicy
 	runtime    runtimemodel.Runtime
 	cancel     func()
 	state      *frameLoadState

@@ -105,7 +105,7 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 
 	request := loadRequest{
 		Engine: r.engine, Document: environment.Document.Snapshot(), StorageSource: environment.StorageSource,
-		ImportMap: cloneStringMap(environment.ImportMap), Frames: frameAccessToWire(environment.Frames),
+		ImportMap: cloneStringMap(environment.ImportMap), Frames: frameAccessToWire(environment.Frames), FramePolicy: environment.FramePolicy,
 	}
 	if environment.BaseURL != nil {
 		request.BaseURL = publicRuntimeURL(environment.BaseURL).String()

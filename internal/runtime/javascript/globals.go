@@ -36,12 +36,20 @@ func (runtime *Runtime) installGlobals(vm *goja.Runtime) error {
 		return err
 	}
 	origin := "null"
-	if runtime.navigationAPI != nil {
+	if !runtime.environment.FramePolicy.HasOpaqueOrigin() && runtime.navigationAPI != nil {
 		if current := runtime.navigationAPI.Current().Origin; current != "" {
 			origin = current
 		}
 	}
 	if err := global.DefineDataProperty("origin", vm.ToValue(origin), goja.FLAG_FALSE, goja.FLAG_FALSE, goja.FLAG_TRUE); err != nil {
+		return err
+	}
+	if err := global.DefineDataProperty("open", vm.ToValue(func(goja.FunctionCall) goja.Value {
+		if !runtime.environment.FramePolicy.AllowsPopups() {
+			panic(frameSecurityError(vm, "iframe sandbox blocks popup creation"))
+		}
+		return goja.Null()
+	}), goja.FLAG_FALSE, goja.FLAG_FALSE, goja.FLAG_TRUE); err != nil {
 		return err
 	}
 	return global.DefineDataProperty("queueMicrotask", vm.ToValue(func(call goja.FunctionCall) goja.Value {

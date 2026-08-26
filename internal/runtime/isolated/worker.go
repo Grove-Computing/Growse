@@ -181,7 +181,7 @@ func (state *workerState) load(ctx context.Context, payload json.RawMessage) (an
 	}
 	environment := runtimemodel.Environment{
 		Document: document, Events: dispatcher, BaseURL: baseURL,
-		ImportMap: cloneStringMap(request.ImportMap), Frames: frames,
+		ImportMap: cloneStringMap(request.ImportMap), Frames: frames, FramePolicy: request.FramePolicy,
 		LocalStorage: local, SessionStorage: session, StorageSource: request.StorageSource,
 		OnMutation: func() {
 			_ = state.peer.event("dom.mutation", mutationEvent{Document: document.Snapshot()})

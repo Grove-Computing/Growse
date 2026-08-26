@@ -8,6 +8,7 @@ import (
 	"github.com/Grove-Computing/Growse/internal/layout"
 	"github.com/Grove-Computing/Growse/internal/network"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
+	"github.com/Grove-Computing/Growse/internal/runtime/isolated"
 )
 
 func TestIframeLoadsSrcSrcdocNestedDocumentsAndIndependentRuntimes(t *testing.T) {
@@ -135,5 +136,98 @@ func TestIframeFailureDoesNotFailParentPage(t *testing.T) {
 	parent, _ := page.Document.GetElementByID("parent")
 	if parent.TextContent() != "visible" || len(page.Frames) != 1 || page.Frames[0].LoadError == "" {
 		t.Fatalf("parent / failed Frame = %q / %#v", parent.TextContent(), page.Frames)
+	}
+}
+
+func TestIframeSandboxTokensFailClosedBeforeCapabilitiesRun(t *testing.T) {
+	parentURL := mustParseURL(t, "https://page.example/index.html")
+	deniedURL := mustParseURL(t, "https://page.example/denied.html")
+	opaqueURL := mustParseURL(t, "https://page.example/opaque.html")
+	popupDeniedURL := mustParseURL(t, "https://page.example/popup-denied.html")
+	sameURL := mustParseURL(t, "https://page.example/same.html")
+	blockedScriptURL := mustParseURL(t, "https://page.example/blocked.js")
+	loader := &routeLoader{responses: map[string]*network.Response{
+		parentURL.String(): {
+			URL: parentURL, StatusCode: 200, ContentType: "text/html",
+			Body: []byte(`<iframe id="denied" sandbox src="/denied.html"></iframe>
+				<iframe id="opaque" sandbox="ALLOW-SCRIPTS allow-forms allow-popups allow-top-navigation-by-user-activation unknown-token" src="/opaque.html"></iframe>
+				<iframe id="popup-denied" sandbox="allow-scripts" src="/popup-denied.html"></iframe>
+				<iframe id="same" sandbox="allow-same-origin" src="/same.html"></iframe>`),
+		},
+		deniedURL.String(): {
+			URL: deniedURL, StatusCode: 200, ContentType: "text/html",
+			Body: []byte(`<script src="/blocked.js"></script>`),
+		},
+		opaqueURL.String(): {
+			URL: opaqueURL, StatusCode: 200, ContentType: "text/html",
+			Body: []byte(`<script>
+				let storageError = "allowed";
+				try { localStorage; } catch (error) { storageError = error.name; }
+				console.log([origin, location.origin, storageError, open("/popup") === null].join("|"));
+			</script>`),
+		},
+		popupDeniedURL.String(): {
+			URL: popupDeniedURL, StatusCode: 200, ContentType: "text/html",
+			Body: []byte(`<script>
+				try { open("/popup"); console.log("allowed"); } catch (error) { console.log(error.name); }
+			</script>`),
+		},
+		sameURL.String(): {
+			URL: sameURL, StatusCode: 200, ContentType: "text/html", Body: []byte(`<p>same origin</p>`),
+		},
+	}}
+	browserState := NewWithEngineFactory(loader, func(engine runtimemodel.Engine) runtimemodel.Runtime { return isolated.New(engine) })
+	t.Cleanup(func() { _ = browserState.Close() })
+	if _, err := browserState.SetEngine(context.Background(), runtimemodel.EngineJavaScript); err != nil {
+		t.Fatal(err)
+	}
+	page, err := browserState.Navigate(context.Background(), parentURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Frames) != 4 {
+		t.Fatalf("Frames = %d, want 4", len(page.Frames))
+	}
+	denied, opaque, popupDenied, same := page.Frames[0], page.Frames[1], page.Frames[2], page.Frames[3]
+	if len(denied.Page.Scripts) != 0 || denied.Page.RuntimeStarted {
+		t.Fatalf("denied scripts = %d, started=%t", len(denied.Page.Scripts), denied.Page.RuntimeStarted)
+	}
+	for _, requested := range loader.requested {
+		if requested == blockedScriptURL.String() {
+			t.Fatal("sandboxed external script was fetched before rejection")
+		}
+	}
+	records := opaque.Page.DevTools.Console()
+	if len(records) != 1 || records[0].Message != "null|null|SecurityError|true" || !opaque.Page.RuntimeStarted {
+		t.Fatalf("opaque runtime = records:%#v started:%t", records, opaque.Page.RuntimeStarted)
+	}
+	popupRecords := popupDenied.Page.DevTools.Console()
+	if len(popupRecords) != 1 || popupRecords[0].Message != "SecurityError" {
+		t.Fatalf("sandboxed popup Console() = %#v", popupRecords)
+	}
+	if err := denied.AuthorizeFormSubmission(); err == nil {
+		t.Fatal("empty sandbox allowed form submission")
+	}
+	if err := denied.AuthorizePopup(); err == nil {
+		t.Fatal("empty sandbox allowed popup")
+	}
+	if err := denied.AuthorizeTopNavigation(true); err == nil {
+		t.Fatal("empty sandbox allowed top navigation")
+	}
+	if err := opaque.AuthorizeFormSubmission(); err != nil {
+		t.Fatalf("allow-forms rejected: %v", err)
+	}
+	if err := opaque.AuthorizePopup(); err != nil {
+		t.Fatalf("allow-popups rejected: %v", err)
+	}
+	if err := opaque.AuthorizeTopNavigation(false); err == nil {
+		t.Fatal("top navigation without user activation was allowed")
+	}
+	if err := opaque.AuthorizeTopNavigation(true); err != nil {
+		t.Fatalf("activated top navigation rejected: %v", err)
+	}
+	access := runtimeFrameAccess(page)
+	if access[0].SameOrigin || access[1].SameOrigin || access[2].SameOrigin || !access[3].SameOrigin || same.Page.FramePolicy.HasOpaqueOrigin() {
+		t.Fatalf("sandbox Origin access = %#v", access)
 	}
 }

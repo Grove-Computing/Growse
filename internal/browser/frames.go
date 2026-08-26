@@ -89,10 +89,11 @@ func (state *frameLoadState) loadOne(parentPage *Page, element *dom.Node, parent
 	state.nextID++
 	frameContext, cancel := context.WithCancel(state.ctx)
 	width, height := frameDimensions(element)
+	policy := parseFramePolicy(element)
 	frame := &Frame{
 		ID: state.nextID, ElementID: element.ID, ParentID: parentID, Depth: depth, Generation: state.generation,
 		Viewport: FrameViewport{Width: width, Height: height, ClipWidth: width, ClipHeight: height}, cancel: cancel,
-		state: state, parentPage: parentPage,
+		state: state, parentPage: parentPage, Sandbox: policy,
 	}
 	if depth > maxFrameDepth {
 		frame.LoadError = fmt.Sprintf("iframe depth exceeds %d", maxFrameDepth)
@@ -109,7 +110,7 @@ func (state *frameLoadState) loadOne(parentPage *Page, element *dom.Node, parent
 		frame.LoadError = fmt.Sprintf("iframe documents exceed %d bytes", maxFrameDocuments)
 		return frame
 	}
-	page, err := state.buildPage(frameContext, response)
+	page, err := state.buildPage(frameContext, response, policy)
 	if err != nil {
 		frame.LoadError = err.Error()
 		return frame
@@ -156,7 +157,7 @@ func (state *frameLoadState) frameResponse(ctx context.Context, parentURL *url.U
 	return state.runtimeClient.Get(ctx, target)
 }
 
-func (state *frameLoadState) buildPage(ctx context.Context, response *network.Response) (*Page, error) {
+func (state *frameLoadState) buildPage(ctx context.Context, response *network.Response, policy runtimemodel.FramePolicy) (*Page, error) {
 	if response == nil || response.URL == nil {
 		return nil, errors.New("iframe response is invalid")
 	}
@@ -185,9 +186,13 @@ func (state *frameLoadState) buildPage(ctx context.Context, response *network.Re
 		ColorScheme: "light", Hover: true, Pointer: "fine", ReducedMotion: state.reducedMotion,
 	})
 	backgroundImages, backgroundErrors := loadBackgroundImages(ctx, imageResources, computed)
-	scripts, scriptErrors := loadScriptsForEngine(ctx, scriptResources, response.URL, document, state.engine)
+	var scripts []Script
+	var scriptErrors []string
 	var importMap map[string]string
-	if state.engine == runtimemodel.EngineJavaScript {
+	if policy.AllowsScripts() {
+		scripts, scriptErrors = loadScriptsForEngine(ctx, scriptResources, response.URL, document, state.engine)
+	}
+	if policy.AllowsScripts() && state.engine == runtimemodel.EngineJavaScript {
 		var importErrors []string
 		importMap, importErrors = loadImportMap(document, response.URL)
 		scriptErrors = append(scriptErrors, importErrors...)
@@ -198,6 +203,7 @@ func (state *frameLoadState) buildPage(ctx context.Context, response *network.Re
 		Animations: style.NewAnimationRegistry(), Transitions: style.NewTransitionRegistry(), BackgroundImages: backgroundImages,
 		BackgroundErrors: backgroundErrors, Engine: state.engine, Scripts: scripts, ImportMap: importMap, ScriptErrors: scriptErrors,
 		StyleRevision: 1, ReducedMotion: state.reducedMotion, ViewportWidth: defaultFrameWidth, ViewportHeight: defaultFrameHeight, DevTools: pageStore,
+		FramePolicy: policy,
 	}
 	for _, scriptError := range scriptErrors {
 		pageStore.AddConsole(devtools.ConsoleError, "script", scriptError)
@@ -266,7 +272,7 @@ func (frame *Frame) navigate(ctx context.Context, target *url.URL) error {
 		frame.LoadError = err.Error()
 		return err
 	}
-	page, err := state.buildPage(ctx, response)
+	page, err := state.buildPage(ctx, response, frame.Sandbox)
 	if err != nil {
 		frame.LoadError = err.Error()
 		return err
@@ -315,7 +321,7 @@ func runtimeFrameAccess(page *Page) []runtimemodel.FrameAccess {
 			if origin, err := network.OriginFromURL(frame.URL); err == nil {
 				access.Origin = origin.String()
 			}
-			access.SameOrigin = network.SameOrigin(page.URL, frame.URL)
+			access.SameOrigin = !page.FramePolicy.HasOpaqueOrigin() && !frame.Page.FramePolicy.HasOpaqueOrigin() && network.SameOrigin(page.URL, frame.URL)
 			if access.SameOrigin {
 				access.URL = frame.URL.String()
 				access.Document = frame.Page.Document
@@ -334,7 +340,7 @@ func applyFrameMutation(parent *Page, frameID, generation uint64, snapshot dom.D
 		if frame == nil || frame.ID != frameID {
 			continue
 		}
-		if frame.Closed || frame.Generation != generation || frame.Page == nil || !network.SameOrigin(parent.URL, frame.URL) {
+		if frame.Closed || frame.Generation != generation || frame.Page == nil || parent.FramePolicy.HasOpaqueOrigin() || frame.Page.FramePolicy.HasOpaqueOrigin() || !network.SameOrigin(parent.URL, frame.URL) {
 			return errors.New("stale or cross-origin Frame mutation was rejected")
 		}
 		if err := frame.Page.Document.ApplySnapshot(snapshot); err != nil {
@@ -399,6 +405,56 @@ func (frame *Frame) updateHistory(_ string, target *url.URL, replace bool) error
 	frame.Page.URL = cloneURL(target)
 	frame.URL = cloneURL(target)
 	_ = replace
+	return nil
+}
+
+func parseFramePolicy(element *dom.Node) runtimemodel.FramePolicy {
+	if element == nil {
+		return runtimemodel.FramePolicy{}
+	}
+	value, sandboxed := element.Attribute("sandbox")
+	policy := runtimemodel.FramePolicy{Sandboxed: sandboxed}
+	if !sandboxed {
+		return policy
+	}
+	for _, token := range strings.Fields(strings.ToLower(value)) {
+		switch token {
+		case "allow-scripts":
+			policy.AllowScripts = true
+		case "allow-same-origin":
+			policy.AllowSameOrigin = true
+		case "allow-forms":
+			policy.AllowForms = true
+		case "allow-popups":
+			policy.AllowPopups = true
+		case "allow-top-navigation-by-user-activation":
+			policy.AllowTopNavigationByActivation = true
+		}
+	}
+	return policy
+}
+
+// AuthorizeFormSubmission applies the sandbox form gate before any side effect.
+func (frame *Frame) AuthorizeFormSubmission() error {
+	if frame == nil || frame.Closed || !frame.Sandbox.AllowsForms() {
+		return errors.New("iframe sandbox blocks form submission")
+	}
+	return nil
+}
+
+// AuthorizePopup applies the sandbox auxiliary-context gate before any side effect.
+func (frame *Frame) AuthorizePopup() error {
+	if frame == nil || frame.Closed || !frame.Sandbox.AllowsPopups() {
+		return errors.New("iframe sandbox blocks popup creation")
+	}
+	return nil
+}
+
+// AuthorizeTopNavigation applies the user-activation sandbox gate.
+func (frame *Frame) AuthorizeTopNavigation(userActivated bool) error {
+	if frame == nil || frame.Closed || !frame.Sandbox.AllowsTopNavigation(userActivated) {
+		return errors.New("iframe sandbox blocks top navigation")
+	}
 	return nil
 }
 

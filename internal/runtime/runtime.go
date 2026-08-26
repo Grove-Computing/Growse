@@ -106,6 +106,35 @@ type Environment struct {
 	RuntimeFailure  func(error)
 	Frames          []FrameAccess
 	FrameMutation   func(frameID, generation uint64, document dom.DocumentSnapshot) error
+	FramePolicy     FramePolicy
+}
+
+// FramePolicy contains the capabilities granted by an iframe sandbox.
+// A non-sandboxed context keeps the historical unrestricted behavior.
+type FramePolicy struct {
+	Sandboxed                      bool
+	AllowScripts                   bool
+	AllowSameOrigin                bool
+	AllowForms                     bool
+	AllowPopups                    bool
+	AllowTopNavigationByActivation bool
+}
+
+// AllowsScripts reports whether page code may be evaluated.
+func (policy FramePolicy) AllowsScripts() bool { return !policy.Sandboxed || policy.AllowScripts }
+
+// HasOpaqueOrigin reports whether the context has a unique opaque origin.
+func (policy FramePolicy) HasOpaqueOrigin() bool { return policy.Sandboxed && !policy.AllowSameOrigin }
+
+// AllowsForms reports whether form submission is enabled.
+func (policy FramePolicy) AllowsForms() bool { return !policy.Sandboxed || policy.AllowForms }
+
+// AllowsPopups reports whether creation of auxiliary browsing contexts is enabled.
+func (policy FramePolicy) AllowsPopups() bool { return !policy.Sandboxed || policy.AllowPopups }
+
+// AllowsTopNavigation reports whether a user-activated top navigation is enabled.
+func (policy FramePolicy) AllowsTopNavigation(userActivated bool) bool {
+	return !policy.Sandboxed || policy.AllowTopNavigationByActivation && userActivated
 }
 
 // FrameAccess is the least-privilege view of one direct child browsing context.

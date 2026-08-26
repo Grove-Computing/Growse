@@ -1705,8 +1705,9 @@ func startRuntime(ctx context.Context, factory runtimemodel.EngineFactory, engin
 		FrameMutation: func(frameID, generation uint64, snapshot dom.DocumentSnapshot) error {
 			return applyFrameMutation(page, frameID, generation, snapshot, onMutation, runtimeNow())
 		},
+		FramePolicy: page.FramePolicy,
 	}
-	if local, session, _ := storageManager.Areas(page.URL); local != nil || session != nil {
+	if local, session, _ := storageManager.Areas(page.URL); !page.FramePolicy.HasOpaqueOrigin() && (local != nil || session != nil) {
 		environment.LocalStorage = local
 		environment.SessionStorage = session
 		environment.StorageSource = storagecore.MutationSource{ID: storageSourceID, URL: network.RedactedURL(page.URL)}
