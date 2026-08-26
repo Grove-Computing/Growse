@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/events"
 	htmlparser "github.com/Grove-Computing/Growse/internal/html"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
@@ -144,6 +145,80 @@ func main() { _ = os.Getenv("HOME") }`
 	}
 	if err := runtime.Start(context.Background()); err == nil || !strings.Contains(err.Error(), "os") {
 		t.Fatalf("isolated Go OS import error = %v", err)
+	}
+}
+
+func TestIsolatedRuntimeTimesOutBusyScriptAndReportsFailure(t *testing.T) {
+	document, _ := htmlparser.Parse(strings.NewReader(`<p>safe</p>`))
+	failures := make(chan error, 1)
+	runtime := New(runtimemodel.EngineJavaScript)
+	runtime.taskTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { _ = runtime.Stop() })
+	environment := runtimemodel.Environment{
+		Document: document, Events: events.NewDispatcher(), BaseURL: mustURL(t, "https://example.test/"),
+		RuntimeFailure: func(err error) { failures <- err },
+	}
+	if err := runtime.Load(context.Background(), []runtimemodel.Script{{Engine: runtimemodel.EngineJavaScript, SourceURL: environment.BaseURL, Source: `for (;;) {}`}}, environment); err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now()
+	err := runtime.Start(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "exceeded") || time.Since(started) > time.Second {
+		t.Fatalf("busy script timeout = %v after %v", err, time.Since(started))
+	}
+	select {
+	case failure := <-failures:
+		if failure == nil {
+			t.Fatal("worker failure callback received nil")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("worker timeout was not reported")
+	}
+}
+
+func TestWorkerCrashDoesNotStopIndependentRuntime(t *testing.T) {
+	newRunning := func(text string) (*Runtime, *dom.Node) {
+		document, _ := htmlparser.Parse(strings.NewReader(`<p id="result">idle</p>`))
+		result, _ := document.GetElementByID("result")
+		runtime := New(runtimemodel.EngineJavaScript)
+		environment := runtimemodel.Environment{Document: document, Events: events.NewDispatcher(), BaseURL: mustURL(t, "https://example.test/")}
+		source := `document.getElementById("result").textContent = "` + text + `";`
+		if err := runtime.Load(context.Background(), []runtimemodel.Script{{Engine: runtimemodel.EngineJavaScript, SourceURL: environment.BaseURL, Source: source}}, environment); err != nil {
+			t.Fatal(err)
+		}
+		if err := runtime.Start(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		return runtime, result
+	}
+	crashed, _ := newRunning("first")
+	independent, result := newRunning("second")
+	t.Cleanup(func() { _ = crashed.Stop(); _ = independent.Stop() })
+	if crashed.command == nil || crashed.command.Process == nil {
+		t.Fatal("first worker process is unavailable")
+	}
+	if err := crashed.command.Process.Kill(); err != nil {
+		t.Fatalf("kill first worker: %v", err)
+	}
+	select {
+	case <-crashed.peer.done:
+	case <-time.After(time.Second):
+		t.Fatal("crashed worker connection remained open")
+	}
+	if got := result.TextContent(); got != "second" {
+		t.Fatalf("independent worker DOM = %q", got)
+	}
+	if !independent.DispatchPageEvent(func() bool { return true }) || independent.stopped {
+		t.Fatal("independent worker stopped after peer crash")
+	}
+}
+
+func TestWorkerSessionLimitFailsBeforeStartingProcess(t *testing.T) {
+	previous := activeWorkers.Load()
+	activeWorkers.Store(maxSessionWorkers)
+	t.Cleanup(func() { activeWorkers.Store(previous) })
+	if _, _, _, _, _, err := startWorkerProcess(); err == nil || !strings.Contains(err.Error(), "session limit") {
+		t.Fatalf("worker session limit error = %v", err)
 	}
 }
 

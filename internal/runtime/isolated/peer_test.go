@@ -71,6 +71,36 @@ func TestPeerRejectsUnregisteredHostMethod(t *testing.T) {
 	}
 }
 
+func TestPeerContainsHandlerPanicAndContinues(t *testing.T) {
+	leftConnection, rightConnection := net.Pipe()
+	t.Cleanup(func() { _ = leftConnection.Close(); _ = rightConnection.Close() })
+	left := newPeer(leftConnection, leftConnection)
+	right := newPeer(rightConnection, rightConnection)
+	right.handleRequest("panic", func(context.Context, json.RawMessage) (any, error) { panic("contained") })
+	right.handleRequest("ok", func(context.Context, json.RawMessage) (any, error) { return "alive", nil })
+	if err := left.call(context.Background(), "panic", nil, nil); err == nil || !strings.Contains(err.Error(), "handler panic") {
+		t.Fatalf("panic call error = %v", err)
+	}
+	var result string
+	if err := left.call(context.Background(), "ok", nil, &result); err != nil || result != "alive" {
+		t.Fatalf("call after panic = %q, %v", result, err)
+	}
+}
+
+func TestPeerRejectsPendingRequestsBeyondLimit(t *testing.T) {
+	leftConnection, rightConnection := net.Pipe()
+	t.Cleanup(func() { _ = leftConnection.Close(); _ = rightConnection.Close() })
+	p := newPeer(leftConnection, io.Discard)
+	p.mu.Lock()
+	for id := uint64(1); id <= maxPendingRequests; id++ {
+		p.pending[id] = make(chan workerproto.Envelope, 1)
+	}
+	p.mu.Unlock()
+	if err := p.call(context.Background(), "overflow", nil, nil); err == nil || !strings.Contains(err.Error(), "pending request limit") {
+		t.Fatalf("pending limit error = %v", err)
+	}
+}
+
 func decode(payload []byte, target any) error {
 	return workerproto.DecodePayload(payload, target)
 }

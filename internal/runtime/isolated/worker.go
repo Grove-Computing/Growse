@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -20,7 +21,10 @@ import (
 	storagecore "github.com/Grove-Computing/Growse/internal/storage"
 )
 
-const brokerStorageSourceID = ^uint64(0)
+const (
+	brokerStorageSourceID = ^uint64(0)
+	maxWorkerHeapBytes    = 256 << 20
+)
 
 type pageEventRuntime interface {
 	DispatchPageEvent(func() bool) bool
@@ -72,6 +76,7 @@ func init() {
 }
 
 func runWorkerProcess() error {
+	debug.SetMemoryLimit(maxWorkerHeapBytes)
 	p := newPeer(os.Stdin, os.Stdout)
 	state := &workerState{peer: p}
 	state.installHandlers()

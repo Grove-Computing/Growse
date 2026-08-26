@@ -67,6 +67,7 @@ type Environment struct {
 	FrameScope      func(time.Time, func())
 	ConsoleLog      func(message string)
 	ConsoleRecord   func(level, message string)
+	RuntimeFailure  func(error)
 }
 
 // Runtime は1ページに属するGoスクリプトを実行する。

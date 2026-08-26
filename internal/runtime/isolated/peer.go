@@ -12,7 +12,10 @@ import (
 	"github.com/Grove-Computing/Growse/internal/runtime/workerproto"
 )
 
-const maxConcurrentHandlers = 64
+const (
+	maxConcurrentHandlers = 64
+	maxPendingRequests    = 256
+)
 
 type requestHandler func(context.Context, json.RawMessage) (any, error)
 type eventHandler func(json.RawMessage)
@@ -75,6 +78,10 @@ func (p *peer) call(ctx context.Context, method string, request, response any) e
 			err = errors.New("worker connection is closed")
 		}
 		return err
+	}
+	if len(p.pending) >= maxPendingRequests {
+		p.mu.Unlock()
+		return errors.New("worker pending request limit exceeded")
 	}
 	p.pending[id] = replies
 	p.mu.Unlock()
@@ -193,13 +200,7 @@ func (p *peer) dispatchRequest(message workerproto.Envelope) {
 	case p.handlers <- struct{}{}:
 		go func() {
 			defer func() { <-p.handlers }()
-			var result any
-			var err error
-			if handler == nil {
-				err = fmt.Errorf("unsupported worker method %q", message.Method)
-			} else {
-				result, err = handler(context.Background(), message.Payload)
-			}
+			result, err := invokeRequestHandler(handler, message)
 			payload, marshalErr := workerproto.MarshalPayload(result)
 			if err == nil && marshalErr != nil {
 				err = marshalErr
@@ -218,4 +219,17 @@ func (p *peer) dispatchRequest(message workerproto.Envelope) {
 			p.closeWithError(err)
 		}
 	}
+}
+
+func invokeRequestHandler(handler requestHandler, message workerproto.Envelope) (result any, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			result = nil
+			err = fmt.Errorf("worker handler panic: %v", recovered)
+		}
+	}()
+	if handler == nil {
+		return nil, fmt.Errorf("unsupported worker method %q", message.Method)
+	}
+	return handler(context.Background(), message.Payload)
 }

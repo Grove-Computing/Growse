@@ -1621,6 +1621,15 @@ func startRuntime(ctx context.Context, factory runtimemodel.EngineFactory, engin
 		ConsoleRecord: func(level, message string) {
 			page.ensureDevTools().AddConsoleForEngine(devtools.ConsoleLevel(level), string(engine), "console", message)
 		},
+		RuntimeFailure: func(err error) {
+			if err == nil {
+				return
+			}
+			setRuntimeError(page, fmt.Sprintf("%s runtime worker failed: %v", engine, err))
+			if onMutation != nil {
+				onMutation()
+			}
+		},
 	}
 	if local, session, _ := storageManager.Areas(page.URL); local != nil || session != nil {
 		environment.LocalStorage = local

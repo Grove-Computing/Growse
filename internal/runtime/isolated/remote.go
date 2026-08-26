@@ -16,6 +16,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Grove-Computing/Growse/internal/events"
@@ -29,7 +30,11 @@ const (
 	workerEnvironmentKey = "GROWSE_RUNTIME_WORKER"
 	workerStopTimeout    = time.Second
 	maxWorkerStderrBytes = 64 << 10
+	defaultTaskTimeout   = 5 * time.Second
+	maxSessionWorkers    = 32
 )
+
+var activeWorkers atomic.Int64
 
 // Runtime is a browser-side proxy for one isolated Go or JavaScript runtime.
 type Runtime struct {
@@ -46,11 +51,12 @@ type Runtime struct {
 	started     bool
 	stopped     bool
 	unsubscribe func()
+	taskTimeout time.Duration
 }
 
 // New returns a runtime proxy for engine. The worker is started by Load.
 func New(engine runtimemodel.Engine) *Runtime {
-	return &Runtime{engine: runtimemodel.NormalizeEngine(engine)}
+	return &Runtime{engine: runtimemodel.NormalizeEngine(engine), taskTimeout: defaultTaskTimeout}
 }
 
 func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, environment runtimemodel.Environment) error {
@@ -86,6 +92,7 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 	r.peer, r.command, r.stdin, r.processDone, r.stderr = workerPeer, command, stdin, processDone, stderr
 	r.mu.Unlock()
 	r.installHostHandlers(workerPeer)
+	r.monitorWorker(workerPeer)
 
 	request := loadRequest{
 		Engine: r.engine, Document: environment.Document.Snapshot(), StorageSource: environment.StorageSource,
@@ -109,7 +116,7 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 			request.Scripts[index].SourceURL = publicRuntimeURL(script.SourceURL).String()
 		}
 	}
-	if err := workerPeer.call(ctx, "runtime.load", request, nil); err != nil {
+	if err := r.callTask(ctx, "runtime.load", request, nil); err != nil {
 		_ = r.Stop()
 		return fmt.Errorf("load isolated %s runtime: %w", r.engine, err)
 	}
@@ -145,10 +152,9 @@ func (r *Runtime) Start(ctx context.Context) error {
 		r.mu.Unlock()
 		return errors.New("isolated runtime is stopped")
 	}
-	p := r.peer
 	r.started = true
 	r.mu.Unlock()
-	if err := p.call(ctx, "runtime.start", nil, nil); err != nil {
+	if err := r.callTask(ctx, "runtime.start", nil, nil); err != nil {
 		return fmt.Errorf("start isolated %s runtime: %w", r.engine, err)
 	}
 	return nil
@@ -205,7 +211,7 @@ func (r *Runtime) DispatchDOMEvent(event events.Event) bool {
 		X: event.X, Y: event.Y, Value: event.Value, Cancelable: event.IsCancelable(),
 	}
 	var response eventResponse
-	if err := p.call(context.Background(), "runtime.event", request, &response); err != nil {
+	if err := r.callTask(context.Background(), "runtime.event", request, &response); err != nil {
 		return false
 	}
 	if response.DefaultPrevented {
@@ -228,7 +234,7 @@ func (r *Runtime) RunAnimationFrame(current time.Time) bool {
 	}
 	var response boolResponse
 	request := frameRequest{UnixNano: current.UnixNano(), Document: environment.Document.Snapshot()}
-	return p.call(context.Background(), "runtime.frame", request, &response) == nil && response.Value
+	return r.callTask(context.Background(), "runtime.frame", request, &response) == nil && response.Value
 }
 
 func (r *Runtime) HasAnimationFrameCallbacks() bool {
@@ -239,7 +245,7 @@ func (r *Runtime) HasAnimationFrameCallbacks() bool {
 		return false
 	}
 	var response boolResponse
-	return p.call(context.Background(), "runtime.has-frame", nil, &response) == nil && response.Value
+	return r.callTask(context.Background(), "runtime.has-frame", nil, &response) == nil && response.Value
 }
 
 func (r *Runtime) SetBackground(background bool) {
@@ -272,6 +278,58 @@ func (r *Runtime) sendEvent(method string, value any) {
 	if p != nil && !stopped {
 		_ = p.event(method, value)
 	}
+}
+
+func (r *Runtime) callTask(ctx context.Context, method string, request, response any) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	r.mu.Lock()
+	p, timeout, stopped := r.peer, r.taskTimeout, r.stopped
+	r.mu.Unlock()
+	if p == nil || stopped {
+		return errors.New("isolated runtime worker is unavailable")
+	}
+	if timeout <= 0 {
+		timeout = defaultTaskTimeout
+	}
+	taskContext, cancel := context.WithTimeout(ctx, timeout)
+	err := p.call(taskContext, method, request, response)
+	timedOut := errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil
+	cancel()
+	if timedOut {
+		r.terminateWorker()
+		return fmt.Errorf("runtime worker task %s exceeded %s", method, timeout)
+	}
+	return err
+}
+
+func (r *Runtime) terminateWorker() {
+	r.mu.Lock()
+	command := r.command
+	r.mu.Unlock()
+	if command != nil && command.Process != nil {
+		_ = command.Process.Kill()
+	}
+}
+
+func (r *Runtime) monitorWorker(p *peer) {
+	go func() {
+		<-p.done
+		p.mu.Lock()
+		err := p.readErr
+		p.mu.Unlock()
+		r.mu.Lock()
+		stopped := r.stopped
+		failure := r.environment.RuntimeFailure
+		r.mu.Unlock()
+		if !stopped && failure != nil {
+			if err == nil {
+				err = errors.New("runtime worker exited unexpectedly")
+			}
+			failure(err)
+		}
+	}()
 }
 
 func (r *Runtime) installHostHandlers(p *peer) {
@@ -456,6 +514,16 @@ func (r *Runtime) applyStorageChange(payload json.RawMessage) {
 }
 
 func startWorkerProcess() (*peer, *exec.Cmd, io.WriteCloser, chan error, *limitedBuffer, error) {
+	if activeWorkers.Add(1) > maxSessionWorkers {
+		activeWorkers.Add(-1)
+		return nil, nil, nil, nil, nil, errors.New("runtime worker session limit exceeded")
+	}
+	releaseWorker := true
+	defer func() {
+		if releaseWorker {
+			activeWorkers.Add(-1)
+		}
+	}()
 	executable, err := os.Executable()
 	if err != nil {
 		return nil, nil, nil, nil, nil, fmt.Errorf("resolve runtime worker executable: %w", err)
@@ -478,7 +546,11 @@ func startWorkerProcess() (*peer, *exec.Cmd, io.WriteCloser, chan error, *limite
 		return nil, nil, nil, nil, nil, fmt.Errorf("start runtime worker: %w", err)
 	}
 	done := make(chan error, 1)
-	go func() { done <- command.Wait() }()
+	releaseWorker = false
+	go func() {
+		done <- command.Wait()
+		activeWorkers.Add(-1)
+	}()
 	return newPeer(stdout, stdin), command, stdin, done, stderr, nil
 }
 
