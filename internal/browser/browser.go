@@ -25,6 +25,7 @@ import (
 	htmlparser "github.com/Grove-Computing/Growse/internal/html"
 	"github.com/Grove-Computing/Growse/internal/network"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
+	"github.com/Grove-Computing/Growse/internal/serviceworker"
 	storagecore "github.com/Grove-Computing/Growse/internal/storage"
 	"github.com/Grove-Computing/Growse/internal/style"
 	fetchapi "github.com/Grove-Computing/Growse/internal/webapi/fetch"
@@ -88,6 +89,7 @@ type Browser struct {
 	storageSourceID  uint64
 	fetchLimiter     *fetchapi.Limiter
 	devToolsSession  *devtools.SessionStore
+	serviceWorkers   *serviceworker.Manager
 }
 
 var nextStorageSourceID atomic.Uint64
@@ -110,13 +112,22 @@ func NewWithRuntimeFactory(client ResourceLoader, factory runtimemodel.Factory) 
 
 // NewWithRuntimeFactoryAndStorage は注入されたStorage profileを使用するBrowserを生成する。
 func NewWithRuntimeFactoryAndStorage(client ResourceLoader, factory runtimemodel.Factory, manager *storagecore.Manager) *Browser {
+	return NewWithRuntimeFactoryAndStorageAndServiceWorkers(client, factory, manager, serviceworker.NewManager())
+}
+
+// NewWithRuntimeFactoryAndStorageAndServiceWorkers injects shared profile state.
+func NewWithRuntimeFactoryAndStorageAndServiceWorkers(client ResourceLoader, factory runtimemodel.Factory, manager *storagecore.Manager, serviceWorkers *serviceworker.Manager) *Browser {
 	if manager == nil {
 		manager = storagecore.NewManager()
+	}
+	if serviceWorkers == nil {
+		serviceWorkers = serviceworker.NewManager()
 	}
 	return &Browser{
 		client: client, runtimeFactory: factory, engineFactory: runtimemodel.ForGo(factory), engine: runtimemodel.EngineGo,
 		history: newHistory(), clock: animationmodel.SystemClock{}, storage: manager, active: true,
 		storageSourceID: nextStorageSourceID.Add(1), devToolsSession: devtools.NewSessionStore(),
+		serviceWorkers: serviceWorkers,
 	}
 }
 
@@ -127,13 +138,22 @@ func NewWithEngineFactory(client ResourceLoader, factory runtimemodel.EngineFact
 
 // NewWithEngineFactoryAndStorage はEngine選択と注入Storage profileを使用するBrowserを生成する。
 func NewWithEngineFactoryAndStorage(client ResourceLoader, factory runtimemodel.EngineFactory, manager *storagecore.Manager) *Browser {
+	return NewWithEngineFactoryAndStorageAndServiceWorkers(client, factory, manager, serviceworker.NewManager())
+}
+
+// NewWithEngineFactoryAndStorageAndServiceWorkers injects shared profile state.
+func NewWithEngineFactoryAndStorageAndServiceWorkers(client ResourceLoader, factory runtimemodel.EngineFactory, manager *storagecore.Manager, serviceWorkers *serviceworker.Manager) *Browser {
 	if manager == nil {
 		manager = storagecore.NewManager()
+	}
+	if serviceWorkers == nil {
+		serviceWorkers = serviceworker.NewManager()
 	}
 	return &Browser{
 		client: client, engineFactory: factory, engine: runtimemodel.EngineGo,
 		history: newHistory(), clock: animationmodel.SystemClock{}, storage: manager, active: true,
 		storageSourceID: nextStorageSourceID.Add(1), devToolsSession: devtools.NewSessionStore(),
+		serviceWorkers: serviceWorkers,
 	}
 }
 
@@ -893,8 +913,8 @@ func (b *Browser) SubmitPOST(ctx context.Context, formID, submitterID dom.NodeID
 	}
 	target.Fragment = ""
 	client := b.client
-	loader, ok := client.(requestLoader)
-	if !ok {
+	_, supportsRequests := client.(requestLoader)
+	if !supportsRequests {
 		b.mu.Unlock()
 		return nil, errors.New("network client does not support POST")
 	}
@@ -903,6 +923,7 @@ func (b *Browser) SubmitPOST(ctx context.Context, formID, submitterID dom.NodeID
 	engineFactory := b.engineFactory
 	engine := runtimemodel.NormalizeEngine(b.engine)
 	storageManager := b.storage
+	serviceWorkers := b.serviceWorkers
 	onMutation := b.onMutation
 	reducedMotion := b.reducedMotion
 	b.mu.Unlock()
@@ -914,7 +935,8 @@ func (b *Browser) SubmitPOST(ctx context.Context, formID, submitterID dom.NodeID
 		return nil, err
 	}
 	body := []byte(encoded)
-	response, err := loader.Do(ctx, &network.Request{
+	intercepted := serviceWorkerLoader{ResourceLoader: client, manager: serviceWorkers}
+	response, err := intercepted.Do(ctx, &network.Request{
 		Method: http.MethodPost, URL: target, Body: body,
 		Header:  http.Header{"Content-Type": []string{forms.URLEncoded}},
 		SiteURL: cloneURL(page.URL), Kind: network.RequestForm,
@@ -924,7 +946,7 @@ func (b *Browser) SubmitPOST(ctx context.Context, formID, submitterID dom.NodeID
 		pageStore.Close()
 		return nil, fmt.Errorf("submit form to %s: %w", network.RedactedURL(target), err)
 	}
-	return b.finishLoad(ctx, target, response, historyPush, -1, navigationID, client, client, engineFactory, engine, storageManager, onMutation, reducedMotion, pageStore)
+	return b.finishLoad(ctx, target, response, historyPush, -1, navigationID, intercepted, intercepted, engineFactory, engine, storageManager, onMutation, reducedMotion, pageStore)
 }
 
 // Submit validates and dispatches a cancelable submit event before navigation.
@@ -1141,6 +1163,7 @@ func (b *Browser) loadWithClient(ctx context.Context, pageURL *url.URL, commit h
 	engineFactory := b.engineFactory
 	engine := runtimemodel.NormalizeEngine(b.engine)
 	storageManager := b.storage
+	serviceWorkers := b.serviceWorkers
 	onMutation := b.onMutation
 	reducedMotion := b.reducedMotion
 	b.mu.Unlock()
@@ -1159,6 +1182,9 @@ func (b *Browser) loadWithClient(ctx context.Context, pageURL *url.URL, commit h
 	if revalidateResources {
 		resourceClient = cacheRevalidatingLoader{ResourceLoader: client}
 	}
+	documentClient = serviceWorkerLoader{ResourceLoader: documentClient, manager: serviceWorkers}
+	resourceClient = serviceWorkerLoader{ResourceLoader: resourceClient, manager: serviceWorkers}
+	runtimeClient := ResourceLoader(serviceWorkerLoader{ResourceLoader: client, manager: serviceWorkers})
 
 	var response *network.Response
 	var err error
@@ -1172,7 +1198,7 @@ func (b *Browser) loadWithClient(ctx context.Context, pageURL *url.URL, commit h
 		pageStore.Close()
 		return nil, fmt.Errorf("navigate to %s: %w", network.RedactedURL(pageURL), err)
 	}
-	return b.finishLoad(navigationContext, pageURL, response, commit, historyIndex, navigationID, resourceClient, client, engineFactory, engine, storageManager, onMutation, reducedMotion, pageStore)
+	return b.finishLoad(navigationContext, pageURL, response, commit, historyIndex, navigationID, resourceClient, runtimeClient, engineFactory, engine, storageManager, onMutation, reducedMotion, pageStore)
 }
 
 type cacheRevalidatingLoader struct {
@@ -1304,6 +1330,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 		ImportMap:        importMap,
 		ScriptErrors:     scriptErrors,
 		DevTools:         pageStore,
+		serviceWorkers:   b.serviceWorkers,
 	}
 	for _, scriptError := range scriptErrors {
 		page.DevTools.AddConsole(devtools.ConsoleError, "script", scriptError)
@@ -1705,8 +1732,9 @@ func startRuntime(ctx context.Context, factory runtimemodel.EngineFactory, engin
 		FrameMutation: func(frameID, generation uint64, snapshot dom.DocumentSnapshot) error {
 			return applyFrameMutation(page, frameID, generation, snapshot, onMutation, runtimeNow())
 		},
-		FramePolicy: page.FramePolicy,
-		Window:      page.window,
+		FramePolicy:   page.FramePolicy,
+		Window:        page.window,
+		ServiceWorker: serviceWorkerHost(ctx, page, client),
 	}
 	if page.windows != nil {
 		environment.PostMessage = func(target runtimemodel.WindowReference, targetOrigin string, payload []byte) error {

@@ -219,9 +219,9 @@ func (state *frameLoadState) buildPage(ctx context.Context, response *network.Re
 	pageStore := state.browser.newDevToolsPageStore()
 	styleResources, imageResources, scriptResources := state.resourceClient, state.resourceClient, state.resourceClient
 	if loader, ok := state.resourceClient.(requestLoader); ok {
-		styleResources = pageResourceLoader{loader: loader, siteURL: state.rootURL, kind: network.RequestStylesheet, observer: pageStore.ObserveNetwork}
-		imageResources = pageResourceLoader{loader: loader, siteURL: state.rootURL, kind: network.RequestImage, observer: pageStore.ObserveNetwork}
-		scriptResources = pageResourceLoader{loader: loader, siteURL: state.rootURL, kind: network.RequestScript, engine: string(state.engine), observer: pageStore.ObserveNetwork}
+		styleResources = pageResourceLoader{loader: loader, siteURL: response.URL, kind: network.RequestStylesheet, observer: pageStore.ObserveNetwork}
+		imageResources = pageResourceLoader{loader: loader, siteURL: response.URL, kind: network.RequestImage, observer: pageStore.ObserveNetwork}
+		scriptResources = pageResourceLoader{loader: loader, siteURL: response.URL, kind: network.RequestScript, engine: string(state.engine), observer: pageStore.ObserveNetwork}
 	}
 	stylesheet, err := state.browser.loadStyles(ctx, styleResources, response.URL, document)
 	if err != nil {
@@ -250,7 +250,8 @@ func (state *frameLoadState) buildPage(ctx context.Context, response *network.Re
 		Animations: style.NewAnimationRegistry(), Transitions: style.NewTransitionRegistry(), BackgroundImages: backgroundImages,
 		BackgroundErrors: backgroundErrors, Engine: state.engine, Scripts: scripts, ImportMap: importMap, ScriptErrors: scriptErrors,
 		StyleRevision: 1, ReducedMotion: state.reducedMotion, ViewportWidth: defaultFrameWidth, ViewportHeight: defaultFrameHeight, DevTools: pageStore,
-		FramePolicy: policy,
+		FramePolicy:    policy,
+		serviceWorkers: state.rootPage.serviceWorkers,
 	}
 	for _, scriptError := range scriptErrors {
 		pageStore.AddConsole(devtools.ConsoleError, "script", scriptError)

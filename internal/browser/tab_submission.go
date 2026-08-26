@@ -112,8 +112,8 @@ func (b *Browser) submitPreparedForm(ctx context.Context, submission preparedFor
 	}
 	b.mu.Lock()
 	client := b.client
-	loader, ok := client.(requestLoader)
-	if !ok {
+	_, supportsRequests := client.(requestLoader)
+	if !supportsRequests {
 		b.mu.Unlock()
 		return nil, errors.New("network client does not support POST")
 	}
@@ -122,11 +122,13 @@ func (b *Browser) submitPreparedForm(ctx context.Context, submission preparedFor
 	engineFactory := b.engineFactory
 	engine := runtimemodel.NormalizeEngine(b.engine)
 	storageManager := b.storage
+	serviceWorkers := b.serviceWorkers
 	onMutation := b.onMutation
 	reducedMotion := b.reducedMotion
 	b.mu.Unlock()
 	pageStore := b.newDevToolsPageStore()
-	response, err := loader.Do(ctx, &network.Request{
+	intercepted := serviceWorkerLoader{ResourceLoader: client, manager: serviceWorkers}
+	response, err := intercepted.Do(ctx, &network.Request{
 		Method: http.MethodPost, URL: submission.target, Body: append([]byte(nil), submission.body...),
 		Header: http.Header{"Content-Type": []string{forms.URLEncoded}}, SiteURL: cloneURL(submission.siteURL), Kind: network.RequestForm, Observer: pageStore.ObserveNetwork,
 	})
@@ -134,7 +136,7 @@ func (b *Browser) submitPreparedForm(ctx context.Context, submission preparedFor
 		pageStore.Close()
 		return nil, fmt.Errorf("submit form to %s: %w", network.RedactedURL(submission.target), err)
 	}
-	return b.finishLoad(ctx, submission.target, response, historyPush, -1, navigationID, client, client, engineFactory, engine, storageManager, onMutation, reducedMotion, pageStore)
+	return b.finishLoad(ctx, submission.target, response, historyPush, -1, navigationID, intercepted, intercepted, engineFactory, engine, storageManager, onMutation, reducedMotion, pageStore)
 }
 
 // SubmitFormToNewTab validates a _blank form submission and executes it in an

@@ -12,6 +12,8 @@ import (
 	"github.com/Grove-Computing/Growse/internal/network"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 	"github.com/Grove-Computing/Growse/internal/runtime/isolated"
+	"github.com/Grove-Computing/Growse/internal/serviceworker"
+	storagecore "github.com/Grove-Computing/Growse/internal/storage"
 )
 
 func TestBrowserSwitchesGoAndJavaScriptThroughIsolatedWorkers(t *testing.T) {
@@ -200,6 +202,222 @@ func TestBrowserRoutesPostMessageAcrossIsolatedIframeWorkers(t *testing.T) {
 		if len(childRecords) != 1 || childRecords[0].Message != "true|0" {
 			t.Fatalf("child %d Window relationships = %#v", index, childRecords)
 		}
+	}
+}
+
+func TestBrowserRegistersAndControlsServiceWorkerThroughIsolatedRuntime(t *testing.T) {
+	pageURL := mustParseURL(t, "https://app.example/app/page.html")
+	workerURL := mustParseURL(t, "https://app.example/app/sw.js")
+	loader := &requestRouteLoader{routeLoader: routeLoader{responses: map[string]*network.Response{
+		pageURL.String(): {
+			URL: pageURL, StatusCode: http.StatusOK, ContentType: "text/html",
+			Body: []byte(`<p id="result">waiting</p><script>
+				navigator.serviceWorker.register("/app/sw.js").then(function(registration) {
+					return navigator.serviceWorker.ready.then(function(ready) {
+						return Promise.all([
+							navigator.serviceWorker.getRegistration(),
+							navigator.serviceWorker.getRegistrations()
+						]).then(function(values) {
+							const before = [registration.active.state, ready.active.state, values[1].length,
+								navigator.serviceWorker.controller.state].join("|");
+							return registration.unregister().then(function(removed) {
+								document.getElementById("result").textContent = before + "|" + removed + "|" +
+									(navigator.serviceWorker.controller === null);
+							});
+						});
+					});
+			});
+			</script>`),
+		},
+		workerURL.String(): {
+			URL: workerURL, StatusCode: http.StatusOK, ContentType: "text/javascript",
+			Body: []byte(`
+				self.addEventListener("install", event => event.waitUntil(self.skipWaiting()));
+				self.addEventListener("activate", event => event.waitUntil(clients.claim()));`),
+		},
+	}}}
+	browserState := NewWithEngineFactory(loader, func(engine runtimemodel.Engine) runtimemodel.Runtime { return isolated.New(engine) })
+	t.Cleanup(func() { _ = browserState.Close() })
+	if _, err := browserState.SetEngine(context.Background(), runtimemodel.EngineJavaScript); err != nil {
+		t.Fatal(err)
+	}
+	page, err := browserState.Navigate(context.Background(), pageURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, _ := page.Document.GetElementByID("result")
+	if got := result.TextContent(); got != "activated|activated|1|activated|true|true" {
+		t.Fatalf("Service Worker lifecycle result = %q, runtimeError=%q", got, page.RuntimeError)
+	}
+	foundWorkerRequest := false
+	for _, request := range loader.requests {
+		if request.Kind == network.RequestServiceWorker && request.URL.String() == workerURL.String() && request.Credentials == network.CredentialsInclude {
+			foundWorkerRequest = true
+		}
+	}
+	if !foundWorkerRequest {
+		t.Fatalf("Service Worker request was not brokered: %#v", loader.requests)
+	}
+}
+
+func TestBrowserUsesActiveServiceWorkerForNavigationResourceAndFetch(t *testing.T) {
+	installURL := mustParseURL(t, "https://app.example/app/install.html")
+	workerURL := mustParseURL(t, "https://app.example/app/sw.js")
+	controlledURL := mustParseURL(t, "https://app.example/app/controlled.html")
+	loader := &requestRouteLoader{routeLoader: routeLoader{responses: map[string]*network.Response{
+		installURL.String(): {
+			URL: installURL, StatusCode: http.StatusOK, ContentType: "text/html",
+			Body: []byte(`<p id="result">installing</p><script>
+				navigator.serviceWorker.register("/app/sw.js").then(function() {
+					document.getElementById("result").textContent = "installed";
+				});
+			</script>`),
+		},
+		workerURL.String(): {
+			URL: workerURL, StatusCode: http.StatusOK, ContentType: "text/javascript",
+			Body: []byte(`
+				self.addEventListener("install", () => self.skipWaiting());
+				self.addEventListener("activate", () => clients.claim());
+				self.addEventListener("fetch", event => {
+					if (event.request.url.endsWith("/controlled.html")) {
+						event.respondWith(new Response('<p id="result">navigation</p><script src="/app/app.js"></' + 'script><script>fetch("/app/api").then(r => r.text()).then(value => console.log("service-worker-" + value));</' + 'script>', {headers: {"Content-Type": "text/html"}}));
+					} else if (event.request.url.endsWith("/app.js")) {
+						event.respondWith(Promise.resolve(new Response('document.getElementById("result").textContent += "|resource";', {headers: {"Content-Type": "text/javascript"}})));
+					} else if (event.request.url.endsWith("/api")) {
+						event.respondWith(new Response("fetch", {headers: {"Content-Type": "text/plain"}}));
+					}
+				});`),
+		},
+	}}}
+	browserState := NewWithEngineFactory(loader, func(engine runtimemodel.Engine) runtimemodel.Runtime { return isolated.New(engine) })
+	t.Cleanup(func() { _ = browserState.Close() })
+	if _, err := browserState.SetEngine(context.Background(), runtimemodel.EngineJavaScript); err != nil {
+		t.Fatal(err)
+	}
+	installPage, err := browserState.Navigate(context.Background(), installURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	installResult, _ := installPage.Document.GetElementByID("result")
+	if got := installResult.TextContent(); got != "installed" {
+		t.Fatalf("installation result = %q", got)
+	}
+	page, err := browserState.Navigate(context.Background(), controlledURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, _ := page.Document.GetElementByID("result")
+	if got := result.TextContent(); got != "navigation|resource" || page.RuntimeError != "" {
+		t.Fatalf("controlled page = text:%q runtimeError:%q scriptErrors:%v", got, page.RuntimeError, page.ScriptErrors)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for len(page.DevTools.Console()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	records := page.DevTools.Console()
+	if len(records) != 1 || records[0].Message != "service-worker-fetch" {
+		t.Fatalf("controlled Fetch console = %#v", records)
+	}
+	for _, request := range loader.requests {
+		if request.URL.String() == controlledURL.String() || request.URL.Path == "/app/app.js" || request.URL.Path == "/app/api" {
+			t.Fatalf("controlled request reached network fallback: %#v", request)
+		}
+	}
+}
+
+func TestBrowserRestoresNavigationFromServiceWorkerCacheStorage(t *testing.T) {
+	installURL := mustParseURL(t, "https://cache.example/app/install.html")
+	workerURL := mustParseURL(t, "https://cache.example/app/sw.js")
+	offlineURL := mustParseURL(t, "https://cache.example/app/offline.html")
+	loader := &requestRouteLoader{routeLoader: routeLoader{responses: map[string]*network.Response{
+		installURL.String(): {
+			URL: installURL, StatusCode: http.StatusOK, ContentType: "text/html",
+			Body: []byte(`<script>navigator.serviceWorker.register("/app/sw.js")</script>`),
+		},
+		workerURL.String(): {
+			URL: workerURL, StatusCode: http.StatusOK, ContentType: "text/javascript",
+			Body: []byte(`
+				self.addEventListener("install", event => {
+					event.waitUntil(caches.open("offline-v1").then(cache => cache.put(
+						"/app/offline.html",
+						new Response('<p id="result">cache-storage</p>', {headers: {"Content-Type": "text/html"}})
+					)));
+					self.skipWaiting();
+				});
+				self.addEventListener("activate", event => event.waitUntil(clients.claim()));
+				self.addEventListener("fetch", event => event.respondWith(
+					caches.match(event.request).then(response => response || fetch(event.request))
+				));`),
+		},
+	}}}
+	browserState := NewWithEngineFactory(loader, func(engine runtimemodel.Engine) runtimemodel.Runtime { return isolated.New(engine) })
+	t.Cleanup(func() { _ = browserState.Close() })
+	if _, err := browserState.SetEngine(context.Background(), runtimemodel.EngineJavaScript); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := browserState.Navigate(context.Background(), installURL.String()); err != nil {
+		t.Fatal(err)
+	}
+	page, err := browserState.Navigate(context.Background(), offlineURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, _ := page.Document.GetElementByID("result")
+	if got := result.TextContent(); got != "cache-storage" {
+		t.Fatalf("cached navigation text = %q", got)
+	}
+	for _, request := range loader.requests {
+		if request.URL.String() == offlineURL.String() {
+			t.Fatalf("cached navigation reached the network: %#v", request)
+		}
+	}
+}
+
+func TestBrowsersShareServiceWorkerProfileAcrossTabs(t *testing.T) {
+	installURL := mustParseURL(t, "https://tabs.example/app/install.html")
+	workerURL := mustParseURL(t, "https://tabs.example/app/sw.js")
+	controlledURL := mustParseURL(t, "https://tabs.example/app/controlled.html")
+	loader := &requestRouteLoader{routeLoader: routeLoader{responses: map[string]*network.Response{
+		installURL.String(): {
+			URL: installURL, StatusCode: http.StatusOK, ContentType: "text/html",
+			Body: []byte(`<script>navigator.serviceWorker.register("/app/sw.js")</script>`),
+		},
+		workerURL.String(): {
+			URL: workerURL, StatusCode: http.StatusOK, ContentType: "text/javascript",
+			Body: []byte(`
+				self.addEventListener("install", () => self.skipWaiting());
+				self.addEventListener("activate", () => clients.claim());
+				self.addEventListener("fetch", event => event.respondWith(new Response('<p id="result">shared-profile</p>', {headers: {"Content-Type": "text/html"}})));`),
+		},
+	}}}
+	profile := serviceworker.NewManager()
+	newTab := func() *Browser {
+		return NewWithEngineFactoryAndStorageAndServiceWorkers(loader, func(engine runtimemodel.Engine) runtimemodel.Runtime {
+			return isolated.New(engine)
+		}, storagecore.NewManager(), profile)
+	}
+	first := newTab()
+	second := newTab()
+	t.Cleanup(func() { _ = first.Close(); _ = second.Close(); _ = profile.Close() })
+	if _, err := first.SetEngine(context.Background(), runtimemodel.EngineJavaScript); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := second.SetEngine(context.Background(), runtimemodel.EngineJavaScript); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.Navigate(context.Background(), installURL.String()); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	page, err := second.Navigate(context.Background(), controlledURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, _ := page.Document.GetElementByID("result")
+	if got := result.TextContent(); got != "shared-profile" {
+		t.Fatalf("shared Service Worker profile result = %q", got)
 	}
 }
 

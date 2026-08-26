@@ -13,6 +13,7 @@ import (
 	"github.com/Grove-Computing/Growse/internal/network"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 	"github.com/Grove-Computing/Growse/internal/runtime/isolated"
+	"github.com/Grove-Computing/Growse/internal/serviceworker"
 	storagecore "github.com/Grove-Computing/Growse/internal/storage"
 	"github.com/Grove-Computing/Growse/internal/ui"
 	"github.com/Grove-Computing/Growse/internal/updater"
@@ -38,15 +39,23 @@ func Run() {
 func runWindow(window *gioapp.Window) error {
 	var ops op.Ops
 	storageManager := storagecore.NewManager()
-	if dataRoot, err := storagecore.DefaultDataRoot(); err == nil {
+	serviceWorkerManager := serviceworker.NewManager()
+	dataRoot, dataRootErr := storagecore.DefaultDataRoot()
+	if dataRootErr == nil {
 		if persistent, persistentErr := storagecore.NewPersistentManager(dataRoot); persistentErr == nil {
 			storageManager = persistent
 		} else {
 			log.Printf("Local Storage profileを初期化できませんでした: %v", persistentErr)
 		}
+		if persistent, persistentErr := serviceworker.NewPersistentManager(dataRoot); persistentErr == nil {
+			serviceWorkerManager = persistent
+		} else {
+			log.Printf("Service Worker profileを初期化できませんでした: %v", persistentErr)
+		}
 	} else {
-		log.Printf("Local Storage data directoryを解決できませんでした: %v", err)
+		log.Printf("Browser profile data directoryを解決できませんでした: %v", dataRootErr)
 	}
+	defer serviceWorkerManager.Close()
 	networkClient := network.NewClient()
 	if cacheRoot, err := network.DefaultCacheRoot(); err == nil {
 		if persistent, persistentErr := network.NewClientWithCacheRoot(nil, 0, cacheRoot); persistentErr == nil {
@@ -58,12 +67,12 @@ func runWindow(window *gioapp.Window) error {
 		log.Printf("HTTP Cache directoryを解決できませんでした: %v", err)
 	}
 	session := browser.NewSession(func() *browser.Browser {
-		state := browser.NewWithEngineFactoryAndStorage(networkClient, func(engine runtimemodel.Engine) runtimemodel.Runtime {
+		state := browser.NewWithEngineFactoryAndStorageAndServiceWorkers(networkClient, func(engine runtimemodel.Engine) runtimemodel.Runtime {
 			if !runtimemodel.NormalizeEngine(engine).Valid() {
 				return nil
 			}
 			return isolated.New(engine)
-		}, storageManager.NewPageSession())
+		}, storageManager.NewPageSession(), serviceWorkerManager)
 		return state
 	})
 	session.SetOnActiveMutation(window.Invalidate)

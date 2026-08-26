@@ -46,6 +46,7 @@ type loadRequest struct {
 	Frames         []wireFrame                `json:"frames,omitempty"`
 	FramePolicy    runtimemodel.FramePolicy   `json:"framePolicy,omitempty"`
 	Window         runtimemodel.WindowContext `json:"window"`
+	ServiceWorker  bool                       `json:"serviceWorker,omitempty"`
 }
 
 type wireFrame struct {
@@ -72,6 +73,28 @@ type postMessageRequest struct {
 
 type messageRequest struct {
 	Event runtimemodel.MessageEvent `json:"event"`
+}
+
+type serviceWorkerRegisterRequest struct {
+	ScriptURL string `json:"scriptUrl"`
+	Scope     string `json:"scope,omitempty"`
+}
+
+type serviceWorkerScopeRequest struct {
+	Scope string `json:"scope"`
+}
+
+type serviceWorkerClientRequest struct {
+	URL string `json:"url,omitempty"`
+}
+
+type serviceWorkerRegistrationResponse struct {
+	Found        bool                                   `json:"found"`
+	Registration runtimemodel.ServiceWorkerRegistration `json:"registration"`
+}
+
+type serviceWorkerRegistrationsResponse struct {
+	Registrations []runtimemodel.ServiceWorkerRegistration `json:"registrations"`
 }
 
 type mutationEvent struct {

@@ -106,7 +106,8 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 	request := loadRequest{
 		Engine: r.engine, Document: environment.Document.Snapshot(), StorageSource: environment.StorageSource,
 		ImportMap: cloneStringMap(environment.ImportMap), Frames: frameAccessToWire(environment.Frames), FramePolicy: environment.FramePolicy,
-		Window: environment.Window,
+		Window:        environment.Window,
+		ServiceWorker: environment.ServiceWorker != nil,
 	}
 	if environment.BaseURL != nil {
 		request.BaseURL = publicRuntimeURL(environment.BaseURL).String()
@@ -434,6 +435,98 @@ func (r *Runtime) installHostHandlers(p *peer) {
 	p.handleRequest("host.history-info", r.handleHistoryInfo)
 	p.handleRequest("host.frame-mutation", r.handleFrameMutation)
 	p.handleRequest("host.post-message", r.handlePostMessage)
+	p.handleRequest("host.service-worker-register", r.handleServiceWorkerRegister)
+	p.handleRequest("host.service-worker-update", r.handleServiceWorkerUpdate)
+	p.handleRequest("host.service-worker-unregister", r.handleServiceWorkerUnregister)
+	p.handleRequest("host.service-worker-get", r.handleServiceWorkerGet)
+	p.handleRequest("host.service-worker-list", r.handleServiceWorkerList)
+	p.handleRequest("host.service-worker-controller", r.handleServiceWorkerController)
+}
+
+func (r *Runtime) serviceWorkerHost() (*runtimemodel.ServiceWorkerHost, error) {
+	r.mu.Lock()
+	host := r.environment.ServiceWorker
+	r.mu.Unlock()
+	if host == nil {
+		return nil, errors.New("service worker is unavailable")
+	}
+	return host, nil
+}
+
+func (r *Runtime) handleServiceWorkerRegister(_ context.Context, payload json.RawMessage) (any, error) {
+	var request serviceWorkerRegisterRequest
+	if err := workerproto.DecodePayload(payload, &request); err != nil {
+		return nil, err
+	}
+	host, err := r.serviceWorkerHost()
+	if err != nil {
+		return nil, err
+	}
+	return host.Register(request.ScriptURL, request.Scope)
+}
+
+func (r *Runtime) handleServiceWorkerUpdate(_ context.Context, payload json.RawMessage) (any, error) {
+	var request serviceWorkerScopeRequest
+	if err := workerproto.DecodePayload(payload, &request); err != nil {
+		return nil, err
+	}
+	host, err := r.serviceWorkerHost()
+	if err != nil {
+		return nil, err
+	}
+	return host.Update(request.Scope)
+}
+
+func (r *Runtime) handleServiceWorkerUnregister(_ context.Context, payload json.RawMessage) (any, error) {
+	var request serviceWorkerScopeRequest
+	if err := workerproto.DecodePayload(payload, &request); err != nil {
+		return nil, err
+	}
+	host, err := r.serviceWorkerHost()
+	if err != nil {
+		return nil, err
+	}
+	value, err := host.Unregister(request.Scope)
+	return boolResponse{Value: value}, err
+}
+
+func (r *Runtime) handleServiceWorkerGet(_ context.Context, payload json.RawMessage) (any, error) {
+	var request serviceWorkerClientRequest
+	if err := workerproto.DecodePayload(payload, &request); err != nil {
+		return nil, err
+	}
+	host, err := r.serviceWorkerHost()
+	if err != nil {
+		return nil, err
+	}
+	registration, err := host.GetRegistration(request.URL)
+	response := serviceWorkerRegistrationResponse{Found: registration != nil}
+	if registration != nil {
+		response.Registration = *registration
+	}
+	return response, err
+}
+
+func (r *Runtime) handleServiceWorkerList(_ context.Context, _ json.RawMessage) (any, error) {
+	host, err := r.serviceWorkerHost()
+	if err != nil {
+		return nil, err
+	}
+	registrations, err := host.GetRegistrations()
+	return serviceWorkerRegistrationsResponse{Registrations: registrations}, err
+}
+
+func (r *Runtime) handleServiceWorkerController(_ context.Context, _ json.RawMessage) (any, error) {
+	host, err := r.serviceWorkerHost()
+	if err != nil {
+		return nil, err
+	}
+	registration := host.Controller()
+	response := serviceWorkerRegistrationResponse{Found: registration != nil}
+	if registration != nil {
+		response.Registration = *registration
+	}
+	return response, nil
 }
 
 func (r *Runtime) handlePostMessage(_ context.Context, payload json.RawMessage) (any, error) {
