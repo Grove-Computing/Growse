@@ -62,6 +62,25 @@ esac
 
 go build -trimpath -ldflags="$ldflags" -o "$output" ./cmd/growse
 
+example_resources=(
+  animation
+  counter
+  css3-core
+  dashboard
+  data-app
+  devtools
+  dual-runtime
+  external-web-platform
+  flexbox
+  multi-tab-workspace
+  persistent-app
+  todo
+)
+mkdir -p "${package_dir}/examples"
+for example in "${example_resources[@]}"; do
+  cp -R "examples/${example}" "${package_dir}/examples/"
+done
+
 case "$goos" in
   linux)
     mkdir -p \

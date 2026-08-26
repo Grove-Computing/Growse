@@ -198,13 +198,14 @@ jobs:
           CGO_ENABLED: ${{ matrix.cgo_enabled }}
           GOARCH: ${{ matrix.goarch }}
           GOOS: ${{ matrix.goos }}
-        run: scripts/package-gui.sh dist/package v0.10.0 "$GITHUB_RUN_NUMBER"
+        run: scripts/package-gui.sh dist/package v0.14.0 "$GITHUB_RUN_NUMBER"
 
       - name: Verify GUI package
         shell: bash
         env:
           GOOS: ${{ matrix.goos }}
         run: |
+          bash scripts/verify-gui-package.sh dist/package
           case "$GOOS" in
             linux)
               test -x dist/package/growse
