@@ -105,7 +105,8 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 
 	request := loadRequest{
 		Engine: r.engine, Document: environment.Document.Snapshot(), StorageSource: environment.StorageSource,
-		ImportMap: cloneStringMap(environment.ImportMap),
+		ImportMap: cloneStringMap(environment.ImportMap), Frames: frameAccessToWire(environment.Frames), FramePolicy: environment.FramePolicy,
+		Window: environment.Window,
 	}
 	if environment.BaseURL != nil {
 		request.BaseURL = publicRuntimeURL(environment.BaseURL).String()
@@ -308,6 +309,11 @@ func (r *Runtime) DispatchHashChange(oldURL, newURL string) {
 	r.sendEvent("runtime.hashchange", hashChangeEvent{OldURL: oldURL, NewURL: newURL})
 }
 
+// DispatchMessage delivers a bounded postMessage event to the worker queue.
+func (r *Runtime) DispatchMessage(event runtimemodel.MessageEvent) error {
+	return r.callTask(context.Background(), "runtime.message", messageRequest{Event: event}, nil)
+}
+
 func (r *Runtime) sendEvent(method string, value any) {
 	r.mu.Lock()
 	p, stopped := r.peer, r.stopped
@@ -426,6 +432,64 @@ func (r *Runtime) installHostHandlers(p *peer) {
 	p.handleRequest("host.history-replace", r.handleHistoryReplace)
 	p.handleRequest("host.history-traverse", r.handleHistoryTraverse)
 	p.handleRequest("host.history-info", r.handleHistoryInfo)
+	p.handleRequest("host.frame-mutation", r.handleFrameMutation)
+	p.handleRequest("host.post-message", r.handlePostMessage)
+}
+
+func (r *Runtime) handlePostMessage(_ context.Context, payload json.RawMessage) (any, error) {
+	var request postMessageRequest
+	if err := workerproto.DecodePayload(payload, &request); err != nil {
+		return nil, err
+	}
+	r.mu.Lock()
+	post := r.environment.PostMessage
+	r.mu.Unlock()
+	if post == nil {
+		return nil, errors.New("postMessage broker is unavailable")
+	}
+	return nil, post(request.Target, request.TargetOrigin, request.Payload)
+}
+
+func (r *Runtime) handleFrameMutation(_ context.Context, payload json.RawMessage) (any, error) {
+	var request frameMutationRequest
+	if err := workerproto.DecodePayload(payload, &request); err != nil {
+		return nil, err
+	}
+	r.mu.Lock()
+	mutate := r.environment.FrameMutation
+	r.mu.Unlock()
+	if mutate == nil {
+		return nil, errors.New("frame mutation broker is unavailable")
+	}
+	return nil, mutate(request.ID, request.Generation, request.Document)
+}
+
+// UpdateFrames replaces generation-scoped child access inside the worker.
+func (r *Runtime) UpdateFrames(frames []runtimemodel.FrameAccess) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	p, stopped := r.peer, r.stopped
+	r.environment.Frames = append([]runtimemodel.FrameAccess(nil), frames...)
+	r.mu.Unlock()
+	if p != nil && !stopped {
+		_ = p.event("runtime.frames", frameAccessToWire(frames))
+	}
+}
+
+// UpdateWindow refreshes generation-scoped WindowProxy relationships in the worker.
+func (r *Runtime) UpdateWindow(window runtimemodel.WindowContext) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	p, stopped := r.peer, r.stopped
+	r.environment.Window = window
+	r.mu.Unlock()
+	if p != nil && !stopped {
+		_ = p.event("runtime.window", window)
+	}
 }
 
 func (r *Runtime) handleFetch(ctx context.Context, payload json.RawMessage) (any, error) {

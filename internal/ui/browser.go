@@ -1761,12 +1761,14 @@ func (ui *BrowserUI) cachedDocumentTree(page *browser.Page, viewportWidth, viewp
 		build = layoutengine.BuildWithScroll
 	}
 	tree := build(page.Document, page.ComputedStyles, viewportWidth, viewportHeight, 0, 0)
+	page.SyncFrameViewports(tree)
 	displayList := paintmodel.Build(tree)
 	if position.First >= 0 && position.First < len(displayList.Commands) {
 		if firstY, ok := commandDocumentY(displayList.Commands[position.First]); ok {
 			scrollY := max(firstY+float32(position.Offset)/pxPerDp, float32(0))
 			if scrollY > 0 {
 				tree = build(page.Document, page.ComputedStyles, viewportWidth, viewportHeight, 0, scrollY)
+				page.SyncFrameViewports(tree)
 			}
 		}
 	}

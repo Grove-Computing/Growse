@@ -1162,6 +1162,10 @@ func uaStyle(tag string) blockStyle {
 		style.margin.Bottom = 14
 	case "button":
 		style.bold = true
+	case "iframe":
+		style.display = stylemodel.DisplayInlineBlock
+		style.width = stylemodel.SizeValue{Kind: stylemodel.SizeLength, Value: stylemodel.LengthPercentage{Pixels: 300}}
+		style.height = stylemodel.SizeValue{Kind: stylemodel.SizeLength, Value: stylemodel.LengthPercentage{Pixels: 150}}
 	case "li":
 		style.display = stylemodel.DisplayBlock
 		style.margin.Bottom = 6

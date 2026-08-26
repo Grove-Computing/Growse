@@ -78,6 +78,18 @@ func (api *API) QuerySelector(selector string) *Element {
 	return api.element(node)
 }
 
+// ElementByNodeID returns a connected element by its document-scoped identity.
+func (api *API) ElementByNodeID(id dommodel.NodeID) *Element {
+	if api == nil || api.document == nil || id == 0 {
+		return nil
+	}
+	node, ok := api.document.NodeByID(id)
+	if !ok || node.Type != dommodel.NodeElement || !api.document.IsConnected(node) {
+		return nil
+	}
+	return api.element(node)
+}
+
 // CreateElement はDocumentが所有する未接続の要素を作成する。
 func (api *API) CreateElement(tagName string) *Element {
 	if api == nil || api.document == nil {

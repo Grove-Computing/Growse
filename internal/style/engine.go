@@ -87,6 +87,7 @@ func computeNode(node *dom.Node, parent ComputedStyle, stylesheet *css.Styleshee
 		computed = initialStyle()
 	} else if node.Type == dom.NodeElement {
 		computed = applyUADefaults(node.TagName, computed)
+		computed = applyPresentationalHints(node, computed)
 		computed = applyAuthorRules(node, computed, parent, stylesheet, state, environment)
 		computed = applyGeneratedContent(node, computed, stylesheet, state, environment)
 		result[node.ID] = computed
@@ -101,6 +102,23 @@ func computeNode(node *dom.Node, parent ComputedStyle, stylesheet *css.Styleshee
 	for _, child := range node.Children {
 		computeNode(child, computed, stylesheet, state, childEnvironment, result)
 	}
+}
+
+func applyPresentationalHints(node *dom.Node, computed ComputedStyle) ComputedStyle {
+	if node == nil || node.TagName != "iframe" {
+		return computed
+	}
+	for name, target := range map[string]*SizeValue{"width": &computed.Width, "height": &computed.Height} {
+		value, ok := node.Attribute(name)
+		if !ok {
+			continue
+		}
+		pixels, err := strconv.ParseFloat(strings.TrimSpace(value), 32)
+		if err == nil && pixels > 0 && pixels <= 16_384 {
+			*target = SizeValue{Kind: SizeLength, Value: LengthPercentage{Pixels: float32(pixels)}}
+		}
+	}
+	return computed
 }
 
 func initialStyle() ComputedStyle {
@@ -163,6 +181,10 @@ func applyUADefaults(tag string, computed ComputedStyle) ComputedStyle {
 		computed.Margin.Bottom = 14
 	case "button":
 		computed.FontWeight = 700
+	case "iframe":
+		computed.Display = DisplayInlineBlock
+		computed.Width = SizeValue{Kind: SizeLength, Value: LengthPercentage{Pixels: 300}}
+		computed.Height = SizeValue{Kind: SizeLength, Value: LengthPercentage{Pixels: 150}}
 	case "a":
 		computed.Color = 0x0969daff
 	case "pre":

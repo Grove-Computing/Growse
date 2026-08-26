@@ -1,6 +1,7 @@
 package isolated
 
 import (
+	"fmt"
 	"net/http"
 	"time"
 
@@ -42,6 +43,35 @@ type loadRequest struct {
 	StorageSource  storagecore.MutationSource `json:"storageSource"`
 	HistoryLength  int                        `json:"historyLength"`
 	HistoryState   string                     `json:"historyState,omitempty"`
+	Frames         []wireFrame                `json:"frames,omitempty"`
+	FramePolicy    runtimemodel.FramePolicy   `json:"framePolicy,omitempty"`
+	Window         runtimemodel.WindowContext `json:"window"`
+}
+
+type wireFrame struct {
+	ID         uint64                `json:"id"`
+	ElementID  dom.NodeID            `json:"elementId"`
+	Generation uint64                `json:"generation"`
+	Origin     string                `json:"origin"`
+	URL        string                `json:"url,omitempty"`
+	SameOrigin bool                  `json:"sameOrigin"`
+	Document   *dom.DocumentSnapshot `json:"document,omitempty"`
+}
+
+type frameMutationRequest struct {
+	ID         uint64               `json:"id"`
+	Generation uint64               `json:"generation"`
+	Document   dom.DocumentSnapshot `json:"document"`
+}
+
+type postMessageRequest struct {
+	Target       runtimemodel.WindowReference `json:"target"`
+	TargetOrigin string                       `json:"targetOrigin"`
+	Payload      []byte                       `json:"payload"`
+}
+
+type messageRequest struct {
+	Event runtimemodel.MessageEvent `json:"event"`
 }
 
 type mutationEvent struct {
@@ -146,4 +176,42 @@ type boolResponse struct {
 
 func frameTime(request frameRequest) time.Time {
 	return time.Unix(0, request.UnixNano)
+}
+
+func frameAccessToWire(frames []runtimemodel.FrameAccess) []wireFrame {
+	result := make([]wireFrame, 0, len(frames))
+	for _, frame := range frames {
+		item := wireFrame{
+			ID: frame.ID, ElementID: frame.ElementID, Generation: frame.Generation,
+			Origin: frame.Origin, URL: frame.URL, SameOrigin: frame.SameOrigin,
+		}
+		if frame.SameOrigin && frame.Document != nil {
+			snapshot := frame.Document.Snapshot()
+			item.Document = &snapshot
+		}
+		result = append(result, item)
+	}
+	return result
+}
+
+func wireToFrameAccess(frames []wireFrame) ([]runtimemodel.FrameAccess, error) {
+	result := make([]runtimemodel.FrameAccess, 0, len(frames))
+	for _, frame := range frames {
+		item := runtimemodel.FrameAccess{
+			ID: frame.ID, ElementID: frame.ElementID, Generation: frame.Generation,
+			Origin: frame.Origin, URL: frame.URL, SameOrigin: frame.SameOrigin,
+		}
+		if frame.SameOrigin {
+			if frame.Document == nil {
+				return nil, fmt.Errorf("same-origin Frame %d has no Document", frame.ID)
+			}
+			document, err := dom.NewDocumentFromSnapshot(*frame.Document)
+			if err != nil {
+				return nil, fmt.Errorf("decode Frame %d Document: %w", frame.ID, err)
+			}
+			item.Document = document
+		}
+		result = append(result, item)
+	}
+	return result, nil
 }

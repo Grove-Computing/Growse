@@ -176,6 +176,7 @@ func (runtime *Runtime) elementValue(vm *goja.Runtime, element *domapi.Element) 
 		return goja.Undefined()
 	})
 	_ = object.DefineAccessorProperty("value", valueGetter, valueSetter, goja.FLAG_FALSE, goja.FLAG_TRUE)
+	runtime.installFrameElement(vm, object, id)
 	return object
 }
 

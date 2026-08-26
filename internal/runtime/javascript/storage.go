@@ -10,12 +10,29 @@ import (
 )
 
 func (runtime *Runtime) installStorage(vm *goja.Runtime) error {
+	if runtime.environment.FramePolicy.HasOpaqueOrigin() {
+		blocked := vm.ToValue(func(goja.FunctionCall) goja.Value {
+			panic(frameSecurityError(vm, "storage is unavailable for an opaque origin"))
+		})
+		global := vm.GlobalObject()
+		if err := global.DefineAccessorProperty("localStorage", blocked, nil, goja.FLAG_FALSE, goja.FLAG_TRUE); err != nil {
+			return err
+		}
+		if err := global.DefineAccessorProperty("sessionStorage", blocked, nil, goja.FLAG_FALSE, goja.FLAG_TRUE); err != nil {
+			return err
+		}
+		return runtime.installWindowEventTarget(vm)
+	}
 	if err := vm.Set("localStorage", runtime.storageValue(vm, runtime.storageAPI.Local())); err != nil {
 		return err
 	}
 	if err := vm.Set("sessionStorage", runtime.storageValue(vm, runtime.storageAPI.Session())); err != nil {
 		return err
 	}
+	return runtime.installWindowEventTarget(vm)
+}
+
+func (runtime *Runtime) installWindowEventTarget(vm *goja.Runtime) error {
 	return vm.Set("addEventListener", func(call goja.FunctionCall) goja.Value {
 		runtime.addWindowEventListener(vm, call.Argument(0).String(), call.Argument(1))
 		return goja.Undefined()
@@ -70,7 +87,7 @@ func (runtime *Runtime) addWindowEventListener(vm *goja.Runtime, eventType strin
 		panic(vm.NewTypeError("window event listener must be a function"))
 	}
 	eventType = strings.ToLower(strings.TrimSpace(eventType))
-	if eventType != "storage" && eventType != "popstate" && eventType != "hashchange" && eventType != "load" {
+	if eventType != "storage" && eventType != "popstate" && eventType != "hashchange" && eventType != "load" && eventType != "message" {
 		panic(vm.NewTypeError("window event type is unsupported"))
 	}
 	runtime.mu.Lock()

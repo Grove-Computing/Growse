@@ -104,6 +104,76 @@ type Environment struct {
 	ConsoleLog      func(message string)
 	ConsoleRecord   func(level, message string)
 	RuntimeFailure  func(error)
+	Frames          []FrameAccess
+	FrameMutation   func(frameID, generation uint64, document dom.DocumentSnapshot) error
+	FramePolicy     FramePolicy
+	Window          WindowContext
+	PostMessage     func(target WindowReference, targetOrigin string, payload []byte) error
+}
+
+// FramePolicy contains the capabilities granted by an iframe sandbox.
+// A non-sandboxed context keeps the historical unrestricted behavior.
+type FramePolicy struct {
+	Sandboxed                      bool
+	AllowScripts                   bool
+	AllowSameOrigin                bool
+	AllowForms                     bool
+	AllowPopups                    bool
+	AllowTopNavigationByActivation bool
+}
+
+// AllowsScripts reports whether page code may be evaluated.
+func (policy FramePolicy) AllowsScripts() bool { return !policy.Sandboxed || policy.AllowScripts }
+
+// HasOpaqueOrigin reports whether the context has a unique opaque origin.
+func (policy FramePolicy) HasOpaqueOrigin() bool { return policy.Sandboxed && !policy.AllowSameOrigin }
+
+// AllowsForms reports whether form submission is enabled.
+func (policy FramePolicy) AllowsForms() bool { return !policy.Sandboxed || policy.AllowForms }
+
+// AllowsPopups reports whether creation of auxiliary browsing contexts is enabled.
+func (policy FramePolicy) AllowsPopups() bool { return !policy.Sandboxed || policy.AllowPopups }
+
+// AllowsTopNavigation reports whether a user-activated top navigation is enabled.
+func (policy FramePolicy) AllowsTopNavigation(userActivated bool) bool {
+	return !policy.Sandboxed || policy.AllowTopNavigationByActivation && userActivated
+}
+
+// FrameAccess is the least-privilege view of one direct child browsing context.
+// Document is present only while same-origin access is allowed.
+type FrameAccess struct {
+	ID         uint64
+	ElementID  dom.NodeID
+	Generation uint64
+	Origin     string
+	URL        string
+	SameOrigin bool
+	Document   *dom.Document
+}
+
+// WindowReference identifies one generation of a browsing context without
+// exposing cross-origin DOM state.
+type WindowReference struct {
+	ID         uint64
+	Generation uint64
+	Origin     string
+	URL        string
+	SameOrigin bool
+}
+
+// WindowContext defines the self, parent, top, and direct child relationships.
+type WindowContext struct {
+	Self     WindowReference
+	Parent   WindowReference
+	Top      WindowReference
+	Children []WindowReference
+}
+
+// MessageEvent is a bounded serialized structured-clone subset.
+type MessageEvent struct {
+	Data   []byte
+	Origin string
+	Source WindowReference
 }
 
 // Runtime は1ページに属するGoスクリプトを実行する。
@@ -122,6 +192,21 @@ type SandboxReporter interface {
 // LocationUpdater はsame-document Navigationを現在Runtimeへ通知する。
 type LocationUpdater interface {
 	UpdateLocation(*url.URL)
+}
+
+// FrameUpdater receives generation-scoped child Frame access changes.
+type FrameUpdater interface {
+	UpdateFrames([]FrameAccess)
+}
+
+// MessageDispatcher receives one postMessage event on the Page queue.
+type MessageDispatcher interface {
+	DispatchMessage(MessageEvent) error
+}
+
+// WindowUpdater refreshes generation-scoped child WindowProxy relationships.
+type WindowUpdater interface {
+	UpdateWindow(WindowContext)
 }
 
 // NavigationEventDispatcher はNavigation Eventを現在Runtimeへ配送する。

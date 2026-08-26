@@ -107,10 +107,13 @@ func (state *workerState) installHandlers() {
 	state.peer.handleRequest("runtime.event", state.dispatchEvent)
 	state.peer.handleRequest("runtime.frame", state.runFrame)
 	state.peer.handleRequest("runtime.has-frame", state.hasFrame)
+	state.peer.handleRequest("runtime.message", state.dispatchMessage)
 	state.peer.handleEvent("runtime.background", state.setBackground)
 	state.peer.handleEvent("runtime.location", state.updateLocation)
 	state.peer.handleEvent("runtime.popstate", state.dispatchPopState)
 	state.peer.handleEvent("runtime.hashchange", state.dispatchHashChange)
+	state.peer.handleEvent("runtime.frames", state.updateFrames)
+	state.peer.handleEvent("runtime.window", state.updateWindow)
 	state.peer.handleEvent("storage.external", state.applyExternalStorage)
 }
 
@@ -171,9 +174,16 @@ func (state *workerState) load(ctx context.Context, payload json.RawMessage) (an
 	state.local, state.session, state.cancel = local, session, cancel
 	state.mu.Unlock()
 
+	frames, err := wireToFrameAccess(request.Frames)
+	if err != nil {
+		cancel()
+		_ = pageRuntime.Stop()
+		state.reset()
+		return nil, err
+	}
 	environment := runtimemodel.Environment{
 		Document: document, Events: dispatcher, BaseURL: baseURL,
-		ImportMap:    cloneStringMap(request.ImportMap),
+		ImportMap: cloneStringMap(request.ImportMap), Frames: frames, FramePolicy: request.FramePolicy, Window: request.Window,
 		LocalStorage: local, SessionStorage: session, StorageSource: request.StorageSource,
 		OnMutation: func() {
 			_ = state.peer.event("dom.mutation", mutationEvent{Document: document.Snapshot()})
@@ -206,6 +216,12 @@ func (state *workerState) load(ctx context.Context, payload json.RawMessage) (an
 				return request.HistoryLength, request.HistoryState
 			}
 			return response.Length, response.State
+		},
+		FrameMutation: func(frameID, generation uint64, document dom.DocumentSnapshot) error {
+			return state.peer.call(runtimeContext, "host.frame-mutation", frameMutationRequest{ID: frameID, Generation: generation, Document: document}, nil)
+		},
+		PostMessage: func(target runtimemodel.WindowReference, targetOrigin string, payload []byte) error {
+			return state.peer.call(runtimeContext, "host.post-message", postMessageRequest{Target: target, TargetOrigin: targetOrigin, Payload: payload}, nil)
 		},
 	}
 	if err := pageRuntime.Load(runtimeContext, scripts, environment); err != nil {
@@ -387,6 +403,51 @@ func (state *workerState) dispatchHashChange(payload json.RawMessage) {
 	if dispatcher, ok := runtime.(navigationEventRuntime); ok {
 		dispatcher.DispatchHashChange(event.OldURL, event.NewURL)
 	}
+}
+
+func (state *workerState) updateFrames(payload json.RawMessage) {
+	var frames []wireFrame
+	if workerproto.DecodePayload(payload, &frames) != nil {
+		return
+	}
+	access, err := wireToFrameAccess(frames)
+	if err != nil {
+		return
+	}
+	state.mu.Lock()
+	runtime := state.runtime
+	state.mu.Unlock()
+	if updater, ok := runtime.(runtimemodel.FrameUpdater); ok {
+		updater.UpdateFrames(access)
+	}
+}
+
+func (state *workerState) updateWindow(payload json.RawMessage) {
+	var window runtimemodel.WindowContext
+	if workerproto.DecodePayload(payload, &window) != nil {
+		return
+	}
+	state.mu.Lock()
+	runtime := state.runtime
+	state.mu.Unlock()
+	if updater, ok := runtime.(runtimemodel.WindowUpdater); ok {
+		updater.UpdateWindow(window)
+	}
+}
+
+func (state *workerState) dispatchMessage(_ context.Context, payload json.RawMessage) (any, error) {
+	var request messageRequest
+	if err := workerproto.DecodePayload(payload, &request); err != nil {
+		return nil, err
+	}
+	state.mu.Lock()
+	runtime := state.runtime
+	state.mu.Unlock()
+	dispatcher, ok := runtime.(runtimemodel.MessageDispatcher)
+	if !ok {
+		return nil, errors.New("runtime does not support postMessage")
+	}
+	return nil, dispatcher.DispatchMessage(request.Event)
 }
 
 func (state *workerState) applyExternalStorage(payload json.RawMessage) {
