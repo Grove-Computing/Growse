@@ -162,9 +162,15 @@ func (b *Browser) SetTabActive(active bool) {
 	b.mu.Lock()
 	b.active = active
 	runtime := b.activeRuntime
+	page := b.page
 	b.mu.Unlock()
 	if runtime, ok := runtime.(backgroundRuntime); ok {
 		runtime.SetBackground(!active)
+	}
+	for _, childRuntime := range frameRuntimes(page) {
+		if runtime, ok := childRuntime.(backgroundRuntime); ok {
+			runtime.SetBackground(!active)
+		}
 	}
 }
 
@@ -247,6 +253,9 @@ func (b *Browser) SetEngine(ctx context.Context, engine runtimemodel.Engine) (*P
 			return nil, err
 		}
 	}
+	if err := closePageFrames(page); err != nil {
+		return nil, err
+	}
 	if page == nil {
 		return nil, nil
 	}
@@ -282,6 +291,7 @@ func (b *Browser) InspectPage(inspect func(*Page) bool) bool {
 func (b *Browser) RunAnimationFrame(current time.Time) bool {
 	b.mu.Lock()
 	activeRuntime := b.activeRuntime
+	page := b.page
 	active := b.active
 	if active && current.Before(b.lastFrame) {
 		current = b.lastFrame
@@ -293,21 +303,37 @@ func (b *Browser) RunAnimationFrame(current time.Time) bool {
 	if !active {
 		return false
 	}
-	runtime, ok := activeRuntime.(animationFrameRuntime)
-	return ok && runtime.RunAnimationFrame(current)
+	ran := false
+	if runtime, ok := activeRuntime.(animationFrameRuntime); ok {
+		ran = runtime.RunAnimationFrame(current)
+	}
+	for _, childRuntime := range frameRuntimes(page) {
+		if runtime, ok := childRuntime.(animationFrameRuntime); ok && runtime.RunAnimationFrame(current) {
+			ran = true
+		}
+	}
+	return ran
 }
 
 // HasAnimationFrameCallbacks reports whether WebGo requested another frame.
 func (b *Browser) HasAnimationFrameCallbacks() bool {
 	b.mu.RLock()
 	activeRuntime := b.activeRuntime
+	page := b.page
 	active := b.active
 	b.mu.RUnlock()
 	if !active {
 		return false
 	}
-	runtime, ok := activeRuntime.(animationFrameRuntime)
-	return ok && runtime.HasAnimationFrameCallbacks()
+	if runtime, ok := activeRuntime.(animationFrameRuntime); ok && runtime.HasAnimationFrameCallbacks() {
+		return true
+	}
+	for _, childRuntime := range frameRuntimes(page) {
+		if runtime, ok := childRuntime.(animationFrameRuntime); ok && runtime.HasAnimationFrameCallbacks() {
+			return true
+		}
+	}
+	return false
 }
 
 func (b *Browser) dispatchPageEvent(page *Page, event events.Event) bool {
@@ -725,6 +751,9 @@ func (b *Browser) SetPage(page *Page) {
 	if activeRuntime != nil {
 		_ = activeRuntime.Stop()
 	}
+	if previousPage != nil && previousPage != page {
+		_ = closePageFrames(previousPage)
+	}
 }
 
 // Close はアクティブページに属するRuntimeを停止する。
@@ -759,6 +788,9 @@ func (b *Browser) Close() error {
 	var closeErr error
 	if activeRuntime != nil {
 		closeErr = activeRuntime.Stop()
+	}
+	if err := closePageFrames(page); err != nil && closeErr == nil {
+		closeErr = err
 	}
 	if storageManager != nil {
 		storageManager.DiscardSession()
@@ -1281,6 +1313,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	b.mu.RLock()
 	fetchLimiter := b.fetchLimiter
 	b.mu.RUnlock()
+	b.loadFrames(ctx, page, resourceClient, runtimeClient, engineFactory, engine, storageManager, fetchLimiter, onMutation, reducedMotion)
 	pageRuntime := startRuntime(ctx, engineFactory, engine, page, runtimeClient, storageManager, b.storageSourceID, fetchLimiter, onMutation, b.currentTime, func(target *url.URL) error {
 		resolved := cloneURL(target)
 		go func() {
@@ -1303,6 +1336,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 		if pageRuntime != nil {
 			_ = pageRuntime.Stop()
 		}
+		_ = closePageFrames(page)
 		page.closeDevTools()
 		return nil, err
 	}
@@ -1315,6 +1349,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 		if pageRuntime != nil {
 			_ = pageRuntime.Stop()
 		}
+		_ = closePageFrames(page)
 		page.closeDevTools()
 		return nil, context.Canceled
 	}
@@ -1372,9 +1407,18 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	if runtime, ok := pageRuntime.(backgroundRuntime); ok {
 		runtime.SetBackground(background)
 	}
+	for _, childRuntime := range frameRuntimes(page) {
+		if runtime, ok := childRuntime.(backgroundRuntime); ok {
+			runtime.SetBackground(background)
+		}
+	}
 	if previousRuntime != nil {
 		_ = previousRuntime.Stop()
 	}
+	if previousPage != nil && previousPage != page {
+		_ = closePageFrames(previousPage)
+	}
+	dispatchFrameLoadEvents(b, page)
 	if dispatchPopState {
 		if dispatcher, ok := pageRuntime.(runtimemodel.NavigationEventDispatcher); ok {
 			dispatcher.DispatchPopState(popState)

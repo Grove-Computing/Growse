@@ -10,6 +10,7 @@ import (
 	"github.com/Grove-Computing/Growse/internal/devtools"
 	"github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/events"
+	layoutmodel "github.com/Grove-Computing/Growse/internal/layout"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 	"github.com/Grove-Computing/Growse/internal/style"
 )
@@ -52,6 +53,36 @@ type Page struct {
 	ReducedMotion    bool
 	StyleRevision    uint64
 	DevTools         *devtools.PageStore
+	Frames           []*Frame
+}
+
+// Frame is one nested browsing context owned by a parent Page.
+type Frame struct {
+	ID         uint64
+	ElementID  dom.NodeID
+	ParentID   uint64
+	Depth      int
+	Generation uint64
+	URL        *url.URL
+	Page       *Page
+	Viewport   FrameViewport
+	ScrollX    float32
+	ScrollY    float32
+	LoadError  string
+	Loaded     bool
+	Closed     bool
+	runtime    runtimemodel.Runtime
+	cancel     func()
+	state      *frameLoadState
+	parentPage *Page
+}
+
+// FrameViewport is the iframe border box and its clipped child viewport.
+type FrameViewport struct {
+	X, Y, Width, Height float32
+	ClipX, ClipY        float32
+	ClipWidth           float32
+	ClipHeight          float32
 }
 
 // AnimatedStyles samples this page's CSS Animations and Transitions at current without
@@ -92,6 +123,45 @@ func (p *Page) ensureDevTools() *devtools.PageStore {
 func (p *Page) closeDevTools() {
 	if p != nil && p.DevTools != nil {
 		p.DevTools.Close()
+	}
+}
+
+// FrameByElement returns the live top-level Frame hosted by elementID.
+func (p *Page) FrameByElement(elementID dom.NodeID) (*Frame, bool) {
+	if p == nil {
+		return nil, false
+	}
+	for _, frame := range p.Frames {
+		if frame != nil && frame.ElementID == elementID && !frame.Closed {
+			return frame, true
+		}
+	}
+	return nil, false
+}
+
+// SyncFrameViewports maps the parent layout geometry into clipped child viewports.
+func (p *Page) SyncFrameViewports(tree *layoutmodel.Tree) {
+	if p == nil || tree == nil {
+		return
+	}
+	for _, frame := range p.Frames {
+		if frame == nil || frame.Closed {
+			continue
+		}
+		if bounds, ok := tree.Bounds[frame.ElementID]; ok {
+			frame.SetViewport(bounds.X, bounds.Y, bounds.Width, bounds.Height)
+			continue
+		}
+		for _, box := range tree.Boxes {
+			x := box.X
+			for _, run := range box.Runs {
+				if run.NodeID == frame.ElementID {
+					frame.SetViewport(x, box.Y, run.Width, box.Height)
+					break
+				}
+				x += run.Width
+			}
+		}
 	}
 }
 
