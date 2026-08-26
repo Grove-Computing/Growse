@@ -25,6 +25,7 @@ import (
 	htmlparser "github.com/Grove-Computing/Growse/internal/html"
 	"github.com/Grove-Computing/Growse/internal/network"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
+	"github.com/Grove-Computing/Growse/internal/serviceworker"
 	storagecore "github.com/Grove-Computing/Growse/internal/storage"
 	"github.com/Grove-Computing/Growse/internal/style"
 	fetchapi "github.com/Grove-Computing/Growse/internal/webapi/fetch"
@@ -59,6 +60,10 @@ type pageEventRuntime interface {
 	DispatchPageEvent(func() bool) bool
 }
 
+type isolatedDOMEventRuntime interface {
+	DispatchDOMEvent(events.Event) bool
+}
+
 // Browser owns the state for one browser window.
 //
 // MVPでは1つのアクティブページ、線形の閲覧履歴、信頼済みページごとに
@@ -84,6 +89,7 @@ type Browser struct {
 	storageSourceID  uint64
 	fetchLimiter     *fetchapi.Limiter
 	devToolsSession  *devtools.SessionStore
+	serviceWorkers   *serviceworker.Manager
 }
 
 var nextStorageSourceID atomic.Uint64
@@ -106,13 +112,22 @@ func NewWithRuntimeFactory(client ResourceLoader, factory runtimemodel.Factory) 
 
 // NewWithRuntimeFactoryAndStorage は注入されたStorage profileを使用するBrowserを生成する。
 func NewWithRuntimeFactoryAndStorage(client ResourceLoader, factory runtimemodel.Factory, manager *storagecore.Manager) *Browser {
+	return NewWithRuntimeFactoryAndStorageAndServiceWorkers(client, factory, manager, serviceworker.NewManager())
+}
+
+// NewWithRuntimeFactoryAndStorageAndServiceWorkers injects shared profile state.
+func NewWithRuntimeFactoryAndStorageAndServiceWorkers(client ResourceLoader, factory runtimemodel.Factory, manager *storagecore.Manager, serviceWorkers *serviceworker.Manager) *Browser {
 	if manager == nil {
 		manager = storagecore.NewManager()
+	}
+	if serviceWorkers == nil {
+		serviceWorkers = serviceworker.NewManager()
 	}
 	return &Browser{
 		client: client, runtimeFactory: factory, engineFactory: runtimemodel.ForGo(factory), engine: runtimemodel.EngineGo,
 		history: newHistory(), clock: animationmodel.SystemClock{}, storage: manager, active: true,
 		storageSourceID: nextStorageSourceID.Add(1), devToolsSession: devtools.NewSessionStore(),
+		serviceWorkers: serviceWorkers,
 	}
 }
 
@@ -123,13 +138,22 @@ func NewWithEngineFactory(client ResourceLoader, factory runtimemodel.EngineFact
 
 // NewWithEngineFactoryAndStorage はEngine選択と注入Storage profileを使用するBrowserを生成する。
 func NewWithEngineFactoryAndStorage(client ResourceLoader, factory runtimemodel.EngineFactory, manager *storagecore.Manager) *Browser {
+	return NewWithEngineFactoryAndStorageAndServiceWorkers(client, factory, manager, serviceworker.NewManager())
+}
+
+// NewWithEngineFactoryAndStorageAndServiceWorkers injects shared profile state.
+func NewWithEngineFactoryAndStorageAndServiceWorkers(client ResourceLoader, factory runtimemodel.EngineFactory, manager *storagecore.Manager, serviceWorkers *serviceworker.Manager) *Browser {
 	if manager == nil {
 		manager = storagecore.NewManager()
+	}
+	if serviceWorkers == nil {
+		serviceWorkers = serviceworker.NewManager()
 	}
 	return &Browser{
 		client: client, engineFactory: factory, engine: runtimemodel.EngineGo,
 		history: newHistory(), clock: animationmodel.SystemClock{}, storage: manager, active: true,
 		storageSourceID: nextStorageSourceID.Add(1), devToolsSession: devtools.NewSessionStore(),
+		serviceWorkers: serviceWorkers,
 	}
 }
 
@@ -158,9 +182,15 @@ func (b *Browser) SetTabActive(active bool) {
 	b.mu.Lock()
 	b.active = active
 	runtime := b.activeRuntime
+	page := b.page
 	b.mu.Unlock()
 	if runtime, ok := runtime.(backgroundRuntime); ok {
 		runtime.SetBackground(!active)
+	}
+	for _, childRuntime := range frameRuntimes(page) {
+		if runtime, ok := childRuntime.(backgroundRuntime); ok {
+			runtime.SetBackground(!active)
+		}
 	}
 }
 
@@ -238,10 +268,25 @@ func (b *Browser) SetEngine(ctx context.Context, engine runtimemodel.Engine) (*P
 		page.RuntimeStarted = false
 	}
 	b.mu.Unlock()
+	var teardownErr error
 	if activeRuntime != nil {
 		if err := activeRuntime.Stop(); err != nil {
-			return nil, err
+			teardownErr = errors.Join(teardownErr, fmt.Errorf("stop top-level runtime: %w", err))
 		}
+	}
+	if err := closePageFrames(page); err != nil {
+		teardownErr = errors.Join(teardownErr, fmt.Errorf("stop frame runtimes: %w", err))
+	}
+	if page != nil {
+		if page.Animations != nil {
+			page.Animations.Clear()
+		}
+		if page.Transitions != nil {
+			page.Transitions.Clear()
+		}
+	}
+	if teardownErr != nil {
+		return nil, teardownErr
 	}
 	if page == nil {
 		return nil, nil
@@ -278,6 +323,7 @@ func (b *Browser) InspectPage(inspect func(*Page) bool) bool {
 func (b *Browser) RunAnimationFrame(current time.Time) bool {
 	b.mu.Lock()
 	activeRuntime := b.activeRuntime
+	page := b.page
 	active := b.active
 	if active && current.Before(b.lastFrame) {
 		current = b.lastFrame
@@ -289,21 +335,37 @@ func (b *Browser) RunAnimationFrame(current time.Time) bool {
 	if !active {
 		return false
 	}
-	runtime, ok := activeRuntime.(animationFrameRuntime)
-	return ok && runtime.RunAnimationFrame(current)
+	ran := false
+	if runtime, ok := activeRuntime.(animationFrameRuntime); ok {
+		ran = runtime.RunAnimationFrame(current)
+	}
+	for _, childRuntime := range frameRuntimes(page) {
+		if runtime, ok := childRuntime.(animationFrameRuntime); ok && runtime.RunAnimationFrame(current) {
+			ran = true
+		}
+	}
+	return ran
 }
 
 // HasAnimationFrameCallbacks reports whether WebGo requested another frame.
 func (b *Browser) HasAnimationFrameCallbacks() bool {
 	b.mu.RLock()
 	activeRuntime := b.activeRuntime
+	page := b.page
 	active := b.active
 	b.mu.RUnlock()
 	if !active {
 		return false
 	}
-	runtime, ok := activeRuntime.(animationFrameRuntime)
-	return ok && runtime.HasAnimationFrameCallbacks()
+	if runtime, ok := activeRuntime.(animationFrameRuntime); ok && runtime.HasAnimationFrameCallbacks() {
+		return true
+	}
+	for _, childRuntime := range frameRuntimes(page) {
+		if runtime, ok := childRuntime.(animationFrameRuntime); ok && runtime.HasAnimationFrameCallbacks() {
+			return true
+		}
+	}
+	return false
 }
 
 func (b *Browser) dispatchPageEvent(page *Page, event events.Event) bool {
@@ -314,12 +376,19 @@ func (b *Browser) dispatchPageEvent(page *Page, event events.Event) bool {
 	activeRuntime := b.activeRuntime
 	active := b.page == page
 	b.mu.RUnlock()
-	if runtime, ok := activeRuntime.(pageEventRuntime); ok && active {
-		return runtime.DispatchPageEvent(func() bool {
-			return page.Events.Dispatch(event)
-		})
+	dispatch := func() bool {
+		if page.Document != nil {
+			return page.Events.DispatchTree(page.Document, event)
+		}
+		return page.Events.Dispatch(event)
 	}
-	return page.Events.Dispatch(event)
+	if runtime, ok := activeRuntime.(isolatedDOMEventRuntime); ok && active {
+		return runtime.DispatchDOMEvent(event)
+	}
+	if runtime, ok := activeRuntime.(pageEventRuntime); ok && active {
+		return runtime.DispatchPageEvent(dispatch)
+	}
+	return dispatch()
 }
 
 // DispatchClick はアクティブページの対象ノードへクリックを配信する。
@@ -335,9 +404,11 @@ func (b *Browser) DispatchClick(nodeID dom.NodeID, x, y float32) bool {
 			return false
 		}
 	}
-	clickHandled := b.dispatchPageEvent(page, events.Event{Type: events.Click, Target: nodeID, X: x, Y: y})
+	clickEvent := events.Cancelable(events.Click, nodeID)
+	clickEvent.X, clickEvent.Y = x, y
+	clickHandled := b.dispatchPageEvent(page, clickEvent)
 	labelHandled := false
-	if page.Document != nil {
+	if !clickEvent.DefaultPrevented() && page.Document != nil {
 		if node, ok := page.Document.NodeByID(nodeID); ok {
 			if control := forms.LabeledControl(page.Document, node); control != nil && !forms.Disabled(control) {
 				b.UpdateFocus(control.ID)
@@ -348,7 +419,7 @@ func (b *Browser) DispatchClick(nodeID dom.NodeID, x, y float32) bool {
 		}
 	}
 	submitHandled := false
-	if page.Document != nil {
+	if !clickEvent.DefaultPrevented() && page.Document != nil {
 		if node, ok := page.Document.NodeByID(nodeID); ok && isSubmitButton(node) {
 			if form := forms.FormOwner(page.Document, node); form != nil {
 				b.mu.Lock()
@@ -356,7 +427,7 @@ func (b *Browser) DispatchClick(nodeID dom.NodeID, x, y float32) bool {
 					page.Submitter = node.ID
 				}
 				b.mu.Unlock()
-				submitHandled = b.dispatchPageEvent(page, events.Event{Type: events.Submit, Target: form.ID})
+				submitHandled = b.dispatchPageEvent(page, events.Cancelable(events.Submit, form.ID))
 			}
 		}
 	}
@@ -486,7 +557,7 @@ func (b *Browser) SubmitForm(nodeID dom.NodeID) bool {
 		page.Submitter = 0
 	}
 	b.mu.Unlock()
-	return b.dispatchPageEvent(page, events.Event{Type: events.Submit, Target: form.ID})
+	return b.dispatchPageEvent(page, events.Cancelable(events.Submit, form.ID))
 }
 
 // ResetForm restores a form's controls to their HTML attribute defaults.
@@ -511,7 +582,14 @@ func (b *Browser) ResetForm(nodeID dom.NodeID) bool {
 		b.mu.Unlock()
 		return false
 	}
-	changed := forms.Reset(form)
+	b.mu.Unlock()
+	resetEvent := events.Cancelable(events.Reset, form.ID)
+	handled := b.dispatchPageEvent(page, resetEvent)
+	if resetEvent.DefaultPrevented() {
+		return handled
+	}
+	b.mu.Lock()
+	changed := b.page == page && forms.Reset(form)
 	if changed {
 		recomputePageStyles(page, b.currentTime())
 	}
@@ -519,7 +597,6 @@ func (b *Browser) ResetForm(nodeID dom.NodeID) bool {
 	if changed && onMutation != nil {
 		onMutation()
 	}
-	handled := b.dispatchPageEvent(page, events.Event{Type: events.Reset, Target: form.ID})
 	return changed || handled
 }
 
@@ -718,6 +795,9 @@ func (b *Browser) SetPage(page *Page) {
 	if activeRuntime != nil {
 		_ = activeRuntime.Stop()
 	}
+	if previousPage != nil && previousPage != page {
+		_ = closePageFrames(previousPage)
+	}
 }
 
 // Close はアクティブページに属するRuntimeを停止する。
@@ -752,6 +832,9 @@ func (b *Browser) Close() error {
 	var closeErr error
 	if activeRuntime != nil {
 		closeErr = activeRuntime.Stop()
+	}
+	if err := closePageFrames(page); err != nil && closeErr == nil {
+		closeErr = err
 	}
 	if storageManager != nil {
 		storageManager.DiscardSession()
@@ -804,7 +887,7 @@ func (b *Browser) SubmitGET(ctx context.Context, formID, submitterID dom.NodeID)
 		return nil, errors.New("form is not a GET submission")
 	}
 	entries := forms.CollectEntries(page.Document, form, submitter)
-	baseURL := cloneURL(page.URL)
+	baseURL := cloneURL(pageBaseURL(page))
 	b.mu.RUnlock()
 
 	target, err := resolveFormAction(baseURL, config.Action)
@@ -847,15 +930,15 @@ func (b *Browser) SubmitPOST(ctx context.Context, formID, submitterID dom.NodeID
 		return nil, errors.New("unsupported POST form configuration")
 	}
 	entries := forms.CollectEntries(page.Document, form, submitter)
-	target, err := resolveFormAction(page.URL, config.Action)
+	target, err := resolveFormAction(pageBaseURL(page), config.Action)
 	if err != nil {
 		b.mu.Unlock()
 		return nil, err
 	}
 	target.Fragment = ""
 	client := b.client
-	loader, ok := client.(requestLoader)
-	if !ok {
+	_, supportsRequests := client.(requestLoader)
+	if !supportsRequests {
 		b.mu.Unlock()
 		return nil, errors.New("network client does not support POST")
 	}
@@ -864,6 +947,7 @@ func (b *Browser) SubmitPOST(ctx context.Context, formID, submitterID dom.NodeID
 	engineFactory := b.engineFactory
 	engine := runtimemodel.NormalizeEngine(b.engine)
 	storageManager := b.storage
+	serviceWorkers := b.serviceWorkers
 	onMutation := b.onMutation
 	reducedMotion := b.reducedMotion
 	b.mu.Unlock()
@@ -875,7 +959,8 @@ func (b *Browser) SubmitPOST(ctx context.Context, formID, submitterID dom.NodeID
 		return nil, err
 	}
 	body := []byte(encoded)
-	response, err := loader.Do(ctx, &network.Request{
+	intercepted := serviceWorkerLoader{ResourceLoader: client, manager: serviceWorkers}
+	response, err := intercepted.Do(ctx, &network.Request{
 		Method: http.MethodPost, URL: target, Body: body,
 		Header:  http.Header{"Content-Type": []string{forms.URLEncoded}},
 		SiteURL: cloneURL(page.URL), Kind: network.RequestForm,
@@ -885,7 +970,7 @@ func (b *Browser) SubmitPOST(ctx context.Context, formID, submitterID dom.NodeID
 		pageStore.Close()
 		return nil, fmt.Errorf("submit form to %s: %w", network.RedactedURL(target), err)
 	}
-	return b.finishLoad(ctx, target, response, historyPush, -1, navigationID, client, client, engineFactory, engine, storageManager, onMutation, reducedMotion, pageStore)
+	return b.finishLoad(ctx, target, response, historyPush, -1, navigationID, intercepted, intercepted, engineFactory, engine, storageManager, onMutation, reducedMotion, pageStore)
 }
 
 // Submit validates and dispatches a cancelable submit event before navigation.
@@ -1102,6 +1187,7 @@ func (b *Browser) loadWithClient(ctx context.Context, pageURL *url.URL, commit h
 	engineFactory := b.engineFactory
 	engine := runtimemodel.NormalizeEngine(b.engine)
 	storageManager := b.storage
+	serviceWorkers := b.serviceWorkers
 	onMutation := b.onMutation
 	reducedMotion := b.reducedMotion
 	b.mu.Unlock()
@@ -1120,6 +1206,9 @@ func (b *Browser) loadWithClient(ctx context.Context, pageURL *url.URL, commit h
 	if revalidateResources {
 		resourceClient = cacheRevalidatingLoader{ResourceLoader: client}
 	}
+	documentClient = serviceWorkerLoader{ResourceLoader: documentClient, manager: serviceWorkers}
+	resourceClient = serviceWorkerLoader{ResourceLoader: resourceClient, manager: serviceWorkers}
+	runtimeClient := ResourceLoader(serviceWorkerLoader{ResourceLoader: client, manager: serviceWorkers})
 
 	var response *network.Response
 	var err error
@@ -1133,7 +1222,7 @@ func (b *Browser) loadWithClient(ctx context.Context, pageURL *url.URL, commit h
 		pageStore.Close()
 		return nil, fmt.Errorf("navigate to %s: %w", network.RedactedURL(pageURL), err)
 	}
-	return b.finishLoad(navigationContext, pageURL, response, commit, historyIndex, navigationID, resourceClient, client, engineFactory, engine, storageManager, onMutation, reducedMotion, pageStore)
+	return b.finishLoad(navigationContext, pageURL, response, commit, historyIndex, navigationID, resourceClient, runtimeClient, engineFactory, engine, storageManager, onMutation, reducedMotion, pageStore)
 }
 
 type cacheRevalidatingLoader struct {
@@ -1152,6 +1241,21 @@ func (loader pageResourceLoader) Get(ctx context.Context, resourceURL *url.URL) 
 	return loader.loader.Do(ctx, &network.Request{
 		Method: http.MethodGet, URL: resourceURL, SiteURL: cloneURL(loader.siteURL), Kind: loader.kind, Engine: loader.engine, Observer: loader.observer,
 	})
+}
+
+func (loader pageResourceLoader) Do(ctx context.Context, request *network.Request) (*network.Response, error) {
+	if request == nil {
+		return loader.loader.Do(ctx, nil)
+	}
+	copy := *request
+	copy.Header = request.Header.Clone()
+	copy.SiteURL = cloneURL(loader.siteURL)
+	if loader.kind != network.RequestScript || request.Kind != network.RequestModule {
+		copy.Kind = loader.kind
+	}
+	copy.Engine = loader.engine
+	copy.Observer = loader.observer
+	return loader.loader.Do(ctx, &copy)
 }
 
 func (loader cacheRevalidatingLoader) Get(ctx context.Context, resourceURL *url.URL) (*network.Response, error) {
@@ -1204,6 +1308,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	if err != nil {
 		return nil, fmt.Errorf("build DOM for %s: %w", network.RedactedURL(pageURL), err)
 	}
+	baseURL := documentBaseURL(document, response.URL)
 	styleResources := resourceClient
 	imageResources := resourceClient
 	scriptResources := resourceClient
@@ -1213,7 +1318,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 		imageResources = pageResourceLoader{loader: loader, siteURL: response.URL, kind: network.RequestImage, observer: pageStore.ObserveNetwork}
 		scriptResources = pageResourceLoader{loader: loader, siteURL: response.URL, kind: network.RequestScript, engine: string(engine), observer: pageStore.ObserveNetwork}
 	}
-	stylesheet, err := b.loadStyles(ctx, styleResources, response.URL, document)
+	stylesheet, err := b.loadStylesWithBase(ctx, styleResources, response.URL, baseURL, document)
 	if err != nil {
 		return nil, fmt.Errorf("load styles for %s: %w", network.RedactedURL(pageURL), err)
 	}
@@ -1222,10 +1327,17 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 		ColorScheme: "light", Hover: true, Pointer: "fine", ReducedMotion: reducedMotion,
 	})
 	backgroundImages, backgroundErrors := loadBackgroundImages(ctx, imageResources, computedStyles)
-	scripts, scriptErrors := loadScriptsForEngine(ctx, scriptResources, response.URL, document, engine)
+	scripts, scriptErrors := loadScriptsForEngineWithBase(ctx, scriptResources, response.URL, baseURL, document, engine)
+	var importMap map[string]string
+	if engine == runtimemodel.EngineJavaScript {
+		var importMapErrors []string
+		importMap, importMapErrors = loadImportMap(document, baseURL)
+		scriptErrors = append(scriptErrors, importMapErrors...)
+	}
 
 	page := &Page{
 		URL:              cloneURL(response.URL),
+		BaseURL:          cloneURL(baseURL),
 		StatusCode:       response.StatusCode,
 		ContentType:      response.ContentType,
 		Source:           append([]byte(nil), response.Body...),
@@ -1241,8 +1353,10 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 		BackgroundErrors: backgroundErrors,
 		Engine:           engine,
 		Scripts:          scripts,
+		ImportMap:        importMap,
 		ScriptErrors:     scriptErrors,
 		DevTools:         pageStore,
+		serviceWorkers:   b.serviceWorkers,
 	}
 	for _, scriptError := range scriptErrors {
 		page.DevTools.AddConsole(devtools.ConsoleError, "script", scriptError)
@@ -1252,6 +1366,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	b.mu.RLock()
 	fetchLimiter := b.fetchLimiter
 	b.mu.RUnlock()
+	b.loadFrames(ctx, page, resourceClient, runtimeClient, engineFactory, engine, storageManager, fetchLimiter, onMutation, reducedMotion)
 	pageRuntime := startRuntime(ctx, engineFactory, engine, page, runtimeClient, storageManager, b.storageSourceID, fetchLimiter, onMutation, b.currentTime, func(target *url.URL) error {
 		resolved := cloneURL(target)
 		go func() {
@@ -1266,6 +1381,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	}, func(delta int) error {
 		return b.queueHistoryTraversal(page, navigationReady, delta)
 	}, b.historyInfo)
+	document.SetReadyState("complete")
 	if err := ctx.Err(); err != nil {
 		close(navigationReady)
 		page.Animations.Clear()
@@ -1273,6 +1389,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 		if pageRuntime != nil {
 			_ = pageRuntime.Stop()
 		}
+		_ = closePageFrames(page)
 		page.closeDevTools()
 		return nil, err
 	}
@@ -1285,6 +1402,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 		if pageRuntime != nil {
 			_ = pageRuntime.Stop()
 		}
+		_ = closePageFrames(page)
 		page.closeDevTools()
 		return nil, context.Canceled
 	}
@@ -1342,9 +1460,18 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	if runtime, ok := pageRuntime.(backgroundRuntime); ok {
 		runtime.SetBackground(background)
 	}
+	for _, childRuntime := range frameRuntimes(page) {
+		if runtime, ok := childRuntime.(backgroundRuntime); ok {
+			runtime.SetBackground(background)
+		}
+	}
 	if previousRuntime != nil {
 		_ = previousRuntime.Stop()
 	}
+	if previousPage != nil && previousPage != page {
+		_ = closePageFrames(previousPage)
+	}
+	dispatchFrameLoadEvents(b, page)
 	if dispatchPopState {
 		if dispatcher, ok := pageRuntime.(runtimemodel.NavigationEventDispatcher); ok {
 			dispatcher.DispatchPopState(popState)
@@ -1544,21 +1671,24 @@ func startRuntime(ctx context.Context, factory runtimemodel.EngineFactory, engin
 		return nil
 	}
 	engine = runtimemodel.NormalizeEngine(engine)
-	if !IsTrustedOrigin(page.URL) {
+	if engine == runtimemodel.EngineGo && !IsTrustedOrigin(page.URL) {
 		setRuntimeError(page, fmt.Sprintf("blocked %s script execution from untrusted origin: %s", engine, network.RedactedURL(page.URL)))
 		return nil
 	}
+	if engine == runtimemodel.EngineJavaScript && !isHTTPURL(page.URL) {
+		setRuntimeError(page, fmt.Sprintf("blocked %s script execution from non-HTTP(S) origin: %s", engine, network.RedactedURL(page.URL)))
+		return nil
+	}
 	for _, script := range page.Scripts {
-		if runtimemodel.NormalizeEngine(script.Engine) != engine || !IsTrustedOrigin(script.SourceURL) || !network.SameOrigin(page.URL, script.SourceURL) {
+		invalidSource := !isHTTPURL(script.SourceURL)
+		if engine == runtimemodel.EngineGo {
+			invalidSource = !IsTrustedOrigin(script.SourceURL) || !network.SameOrigin(page.URL, script.SourceURL)
+		}
+		if runtimemodel.NormalizeEngine(script.Engine) != engine || invalidSource {
 			setRuntimeError(page, fmt.Sprintf("blocked %s script execution from untrusted or cross-origin source: %s", engine, runtimeOrigin(script.SourceURL)))
 			return nil
 		}
 	}
-	if len(page.ScriptErrors) != 0 {
-		setRuntimeError(page, fmt.Sprintf("%s script loading failed; runtime was not started", engine))
-		return nil
-	}
-
 	pageRuntime := factory(engine)
 	if pageRuntime == nil {
 		setRuntimeError(page, fmt.Sprintf("%s runtime factory returned nil", engine))
@@ -1580,6 +1710,8 @@ func startRuntime(ctx context.Context, factory runtimemodel.EngineFactory, engin
 		Document:        page.Document,
 		Events:          page.Events,
 		BaseURL:         cloneURL(page.URL),
+		ResourceBaseURL: cloneURL(pageBaseURL(page)),
+		ImportMap:       cloneStringMap(page.ImportMap),
 		FetchLimiter:    fetchLimiter,
 		Navigate:        navigate,
 		HistoryPush:     historyPush,
@@ -1614,8 +1746,29 @@ func startRuntime(ctx context.Context, factory runtimemodel.EngineFactory, engin
 		ConsoleRecord: func(level, message string) {
 			page.ensureDevTools().AddConsoleForEngine(devtools.ConsoleLevel(level), string(engine), "console", message)
 		},
+		RuntimeFailure: func(err error) {
+			if err == nil {
+				return
+			}
+			setRuntimeError(page, fmt.Sprintf("%s runtime worker failed: %v", engine, err))
+			if onMutation != nil {
+				onMutation()
+			}
+		},
+		Frames: runtimeFrameAccess(page),
+		FrameMutation: func(frameID, generation uint64, snapshot dom.DocumentSnapshot) error {
+			return applyFrameMutation(page, frameID, generation, snapshot, onMutation, runtimeNow())
+		},
+		FramePolicy:   page.FramePolicy,
+		Window:        page.window,
+		ServiceWorker: serviceWorkerHost(ctx, page, client),
 	}
-	if local, session, _ := storageManager.Areas(page.URL); local != nil || session != nil {
+	if page.windows != nil {
+		environment.PostMessage = func(target runtimemodel.WindowReference, targetOrigin string, payload []byte) error {
+			return page.windows.post(page.window.Self, target, targetOrigin, payload)
+		}
+	}
+	if local, session, _ := storageManager.Areas(page.URL); !page.FramePolicy.HasOpaqueOrigin() && (local != nil || session != nil) {
 		environment.LocalStorage = local
 		environment.SessionStorage = session
 		environment.StorageSource = storagecore.MutationSource{ID: storageSourceID, URL: network.RedactedURL(page.URL)}
@@ -1630,15 +1783,25 @@ func startRuntime(ctx context.Context, factory runtimemodel.EngineFactory, engin
 			return loader.Do(fetchContext, &copy)
 		}
 	}
-	if err := pageRuntime.Load(ctx, page.Scripts, environment); err != nil {
-		setRuntimeError(page, fmt.Sprintf("load %s runtime: %v", engine, err))
+	loadErr := pageRuntime.Load(ctx, page.Scripts, environment)
+	if reporter, ok := pageRuntime.(runtimemodel.SandboxReporter); ok {
+		page.Sandbox = reporter.SandboxStatus()
+	}
+	if loadErr != nil {
+		setRuntimeError(page, fmt.Sprintf("load %s runtime: %v", engine, loadErr))
 		_ = pageRuntime.Stop()
 		return nil
 	}
 	if err := pageRuntime.Start(ctx); err != nil {
 		setRuntimeError(page, fmt.Sprintf("start %s runtime: %v", engine, err))
+		if page.windows != nil {
+			page.windows.unregister(page.window.Self)
+		}
 		_ = pageRuntime.Stop()
 		return nil
+	}
+	if page.windows != nil {
+		page.windows.register(page.window.Self, pageRuntime)
 	}
 	page.RuntimeStarted = true
 	return pageRuntime

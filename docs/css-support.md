@@ -1,6 +1,6 @@
 # CSS対応表
 
-この表はGrowse v0.7.0の実装を基準とする。「部分対応」は一般的な値を扱えるが、仕様全体を実装していない機能を表す。
+この表はGrowse v0.14.0の実装を基準とする。「部分対応」は一般的な値を扱えるが、仕様全体を実装していない機能を表す。document、stylesheet、`@import`、background resourceは最初の有効な`<base href>`から解決する。
 
 ## SelectorとCascade
 
@@ -26,7 +26,7 @@
 | `calc()` | 対応 | Length/Percentageの四則演算。非互換Dimension、ゼロ除算、非有限値は無効 |
 | CSS Color Level 3 | 対応 | Named Color、hex、rgb(a)、hsl(a)、`transparent`、`currentColor` |
 | Media Query | 部分対応 | `all`、`screen`、width/height、orientation、resolution、color scheme、hover、pointer、`prefers-reduced-motion` |
-| `@import` | 部分対応 | Stylesheet先頭の同一Origin HTTP(S)だけ。循環・深度・件数・サイズ制限あり |
+| `@import` | 部分対応 | Stylesheet先頭のsame / cross-origin HTTP(S)。redirect、CSS MIME、mixed content、循環、深度8、32件、合計8 MiBを検証 |
 | `@keyframes` | 対応 | from/to、percentage、複数selector、同一offsetのCascade。1 Stylesheetあたり256 rule |
 
 ## Property
@@ -83,3 +83,11 @@ TransitionとKeyframes AnimationはOpacity、Color、Background Color、Border C
 Float、Multi-columnは未対応である。
 
 WPTから適応した回帰テストと出典は[Web Platform Tests由来テスト](wpt.md)に記録する。
+
+## 外部Pageと動的更新
+
+top-level documentとiframeはsame / cross-origin stylesheetを取得できる。最終URLのscheme、mixed content、HTTP status、`text/css` MIME、sizeを検証し、失敗したstylesheet / importだけを無効にして残りのDocumentを描画する。CSS resource取得はCookieやAuthorizationをStyle modelへ渡さず、Network policyが選んだcredentials modeに従う。
+
+JavaScriptによるattribute、class、tree、`innerHTML` mutation後はStyle revisionを増やし、Computed Style、Layout Tree、Display List、Hit Test、Inspector snapshotを同じrevisionから再生成する。iframeは親Layoutの置換要素としてborder box、clip、scrollを持ち、子DocumentのPaintを親のclip内へ合成する。
+
+v0.14.0の「通常サイト描画」は[External Web Platform Showcase](../examples/external-web-platform)と選定WPTで固定した範囲を指す。未知の公開サイトとのpixel完全一致、Web Font、SVG、Canvas、video、全CSS仕様への適合は保証しない。

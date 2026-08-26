@@ -2,6 +2,7 @@ package javascript
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -113,15 +114,22 @@ func TestEventListenerLimitAndPageClose(t *testing.T) {
 	dispatcher := events.NewDispatcher()
 	runtime := New()
 	runtime.maxListeners = 1
+	var records [][2]string
 	source := `
 		var target = document.getElementById("target");
 		target.addEventListener("click", function () {});
 		target.addEventListener("click", function () {});`
-	if err := runtime.Load(context.Background(), []runtimemodel.Script{javaScript(source)}, runtimemodel.Environment{Document: document, Events: dispatcher}); err != nil {
+	if err := runtime.Load(context.Background(), []runtimemodel.Script{javaScript(source)}, runtimemodel.Environment{
+		Document: document, Events: dispatcher,
+		ConsoleRecord: func(level, message string) { records = append(records, [2]string{level, message}) },
+	}); err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if err := runtime.Start(context.Background()); err == nil || !strings.Contains(err.Error(), "event listener limit exceeded") {
-		t.Fatalf("Start() error = %v, want listener limit error", err)
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatalf("contained Start() error = %v", err)
+	}
+	if len(records) != 1 || !strings.Contains(records[0][1], "event listener limit exceeded") {
+		t.Fatalf("event listener limit records = %v", records)
 	}
 	if err := runtime.Stop(); err != nil {
 		t.Fatalf("Stop() error = %v", err)
@@ -131,6 +139,52 @@ func TestEventListenerLimitAndPageClose(t *testing.T) {
 	}
 	if runtime.DispatchPageEvent(func() bool { return true }) {
 		t.Fatal("closed Runtime delivered a Page event")
+	}
+}
+
+func TestEventPropagationMetadataRemovalAndCancellation(t *testing.T) {
+	document, err := htmlparser.Parse(strings.NewReader(`<main id="parent"><button id="target">click</button></main>`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, _ := document.GetElementByID("target")
+	dispatcher := events.NewDispatcher()
+	runtime := New()
+	t.Cleanup(func() { _ = runtime.Stop() })
+	var records []string
+	source := `
+		var order = [];
+		var parentElement = document.getElementById("parent");
+		var target = document.getElementById("target");
+		function removed() { order.push("removed"); }
+		target.addEventListener("click", removed);
+		target.removeEventListener("click", removed);
+		parentElement.addEventListener("click", function (event) {
+			order.push("capture:" + event.eventPhase + ":" + (event.target === target) + ":" + (event.currentTarget === parentElement));
+		}, {capture: true});
+		target.addEventListener("click", function (event) {
+			order.push("target:" + event.eventPhase + ":" + event.bubbles + ":" + event.cancelable + ":" + event.defaultPrevented);
+			event.preventDefault();
+			event.stopPropagation();
+			order.push("prevented:" + event.defaultPrevented);
+		});
+		target.addEventListener("click", function () { order.push("same-target"); });
+		parentElement.addEventListener("click", function () { order.push("bubble"); });`
+	startJavaScriptRuntime(t, runtime, source, runtimemodel.Environment{
+		Document: document, Events: dispatcher,
+		ConsoleRecord: func(_, message string) { records = append(records, message) },
+	})
+	event := events.Cancelable(events.Click, target.ID)
+	if !runtime.DispatchPageEvent(func() bool { return dispatcher.DispatchTree(document, event) }) || !event.DefaultPrevented() {
+		t.Fatalf("cancelable propagated event was not handled/prevented: %v", records)
+	}
+	var order []string
+	if err := runtime.runSync(context.Background(), func(vm *goja.Runtime) error { return vm.ExportTo(vm.Get("order"), &order) }); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"capture:1:true:true", "target:2:true:true:false", "prevented:true", "same-target"}
+	if !reflect.DeepEqual(order, want) {
+		t.Fatalf("JavaScript propagation order = %v, want %v", order, want)
 	}
 }
 

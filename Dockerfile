@@ -21,7 +21,9 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 RUN CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
-    go build -trimpath -ldflags="-s -w" -o /out/growse ./cmd/growse
+    go build -trimpath -ldflags="-s -w" -o /out/growse ./cmd/growse \
+    && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    go build -trimpath -ldflags="-s -w" -o /out/growse-smoke ./cmd/growse-smoke
 
 FROM ubuntu:26.04@sha256:2260313b31c8c011cd2eebe728008efac1b3982be73eb71348ea2648d2c0e09b
 
@@ -49,6 +51,8 @@ RUN apt-get update \
     && useradd --system --gid growse --create-home --home-dir /home/growse growse
 
 COPY --from=build /out/growse /usr/local/bin/growse
+COPY --from=build /out/growse-smoke /usr/local/bin/growse-smoke
+COPY --from=build /src/examples/external-web-platform /usr/local/share/growse/examples/external-web-platform
 
 USER growse
 ENTRYPOINT ["growse"]

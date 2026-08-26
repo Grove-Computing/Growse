@@ -33,10 +33,6 @@ for value in \
     "artifact: macos_amd64" \
     "artifact: macos_arm64" \
     "artifact: windows_amd64" \
-    "examples/dashboard" \
-    "examples/animation" \
-    "examples/data-app" \
-    "examples/persistent-app" \
     'application_id="io.github.grovecomputing.Growse"' \
     '-X gioui.org/app.ID=${application_id}' \
     '-X github.com/Grove-Computing/Growse/internal/updater.CurrentVersion=${release_tag}' \
@@ -48,6 +44,7 @@ for value in \
     "codesign --force --deep --sign -" \
     "packaging/windows/Growse.ico" \
     "packaging/windows/install-shortcut.ps1" \
+    "scripts/verify-gui-package.sh" \
     "github.com/tc-hib/go-winres@v0.3.3 simply" \
     '--manifest gui' \
     'tar -czf "dist/$archive_name"' \
@@ -64,12 +61,33 @@ do
     require "$value"
 done
 
+for resource in \
+    animation \
+    counter \
+    css3-core \
+    dashboard \
+    data-app \
+    devtools \
+    dual-runtime \
+    external-web-platform \
+    flexbox \
+    multi-tab-workspace \
+    persistent-app \
+    todo
+do
+    if ! grep -Fq -- "  ${resource}" "$package_script"; then
+        echo "package scriptにGUI resource allowlistがありません: ${resource}" >&2
+        exit 1
+    fi
+done
+
 for value in \
     "runner: macos-15" \
     "runner: windows-2025" \
     "name: Run platform tests" \
     "run: go test ./..." \
-    'scripts/package-gui.sh dist/package v0.10.0 "$GITHUB_RUN_NUMBER"'
+    'scripts/package-gui.sh dist/package v0.14.0 "$GITHUB_RUN_NUMBER"' \
+    'bash scripts/verify-gui-package.sh dist/package'
 do
     require_ci "$value"
 done

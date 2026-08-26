@@ -58,6 +58,7 @@ type Request struct {
 	Kind        RequestKind
 	Engine      string
 	Credentials CredentialsMode
+	CORS        bool
 	Observer    func(Observation)
 }
 
@@ -87,6 +88,9 @@ const (
 	RequestStylesheet
 	RequestImage
 	RequestScript
+	RequestModule
+	RequestServiceWorker
+	RequestServiceWorkerFetch
 )
 
 // CredentialsMode controls whether Fetch sends and stores credentials.
@@ -467,7 +471,7 @@ func storeResponseCookies(jar http.CookieJar, response *http.Response, requestDa
 }
 
 func credentialsAllowed(target *url.URL, requestData *Request) bool {
-	if requestData == nil || requestData.Kind != RequestFetch {
+	if requestData == nil || !requiresCORS(requestData) {
 		return true
 	}
 	switch requestData.Credentials {

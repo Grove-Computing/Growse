@@ -137,10 +137,9 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           GOOS: ${{ matrix.goos }}
         run: |
-          mkdir -p dist/package/examples
           scripts/package-gui.sh dist/package "$RELEASE_TAG" "$GITHUB_RUN_NUMBER"
           cp README.md SECURITY.md LICENSE.md dist/package/
-          cp -R examples/counter examples/todo examples/css3-core examples/flexbox examples/dashboard examples/animation examples/data-app examples/persistent-app dist/package/examples/
+          bash scripts/verify-gui-package.sh dist/package
 
       - name: Package Unix archive
         if: runner.os != 'Windows'
@@ -282,10 +281,10 @@ jobs:
           echo "name=$image_name" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3.6.0
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -315,6 +314,12 @@ jobs:
           echo "Container digest: $BUILD_DIGEST"
           test "$(docker buildx imagetools inspect "$image_ref" --format '{{ json .SBOM.SPDX }}')" != "null"
           test "$(docker buildx imagetools inspect "$image_ref" --format '{{ json .Provenance.SLSA }}')" != "null"
+
+      - name: Run sandbox Web Platform smoke by digest
+        env:
+          BUILD_DIGEST: ${{ steps.build.outputs.digest }}
+        shell: bash
+        run: docker run --rm --entrypoint growse-smoke "$IMAGE_NAME@$BUILD_DIGEST" /usr/local/share/growse/examples/external-web-platform
 
       - name: Scan published image by digest
         uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
@@ -346,7 +351,7 @@ jobs:
       attestations: write
     steps:
       - name: Log in to GitHub Container Registry for attestation
-        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3.6.0
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}

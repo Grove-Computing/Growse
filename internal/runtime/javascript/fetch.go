@@ -83,6 +83,7 @@ func (runtime *Runtime) fetchRequest(vm *goja.Runtime, call goja.FunctionCall) (
 
 func (runtime *Runtime) responseValue(vm *goja.Runtime, response fetchapi.Response) goja.Value {
 	object := vm.NewObject()
+	runtime.responseValues[object] = response
 	defineReadOnly := func(name string, value goja.Value) {
 		_ = object.DefineDataProperty(name, value, goja.FLAG_FALSE, goja.FLAG_FALSE, goja.FLAG_TRUE)
 	}
@@ -107,6 +108,15 @@ func (runtime *Runtime) responseValue(vm *goja.Runtime, response fetchapi.Respon
 				return nil, err
 			}
 			return parseJSON(vm, value)
+		})
+	})
+	_ = object.Set("arrayBuffer", func(goja.FunctionCall) goja.Value {
+		return runtime.resolvedPromise(vm, func() (goja.Value, error) {
+			value, err := response.Bytes()
+			if err != nil {
+				return nil, err
+			}
+			return vm.ToValue(vm.NewArrayBuffer(value)), nil
 		})
 	})
 	return object

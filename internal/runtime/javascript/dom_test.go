@@ -97,3 +97,40 @@ func TestDOMRejectsInvalidAndDisconnectedOperations(t *testing.T) {
 		t.Fatalf("Start() error = %v", err)
 	}
 }
+
+func TestJavaScriptDOMCollectionsTreeMetadataInnerHTMLAndClassList(t *testing.T) {
+	document, err := htmlparser.Parse(strings.NewReader(`<main id="app"><p class="card featured">one</p><p class="card">two</p></main>`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := New()
+	t.Cleanup(func() { _ = runtime.Stop() })
+	source := `
+		var app = document.getElementById("app");
+		if (document.querySelectorAll(".card").length !== 2) throw new Error("querySelectorAll");
+		if (document.getElementsByClassName("card featured").length !== 1) throw new Error("class collection");
+		if (document.getElementsByTagName("p").length !== 2) throw new Error("tag collection");
+		if (app.id !== "app" || app.tagName !== "MAIN" || app.children.length !== 2) throw new Error("metadata");
+		var text = document.createTextNode("prefix");
+		var section = document.createElement("section");
+		section.id = "section";
+		section.className = "panel";
+		app.prepend(text);
+		app.append(section, "suffix");
+		if (section.parentElement !== app || !section.classList.contains("panel")) throw new Error("parent/class contains");
+		if (section.classList.toggle("panel") !== false || section.classList.toggle("active", true) !== true) throw new Error("class toggle");
+		if (app.removeChild(section) !== section || section.parentElement !== null) throw new Error("removeChild");
+		app.replaceChildren(section);
+		app.innerHTML = '<article id="article"><strong class="label">safe &amp; sound</strong><script>globalThis.mustNotRun = true</script></article>';
+		if (app.children.length !== 1 || app.innerHTML.indexOf("safe &amp; sound") < 0 || globalThis.mustNotRun === true) throw new Error("innerHTML");`
+	if err := runtime.Load(context.Background(), []runtimemodel.Script{javaScript(source)}, runtimemodel.Environment{Document: document, Events: events.NewDispatcher()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	article, ok := document.GetElementByID("article")
+	if !ok || article.Parent == nil || article.Parent.TagName != "main" || document.OwnedNodeCount() <= document.NodeCount() {
+		t.Fatalf("JavaScript DOM result = article:%#v connected:%d owned:%d", article, document.NodeCount(), document.OwnedNodeCount())
+	}
+}

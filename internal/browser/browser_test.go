@@ -957,7 +957,7 @@ func TestCachedNavigationStillValidatesDocumentMIMEType(t *testing.T) {
 	}
 }
 
-func TestCachedStylesheetRedirectStillValidatesFinalOrigin(t *testing.T) {
+func TestCachedStylesheetRedirectAllowsValidatedCrossOriginFinalURL(t *testing.T) {
 	externalRequests := 0
 	external := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
 		externalRequests++
@@ -991,17 +991,18 @@ func TestCachedStylesheetRedirectStillValidatesFinalOrigin(t *testing.T) {
 	}
 	heading, _ := page.Document.QuerySelector("h1")
 	computed, _ := page.ComputedStyles.For(heading)
-	if computed.Color == 0xff0000ff {
-		t.Fatal("cross-origin final stylesheet was applied from Cache")
+	if computed.Color != 0xff0000ff {
+		t.Fatal("validated cross-origin final stylesheet was not applied from Cache")
 	}
 	if stylesheetRequests != 1 || externalRequests != 1 {
 		t.Fatalf("stylesheet Network requests = redirect:%d external:%d, want cached 1:1", stylesheetRequests, externalRequests)
 	}
 }
 
-func TestNavigateLoadsInlineAndSameOriginStylesheets(t *testing.T) {
+func TestNavigateLoadsInlineSameOriginAndCrossOriginStylesheets(t *testing.T) {
 	pageURL := mustParseURL(t, "https://example.com/index.html")
 	cssURL := mustParseURL(t, "https://example.com/site.css")
+	cdnURL := mustParseURL(t, "https://cdn.example.org/ignored.css")
 	loader := &routeLoader{responses: map[string]*network.Response{
 		pageURL.String(): {
 			URL: pageURL, StatusCode: 200, ContentType: "text/html",
@@ -1015,6 +1016,10 @@ func TestNavigateLoadsInlineAndSameOriginStylesheets(t *testing.T) {
 			URL: cssURL, StatusCode: 200, ContentType: "text/css",
 			Body: []byte(`.hero { color: #123456; }`),
 		},
+		cdnURL.String(): {
+			URL: cdnURL, StatusCode: 200, ContentType: "text/css",
+			Body: []byte(`.hero { background-color: #abcdef; }`),
+		},
 	}}
 	browser := New(loader)
 
@@ -1022,7 +1027,7 @@ func TestNavigateLoadsInlineAndSameOriginStylesheets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Navigate() error = %v", err)
 	}
-	if got, want := len(loader.requested), 2; got != want {
+	if got, want := len(loader.requested), 3; got != want {
 		t.Fatalf("request count = %d, want %d (%v)", got, want, loader.requested)
 	}
 	title, ok := page.Document.GetElementByID("title")
@@ -1039,12 +1044,16 @@ func TestNavigateLoadsInlineAndSameOriginStylesheets(t *testing.T) {
 	if got, want := computed.FontSize, float32(30); got != want {
 		t.Fatalf("title font size = %v, want %v", got, want)
 	}
+	if got, want := computed.BackgroundColor, uint32(0xabcdefff); got != want {
+		t.Fatalf("title background color = %#x, want %#x", got, want)
+	}
 }
 
-func TestNavigateLoadsSameOriginImportsWithMediaAndStopsCycles(t *testing.T) {
+func TestNavigateLoadsCrossOriginImportsWithMediaAndStopsCycles(t *testing.T) {
 	pageURL := mustParseURL(t, "https://example.com/index.html")
 	baseURL := mustParseURL(t, "https://example.com/css/base.css")
 	colorsURL := mustParseURL(t, "https://example.com/css/colors.css")
+	crossOriginURL := mustParseURL(t, "https://evil.example/ignored.css")
 	loader := &routeLoader{responses: map[string]*network.Response{
 		pageURL.String(): {
 			URL: pageURL, StatusCode: 200, ContentType: "text/html",
@@ -1065,13 +1074,17 @@ func TestNavigateLoadsSameOriginImportsWithMediaAndStopsCycles(t *testing.T) {
 			URL: colorsURL, StatusCode: 200, ContentType: "text/css",
 			Body: []byte(`@import "base.css"; .hero { color: red; }`),
 		},
+		crossOriginURL.String(): {
+			URL: crossOriginURL, StatusCode: 200, ContentType: "text/css",
+			Body: []byte(`.hero { font-weight: bold; }`),
+		},
 	}}
 	browser := New(loader)
 	page, err := browser.Navigate(context.Background(), pageURL.String())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := loader.requested, []string{pageURL.String(), baseURL.String(), colorsURL.String()}; !reflect.DeepEqual(got, want) {
+	if got, want := loader.requested, []string{pageURL.String(), baseURL.String(), colorsURL.String(), crossOriginURL.String()}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("stylesheet requests = %v, want %v", got, want)
 	}
 	heading, ok := page.Document.QuerySelector("h1")
@@ -1079,8 +1092,37 @@ func TestNavigateLoadsSameOriginImportsWithMediaAndStopsCycles(t *testing.T) {
 		t.Fatal("heading was not found")
 	}
 	computed, _ := page.ComputedStyles.For(heading)
-	if computed.Color != 0xff0000ff || computed.FontSize != 20 || computed.BackgroundColor != 0x0000ffff {
+	if computed.Color != 0xff0000ff || computed.FontSize != 20 || computed.FontWeight != 700 || computed.BackgroundColor != 0x0000ffff {
 		t.Fatalf("imported style = %#v", computed)
+	}
+}
+
+func TestStylesheetPolicyRejectsMixedContentMIMEStatusAndCredentials(t *testing.T) {
+	origin := mustParseURL(t, "https://page.example/index.html")
+	tests := []struct {
+		name        string
+		requested   *url.URL
+		response    *network.Response
+		wantRequest bool
+	}{
+		{name: "initial mixed content", requested: mustParseURL(t, "http://cdn.example/style.css")},
+		{name: "credentialed URL", requested: mustParseURL(t, "https://user:secret@cdn.example/style.css")},
+		{name: "redirected mixed content", requested: mustParseURL(t, "https://cdn.example/redirect.css"), wantRequest: true, response: &network.Response{URL: mustParseURL(t, "http://cdn.example/style.css"), StatusCode: 200, ContentType: "text/css", Body: []byte(`p { color: red }`)}},
+		{name: "invalid MIME", requested: mustParseURL(t, "https://cdn.example/plain.css"), wantRequest: true, response: &network.Response{URL: mustParseURL(t, "https://cdn.example/plain.css"), StatusCode: 200, ContentType: "text/plain", Body: []byte(`p { color: red }`)}},
+		{name: "HTTP error", requested: mustParseURL(t, "https://cdn.example/error.css"), wantRequest: true, response: &network.Response{URL: mustParseURL(t, "https://cdn.example/error.css"), StatusCode: 404, ContentType: "text/css", Body: []byte(`p { color: red }`)}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			loader := &routeLoader{responses: map[string]*network.Response{}}
+			if test.response != nil {
+				loader.responses[test.requested.String()] = test.response
+			}
+			state := &stylesheetLoadState{client: loader, origin: origin, activeURLs: make(map[string]bool)}
+			stylesheet, err := state.loadExternal(context.Background(), test.requested, 0)
+			if err != nil || len(stylesheet.Rules) != 0 || (len(loader.requested) != 0) != test.wantRequest {
+				t.Fatalf("stylesheet=%#v error=%v requests=%v", stylesheet, err, loader.requested)
+			}
+		})
 	}
 }
 
@@ -1499,6 +1541,35 @@ func TestPageLinkURLRejectsUnsupportedScheme(t *testing.T) {
 	page := &Page{URL: mustParseURL(t, "https://example.com"), Document: document}
 	if resolved, ok := page.LinkURL(anchor.ID); ok || resolved != nil {
 		t.Fatalf("LinkURL() = (%v, %v), want unsupported scheme rejected", resolved, ok)
+	}
+}
+
+func TestPreventDefaultBlocksClickAndResetDefaultActions(t *testing.T) {
+	document := dom.NewDocument()
+	form := document.CreateElement("form", map[string]string{"id": "form"})
+	label := document.CreateElement("label", map[string]string{"for": "choice"})
+	labelText := document.CreateText("toggle")
+	checkbox := document.CreateElement("input", map[string]string{"id": "choice", "type": "checkbox"})
+	text := document.CreateElement("input", map[string]string{"id": "text", "value": "default"})
+	for _, edge := range [][2]*dom.Node{{document.Root, form}, {form, label}, {label, labelText}, {form, checkbox}, {form, text}} {
+		if err := document.AppendChild(edge[0], edge[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	page := NewPage(mustParseURL(t, "https://example.test/page"))
+	page.Document, page.Events = document, events.NewDispatcher()
+	browserState := New(nil)
+	browserState.SetPage(page)
+	page.Events.AddEventListener(label.ID, events.Click, func(event events.Event) { event.PreventDefault() })
+	if !browserState.DispatchClick(labelText.ID, 0, 0) || forms.CurrentChecked(checkbox) || page.FocusTarget != 0 {
+		t.Fatalf("prevented click default = checked:%t focus:%d", forms.CurrentChecked(checkbox), page.FocusTarget)
+	}
+	if !forms.SetCurrentValue(text, "changed") {
+		t.Fatal("failed to prepare dirty form value")
+	}
+	page.Events.AddEventListener(form.ID, events.Reset, func(event events.Event) { event.PreventDefault() })
+	if !browserState.ResetForm(form.ID) || forms.CurrentValue(text) != "changed" {
+		t.Fatalf("prevented reset value = %q", forms.CurrentValue(text))
 	}
 }
 

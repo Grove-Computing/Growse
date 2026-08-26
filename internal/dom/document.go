@@ -7,7 +7,8 @@ import (
 
 // Document owns a DOM tree and its node indexes.
 type Document struct {
-	Root *Node
+	Root       *Node
+	readyState string
 
 	byID   map[string]*Node
 	nodes  map[NodeID]*Node
@@ -17,12 +18,30 @@ type Document struct {
 // NewDocument creates an empty document with a document root node.
 func NewDocument() *Document {
 	document := &Document{
-		byID:   make(map[string]*Node),
-		nodes:  make(map[NodeID]*Node),
-		nextID: 1,
+		byID:       make(map[string]*Node),
+		nodes:      make(map[NodeID]*Node),
+		nextID:     1,
+		readyState: "loading",
 	}
 	document.Root = document.newNode(NodeDocument)
 	return document
+}
+
+// ReadyState reports the document loading lifecycle exposed to scripts.
+func (d *Document) ReadyState() string {
+	if d == nil || d.readyState == "" {
+		return "loading"
+	}
+	return d.readyState
+}
+
+// SetReadyState advances the document loading lifecycle.
+func (d *Document) SetReadyState(state string) bool {
+	if d == nil || state != "loading" && state != "interactive" && state != "complete" || d.ReadyState() == state {
+		return false
+	}
+	d.readyState = state
+	return true
 }
 
 // NodeByID returns the node with the internal document-scoped identifier.
@@ -51,20 +70,99 @@ func (d *Document) CreateText(text string) *Node {
 
 // AppendChild attaches child beneath parent.
 func (d *Document) AppendChild(parent, child *Node) error {
+	index := 0
+	if parent != nil {
+		index = len(parent.Children)
+	}
+	return d.InsertChild(parent, child, index)
+}
+
+// InsertChild attaches or moves child beneath parent at index.
+func (d *Document) InsertChild(parent, child *Node, index int) error {
 	if parent == nil || child == nil {
 		return errors.New("parent and child must not be nil")
 	}
 	if parent.document != d || child.document != d {
 		return errors.New("parent and child must belong to the document")
 	}
-	if child.Parent != nil {
-		return errors.New("child already has a parent")
+	if parent.Type != NodeDocument && parent.Type != NodeElement || child == d.Root || index < 0 || index > len(parent.Children) {
+		return errors.New("invalid child insertion")
 	}
-
+	for current := parent; current != nil; current = current.Parent {
+		if current == child {
+			return errors.New("child insertion would create a cycle")
+		}
+	}
+	if child.Parent != nil {
+		oldParent := child.Parent
+		oldIndex := childIndex(oldParent, child)
+		if oldIndex < 0 {
+			return errors.New("child parent relationship is invalid")
+		}
+		oldParent.Children = append(oldParent.Children[:oldIndex], oldParent.Children[oldIndex+1:]...)
+		if oldParent == parent && oldIndex < index {
+			index--
+		}
+	}
 	child.Parent = parent
-	parent.Children = append(parent.Children, child)
+	parent.Children = append(parent.Children, nil)
+	copy(parent.Children[index+1:], parent.Children[index:])
+	parent.Children[index] = child
 	d.rebuildIDIndex()
 	return nil
+}
+
+// DetachChild removes a direct child without destroying its subtree identity.
+func (d *Document) DetachChild(parent, child *Node) bool {
+	if d == nil || parent == nil || child == nil || parent.document != d || child.document != d || child.Parent != parent {
+		return false
+	}
+	index := childIndex(parent, child)
+	if index < 0 {
+		return false
+	}
+	parent.Children = append(parent.Children[:index], parent.Children[index+1:]...)
+	child.Parent = nil
+	d.rebuildIDIndex()
+	return true
+}
+
+// ReplaceChildren atomically moves children beneath parent and detaches the old list.
+func (d *Document) ReplaceChildren(parent *Node, children []*Node) bool {
+	if d == nil || parent == nil || parent.document != d || parent.Type != NodeElement {
+		return false
+	}
+	seen := make(map[NodeID]bool, len(children))
+	for _, child := range children {
+		if child == nil || child.document != d || child == d.Root || seen[child.ID] {
+			return false
+		}
+		seen[child.ID] = true
+		for current := parent; current != nil; current = current.Parent {
+			if current == child {
+				return false
+			}
+		}
+	}
+	for _, child := range children {
+		if child.Parent != nil {
+			oldParent := child.Parent
+			index := childIndex(oldParent, child)
+			if index >= 0 {
+				oldParent.Children = append(oldParent.Children[:index], oldParent.Children[index+1:]...)
+			}
+			child.Parent = nil
+		}
+	}
+	for _, child := range parent.Children {
+		child.Parent = nil
+	}
+	parent.Children = append([]*Node(nil), children...)
+	for _, child := range parent.Children {
+		child.Parent = parent
+	}
+	d.rebuildIDIndex()
+	return true
 }
 
 // IsConnected はノードがDocumentのルートツリーに接続されているかを返す。
@@ -123,6 +221,48 @@ func (d *Document) QuerySelector(value string) (*Node, bool) {
 		return nil, false
 	}
 	return querySelector(d.Root, selector)
+}
+
+// QuerySelectorAll returns all connected elements matching a supported selector.
+func (d *Document) QuerySelectorAll(value string) []*Node {
+	if d == nil || d.Root == nil {
+		return nil
+	}
+	selector, ok := parseSimpleSelector(strings.TrimSpace(value))
+	if !ok {
+		return nil
+	}
+	return querySelectorAll(d.Root, selector, nil)
+}
+
+// GetElementsByClassName returns connected elements containing every class token.
+func (d *Document) GetElementsByClassName(value string) []*Node {
+	classes := strings.Fields(value)
+	if d == nil || d.Root == nil || len(classes) == 0 {
+		return nil
+	}
+	return collectElements(d.Root, nil, func(node *Node) bool {
+		present := make(map[string]bool)
+		value, _ := node.Attribute("class")
+		for _, class := range strings.Fields(value) {
+			present[class] = true
+		}
+		for _, class := range classes {
+			if !present[class] {
+				return false
+			}
+		}
+		return true
+	})
+}
+
+// GetElementsByTagName returns connected elements with the requested tag or all for "*".
+func (d *Document) GetElementsByTagName(value string) []*Node {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if d == nil || d.Root == nil || value == "" || value != "*" && !validSelectorName(value) {
+		return nil
+	}
+	return collectElements(d.Root, nil, func(node *Node) bool { return value == "*" || node.TagName == value })
 }
 
 // SetAttribute は要素の属性を設定し、値が変化した場合にtrueを返す。
@@ -189,6 +329,14 @@ func (d *Document) SetTextContent(id NodeID, value string) bool {
 // NodeCount returns the number of nodes, including the document root.
 func (d *Document) NodeCount() int {
 	return countNodes(d.Root)
+}
+
+// OwnedNodeCount includes detached nodes retained by live Runtime handles.
+func (d *Document) OwnedNodeCount() int {
+	if d == nil {
+		return 0
+	}
+	return len(d.nodes)
 }
 
 // ElementCount returns the number of element nodes.
@@ -359,6 +507,41 @@ func querySelector(node *Node, selector simpleSelector) (*Node, bool) {
 		}
 	}
 	return nil, false
+}
+
+func querySelectorAll(node *Node, selector simpleSelector, result []*Node) []*Node {
+	if matchesSimpleSelector(node, selector) {
+		result = append(result, node)
+	}
+	for _, child := range node.Children {
+		result = querySelectorAll(child, selector, result)
+	}
+	return result
+}
+
+func collectElements(node *Node, result []*Node, matches func(*Node) bool) []*Node {
+	if node == nil {
+		return result
+	}
+	if node.Type == NodeElement && matches(node) {
+		result = append(result, node)
+	}
+	for _, child := range node.Children {
+		result = collectElements(child, result, matches)
+	}
+	return result
+}
+
+func childIndex(parent, child *Node) int {
+	if parent == nil || child == nil {
+		return -1
+	}
+	for index, candidate := range parent.Children {
+		if candidate == child {
+			return index
+		}
+	}
+	return -1
 }
 
 func matchesSimpleSelector(node *Node, selector simpleSelector) bool {

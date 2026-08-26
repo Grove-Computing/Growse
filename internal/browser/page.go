@@ -1,16 +1,20 @@
 package browser
 
 import (
+	"context"
 	"image"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Grove-Computing/Growse/internal/css"
 	"github.com/Grove-Computing/Growse/internal/devtools"
 	"github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/events"
+	layoutmodel "github.com/Grove-Computing/Growse/internal/layout"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
+	"github.com/Grove-Computing/Growse/internal/serviceworker"
 	"github.com/Grove-Computing/Growse/internal/style"
 )
 
@@ -25,6 +29,7 @@ type Page struct {
 	ScrollOffset     int
 	ScrollRevision   uint64
 	URL              *url.URL
+	BaseURL          *url.URL
 	StatusCode       int
 	ContentType      string
 	Source           []byte
@@ -38,9 +43,11 @@ type Page struct {
 	BackgroundErrors []string
 	Engine           runtimemodel.Engine
 	Scripts          []Script
+	ImportMap        map[string]string
 	ScriptErrors     []string
 	RuntimeStarted   bool
 	RuntimeError     string
+	Sandbox          runtimemodel.SandboxStatus
 	HoverTarget      dom.NodeID
 	HoverPath        []dom.NodeID
 	FocusTarget      dom.NodeID
@@ -50,6 +57,46 @@ type Page struct {
 	ReducedMotion    bool
 	StyleRevision    uint64
 	DevTools         *devtools.PageStore
+	Frames           []*Frame
+	FramePolicy      runtimemodel.FramePolicy
+	window           runtimemodel.WindowContext
+	windows          *windowRegistry
+	serviceWorkers   *serviceworker.Manager
+}
+
+// Frame is one nested browsing context owned by a parent Page.
+type Frame struct {
+	ID           uint64
+	ElementID    dom.NodeID
+	ParentID     uint64
+	Depth        int
+	Generation   uint64
+	URL          *url.URL
+	Page         *Page
+	Viewport     FrameViewport
+	ScrollX      float32
+	ScrollY      float32
+	LoadError    string
+	Loaded       bool
+	Closed       bool
+	Sandbox      runtimemodel.FramePolicy
+	runtime      runtimemodel.Runtime
+	cancel       func()
+	state        *frameLoadState
+	parentPage   *Page
+	lifecycle    context.Context
+	lifecycleMu  sync.Mutex
+	navigationMu sync.Mutex
+	quotaMu      sync.Mutex
+	navigations  int
+}
+
+// FrameViewport is the iframe border box and its clipped child viewport.
+type FrameViewport struct {
+	X, Y, Width, Height float32
+	ClipX, ClipY        float32
+	ClipWidth           float32
+	ClipHeight          float32
 }
 
 // AnimatedStyles samples this page's CSS Animations and Transitions at current without
@@ -77,7 +124,7 @@ func (p *Page) ActiveAnimations(current time.Time) bool {
 // NewPage creates a page for pageURL. A nil URL is allowed for documents such
 // as an in-memory error page that do not have a network location.
 func NewPage(pageURL *url.URL) *Page {
-	return &Page{URL: cloneURL(pageURL), DevTools: devtools.NewPageStore()}
+	return &Page{URL: cloneURL(pageURL), BaseURL: cloneURL(pageURL), DevTools: devtools.NewPageStore()}
 }
 
 func (p *Page) ensureDevTools() *devtools.PageStore {
@@ -93,7 +140,46 @@ func (p *Page) closeDevTools() {
 	}
 }
 
-// LinkURL resolves the nearest anchor at nodeID against the page URL.
+// FrameByElement returns the live top-level Frame hosted by elementID.
+func (p *Page) FrameByElement(elementID dom.NodeID) (*Frame, bool) {
+	if p == nil {
+		return nil, false
+	}
+	for _, frame := range p.Frames {
+		if frame != nil && frame.ElementID == elementID && !frame.Closed {
+			return frame, true
+		}
+	}
+	return nil, false
+}
+
+// SyncFrameViewports maps the parent layout geometry into clipped child viewports.
+func (p *Page) SyncFrameViewports(tree *layoutmodel.Tree) {
+	if p == nil || tree == nil {
+		return
+	}
+	for _, frame := range p.Frames {
+		if frame == nil || frame.Closed {
+			continue
+		}
+		if bounds, ok := tree.Bounds[frame.ElementID]; ok {
+			frame.SetViewport(bounds.X, bounds.Y, bounds.Width, bounds.Height)
+			continue
+		}
+		for _, box := range tree.Boxes {
+			x := box.X
+			for _, run := range box.Runs {
+				if run.NodeID == frame.ElementID {
+					frame.SetViewport(x, box.Y, run.Width, box.Height)
+					break
+				}
+				x += run.Width
+			}
+		}
+	}
+}
+
+// LinkURL resolves the nearest anchor at nodeID against the document base URL.
 func (p *Page) LinkURL(nodeID dom.NodeID) (*url.URL, bool) {
 	linkURL, _, ok := p.LinkDestination(nodeID)
 	return linkURL, ok
@@ -101,7 +187,8 @@ func (p *Page) LinkURL(nodeID dom.NodeID) (*url.URL, bool) {
 
 // LinkDestination resolves the nearest anchor URL and normalized target.
 func (p *Page) LinkDestination(nodeID dom.NodeID) (*url.URL, string, bool) {
-	if p == nil || p.URL == nil || p.Document == nil {
+	baseURL := pageBaseURL(p)
+	if baseURL == nil || p.Document == nil {
 		return nil, "", false
 	}
 	node, ok := p.Document.NodeByID(nodeID)
@@ -121,7 +208,7 @@ func (p *Page) LinkDestination(nodeID dom.NodeID) (*url.URL, string, bool) {
 		if err != nil {
 			return nil, "", false
 		}
-		resolved := p.URL.ResolveReference(reference)
+		resolved := baseURL.ResolveReference(reference)
 		if resolved.Scheme != "http" && resolved.Scheme != "https" {
 			return nil, "", false
 		}

@@ -16,9 +16,23 @@ import (
 // Engine はPage Scriptを評価する実行エンジンを識別する。
 type Engine string
 
+// ScriptSchedule identifies when a classic script participates in document
+// loading. The zero value is parser-blocking for compatibility.
+type ScriptSchedule string
+
+// ScriptKind distinguishes classic scripts from ECMAScript modules.
+type ScriptKind string
+
 const (
 	EngineGo         Engine = "go"
 	EngineJavaScript Engine = "javascript"
+
+	ScriptParserBlocking ScriptSchedule = "parser-blocking"
+	ScriptDefer          ScriptSchedule = "defer"
+	ScriptAsync          ScriptSchedule = "async"
+
+	ScriptClassic ScriptKind = "classic"
+	ScriptModule  ScriptKind = "module"
 )
 
 // NormalizeEngine は既存呼び出しのzero valueをGoとして扱う。
@@ -41,10 +55,32 @@ func (engine Engine) Valid() bool {
 
 // Script は文書内で見つかった1つの実行ソースを表す。
 type Script struct {
-	Engine    Engine
-	SourceURL *url.URL
-	Source    string
-	Inline    bool
+	Engine        Engine
+	Kind          ScriptKind
+	SourceURL     *url.URL
+	Source        string
+	Inline        bool
+	Integrity     string
+	CrossOrigin   string
+	Schedule      ScriptSchedule
+	DocumentOrder int
+	FetchOrder    int
+}
+
+// SandboxStatus reports the process boundary that was verified before page
+// code was accepted by a Runtime. Constraints only contains OS controls that
+// the worker actually applied; optional controls are never treated as required.
+type SandboxStatus struct {
+	Generation         uint64   `json:"generation,omitempty"`
+	Platform           string   `json:"platform"`
+	Ready              bool     `json:"ready"`
+	ProcessBoundary    bool     `json:"processBoundary"`
+	BrokeredHostIO     bool     `json:"brokeredHostIo"`
+	MinimalEnvironment bool     `json:"minimalEnvironment"`
+	ParentLifecycle    bool     `json:"parentLifecycle"`
+	MemoryLimitBytes   int64    `json:"memoryLimitBytes"`
+	Constraints        []string `json:"constraints,omitempty"`
+	Failure            string   `json:"failure,omitempty"`
 }
 
 // Environment はRuntimeへ公開するページの状態を保持する。
@@ -52,6 +88,8 @@ type Environment struct {
 	Document        *dom.Document
 	Events          *events.Dispatcher
 	BaseURL         *url.URL
+	ResourceBaseURL *url.URL
+	ImportMap       map[string]string
 	Fetch           func(context.Context, *network.Request) (*network.Response, error)
 	FetchLimiter    *fetchapi.Limiter
 	Navigate        func(*url.URL) error
@@ -67,6 +105,114 @@ type Environment struct {
 	FrameScope      func(time.Time, func())
 	ConsoleLog      func(message string)
 	ConsoleRecord   func(level, message string)
+	RuntimeFailure  func(error)
+	Frames          []FrameAccess
+	FrameMutation   func(frameID, generation uint64, document dom.DocumentSnapshot) error
+	FramePolicy     FramePolicy
+	Window          WindowContext
+	PostMessage     func(target WindowReference, targetOrigin string, payload []byte) error
+	ServiceWorker   *ServiceWorkerHost
+}
+
+// FramePolicy contains the capabilities granted by an iframe sandbox.
+// A non-sandboxed context keeps the historical unrestricted behavior.
+type FramePolicy struct {
+	Sandboxed                      bool
+	AllowScripts                   bool
+	AllowSameOrigin                bool
+	AllowForms                     bool
+	AllowPopups                    bool
+	AllowTopNavigationByActivation bool
+}
+
+// AllowsScripts reports whether page code may be evaluated.
+func (policy FramePolicy) AllowsScripts() bool { return !policy.Sandboxed || policy.AllowScripts }
+
+// HasOpaqueOrigin reports whether the context has a unique opaque origin.
+func (policy FramePolicy) HasOpaqueOrigin() bool { return policy.Sandboxed && !policy.AllowSameOrigin }
+
+// AllowsForms reports whether form submission is enabled.
+func (policy FramePolicy) AllowsForms() bool { return !policy.Sandboxed || policy.AllowForms }
+
+// AllowsPopups reports whether creation of auxiliary browsing contexts is enabled.
+func (policy FramePolicy) AllowsPopups() bool { return !policy.Sandboxed || policy.AllowPopups }
+
+// AllowsTopNavigation reports whether a user-activated top navigation is enabled.
+func (policy FramePolicy) AllowsTopNavigation(userActivated bool) bool {
+	return !policy.Sandboxed || policy.AllowTopNavigationByActivation && userActivated
+}
+
+// FrameAccess is the least-privilege view of one direct child browsing context.
+// Document is present only while same-origin access is allowed.
+type FrameAccess struct {
+	ID         uint64
+	ElementID  dom.NodeID
+	Generation uint64
+	Origin     string
+	URL        string
+	SameOrigin bool
+	Document   *dom.Document
+}
+
+// WindowReference identifies one generation of a browsing context without
+// exposing cross-origin DOM state.
+type WindowReference struct {
+	ID         uint64
+	Generation uint64
+	Origin     string
+	URL        string
+	SameOrigin bool
+}
+
+// WindowContext defines the self, parent, top, and direct child relationships.
+type WindowContext struct {
+	Self     WindowReference
+	Parent   WindowReference
+	Top      WindowReference
+	Children []WindowReference
+}
+
+// MessageEvent is a bounded serialized structured-clone subset.
+type MessageEvent struct {
+	Data   []byte
+	Origin string
+	Source WindowReference
+}
+
+// ServiceWorkerState is the lifecycle state exposed to JavaScript pages.
+type ServiceWorkerState string
+
+const (
+	ServiceWorkerInstalling ServiceWorkerState = "installing"
+	ServiceWorkerInstalled  ServiceWorkerState = "installed"
+	ServiceWorkerActivating ServiceWorkerState = "activating"
+	ServiceWorkerActivated  ServiceWorkerState = "activated"
+	ServiceWorkerRedundant  ServiceWorkerState = "redundant"
+)
+
+// ServiceWorkerRegistration is a serializable view of one scope registration.
+type ServiceWorkerRegistration struct {
+	ID                  uint64
+	Generation          uint64
+	Scope               string
+	ScriptURL           string
+	InstallingScriptURL string
+	WaitingScriptURL    string
+	ActiveScriptURL     string
+	Installing          ServiceWorkerState
+	Waiting             ServiceWorkerState
+	Active              ServiceWorkerState
+	Claimed             bool
+}
+
+// ServiceWorkerHost keeps registration policy and network I/O in the Browser.
+type ServiceWorkerHost struct {
+	Register         func(scriptURL, scope string) (ServiceWorkerRegistration, error)
+	Update           func(scope string) (ServiceWorkerRegistration, error)
+	Unregister       func(scope string) (bool, error)
+	GetRegistration  func(clientURL string) (*ServiceWorkerRegistration, error)
+	GetRegistrations func() ([]ServiceWorkerRegistration, error)
+	Controller       func() *ServiceWorkerRegistration
 }
 
 // Runtime は1ページに属するGoスクリプトを実行する。
@@ -76,9 +222,30 @@ type Runtime interface {
 	Stop() error
 }
 
+// SandboxReporter is implemented by runtimes that verify an out-of-process
+// sandbox before evaluating page code.
+type SandboxReporter interface {
+	SandboxStatus() SandboxStatus
+}
+
 // LocationUpdater はsame-document Navigationを現在Runtimeへ通知する。
 type LocationUpdater interface {
 	UpdateLocation(*url.URL)
+}
+
+// FrameUpdater receives generation-scoped child Frame access changes.
+type FrameUpdater interface {
+	UpdateFrames([]FrameAccess)
+}
+
+// MessageDispatcher receives one postMessage event on the Page queue.
+type MessageDispatcher interface {
+	DispatchMessage(MessageEvent) error
+}
+
+// WindowUpdater refreshes generation-scoped child WindowProxy relationships.
+type WindowUpdater interface {
+	UpdateWindow(WindowContext)
 }
 
 // NavigationEventDispatcher はNavigation Eventを現在Runtimeへ配送する。

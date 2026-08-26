@@ -22,7 +22,7 @@ var (
 )
 
 func applyCORSRequest(request *http.Request, requestData *Request) error {
-	if request == nil || requestData == nil || requestData.Kind != RequestFetch {
+	if request == nil || requestData == nil || !requiresCORS(requestData) {
 		return nil
 	}
 	request.Header.Del("Origin")
@@ -182,7 +182,7 @@ func filterFetchResponseHeaders(header http.Header, requestData *Request, finalU
 }
 
 func validateCORSResponse(response *http.Response, requestData *Request) error {
-	if response == nil || response.Request == nil || requestData == nil || requestData.Kind != RequestFetch ||
+	if response == nil || response.Request == nil || requestData == nil || !requiresCORS(requestData) ||
 		SameOrigin(requestData.SiteURL, response.Request.URL) {
 		return nil
 	}
@@ -201,6 +201,10 @@ func validateCORSResponse(response *http.Response, requestData *Request) error {
 		return nil
 	}
 	return ErrCORS
+}
+
+func requiresCORS(request *Request) bool {
+	return request != nil && (request.Kind == RequestFetch || request.Kind == RequestServiceWorkerFetch || request.CORS)
 }
 
 func isSimpleCORSRequest(request *http.Request) bool {
