@@ -34,12 +34,19 @@ type Element struct {
 
 // Event はWebGoへ公開するDOMイベント情報である。
 type Event struct {
-	Type           string
-	TargetID       string
-	Value          string
-	X              float32
-	Y              float32
-	preventDefault func()
+	Type             string
+	TargetID         string
+	TargetNodeID     dommodel.NodeID
+	CurrentTargetID  dommodel.NodeID
+	Value            string
+	X                float32
+	Y                float32
+	Bubbles          bool
+	Cancelable       bool
+	DefaultPrevented func() bool
+	Phase            events.Phase
+	preventDefault   func()
+	stopPropagation  func()
 }
 
 // ID はElementが参照するPage内Node IDを返す。
@@ -54,6 +61,13 @@ func (element *Element) ID() dommodel.NodeID {
 func (event Event) PreventDefault() {
 	if event.preventDefault != nil {
 		event.preventDefault()
+	}
+}
+
+// StopPropagation prevents this event from reaching later nodes on its path.
+func (event Event) StopPropagation() {
+	if event.stopPropagation != nil {
+		event.stopPropagation()
 	}
 }
 
@@ -110,13 +124,13 @@ func (api *API) GetElementsByTagName(tagName string) []*Element {
 	return api.elements(api.document.GetElementsByTagName(tagName))
 }
 
-// ElementByNodeID returns a connected element by its document-scoped identity.
+// ElementByNodeID returns a connected node handle by its document-scoped identity.
 func (api *API) ElementByNodeID(id dommodel.NodeID) *Element {
 	if api == nil || api.document == nil || id == 0 {
 		return nil
 	}
 	node, ok := api.document.NodeByID(id)
-	if !ok || node.Type != dommodel.NodeElement || !api.document.IsConnected(node) {
+	if !ok || !api.document.IsConnected(node) {
 		return nil
 	}
 	return api.element(node)
@@ -244,35 +258,55 @@ func (element *Element) OnMouseLeave(handler func(Event)) {
 
 // AddEventListener はJavaScript hostを含むRuntime adapter向けに対応Eventを登録する。
 func (element *Element) AddEventListener(eventType string, handler func(Event)) bool {
+	return element.AddEventListenerWithCapture(eventType, false, handler) != 0
+}
+
+// AddEventListenerWithCapture registers a removable listener with propagation options.
+func (element *Element) AddEventListenerWithCapture(eventType string, capture bool, handler func(Event)) events.ListenerID {
 	if handler == nil {
-		return false
+		return 0
 	}
-	var internal events.Type
-	switch strings.ToLower(strings.TrimSpace(eventType)) {
-	case string(events.Click):
-		internal = events.Click
-	case string(events.Input):
-		internal = events.Input
-	case string(events.Change):
-		internal = events.Change
-	case string(events.Submit):
-		internal = events.Submit
-	case string(events.Reset):
-		internal = events.Reset
-	case string(events.Focus):
-		internal = events.Focus
-	case string(events.Blur):
-		internal = events.Blur
-	case string(events.MouseEnter):
-		internal = events.MouseEnter
-	case string(events.MouseLeave):
-		internal = events.MouseLeave
-	default:
-		return false
+	internal, ok := supportedEventType(eventType)
+	if !ok {
+		return 0
 	}
-	return element.addEventListener(internal, func(event events.Event) {
+	return element.addEventListenerWithCapture(internal, capture, func(event events.Event) {
 		handler(element.publicEvent(event))
 	})
+}
+
+// RemoveEventListener removes one listener token returned by AddEventListenerWithCapture.
+func (element *Element) RemoveEventListener(eventType string, id events.ListenerID) bool {
+	internal, ok := supportedEventType(eventType)
+	if !ok || element == nil || element.events == nil {
+		return false
+	}
+	return element.events.RemoveEventListener(element.id, internal, id)
+}
+
+func supportedEventType(eventType string) (events.Type, bool) {
+	switch strings.ToLower(strings.TrimSpace(eventType)) {
+	case string(events.Click):
+		return events.Click, true
+	case string(events.Input):
+		return events.Input, true
+	case string(events.Change):
+		return events.Change, true
+	case string(events.Submit):
+		return events.Submit, true
+	case string(events.Reset):
+		return events.Reset, true
+	case string(events.Focus):
+		return events.Focus, true
+	case string(events.Blur):
+		return events.Blur, true
+	case string(events.MouseEnter):
+		return events.MouseEnter, true
+	case string(events.MouseLeave):
+		return events.MouseLeave, true
+	default:
+		return "", false
+	}
 }
 
 // AppendChild は未接続の子要素を接続済みの要素の末尾へ追加する。
@@ -540,11 +574,18 @@ func (element *Element) Reset() bool {
 		return false
 	}
 	node, ok := element.document.NodeByID(element.id)
-	if !ok || !forms.Reset(node) {
+	if !ok {
 		return false
 	}
 	if element.events != nil {
-		element.events.Dispatch(events.Event{Type: events.Reset, Target: node.ID})
+		event := events.Cancelable(events.Reset, node.ID)
+		element.events.DispatchTree(element.document, event)
+		if event.DefaultPrevented() {
+			return false
+		}
+	}
+	if !forms.Reset(node) {
+		return false
 	}
 	if element.onMutation != nil {
 		element.onMutation()
@@ -704,19 +745,26 @@ func (element *Element) textInputNode() (*dommodel.Node, bool) {
 }
 
 func (element *Element) addEventListener(eventType events.Type, listener events.Listener) bool {
+	return element.addEventListenerWithCapture(eventType, false, listener) != 0
+}
+
+func (element *Element) addEventListenerWithCapture(eventType events.Type, capture bool, listener events.Listener) events.ListenerID {
 	if element == nil || element.document == nil || element.events == nil || listener == nil {
-		return false
+		return 0
 	}
 	node, ok := element.document.NodeByID(element.id)
 	if !ok || !element.document.IsConnected(node) {
-		return false
+		return 0
 	}
-	element.events.AddEventListener(element.id, eventType, listener)
-	return true
+	return element.events.AddEventListenerWithCapture(element.id, eventType, capture, listener)
 }
 
 func (element *Element) publicEvent(event events.Event) Event {
-	result := Event{Type: string(event.Type), Value: event.Value, X: event.X, Y: event.Y}
+	result := Event{
+		Type: string(event.Type), TargetNodeID: event.Target, CurrentTargetID: event.CurrentTarget(), Value: event.Value, X: event.X, Y: event.Y,
+		Bubbles: event.Bubbles(), Cancelable: event.IsCancelable(), DefaultPrevented: event.DefaultPrevented, Phase: event.EventPhase(),
+		stopPropagation: event.StopPropagation,
+	}
 	if event.IsCancelable() {
 		result.preventDefault = event.PreventDefault
 	}

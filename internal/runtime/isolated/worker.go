@@ -325,9 +325,9 @@ func (state *workerState) dispatchEvent(_ context.Context, payload json.RawMessa
 	}
 	handled := false
 	if queued, ok := runtime.(pageEventRuntime); ok {
-		handled = queued.DispatchPageEvent(func() bool { return dispatcher.Dispatch(event) })
+		handled = queued.DispatchPageEvent(func() bool { return dispatcher.DispatchTree(document, event) })
 	} else {
-		handled = dispatcher.Dispatch(event)
+		handled = dispatcher.DispatchTree(document, event)
 	}
 	return eventResponse{Handled: handled, DefaultPrevented: event.DefaultPrevented()}, nil
 }

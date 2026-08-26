@@ -1544,6 +1544,35 @@ func TestPageLinkURLRejectsUnsupportedScheme(t *testing.T) {
 	}
 }
 
+func TestPreventDefaultBlocksClickAndResetDefaultActions(t *testing.T) {
+	document := dom.NewDocument()
+	form := document.CreateElement("form", map[string]string{"id": "form"})
+	label := document.CreateElement("label", map[string]string{"for": "choice"})
+	labelText := document.CreateText("toggle")
+	checkbox := document.CreateElement("input", map[string]string{"id": "choice", "type": "checkbox"})
+	text := document.CreateElement("input", map[string]string{"id": "text", "value": "default"})
+	for _, edge := range [][2]*dom.Node{{document.Root, form}, {form, label}, {label, labelText}, {form, checkbox}, {form, text}} {
+		if err := document.AppendChild(edge[0], edge[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	page := NewPage(mustParseURL(t, "https://example.test/page"))
+	page.Document, page.Events = document, events.NewDispatcher()
+	browserState := New(nil)
+	browserState.SetPage(page)
+	page.Events.AddEventListener(label.ID, events.Click, func(event events.Event) { event.PreventDefault() })
+	if !browserState.DispatchClick(labelText.ID, 0, 0) || forms.CurrentChecked(checkbox) || page.FocusTarget != 0 {
+		t.Fatalf("prevented click default = checked:%t focus:%d", forms.CurrentChecked(checkbox), page.FocusTarget)
+	}
+	if !forms.SetCurrentValue(text, "changed") {
+		t.Fatal("failed to prepare dirty form value")
+	}
+	page.Events.AddEventListener(form.ID, events.Reset, func(event events.Event) { event.PreventDefault() })
+	if !browserState.ResetForm(form.ID) || forms.CurrentValue(text) != "changed" {
+		t.Fatalf("prevented reset value = %q", forms.CurrentValue(text))
+	}
+}
+
 func mustParseURL(t *testing.T, rawURL string) *url.URL {
 	t.Helper()
 

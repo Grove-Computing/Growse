@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Grove-Computing/Growse/internal/forms"
 	"github.com/Grove-Computing/Growse/internal/network"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 	"github.com/Grove-Computing/Growse/internal/runtime/isolated"
@@ -561,5 +562,37 @@ func TestBrowserContinuesValidJavaScriptAfterIndependentLoadFailure(t *testing.T
 	}
 	if page.Document.ReadyState() != "complete" {
 		t.Fatalf("document.readyState = %q", page.Document.ReadyState())
+	}
+}
+
+func TestIsolatedJavaScriptEventCancellationBlocksBrowserClickDefault(t *testing.T) {
+	pageURL := mustParseURL(t, "https://event.example/page")
+	loader := &routeLoader{responses: map[string]*network.Response{
+		pageURL.String(): {
+			URL: pageURL, StatusCode: 200, ContentType: "text/html",
+			Body: []byte(`<label id="label" for="choice"><span id="target">toggle</span></label><input id="choice" type="checkbox">
+				<script>
+				var labelElement = document.getElementById("label");
+				var targetElement = document.getElementById("target");
+				labelElement.addEventListener("click", function (event) {
+					if (event.target !== targetElement || event.currentTarget !== labelElement || event.eventPhase !== 1) throw new Error("event metadata mismatch");
+					event.preventDefault();
+				}, {capture: true});
+				</script>`),
+		},
+	}}
+	browserState := NewWithEngineFactory(loader, func(engine runtimemodel.Engine) runtimemodel.Runtime { return isolated.New(engine) })
+	t.Cleanup(func() { _ = browserState.Close() })
+	if _, err := browserState.SetEngine(context.Background(), runtimemodel.EngineJavaScript); err != nil {
+		t.Fatal(err)
+	}
+	page, err := browserState.Navigate(context.Background(), pageURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, _ := page.Document.GetElementByID("target")
+	checkbox, _ := page.Document.GetElementByID("choice")
+	if !browserState.DispatchClick(target.ID, 0, 0) || forms.CurrentChecked(checkbox) || page.FocusTarget != 0 || page.RuntimeError != "" {
+		t.Fatalf("isolated prevented click = checked:%t focus:%d runtimeError:%q", forms.CurrentChecked(checkbox), page.FocusTarget, page.RuntimeError)
 	}
 }

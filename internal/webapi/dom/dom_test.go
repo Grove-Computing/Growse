@@ -522,12 +522,9 @@ func TestOnMouseEnterAndLeaveProvidePublicEventData(t *testing.T) {
 	dispatcher.Dispatch(events.Event{Type: events.MouseEnter, Target: button.ID, X: 12, Y: 34})
 	dispatcher.Dispatch(events.Event{Type: events.MouseLeave, Target: button.ID, X: 56, Y: 78})
 
-	want := []Event{
-		{Type: "mouseenter", TargetID: "save", X: 12, Y: 34},
-		{Type: "mouseleave", TargetID: "save", X: 56, Y: 78},
-	}
-	if !reflect.DeepEqual(received, want) {
-		t.Fatalf("hover events = %#v, want %#v", received, want)
+	if len(received) != 2 || received[0].Type != "mouseenter" || received[0].TargetID != "save" || received[0].X != 12 || received[0].Y != 34 ||
+		received[1].Type != "mouseleave" || received[1].TargetID != "save" || received[1].X != 56 || received[1].Y != 78 {
+		t.Fatalf("hover events = %#v", received)
 	}
 }
 

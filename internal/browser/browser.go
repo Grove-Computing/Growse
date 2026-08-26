@@ -364,15 +364,19 @@ func (b *Browser) dispatchPageEvent(page *Page, event events.Event) bool {
 	activeRuntime := b.activeRuntime
 	active := b.page == page
 	b.mu.RUnlock()
+	dispatch := func() bool {
+		if page.Document != nil {
+			return page.Events.DispatchTree(page.Document, event)
+		}
+		return page.Events.Dispatch(event)
+	}
 	if runtime, ok := activeRuntime.(isolatedDOMEventRuntime); ok && active {
 		return runtime.DispatchDOMEvent(event)
 	}
 	if runtime, ok := activeRuntime.(pageEventRuntime); ok && active {
-		return runtime.DispatchPageEvent(func() bool {
-			return page.Events.Dispatch(event)
-		})
+		return runtime.DispatchPageEvent(dispatch)
 	}
-	return page.Events.Dispatch(event)
+	return dispatch()
 }
 
 // DispatchClick はアクティブページの対象ノードへクリックを配信する。
@@ -388,9 +392,11 @@ func (b *Browser) DispatchClick(nodeID dom.NodeID, x, y float32) bool {
 			return false
 		}
 	}
-	clickHandled := b.dispatchPageEvent(page, events.Event{Type: events.Click, Target: nodeID, X: x, Y: y})
+	clickEvent := events.Cancelable(events.Click, nodeID)
+	clickEvent.X, clickEvent.Y = x, y
+	clickHandled := b.dispatchPageEvent(page, clickEvent)
 	labelHandled := false
-	if page.Document != nil {
+	if !clickEvent.DefaultPrevented() && page.Document != nil {
 		if node, ok := page.Document.NodeByID(nodeID); ok {
 			if control := forms.LabeledControl(page.Document, node); control != nil && !forms.Disabled(control) {
 				b.UpdateFocus(control.ID)
@@ -401,7 +407,7 @@ func (b *Browser) DispatchClick(nodeID dom.NodeID, x, y float32) bool {
 		}
 	}
 	submitHandled := false
-	if page.Document != nil {
+	if !clickEvent.DefaultPrevented() && page.Document != nil {
 		if node, ok := page.Document.NodeByID(nodeID); ok && isSubmitButton(node) {
 			if form := forms.FormOwner(page.Document, node); form != nil {
 				b.mu.Lock()
@@ -409,7 +415,7 @@ func (b *Browser) DispatchClick(nodeID dom.NodeID, x, y float32) bool {
 					page.Submitter = node.ID
 				}
 				b.mu.Unlock()
-				submitHandled = b.dispatchPageEvent(page, events.Event{Type: events.Submit, Target: form.ID})
+				submitHandled = b.dispatchPageEvent(page, events.Cancelable(events.Submit, form.ID))
 			}
 		}
 	}
@@ -539,7 +545,7 @@ func (b *Browser) SubmitForm(nodeID dom.NodeID) bool {
 		page.Submitter = 0
 	}
 	b.mu.Unlock()
-	return b.dispatchPageEvent(page, events.Event{Type: events.Submit, Target: form.ID})
+	return b.dispatchPageEvent(page, events.Cancelable(events.Submit, form.ID))
 }
 
 // ResetForm restores a form's controls to their HTML attribute defaults.
@@ -564,7 +570,14 @@ func (b *Browser) ResetForm(nodeID dom.NodeID) bool {
 		b.mu.Unlock()
 		return false
 	}
-	changed := forms.Reset(form)
+	b.mu.Unlock()
+	resetEvent := events.Cancelable(events.Reset, form.ID)
+	handled := b.dispatchPageEvent(page, resetEvent)
+	if resetEvent.DefaultPrevented() {
+		return handled
+	}
+	b.mu.Lock()
+	changed := b.page == page && forms.Reset(form)
 	if changed {
 		recomputePageStyles(page, b.currentTime())
 	}
@@ -572,7 +585,6 @@ func (b *Browser) ResetForm(nodeID dom.NodeID) bool {
 	if changed && onMutation != nil {
 		onMutation()
 	}
-	handled := b.dispatchPageEvent(page, events.Event{Type: events.Reset, Target: form.ID})
 	return changed || handled
 }
 
