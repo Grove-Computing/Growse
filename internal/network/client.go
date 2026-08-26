@@ -89,6 +89,7 @@ const (
 	RequestImage
 	RequestScript
 	RequestModule
+	RequestServiceWorker
 )
 
 // CredentialsMode controls whether Fetch sends and stores credentials.

@@ -14,6 +14,7 @@ import (
 	"github.com/Grove-Computing/Growse/internal/events"
 	layoutmodel "github.com/Grove-Computing/Growse/internal/layout"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
+	"github.com/Grove-Computing/Growse/internal/serviceworker"
 	"github.com/Grove-Computing/Growse/internal/style"
 )
 
@@ -59,6 +60,7 @@ type Page struct {
 	FramePolicy      runtimemodel.FramePolicy
 	window           runtimemodel.WindowContext
 	windows          *windowRegistry
+	serviceWorkers   *serviceworker.Manager
 }
 
 // Frame is one nested browsing context owned by a parent Page.

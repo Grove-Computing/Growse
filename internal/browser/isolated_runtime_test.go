@@ -203,6 +203,61 @@ func TestBrowserRoutesPostMessageAcrossIsolatedIframeWorkers(t *testing.T) {
 	}
 }
 
+func TestBrowserRegistersAndControlsServiceWorkerThroughIsolatedRuntime(t *testing.T) {
+	pageURL := mustParseURL(t, "https://app.example/app/page.html")
+	workerURL := mustParseURL(t, "https://app.example/app/sw.js")
+	loader := &requestRouteLoader{routeLoader: routeLoader{responses: map[string]*network.Response{
+		pageURL.String(): {
+			URL: pageURL, StatusCode: http.StatusOK, ContentType: "text/html",
+			Body: []byte(`<p id="result">waiting</p><script>
+				navigator.serviceWorker.register("/app/sw.js").then(function(registration) {
+					return navigator.serviceWorker.ready.then(function(ready) {
+						return Promise.all([
+							navigator.serviceWorker.getRegistration(),
+							navigator.serviceWorker.getRegistrations()
+						]).then(function(values) {
+							const before = [registration.active.state, ready.active.state, values[1].length,
+								navigator.serviceWorker.controller.state].join("|");
+							return registration.unregister().then(function(removed) {
+								document.getElementById("result").textContent = before + "|" + removed + "|" +
+									(navigator.serviceWorker.controller === null);
+							});
+						});
+					});
+			});
+			</script>`),
+		},
+		workerURL.String(): {
+			URL: workerURL, StatusCode: http.StatusOK, ContentType: "text/javascript",
+			Body: []byte(`
+				self.addEventListener("install", event => event.waitUntil(self.skipWaiting()));
+				self.addEventListener("activate", event => event.waitUntil(clients.claim()));`),
+		},
+	}}}
+	browserState := NewWithEngineFactory(loader, func(engine runtimemodel.Engine) runtimemodel.Runtime { return isolated.New(engine) })
+	t.Cleanup(func() { _ = browserState.Close() })
+	if _, err := browserState.SetEngine(context.Background(), runtimemodel.EngineJavaScript); err != nil {
+		t.Fatal(err)
+	}
+	page, err := browserState.Navigate(context.Background(), pageURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, _ := page.Document.GetElementByID("result")
+	if got := result.TextContent(); got != "activated|activated|1|activated|true|true" {
+		t.Fatalf("Service Worker lifecycle result = %q, runtimeError=%q", got, page.RuntimeError)
+	}
+	foundWorkerRequest := false
+	for _, request := range loader.requests {
+		if request.Kind == network.RequestServiceWorker && request.URL.String() == workerURL.String() && request.Credentials == network.CredentialsInclude {
+			foundWorkerRequest = true
+		}
+	}
+	if !foundWorkerRequest {
+		t.Fatalf("Service Worker request was not brokered: %#v", loader.requests)
+	}
+}
+
 func TestBrowserExecutesCORSAndIntegrityCheckedClassicJavaScript(t *testing.T) {
 	scriptBody := []byte(`document.getElementById("result").textContent = "cors integrity";`)
 	digest := sha512.Sum384(scriptBody)

@@ -250,7 +250,8 @@ func (state *frameLoadState) buildPage(ctx context.Context, response *network.Re
 		Animations: style.NewAnimationRegistry(), Transitions: style.NewTransitionRegistry(), BackgroundImages: backgroundImages,
 		BackgroundErrors: backgroundErrors, Engine: state.engine, Scripts: scripts, ImportMap: importMap, ScriptErrors: scriptErrors,
 		StyleRevision: 1, ReducedMotion: state.reducedMotion, ViewportWidth: defaultFrameWidth, ViewportHeight: defaultFrameHeight, DevTools: pageStore,
-		FramePolicy: policy,
+		FramePolicy:    policy,
+		serviceWorkers: state.rootPage.serviceWorkers,
 	}
 	for _, scriptError := range scriptErrors {
 		pageStore.AddConsole(devtools.ConsoleError, "script", scriptError)

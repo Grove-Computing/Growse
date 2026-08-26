@@ -224,6 +224,9 @@ func (state *workerState) load(ctx context.Context, payload json.RawMessage) (an
 			return state.peer.call(runtimeContext, "host.post-message", postMessageRequest{Target: target, TargetOrigin: targetOrigin, Payload: payload}, nil)
 		},
 	}
+	if request.ServiceWorker {
+		environment.ServiceWorker = state.serviceWorkerHost(runtimeContext)
+	}
 	if err := pageRuntime.Load(runtimeContext, scripts, environment); err != nil {
 		cancel()
 		_ = pageRuntime.Stop()
@@ -495,6 +498,45 @@ func (state *workerState) historyState(ctx context.Context, method, value string
 		request.URL = target.String()
 	}
 	return state.peer.call(ctx, method, request, nil)
+}
+
+func (state *workerState) serviceWorkerHost(ctx context.Context) *runtimemodel.ServiceWorkerHost {
+	return &runtimemodel.ServiceWorkerHost{
+		Register: func(scriptURL, scope string) (runtimemodel.ServiceWorkerRegistration, error) {
+			var response runtimemodel.ServiceWorkerRegistration
+			err := state.peer.call(ctx, "host.service-worker-register", serviceWorkerRegisterRequest{ScriptURL: scriptURL, Scope: scope}, &response)
+			return response, err
+		},
+		Update: func(scope string) (runtimemodel.ServiceWorkerRegistration, error) {
+			var response runtimemodel.ServiceWorkerRegistration
+			err := state.peer.call(ctx, "host.service-worker-update", serviceWorkerScopeRequest{Scope: scope}, &response)
+			return response, err
+		},
+		Unregister: func(scope string) (bool, error) {
+			var response boolResponse
+			err := state.peer.call(ctx, "host.service-worker-unregister", serviceWorkerScopeRequest{Scope: scope}, &response)
+			return response.Value, err
+		},
+		GetRegistration: func(clientURL string) (*runtimemodel.ServiceWorkerRegistration, error) {
+			var response serviceWorkerRegistrationResponse
+			if err := state.peer.call(ctx, "host.service-worker-get", serviceWorkerClientRequest{URL: clientURL}, &response); err != nil || !response.Found {
+				return nil, err
+			}
+			return &response.Registration, nil
+		},
+		GetRegistrations: func() ([]runtimemodel.ServiceWorkerRegistration, error) {
+			var response serviceWorkerRegistrationsResponse
+			err := state.peer.call(ctx, "host.service-worker-list", nil, &response)
+			return response.Registrations, err
+		},
+		Controller: func() *runtimemodel.ServiceWorkerRegistration {
+			var response serviceWorkerRegistrationResponse
+			if err := state.peer.call(ctx, "host.service-worker-controller", nil, &response); err != nil || !response.Found {
+				return nil
+			}
+			return &response.Registration
+		},
+	}
 }
 
 func storageArea(entries []storagecore.Entry) *storagecore.Area {

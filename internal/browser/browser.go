@@ -25,6 +25,7 @@ import (
 	htmlparser "github.com/Grove-Computing/Growse/internal/html"
 	"github.com/Grove-Computing/Growse/internal/network"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
+	"github.com/Grove-Computing/Growse/internal/serviceworker"
 	storagecore "github.com/Grove-Computing/Growse/internal/storage"
 	"github.com/Grove-Computing/Growse/internal/style"
 	fetchapi "github.com/Grove-Computing/Growse/internal/webapi/fetch"
@@ -88,6 +89,7 @@ type Browser struct {
 	storageSourceID  uint64
 	fetchLimiter     *fetchapi.Limiter
 	devToolsSession  *devtools.SessionStore
+	serviceWorkers   *serviceworker.Manager
 }
 
 var nextStorageSourceID atomic.Uint64
@@ -117,6 +119,7 @@ func NewWithRuntimeFactoryAndStorage(client ResourceLoader, factory runtimemodel
 		client: client, runtimeFactory: factory, engineFactory: runtimemodel.ForGo(factory), engine: runtimemodel.EngineGo,
 		history: newHistory(), clock: animationmodel.SystemClock{}, storage: manager, active: true,
 		storageSourceID: nextStorageSourceID.Add(1), devToolsSession: devtools.NewSessionStore(),
+		serviceWorkers: serviceworker.NewManager(),
 	}
 }
 
@@ -134,6 +137,7 @@ func NewWithEngineFactoryAndStorage(client ResourceLoader, factory runtimemodel.
 		client: client, engineFactory: factory, engine: runtimemodel.EngineGo,
 		history: newHistory(), clock: animationmodel.SystemClock{}, storage: manager, active: true,
 		storageSourceID: nextStorageSourceID.Add(1), devToolsSession: devtools.NewSessionStore(),
+		serviceWorkers: serviceworker.NewManager(),
 	}
 }
 
@@ -1304,6 +1308,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 		ImportMap:        importMap,
 		ScriptErrors:     scriptErrors,
 		DevTools:         pageStore,
+		serviceWorkers:   b.serviceWorkers,
 	}
 	for _, scriptError := range scriptErrors {
 		page.DevTools.AddConsole(devtools.ConsoleError, "script", scriptError)
@@ -1705,8 +1710,9 @@ func startRuntime(ctx context.Context, factory runtimemodel.EngineFactory, engin
 		FrameMutation: func(frameID, generation uint64, snapshot dom.DocumentSnapshot) error {
 			return applyFrameMutation(page, frameID, generation, snapshot, onMutation, runtimeNow())
 		},
-		FramePolicy: page.FramePolicy,
-		Window:      page.window,
+		FramePolicy:   page.FramePolicy,
+		Window:        page.window,
+		ServiceWorker: serviceWorkerHost(ctx, page, client),
 	}
 	if page.windows != nil {
 		environment.PostMessage = func(target runtimemodel.WindowReference, targetOrigin string, payload []byte) error {

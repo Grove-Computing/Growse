@@ -109,6 +109,7 @@ type Environment struct {
 	FramePolicy     FramePolicy
 	Window          WindowContext
 	PostMessage     func(target WindowReference, targetOrigin string, payload []byte) error
+	ServiceWorker   *ServiceWorkerHost
 }
 
 // FramePolicy contains the capabilities granted by an iframe sandbox.
@@ -174,6 +175,41 @@ type MessageEvent struct {
 	Data   []byte
 	Origin string
 	Source WindowReference
+}
+
+// ServiceWorkerState is the lifecycle state exposed to JavaScript pages.
+type ServiceWorkerState string
+
+const (
+	ServiceWorkerInstalling ServiceWorkerState = "installing"
+	ServiceWorkerInstalled  ServiceWorkerState = "installed"
+	ServiceWorkerActivating ServiceWorkerState = "activating"
+	ServiceWorkerActivated  ServiceWorkerState = "activated"
+	ServiceWorkerRedundant  ServiceWorkerState = "redundant"
+)
+
+// ServiceWorkerRegistration is a serializable view of one scope registration.
+type ServiceWorkerRegistration struct {
+	ID                  uint64
+	Scope               string
+	ScriptURL           string
+	InstallingScriptURL string
+	WaitingScriptURL    string
+	ActiveScriptURL     string
+	Installing          ServiceWorkerState
+	Waiting             ServiceWorkerState
+	Active              ServiceWorkerState
+	Claimed             bool
+}
+
+// ServiceWorkerHost keeps registration policy and network I/O in the Browser.
+type ServiceWorkerHost struct {
+	Register         func(scriptURL, scope string) (ServiceWorkerRegistration, error)
+	Update           func(scope string) (ServiceWorkerRegistration, error)
+	Unregister       func(scope string) (bool, error)
+	GetRegistration  func(clientURL string) (*ServiceWorkerRegistration, error)
+	GetRegistrations func() ([]ServiceWorkerRegistration, error)
+	Controller       func() *ServiceWorkerRegistration
 }
 
 // Runtime は1ページに属するGoスクリプトを実行する。
