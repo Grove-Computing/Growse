@@ -47,6 +47,7 @@ type LayoutBox struct {
 
 // InspectorSnapshot is a bounded point-in-time view of the active document.
 type InspectorSnapshot struct {
+	Revision     uint64
 	Nodes        []DOMNode
 	Selected     dom.NodeID
 	SelectedNode *DOMNode
@@ -57,8 +58,21 @@ type InspectorSnapshot struct {
 
 // SnapshotInspector creates a bounded snapshot without retaining browser-owned objects.
 func SnapshotInspector(document *dom.Document, styles stylemodel.Map, tree *layoutmodel.Tree, selected dom.NodeID) InspectorSnapshot {
+	revision := uint64(0)
+	if tree != nil {
+		revision = tree.Revision
+	}
+	return SnapshotInspectorAtRevision(document, styles, tree, selected, revision)
+}
+
+// SnapshotInspectorAtRevision creates a bounded snapshot for one render revision.
+// A layout tree from another revision is intentionally ignored.
+func SnapshotInspectorAtRevision(document *dom.Document, styles stylemodel.Map, tree *layoutmodel.Tree, selected dom.NodeID, revision uint64) InspectorSnapshot {
 	if document == nil || document.Root == nil {
-		return InspectorSnapshot{}
+		return InspectorSnapshot{Revision: revision}
+	}
+	if tree != nil && tree.Revision != revision {
+		tree = nil
 	}
 	type pendingNode struct {
 		node     *dom.Node
@@ -66,7 +80,7 @@ func SnapshotInspector(document *dom.Document, styles stylemodel.Map, tree *layo
 		depth    int
 	}
 	pending := []pendingNode{{node: document.Root}}
-	snapshot := InspectorSnapshot{Nodes: make([]DOMNode, 0, min(document.NodeCount(), MaxDOMNodes))}
+	snapshot := InspectorSnapshot{Revision: revision, Nodes: make([]DOMNode, 0, min(document.NodeCount(), MaxDOMNodes))}
 	for len(pending) > 0 && len(snapshot.Nodes) < MaxDOMNodes {
 		index := len(pending) - 1
 		item := pending[index]

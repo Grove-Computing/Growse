@@ -1,0 +1,72 @@
+package html
+
+import (
+	"bytes"
+	"fmt"
+	"sort"
+	"strings"
+
+	"github.com/Grove-Computing/Growse/internal/dom"
+	xhtml "golang.org/x/net/html"
+	"golang.org/x/net/html/atom"
+)
+
+// ParseFragment parses an HTML fragment in the supplied element context.
+func ParseFragment(source, contextTag string) (*dom.Document, error) {
+	contextTag = strings.ToLower(strings.TrimSpace(contextTag))
+	context := &xhtml.Node{Type: xhtml.ElementNode, Data: contextTag, DataAtom: atom.Lookup([]byte(contextTag))}
+	nodes, err := xhtml.ParseFragment(strings.NewReader(source), context)
+	if err != nil {
+		return nil, fmt.Errorf("parse HTML fragment: %w", err)
+	}
+	document := dom.NewDocument()
+	for _, node := range nodes {
+		if err := convertNode(document, document.Root, node); err != nil {
+			return nil, err
+		}
+	}
+	return document, nil
+}
+
+// SerializeChildren renders an element's child nodes as an HTML fragment.
+func SerializeChildren(parent *dom.Node) (string, error) {
+	if parent == nil {
+		return "", nil
+	}
+	var output bytes.Buffer
+	for _, child := range parent.Children {
+		if err := xhtml.Render(&output, renderNode(child)); err != nil {
+			return "", fmt.Errorf("serialize HTML fragment: %w", err)
+		}
+	}
+	return output.String(), nil
+}
+
+func renderNode(source *dom.Node) *xhtml.Node {
+	if source == nil {
+		return nil
+	}
+	target := &xhtml.Node{}
+	switch source.Type {
+	case dom.NodeText:
+		target.Type, target.Data = xhtml.TextNode, source.Text
+	case dom.NodeElement:
+		target.Type, target.Data, target.DataAtom = xhtml.ElementNode, source.TagName, atom.Lookup([]byte(source.TagName))
+		names := make([]string, 0, len(source.Attributes))
+		for name := range source.Attributes {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			target.Attr = append(target.Attr, xhtml.Attribute{Key: name, Val: source.Attributes[name]})
+		}
+	default:
+		target.Type = xhtml.DocumentNode
+	}
+	for _, child := range source.Children {
+		if converted := renderNode(child); converted != nil {
+			target.AppendChild(converted)
+		}
+	}
+	return target
+}

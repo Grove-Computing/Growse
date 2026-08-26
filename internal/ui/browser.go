@@ -1347,7 +1347,7 @@ func (ui *BrowserUI) layoutDevToolsInspector(gtx layout.Context, state devToolsT
 	}
 	page := navigator.Page()
 	var tree *layoutengine.Tree
-	if ui.layoutCache.page == page {
+	if ui.layoutCache.page == page && ui.layoutCache.revision == page.StyleRevision {
 		tree = ui.layoutCache.tree
 	}
 	var snapshot devtoolsmodel.InspectorSnapshot
@@ -1355,7 +1355,7 @@ func (ui *BrowserUI) layoutDevToolsInspector(gtx layout.Context, state devToolsT
 		if current != page {
 			return false
 		}
-		snapshot = devtoolsmodel.SnapshotInspector(current.Document, current.ComputedStyles, tree, state.NodeID)
+		snapshot = devtoolsmodel.SnapshotInspectorAtRevision(current.Document, current.ComputedStyles, tree, state.NodeID, current.StyleRevision)
 		return true
 	}
 	if inspector, ok := navigator.(pageInspector); ok {
@@ -1433,7 +1433,11 @@ func (ui *BrowserUI) layoutInspectorDetails(gtx layout.Context, snapshot devtool
 	if snapshot.SelectedNode == nil {
 		return ui.layoutDevToolsPlaceholder(gtx, "Select a DOM node to inspect attributes, styles, and layout")
 	}
-	lines := []string{fmt.Sprintf("%s  node=%d", snapshot.SelectedNode.Name, snapshot.SelectedNode.ID), "", "Attributes"}
+	lines := []string{
+		fmt.Sprintf("Revision %d", snapshot.Revision),
+		fmt.Sprintf("%s  node=%d", snapshot.SelectedNode.Name, snapshot.SelectedNode.ID),
+		"", "Attributes",
+	}
 	if len(snapshot.SelectedNode.Attributes) == 0 {
 		lines = append(lines, "  (none)")
 	}
@@ -1761,6 +1765,7 @@ func (ui *BrowserUI) cachedDocumentTree(page *browser.Page, viewportWidth, viewp
 		build = layoutengine.BuildWithScroll
 	}
 	tree := build(page.Document, page.ComputedStyles, viewportWidth, viewportHeight, 0, 0)
+	tree.Revision = page.StyleRevision
 	page.SyncFrameViewports(tree)
 	displayList := paintmodel.Build(tree)
 	if position.First >= 0 && position.First < len(displayList.Commands) {
@@ -1768,6 +1773,7 @@ func (ui *BrowserUI) cachedDocumentTree(page *browser.Page, viewportWidth, viewp
 			scrollY := max(firstY+float32(position.Offset)/pxPerDp, float32(0))
 			if scrollY > 0 {
 				tree = build(page.Document, page.ComputedStyles, viewportWidth, viewportHeight, 0, scrollY)
+				tree.Revision = page.StyleRevision
 				page.SyncFrameViewports(tree)
 			}
 		}
@@ -1795,14 +1801,14 @@ func (ui *BrowserUI) updateViewportHover(gtx layout.Context, page *browser.Page,
 		ui.updateLinkPreview(page, 0)
 		return
 	}
-	nodeID, ok := layoutengine.HitTest(tree, x, y)
-	if !ok {
+	hit, ok := layoutengine.HitTestWithRevision(tree, x, y)
+	if !ok || hit.Revision != page.StyleRevision || displayList.Revision != page.StyleRevision {
 		ui.navigator.ClearHover()
 		ui.updateLinkPreview(page, 0)
 		return
 	}
-	ui.navigator.UpdateHover(nodeID, x, y)
-	ui.updateLinkPreview(page, nodeID)
+	ui.navigator.UpdateHover(hit.NodeID, x, y)
+	ui.updateLinkPreview(page, hit.NodeID)
 }
 
 func viewportPointerPosition(gtx layout.Context, position f32.Point, insideWindow bool) (image.Point, bool) {
@@ -1838,10 +1844,11 @@ func (ui *BrowserUI) handleViewportClicks(gtx layout.Context, page *browser.Page
 		if !ok {
 			continue
 		}
-		nodeID, ok := layoutengine.HitTest(tree, x, y)
-		if !ok {
+		hit, ok := layoutengine.HitTestWithRevision(tree, x, y)
+		if !ok || hit.Revision != page.StyleRevision || displayList.Revision != page.StyleRevision {
 			continue
 		}
+		nodeID := hit.NodeID
 		if _, handledByButton := ui.formButtons[nodeID]; handledByButton {
 			continue
 		}

@@ -268,13 +268,25 @@ func (b *Browser) SetEngine(ctx context.Context, engine runtimemodel.Engine) (*P
 		page.RuntimeStarted = false
 	}
 	b.mu.Unlock()
+	var teardownErr error
 	if activeRuntime != nil {
 		if err := activeRuntime.Stop(); err != nil {
-			return nil, err
+			teardownErr = errors.Join(teardownErr, fmt.Errorf("stop top-level runtime: %w", err))
 		}
 	}
 	if err := closePageFrames(page); err != nil {
-		return nil, err
+		teardownErr = errors.Join(teardownErr, fmt.Errorf("stop frame runtimes: %w", err))
+	}
+	if page != nil {
+		if page.Animations != nil {
+			page.Animations.Clear()
+		}
+		if page.Transitions != nil {
+			page.Transitions.Clear()
+		}
+	}
+	if teardownErr != nil {
+		return nil, teardownErr
 	}
 	if page == nil {
 		return nil, nil
@@ -364,15 +376,19 @@ func (b *Browser) dispatchPageEvent(page *Page, event events.Event) bool {
 	activeRuntime := b.activeRuntime
 	active := b.page == page
 	b.mu.RUnlock()
+	dispatch := func() bool {
+		if page.Document != nil {
+			return page.Events.DispatchTree(page.Document, event)
+		}
+		return page.Events.Dispatch(event)
+	}
 	if runtime, ok := activeRuntime.(isolatedDOMEventRuntime); ok && active {
 		return runtime.DispatchDOMEvent(event)
 	}
 	if runtime, ok := activeRuntime.(pageEventRuntime); ok && active {
-		return runtime.DispatchPageEvent(func() bool {
-			return page.Events.Dispatch(event)
-		})
+		return runtime.DispatchPageEvent(dispatch)
 	}
-	return page.Events.Dispatch(event)
+	return dispatch()
 }
 
 // DispatchClick はアクティブページの対象ノードへクリックを配信する。
@@ -388,9 +404,11 @@ func (b *Browser) DispatchClick(nodeID dom.NodeID, x, y float32) bool {
 			return false
 		}
 	}
-	clickHandled := b.dispatchPageEvent(page, events.Event{Type: events.Click, Target: nodeID, X: x, Y: y})
+	clickEvent := events.Cancelable(events.Click, nodeID)
+	clickEvent.X, clickEvent.Y = x, y
+	clickHandled := b.dispatchPageEvent(page, clickEvent)
 	labelHandled := false
-	if page.Document != nil {
+	if !clickEvent.DefaultPrevented() && page.Document != nil {
 		if node, ok := page.Document.NodeByID(nodeID); ok {
 			if control := forms.LabeledControl(page.Document, node); control != nil && !forms.Disabled(control) {
 				b.UpdateFocus(control.ID)
@@ -401,7 +419,7 @@ func (b *Browser) DispatchClick(nodeID dom.NodeID, x, y float32) bool {
 		}
 	}
 	submitHandled := false
-	if page.Document != nil {
+	if !clickEvent.DefaultPrevented() && page.Document != nil {
 		if node, ok := page.Document.NodeByID(nodeID); ok && isSubmitButton(node) {
 			if form := forms.FormOwner(page.Document, node); form != nil {
 				b.mu.Lock()
@@ -409,7 +427,7 @@ func (b *Browser) DispatchClick(nodeID dom.NodeID, x, y float32) bool {
 					page.Submitter = node.ID
 				}
 				b.mu.Unlock()
-				submitHandled = b.dispatchPageEvent(page, events.Event{Type: events.Submit, Target: form.ID})
+				submitHandled = b.dispatchPageEvent(page, events.Cancelable(events.Submit, form.ID))
 			}
 		}
 	}
@@ -539,7 +557,7 @@ func (b *Browser) SubmitForm(nodeID dom.NodeID) bool {
 		page.Submitter = 0
 	}
 	b.mu.Unlock()
-	return b.dispatchPageEvent(page, events.Event{Type: events.Submit, Target: form.ID})
+	return b.dispatchPageEvent(page, events.Cancelable(events.Submit, form.ID))
 }
 
 // ResetForm restores a form's controls to their HTML attribute defaults.
@@ -564,7 +582,14 @@ func (b *Browser) ResetForm(nodeID dom.NodeID) bool {
 		b.mu.Unlock()
 		return false
 	}
-	changed := forms.Reset(form)
+	b.mu.Unlock()
+	resetEvent := events.Cancelable(events.Reset, form.ID)
+	handled := b.dispatchPageEvent(page, resetEvent)
+	if resetEvent.DefaultPrevented() {
+		return handled
+	}
+	b.mu.Lock()
+	changed := b.page == page && forms.Reset(form)
 	if changed {
 		recomputePageStyles(page, b.currentTime())
 	}
@@ -572,7 +597,6 @@ func (b *Browser) ResetForm(nodeID dom.NodeID) bool {
 	if changed && onMutation != nil {
 		onMutation()
 	}
-	handled := b.dispatchPageEvent(page, events.Event{Type: events.Reset, Target: form.ID})
 	return changed || handled
 }
 
@@ -863,7 +887,7 @@ func (b *Browser) SubmitGET(ctx context.Context, formID, submitterID dom.NodeID)
 		return nil, errors.New("form is not a GET submission")
 	}
 	entries := forms.CollectEntries(page.Document, form, submitter)
-	baseURL := cloneURL(page.URL)
+	baseURL := cloneURL(pageBaseURL(page))
 	b.mu.RUnlock()
 
 	target, err := resolveFormAction(baseURL, config.Action)
@@ -906,7 +930,7 @@ func (b *Browser) SubmitPOST(ctx context.Context, formID, submitterID dom.NodeID
 		return nil, errors.New("unsupported POST form configuration")
 	}
 	entries := forms.CollectEntries(page.Document, form, submitter)
-	target, err := resolveFormAction(page.URL, config.Action)
+	target, err := resolveFormAction(pageBaseURL(page), config.Action)
 	if err != nil {
 		b.mu.Unlock()
 		return nil, err
@@ -1284,6 +1308,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	if err != nil {
 		return nil, fmt.Errorf("build DOM for %s: %w", network.RedactedURL(pageURL), err)
 	}
+	baseURL := documentBaseURL(document, response.URL)
 	styleResources := resourceClient
 	imageResources := resourceClient
 	scriptResources := resourceClient
@@ -1293,7 +1318,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 		imageResources = pageResourceLoader{loader: loader, siteURL: response.URL, kind: network.RequestImage, observer: pageStore.ObserveNetwork}
 		scriptResources = pageResourceLoader{loader: loader, siteURL: response.URL, kind: network.RequestScript, engine: string(engine), observer: pageStore.ObserveNetwork}
 	}
-	stylesheet, err := b.loadStyles(ctx, styleResources, response.URL, document)
+	stylesheet, err := b.loadStylesWithBase(ctx, styleResources, response.URL, baseURL, document)
 	if err != nil {
 		return nil, fmt.Errorf("load styles for %s: %w", network.RedactedURL(pageURL), err)
 	}
@@ -1302,16 +1327,17 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 		ColorScheme: "light", Hover: true, Pointer: "fine", ReducedMotion: reducedMotion,
 	})
 	backgroundImages, backgroundErrors := loadBackgroundImages(ctx, imageResources, computedStyles)
-	scripts, scriptErrors := loadScriptsForEngine(ctx, scriptResources, response.URL, document, engine)
+	scripts, scriptErrors := loadScriptsForEngineWithBase(ctx, scriptResources, response.URL, baseURL, document, engine)
 	var importMap map[string]string
 	if engine == runtimemodel.EngineJavaScript {
 		var importMapErrors []string
-		importMap, importMapErrors = loadImportMap(document, response.URL)
+		importMap, importMapErrors = loadImportMap(document, baseURL)
 		scriptErrors = append(scriptErrors, importMapErrors...)
 	}
 
 	page := &Page{
 		URL:              cloneURL(response.URL),
+		BaseURL:          cloneURL(baseURL),
 		StatusCode:       response.StatusCode,
 		ContentType:      response.ContentType,
 		Source:           append([]byte(nil), response.Body...),
@@ -1684,6 +1710,7 @@ func startRuntime(ctx context.Context, factory runtimemodel.EngineFactory, engin
 		Document:        page.Document,
 		Events:          page.Events,
 		BaseURL:         cloneURL(page.URL),
+		ResourceBaseURL: cloneURL(pageBaseURL(page)),
 		ImportMap:       cloneStringMap(page.ImportMap),
 		FetchLimiter:    fetchLimiter,
 		Navigate:        navigate,

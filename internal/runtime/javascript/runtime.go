@@ -12,6 +12,7 @@ import (
 	"time"
 
 	dommodel "github.com/Grove-Computing/Growse/internal/dom"
+	"github.com/Grove-Computing/Growse/internal/events"
 	"github.com/Grove-Computing/Growse/internal/network"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 	domapi "github.com/Grove-Computing/Growse/internal/webapi/dom"
@@ -88,6 +89,8 @@ type listenerRecord struct {
 	elementID uint64
 	eventType string
 	function  goja.Value
+	capture   bool
+	token     events.ListenerID
 }
 
 // New returns an unloaded page-scoped JavaScript Runtime.
@@ -132,10 +135,14 @@ func (runtime *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script,
 	runtime.scripts = cloneScripts(scripts)
 	runtime.environment = environment
 	runtime.domAPI = domapi.New(environment.Document, environment.Events, environment.OnMutation)
+	resourceBaseURL := environment.ResourceBaseURL
+	if resourceBaseURL == nil {
+		resourceBaseURL = environment.BaseURL
+	}
 	if runtime.fetchClock != nil {
-		runtime.fetchAPI = fetchapi.NewPageWithClock(runtimeContext, environment.BaseURL, environment.Fetch, runtime.enqueueCallback, runtime.fetchClock)
+		runtime.fetchAPI = fetchapi.NewPageWithClock(runtimeContext, resourceBaseURL, environment.Fetch, runtime.enqueueCallback, runtime.fetchClock)
 	} else {
-		runtime.fetchAPI = fetchapi.NewPage(runtimeContext, environment.BaseURL, environment.Fetch, runtime.enqueueCallback)
+		runtime.fetchAPI = fetchapi.NewPage(runtimeContext, resourceBaseURL, environment.Fetch, runtime.enqueueCallback)
 	}
 	runtime.fetchAPI.SetLimiter(environment.FetchLimiter)
 	runtime.navigationAPI = navigationapi.NewPage(environment.BaseURL, environment.Navigate)
@@ -302,16 +309,7 @@ func (runtime *Runtime) Stop() error {
 	}
 	runtime.mu.Lock()
 	dispatcher := runtime.environment.Events
-	listenerIDs := make([]dommodel.NodeID, 0, len(runtime.listeners))
-	seenListenerIDs := make(map[dommodel.NodeID]struct{}, len(runtime.listeners))
-	for _, listener := range runtime.listeners {
-		id := dommodel.NodeID(listener.elementID)
-		if _, seen := seenListenerIDs[id]; seen {
-			continue
-		}
-		seenListenerIDs[id] = struct{}{}
-		listenerIDs = append(listenerIDs, id)
-	}
+	listeners := append([]listenerRecord(nil), runtime.listeners...)
 	runtime.vm = nil
 	runtime.runtimeCtx = nil
 	runtime.queue = nil
@@ -341,8 +339,10 @@ func (runtime *Runtime) Stop() error {
 	runtime.listenerCount = 0
 	runtime.loaded = false
 	runtime.mu.Unlock()
-	if dispatcher != nil && len(listenerIDs) != 0 {
-		dispatcher.RemoveEventListeners(listenerIDs...)
+	if dispatcher != nil {
+		for _, listener := range listeners {
+			dispatcher.RemoveEventListener(dommodel.NodeID(listener.elementID), events.Type(listener.eventType), listener.token)
+		}
 	}
 	return nil
 }

@@ -29,6 +29,7 @@ type Page struct {
 	ScrollOffset     int
 	ScrollRevision   uint64
 	URL              *url.URL
+	BaseURL          *url.URL
 	StatusCode       int
 	ContentType      string
 	Source           []byte
@@ -123,7 +124,7 @@ func (p *Page) ActiveAnimations(current time.Time) bool {
 // NewPage creates a page for pageURL. A nil URL is allowed for documents such
 // as an in-memory error page that do not have a network location.
 func NewPage(pageURL *url.URL) *Page {
-	return &Page{URL: cloneURL(pageURL), DevTools: devtools.NewPageStore()}
+	return &Page{URL: cloneURL(pageURL), BaseURL: cloneURL(pageURL), DevTools: devtools.NewPageStore()}
 }
 
 func (p *Page) ensureDevTools() *devtools.PageStore {
@@ -178,7 +179,7 @@ func (p *Page) SyncFrameViewports(tree *layoutmodel.Tree) {
 	}
 }
 
-// LinkURL resolves the nearest anchor at nodeID against the page URL.
+// LinkURL resolves the nearest anchor at nodeID against the document base URL.
 func (p *Page) LinkURL(nodeID dom.NodeID) (*url.URL, bool) {
 	linkURL, _, ok := p.LinkDestination(nodeID)
 	return linkURL, ok
@@ -186,7 +187,8 @@ func (p *Page) LinkURL(nodeID dom.NodeID) (*url.URL, bool) {
 
 // LinkDestination resolves the nearest anchor URL and normalized target.
 func (p *Page) LinkDestination(nodeID dom.NodeID) (*url.URL, string, bool) {
-	if p == nil || p.URL == nil || p.Document == nil {
+	baseURL := pageBaseURL(p)
+	if baseURL == nil || p.Document == nil {
 		return nil, "", false
 	}
 	node, ok := p.Document.NodeByID(nodeID)
@@ -206,7 +208,7 @@ func (p *Page) LinkDestination(nodeID dom.NodeID) (*url.URL, string, bool) {
 		if err != nil {
 			return nil, "", false
 		}
-		resolved := p.URL.ResolveReference(reference)
+		resolved := baseURL.ResolveReference(reference)
 		if resolved.Scheme != "http" && resolved.Scheme != "https" {
 			return nil, "", false
 		}

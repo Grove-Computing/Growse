@@ -10,9 +10,40 @@ import (
 	"github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/events"
 	htmlparser "github.com/Grove-Computing/Growse/internal/html"
+	"github.com/Grove-Computing/Growse/internal/network"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 	storagecore "github.com/Grove-Computing/Growse/internal/storage"
 )
+
+func TestIsolatedJavaScriptFetchUsesDocumentResourceBaseURL(t *testing.T) {
+	documentURL := mustURL(t, "https://example.test/root/page.html")
+	resourceBaseURL := mustURL(t, "https://example.test/assets/")
+	requests := make(chan *network.Request, 1)
+	runtime := New(runtimemodel.EngineJavaScript)
+	t.Cleanup(func() { _ = runtime.Stop() })
+	environment := runtimemodel.Environment{
+		Document: dom.NewDocument(), Events: events.NewDispatcher(), BaseURL: documentURL, ResourceBaseURL: resourceBaseURL,
+		Fetch: func(_ context.Context, request *network.Request) (*network.Response, error) {
+			requests <- request
+			return &network.Response{URL: request.URL, StatusCode: 200, Body: []byte("ok")}, nil
+		},
+	}
+	script := runtimemodel.Script{Engine: runtimemodel.EngineJavaScript, SourceURL: documentURL, Source: `fetch("data.json")`, Inline: true}
+	if err := runtime.Load(context.Background(), []runtimemodel.Script{script}, environment); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case request := <-requests:
+		if got, want := request.URL.String(), "https://example.test/assets/data.json"; got != want {
+			t.Fatalf("isolated Fetch URL = %q, want %q", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("isolated Fetch did not reach the Browser broker")
+	}
+}
 
 func TestIsolatedJavaScriptPreservesDOMEventStorageAndConsoleBehavior(t *testing.T) {
 	document, err := htmlparser.Parse(strings.NewReader(`<button id="target">idle</button>`))
@@ -64,6 +95,51 @@ func TestIsolatedJavaScriptPreservesDOMEventStorageAndConsoleBehavior(t *testing
 	}
 	if len(mutations) < 2 {
 		t.Fatalf("worker mutation notifications = %d, want at least 2", len(mutations))
+	}
+}
+
+func TestIsolatedJavaScriptAppliesDOMCollectionsAndInnerHTMLSnapshot(t *testing.T) {
+	document, err := htmlparser.Parse(strings.NewReader(`<main id="app"><p class="card">old</p></main>`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := New(runtimemodel.EngineJavaScript)
+	t.Cleanup(func() { _ = runtime.Stop() })
+	records := make(chan string, 8)
+	environment := runtimemodel.Environment{
+		Document: document, Events: events.NewDispatcher(), BaseURL: mustURL(t, "https://example.test/page"),
+		ConsoleRecord: func(_, message string) { records <- message },
+	}
+	source := `
+		var app = document.getElementById("app");
+		var heading = document.createElement("h1");
+		heading.id = "heading";
+		heading.append(document.createTextNode("created"));
+		app.replaceChildren(heading);
+		app.innerHTML = '<section id="result" class="ready"><strong>isolated</strong></section>';
+		if (document.querySelectorAll(".ready").length !== 1) throw new Error("collection mismatch");`
+	if err := runtime.Load(context.Background(), []runtimemodel.Script{{Engine: runtimemodel.EngineJavaScript, SourceURL: environment.BaseURL, Source: source, Inline: true}}, environment); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if result, ok := document.GetElementByID("result"); ok && result.TextContent() == "isolated" {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	result, _ := document.GetElementByID("result")
+	var messages []string
+	for {
+		select {
+		case message := <-records:
+			messages = append(messages, message)
+		default:
+			t.Fatalf("isolated innerHTML snapshot = %#v console=%v", result, messages)
+		}
 	}
 }
 
@@ -152,7 +228,6 @@ func TestIsolatedRuntimeTimesOutBusyScriptAndReportsFailure(t *testing.T) {
 	document, _ := htmlparser.Parse(strings.NewReader(`<p>safe</p>`))
 	failures := make(chan error, 1)
 	runtime := New(runtimemodel.EngineJavaScript)
-	runtime.taskTimeout = 50 * time.Millisecond
 	t.Cleanup(func() { _ = runtime.Stop() })
 	environment := runtimemodel.Environment{
 		Document: document, Events: events.NewDispatcher(), BaseURL: mustURL(t, "https://example.test/"),
@@ -161,6 +236,7 @@ func TestIsolatedRuntimeTimesOutBusyScriptAndReportsFailure(t *testing.T) {
 	if err := runtime.Load(context.Background(), []runtimemodel.Script{{Engine: runtimemodel.EngineJavaScript, SourceURL: environment.BaseURL, Source: `for (;;) {}`}}, environment); err != nil {
 		t.Fatal(err)
 	}
+	runtime.taskTimeout = 50 * time.Millisecond
 	started := time.Now()
 	err := runtime.Start(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "exceeded") || time.Since(started) > time.Second {

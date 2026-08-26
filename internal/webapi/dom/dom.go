@@ -7,6 +7,14 @@ import (
 	dommodel "github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/events"
 	"github.com/Grove-Computing/Growse/internal/forms"
+	htmlparser "github.com/Grove-Computing/Growse/internal/html"
+)
+
+const (
+	maxDOMCollectionResults = 4_096
+	maxDOMInnerHTMLBytes    = 256 << 10
+	maxDOMOwnedNodes        = 100_000
+	maxDOMTextBytes         = 1 << 20
 )
 
 // API は1ページのDocumentへアクセスする。
@@ -26,12 +34,19 @@ type Element struct {
 
 // Event はWebGoへ公開するDOMイベント情報である。
 type Event struct {
-	Type           string
-	TargetID       string
-	Value          string
-	X              float32
-	Y              float32
-	preventDefault func()
+	Type             string
+	TargetID         string
+	TargetNodeID     dommodel.NodeID
+	CurrentTargetID  dommodel.NodeID
+	Value            string
+	X                float32
+	Y                float32
+	Bubbles          bool
+	Cancelable       bool
+	DefaultPrevented func() bool
+	Phase            events.Phase
+	preventDefault   func()
+	stopPropagation  func()
 }
 
 // ID はElementが参照するPage内Node IDを返す。
@@ -46,6 +61,13 @@ func (element *Element) ID() dommodel.NodeID {
 func (event Event) PreventDefault() {
 	if event.preventDefault != nil {
 		event.preventDefault()
+	}
+}
+
+// StopPropagation prevents this event from reaching later nodes on its path.
+func (event Event) StopPropagation() {
+	if event.stopPropagation != nil {
+		event.stopPropagation()
 	}
 }
 
@@ -78,13 +100,37 @@ func (api *API) QuerySelector(selector string) *Element {
 	return api.element(node)
 }
 
-// ElementByNodeID returns a connected element by its document-scoped identity.
+// QuerySelectorAll returns a bounded static collection for a supported selector.
+func (api *API) QuerySelectorAll(selector string) []*Element {
+	if api == nil || api.document == nil {
+		return nil
+	}
+	return api.elements(api.document.QuerySelectorAll(selector))
+}
+
+// GetElementsByClassName returns a bounded static collection for class tokens.
+func (api *API) GetElementsByClassName(classNames string) []*Element {
+	if api == nil || api.document == nil {
+		return nil
+	}
+	return api.elements(api.document.GetElementsByClassName(classNames))
+}
+
+// GetElementsByTagName returns a bounded static collection for a tag name.
+func (api *API) GetElementsByTagName(tagName string) []*Element {
+	if api == nil || api.document == nil {
+		return nil
+	}
+	return api.elements(api.document.GetElementsByTagName(tagName))
+}
+
+// ElementByNodeID returns a connected node handle by its document-scoped identity.
 func (api *API) ElementByNodeID(id dommodel.NodeID) *Element {
 	if api == nil || api.document == nil || id == 0 {
 		return nil
 	}
 	node, ok := api.document.NodeByID(id)
-	if !ok || node.Type != dommodel.NodeElement || !api.document.IsConnected(node) {
+	if !ok || !api.document.IsConnected(node) {
 		return nil
 	}
 	return api.element(node)
@@ -92,7 +138,7 @@ func (api *API) ElementByNodeID(id dommodel.NodeID) *Element {
 
 // CreateElement はDocumentが所有する未接続の要素を作成する。
 func (api *API) CreateElement(tagName string) *Element {
-	if api == nil || api.document == nil {
+	if api == nil || api.document == nil || api.document.OwnedNodeCount() >= maxDOMOwnedNodes {
 		return nil
 	}
 	tagName = strings.TrimSpace(tagName)
@@ -100,6 +146,14 @@ func (api *API) CreateElement(tagName string) *Element {
 		return nil
 	}
 	return api.element(api.document.CreateElement(tagName, nil))
+}
+
+// CreateTextNode creates a bounded detached text node owned by the Document.
+func (api *API) CreateTextNode(value string) *Element {
+	if api == nil || api.document == nil || len(value) > maxDOMTextBytes || api.document.OwnedNodeCount() >= maxDOMOwnedNodes {
+		return nil
+	}
+	return api.element(api.document.CreateText(value))
 }
 
 // OnClick は要素のクリックイベントへハンドラーを登録する。
@@ -204,56 +258,89 @@ func (element *Element) OnMouseLeave(handler func(Event)) {
 
 // AddEventListener はJavaScript hostを含むRuntime adapter向けに対応Eventを登録する。
 func (element *Element) AddEventListener(eventType string, handler func(Event)) bool {
+	return element.AddEventListenerWithCapture(eventType, false, handler) != 0
+}
+
+// AddEventListenerWithCapture registers a removable listener with propagation options.
+func (element *Element) AddEventListenerWithCapture(eventType string, capture bool, handler func(Event)) events.ListenerID {
 	if handler == nil {
-		return false
+		return 0
 	}
-	var internal events.Type
-	switch strings.ToLower(strings.TrimSpace(eventType)) {
-	case string(events.Click):
-		internal = events.Click
-	case string(events.Input):
-		internal = events.Input
-	case string(events.Change):
-		internal = events.Change
-	case string(events.Submit):
-		internal = events.Submit
-	case string(events.Reset):
-		internal = events.Reset
-	case string(events.Focus):
-		internal = events.Focus
-	case string(events.Blur):
-		internal = events.Blur
-	case string(events.MouseEnter):
-		internal = events.MouseEnter
-	case string(events.MouseLeave):
-		internal = events.MouseLeave
-	default:
-		return false
+	internal, ok := supportedEventType(eventType)
+	if !ok {
+		return 0
 	}
-	return element.addEventListener(internal, func(event events.Event) {
+	return element.addEventListenerWithCapture(internal, capture, func(event events.Event) {
 		handler(element.publicEvent(event))
 	})
 }
 
+// RemoveEventListener removes one listener token returned by AddEventListenerWithCapture.
+func (element *Element) RemoveEventListener(eventType string, id events.ListenerID) bool {
+	internal, ok := supportedEventType(eventType)
+	if !ok || element == nil || element.events == nil {
+		return false
+	}
+	return element.events.RemoveEventListener(element.id, internal, id)
+}
+
+func supportedEventType(eventType string) (events.Type, bool) {
+	switch strings.ToLower(strings.TrimSpace(eventType)) {
+	case string(events.Click):
+		return events.Click, true
+	case string(events.Input):
+		return events.Input, true
+	case string(events.Change):
+		return events.Change, true
+	case string(events.Submit):
+		return events.Submit, true
+	case string(events.Reset):
+		return events.Reset, true
+	case string(events.Focus):
+		return events.Focus, true
+	case string(events.Blur):
+		return events.Blur, true
+	case string(events.MouseEnter):
+		return events.MouseEnter, true
+	case string(events.MouseLeave):
+		return events.MouseLeave, true
+	default:
+		return "", false
+	}
+}
+
 // AppendChild は未接続の子要素を接続済みの要素の末尾へ追加する。
 func (element *Element) AppendChild(child *Element) bool {
-	if element == nil || child == nil || element.document == nil || child.document != element.document {
+	return element.Append(child)
+}
+
+// Append moves nodes to the end of this element's child list.
+func (element *Element) Append(children ...*Element) bool {
+	return element.insert(false, children...)
+}
+
+// Prepend moves nodes to the beginning of this element's child list.
+func (element *Element) Prepend(children ...*Element) bool {
+	return element.insert(true, children...)
+}
+
+// RemoveChild detaches a direct child while retaining its Runtime identity.
+func (element *Element) RemoveChild(child *Element) bool {
+	parentNode, childNode, ok := element.relationship(child)
+	if !ok || !element.document.DetachChild(parentNode, childNode) {
 		return false
 	}
-	parentNode, parentOK := element.document.NodeByID(element.id)
-	childNode, childOK := element.document.NodeByID(child.id)
-	if !parentOK || !childOK || parentNode.Type != dommodel.NodeElement || childNode.Type != dommodel.NodeElement {
+	element.notifyMutation()
+	return true
+}
+
+// ReplaceChildren atomically replaces this element's children with supplied nodes.
+func (element *Element) ReplaceChildren(children ...*Element) bool {
+	parent, nodes, ok := element.mutationNodes(children)
+	if !ok || !element.document.ReplaceChildren(parent, nodes) {
 		return false
 	}
-	if !element.document.IsConnected(parentNode) || element.document.IsConnected(childNode) || childNode.Parent != nil {
-		return false
-	}
-	if err := element.document.AppendChild(parentNode, childNode); err != nil {
-		return false
-	}
-	if element.onMutation != nil {
-		element.onMutation()
-	}
+	element.notifyMutation()
 	return true
 }
 
@@ -348,6 +435,118 @@ func (element *Element) RemoveClass(className string) bool {
 	return element.SetAttribute("class", strings.Join(result, " "))
 }
 
+// ContainsClass reports whether className is present.
+func (element *Element) ContainsClass(className string) bool {
+	if !validClassName(className) {
+		return false
+	}
+	classes, _ := element.GetAttribute("class")
+	for _, class := range strings.Fields(classes) {
+		if class == className {
+			return true
+		}
+	}
+	return false
+}
+
+// ToggleClass applies optional force and returns the resulting membership.
+func (element *Element) ToggleClass(className string, force *bool) bool {
+	if !validClassName(className) {
+		return false
+	}
+	present := element.ContainsClass(className)
+	wanted := !present
+	if force != nil {
+		wanted = *force
+	}
+	if wanted == present {
+		return present
+	}
+	if wanted {
+		element.AddClass(className)
+	} else {
+		element.RemoveClass(className)
+	}
+	return wanted
+}
+
+// ParentElement returns the connected element parent, excluding the Document node.
+func (element *Element) ParentElement() *Element {
+	node, ok := element.node()
+	if !ok || node.Parent == nil || node.Parent.Type != dommodel.NodeElement {
+		return nil
+	}
+	return (&API{document: element.document, events: element.events, onMutation: element.onMutation}).element(node.Parent)
+}
+
+// Children returns a bounded static collection of direct element children.
+func (element *Element) Children() []*Element {
+	node, ok := element.node()
+	if !ok {
+		return nil
+	}
+	api := &API{document: element.document, events: element.events, onMutation: element.onMutation}
+	var nodes []*dommodel.Node
+	for _, child := range node.Children {
+		if child.Type == dommodel.NodeElement {
+			nodes = append(nodes, child)
+		}
+	}
+	return api.elements(nodes)
+}
+
+// IDValue returns the id attribute.
+func (element *Element) IDValue() string { value, _ := element.GetAttribute("id"); return value }
+
+// SetIDValue updates the id attribute.
+func (element *Element) SetIDValue(value string) bool { return element.SetAttribute("id", value) }
+
+// ClassName returns the normalized class attribute string.
+func (element *Element) ClassName() string { value, _ := element.GetAttribute("class"); return value }
+
+// SetClassName updates the class attribute.
+func (element *Element) SetClassName(value string) bool { return element.SetAttribute("class", value) }
+
+// TagName returns the HTML tag name in ASCII uppercase.
+func (element *Element) TagName() string {
+	node, ok := element.node()
+	if !ok || node.Type != dommodel.NodeElement {
+		return ""
+	}
+	return strings.ToUpper(node.TagName)
+}
+
+// InnerHTML serializes this element's children.
+func (element *Element) InnerHTML() string {
+	node, ok := element.node()
+	if !ok || node.Type != dommodel.NodeElement {
+		return ""
+	}
+	value, _ := htmlparser.SerializeChildren(node)
+	return value
+}
+
+// SetInnerHTML parses and atomically replaces a bounded HTML fragment.
+func (element *Element) SetInnerHTML(value string) bool {
+	parent, ok := element.node()
+	if !ok || parent.Type != dommodel.NodeElement || len(value) > maxDOMInnerHTMLBytes {
+		return false
+	}
+	fragment, err := htmlparser.ParseFragment(value, parent.TagName)
+	if err != nil || fragment.NodeCount()-1 > maxDOMCollectionResults || element.document.OwnedNodeCount()+fragment.NodeCount()-1 > maxDOMOwnedNodes {
+		return false
+	}
+	children := make([]*dommodel.Node, 0, len(fragment.Root.Children))
+	for _, child := range fragment.Root.Children {
+		children = append(children, cloneNode(element.document, child))
+	}
+	if !element.document.ReplaceChildren(parent, children) {
+		return false
+	}
+	element.notifyMutation()
+	return true
+}
+
 // Value はテキストinputの現在値を返す。
 func (element *Element) Value() string {
 	node, ok := element.textInputNode()
@@ -375,11 +574,18 @@ func (element *Element) Reset() bool {
 		return false
 	}
 	node, ok := element.document.NodeByID(element.id)
-	if !ok || !forms.Reset(node) {
+	if !ok {
 		return false
 	}
 	if element.events != nil {
-		element.events.Dispatch(events.Event{Type: events.Reset, Target: node.ID})
+		event := events.Cancelable(events.Reset, node.ID)
+		element.events.DispatchTree(element.document, event)
+		if event.DefaultPrevented() {
+			return false
+		}
+	}
+	if !forms.Reset(node) {
+		return false
 	}
 	if element.onMutation != nil {
 		element.onMutation()
@@ -401,7 +607,19 @@ func (element *Element) Text() string {
 
 // SetText は要素の内容を指定したテキストへ置き換える。
 func (element *Element) SetText(value string) {
-	if element == nil || element.document == nil || !element.document.SetTextContent(element.id, value) {
+	if element == nil || element.document == nil {
+		return
+	}
+	node, ok := element.node()
+	if !ok {
+		return
+	}
+	if node.Type == dommodel.NodeText {
+		if node.Text == value {
+			return
+		}
+		node.Text = value
+	} else if !element.document.SetTextContent(element.id, value) {
 		return
 	}
 	if element.onMutation != nil {
@@ -416,6 +634,105 @@ func (api *API) element(node *dommodel.Node) *Element {
 	return &Element{document: api.document, id: node.ID, events: api.events, onMutation: api.onMutation}
 }
 
+func (api *API) elements(nodes []*dommodel.Node) []*Element {
+	if len(nodes) > maxDOMCollectionResults {
+		nodes = nodes[:maxDOMCollectionResults]
+	}
+	result := make([]*Element, 0, len(nodes))
+	for _, node := range nodes {
+		if node.Type == dommodel.NodeElement {
+			result = append(result, api.element(node))
+		}
+	}
+	return result
+}
+
+func (element *Element) node() (*dommodel.Node, bool) {
+	if element == nil || element.document == nil {
+		return nil, false
+	}
+	node, ok := element.document.NodeByID(element.id)
+	return node, ok
+}
+
+func (element *Element) relationship(child *Element) (*dommodel.Node, *dommodel.Node, bool) {
+	if element == nil || child == nil || element.document == nil || child.document != element.document {
+		return nil, nil, false
+	}
+	parentNode, parentOK := element.node()
+	childNode, childOK := child.node()
+	return parentNode, childNode, parentOK && childOK && parentNode.Type == dommodel.NodeElement
+}
+
+func (element *Element) mutationNodes(children []*Element) (*dommodel.Node, []*dommodel.Node, bool) {
+	if element == nil || element.document == nil {
+		return nil, nil, false
+	}
+	parent, ok := element.node()
+	if !ok || parent.Type != dommodel.NodeElement {
+		return nil, nil, false
+	}
+	nodes := make([]*dommodel.Node, len(children))
+	seen := make(map[dommodel.NodeID]bool, len(children))
+	for index, child := range children {
+		if child == nil || child.document != element.document {
+			return nil, nil, false
+		}
+		node, ok := child.node()
+		if !ok || node == element.document.Root || seen[node.ID] {
+			return nil, nil, false
+		}
+		seen[node.ID] = true
+		nodes[index] = node
+	}
+	return parent, nodes, true
+}
+
+func (element *Element) insert(prepend bool, children ...*Element) bool {
+	parent, nodes, ok := element.mutationNodes(children)
+	if !ok || len(nodes) == 0 {
+		return false
+	}
+	wanted := make([]*dommodel.Node, 0, len(parent.Children)+len(nodes))
+	inserted := make(map[dommodel.NodeID]bool, len(nodes))
+	for _, node := range nodes {
+		inserted[node.ID] = true
+	}
+	if prepend {
+		wanted = append(wanted, nodes...)
+	}
+	for _, current := range parent.Children {
+		if !inserted[current.ID] {
+			wanted = append(wanted, current)
+		}
+	}
+	if !prepend {
+		wanted = append(wanted, nodes...)
+	}
+	if !element.document.ReplaceChildren(parent, wanted) {
+		return false
+	}
+	element.notifyMutation()
+	return true
+}
+
+func (element *Element) notifyMutation() {
+	if element != nil && element.onMutation != nil {
+		element.onMutation()
+	}
+}
+
+func cloneNode(document *dommodel.Document, source *dommodel.Node) *dommodel.Node {
+	if source.Type == dommodel.NodeText {
+		return document.CreateText(source.Text)
+	}
+	target := document.CreateElement(source.TagName, source.Attributes)
+	for _, child := range source.Children {
+		_ = document.AppendChild(target, cloneNode(document, child))
+	}
+	return target
+}
+
 func (element *Element) textInputNode() (*dommodel.Node, bool) {
 	if element == nil || element.document == nil {
 		return nil, false
@@ -428,19 +745,26 @@ func (element *Element) textInputNode() (*dommodel.Node, bool) {
 }
 
 func (element *Element) addEventListener(eventType events.Type, listener events.Listener) bool {
+	return element.addEventListenerWithCapture(eventType, false, listener) != 0
+}
+
+func (element *Element) addEventListenerWithCapture(eventType events.Type, capture bool, listener events.Listener) events.ListenerID {
 	if element == nil || element.document == nil || element.events == nil || listener == nil {
-		return false
+		return 0
 	}
 	node, ok := element.document.NodeByID(element.id)
 	if !ok || !element.document.IsConnected(node) {
-		return false
+		return 0
 	}
-	element.events.AddEventListener(element.id, eventType, listener)
-	return true
+	return element.events.AddEventListenerWithCapture(element.id, eventType, capture, listener)
 }
 
 func (element *Element) publicEvent(event events.Event) Event {
-	result := Event{Type: string(event.Type), Value: event.Value, X: event.X, Y: event.Y}
+	result := Event{
+		Type: string(event.Type), TargetNodeID: event.Target, CurrentTargetID: event.CurrentTarget(), Value: event.Value, X: event.X, Y: event.Y,
+		Bubbles: event.Bubbles(), Cancelable: event.IsCancelable(), DefaultPrevented: event.DefaultPrevented, Phase: event.EventPhase(),
+		stopPropagation: event.StopPropagation,
+	}
 	if event.IsCancelable() {
 		result.preventDefault = event.PreventDefault
 	}

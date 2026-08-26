@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Grove-Computing/Growse/internal/devtools"
 	"github.com/Grove-Computing/Growse/internal/dom"
 	layoutengine "github.com/Grove-Computing/Growse/internal/layout"
 	"github.com/Grove-Computing/Growse/internal/network"
@@ -13,6 +14,55 @@ import (
 	"github.com/Grove-Computing/Growse/internal/runtime/yaegi"
 	"github.com/Grove-Computing/Growse/internal/style"
 )
+
+func TestDOMMutationPublishesOneRenderRevision(t *testing.T) {
+	pageURL := mustParseURL(t, "http://localhost/render-revision.html")
+	loader := stubLoader{response: &network.Response{
+		URL: pageURL, StatusCode: 200, ContentType: "text/html",
+		Body: []byte(`<style>#target.changed { font-size: 28px; color: red; }</style>
+<button id="target">Change</button><script type="text/go">package main
+import "growse/dom"
+func main() { dom.GetElementByID("target").OnClick(func() {
+	dom.GetElementByID("target").AddClass("changed")
+}) }</script>`),
+	}}
+	browserState := NewWithRuntimeFactory(loader, func() runtimemodel.Runtime { return yaegi.New() })
+	page, err := browserState.Navigate(context.Background(), pageURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, _ := page.Document.GetElementByID("target")
+	oldRevision := page.StyleRevision
+	oldTree := layoutengine.BuildAtRevision(page.Document, page.ComputedStyles, 800, oldRevision)
+
+	if !browserState.DispatchClick(target.ID, 0, 0) {
+		t.Fatal("DOM mutation click was not dispatched")
+	}
+	if page.StyleRevision <= oldRevision {
+		t.Fatalf("render revision = %d, want greater than %d", page.StyleRevision, oldRevision)
+	}
+
+	tree := layoutengine.BuildAtRevision(page.Document, page.ComputedStyles, 800, page.StyleRevision)
+	displayList := paintmodel.Build(tree)
+	bounds, ok := tree.Bounds[target.ID]
+	if !ok {
+		t.Fatal("mutated target has no layout bounds")
+	}
+	hit, ok := layoutengine.HitTestWithRevision(tree, bounds.X+1, bounds.Y+1)
+	if !ok || hit.NodeID != target.ID {
+		t.Fatalf("hit = (%+v, %v), want target", hit, ok)
+	}
+	inspector := devtools.SnapshotInspectorAtRevision(page.Document, page.ComputedStyles, tree, target.ID, page.StyleRevision)
+	if tree.Revision != page.StyleRevision || displayList.Revision != page.StyleRevision ||
+		hit.Revision != page.StyleRevision || inspector.Revision != page.StyleRevision {
+		t.Fatalf("revisions = style:%d layout:%d paint:%d hit:%d inspector:%d",
+			page.StyleRevision, tree.Revision, displayList.Revision, hit.Revision, inspector.Revision)
+	}
+	stale := devtools.SnapshotInspectorAtRevision(page.Document, page.ComputedStyles, oldTree, target.ID, page.StyleRevision)
+	if stale.Layout != nil {
+		t.Fatalf("inspector accepted stale layout revision %d for %d", oldTree.Revision, page.StyleRevision)
+	}
+}
 
 func TestClassStyleHoverAndWebGoMutationReconcileAnimations(t *testing.T) {
 	pageURL := mustParseURL(t, "http://localhost/animation-mutation.html")

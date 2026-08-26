@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"mime"
+	"net/http"
 	"net/url"
 	"strings"
 
@@ -31,7 +32,7 @@ type stylesheetLoadState struct {
 	totalBytes int
 }
 
-func (b *Browser) loadStyles(ctx context.Context, client ResourceLoader, pageURL *url.URL, document *dom.Document) (*css.Stylesheet, error) {
+func (b *Browser) loadStylesWithBase(ctx context.Context, client ResourceLoader, pageURL, baseURL *url.URL, document *dom.Document) (*css.Stylesheet, error) {
 	combined := &css.Stylesheet{}
 	state := &stylesheetLoadState{client: client, origin: pageURL, activeURLs: make(map[string]bool)}
 	for _, source := range collectStylesheets(document.Root) {
@@ -40,14 +41,14 @@ func (b *Browser) loadStyles(ctx context.Context, client ResourceLoader, pageURL
 			if !state.consumeBytes(len(content)) {
 				continue
 			}
-			parsed, err := state.loadContent(ctx, content, pageURL, 0)
+			parsed, err := state.loadContent(ctx, content, baseURL, 0)
 			if err != nil {
 				return nil, fmt.Errorf("parse stylesheet: %w", err)
 			}
 			combined.Append(parsed)
 			continue
 		}
-		stylesheetURL, err := pageURL.Parse(source.href)
+		stylesheetURL, err := baseURL.Parse(source.href)
 		if err != nil {
 			continue
 		}
@@ -93,7 +94,7 @@ func (state *stylesheetLoadState) loadContent(ctx context.Context, content []byt
 func (state *stylesheetLoadState) loadExternal(ctx context.Context, requestedURL *url.URL, depth int) (*css.Stylesheet, error) {
 	empty := &css.Stylesheet{}
 	if requestedURL == nil || depth > maxCSSImportDepth || state.fetches >= maxCSSStylesheetCount ||
-		!sameOrigin(state.origin, requestedURL) {
+		!isHTTPURL(requestedURL) || requestedURL.User != nil || isMixedContent(state.origin, requestedURL) {
 		return empty, nil
 	}
 	requested := *requestedURL
@@ -113,7 +114,9 @@ func (state *stylesheetLoadState) loadExternal(ctx context.Context, requestedURL
 	if finalURL == nil {
 		finalURL = &requested
 	}
-	if !sameOrigin(state.origin, finalURL) || !isCSSContentType(response.ContentType) || !state.consumeBytes(len(response.Body)) {
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices ||
+		!isHTTPURL(finalURL) || finalURL.User != nil || isMixedContent(state.origin, finalURL) ||
+		!isCSSContentType(response.ContentType) || !state.consumeBytes(len(response.Body)) {
 		return empty, nil
 	}
 	finalKey := finalURL.String()
@@ -137,7 +140,7 @@ func (state *stylesheetLoadState) consumeBytes(size int) bool {
 
 func isCSSContentType(contentType string) bool {
 	if contentType == "" {
-		return true
+		return false
 	}
 	mediaType, _, err := mime.ParseMediaType(contentType)
 	return err == nil && mediaType == "text/css"
@@ -179,10 +182,4 @@ func containsASCIIToken(value, target string) bool {
 		}
 	}
 	return false
-}
-
-func sameOrigin(left, right *url.URL) bool {
-	return left != nil && right != nil &&
-		strings.EqualFold(left.Scheme, right.Scheme) &&
-		strings.EqualFold(left.Host, right.Host)
 }

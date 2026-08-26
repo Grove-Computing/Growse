@@ -11,6 +11,7 @@ import (
 
 // Tree is the result of laying out one document at a specific viewport width.
 type Tree struct {
+	Revision         uint64
 	Width            float32
 	Height           float32
 	Background       uint32

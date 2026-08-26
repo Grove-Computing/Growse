@@ -2,6 +2,7 @@ package dom
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	dommodel "github.com/Grove-Computing/Growse/internal/dom"
@@ -136,19 +137,13 @@ func TestAppendChildRejectsInvalidRelationshipsWithoutMutation(t *testing.T) {
 	mutations := 0
 	api := New(document, events.NewDispatcher(), func() { mutations++ })
 	parent := api.GetElementByID("parent")
-	detachedParent := api.CreateElement("section")
-	detachedChild := api.CreateElement("span")
 	foreignChild := New(dommodel.NewDocument(), events.NewDispatcher(), nil).CreateElement("span")
-	alreadyAttached := api.GetElementByID("attached")
-
 	for name, appendChild := range map[string]func() bool{
-		"nil child":       func() bool { return parent.AppendChild(nil) },
-		"detached parent": func() bool { return detachedParent.AppendChild(detachedChild) },
-		"foreign child":   func() bool { return parent.AppendChild(foreignChild) },
-		"connected child": func() bool { return parent.AppendChild(alreadyAttached) },
+		"nil child":     func() bool { return parent.AppendChild(nil) },
+		"foreign child": func() bool { return parent.AppendChild(foreignChild) },
 		"nil parent receiver": func() bool {
 			var element *Element
-			return element.AppendChild(detachedChild)
+			return element.AppendChild(parent)
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -159,6 +154,68 @@ func TestAppendChildRejectsInvalidRelationshipsWithoutMutation(t *testing.T) {
 	}
 	if mutations != 0 {
 		t.Fatalf("mutation count = %d, want 0", mutations)
+	}
+}
+
+func TestAppendChildMovesConnectedElement(t *testing.T) {
+	document := dommodel.NewDocument()
+	first := document.CreateElement("main", map[string]string{"id": "first"})
+	second := document.CreateElement("main", map[string]string{"id": "second"})
+	child := document.CreateElement("p", map[string]string{"id": "child"})
+	for _, edge := range [][2]*dommodel.Node{{document.Root, first}, {document.Root, second}, {first, child}} {
+		if err := document.AppendChild(edge[0], edge[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mutations := 0
+	api := New(document, events.NewDispatcher(), func() { mutations++ })
+	if !api.GetElementByID("second").AppendChild(api.GetElementByID("child")) || child.Parent != second || len(first.Children) != 0 || mutations != 1 {
+		t.Fatalf("moved child = parent:%v first:%d mutations:%d", child.Parent, len(first.Children), mutations)
+	}
+}
+
+func TestDOMCollectionsTreeMetadataInnerHTMLAndClassList(t *testing.T) {
+	document := dommodel.NewDocument()
+	main := document.CreateElement("main", map[string]string{"id": "app", "class": "shell"})
+	first := document.CreateElement("p", map[string]string{"class": "card featured"})
+	second := document.CreateElement("p", map[string]string{"class": "card"})
+	for _, edge := range [][2]*dommodel.Node{{document.Root, main}, {main, first}, {main, second}} {
+		if err := document.AppendChild(edge[0], edge[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mutations := 0
+	api := New(document, events.NewDispatcher(), func() { mutations++ })
+	app := api.GetElementByID("app")
+	if len(api.QuerySelectorAll(".card")) != 2 || len(api.GetElementsByClassName("card featured")) != 1 || len(api.GetElementsByTagName("P")) != 2 {
+		t.Fatal("DOM collections did not return the expected static elements")
+	}
+	if app.IDValue() != "app" || app.ClassName() != "shell" || app.TagName() != "MAIN" || len(app.Children()) != 2 || app.ParentElement() != nil {
+		t.Fatalf("element metadata = id:%q class:%q tag:%q children:%d parent:%v", app.IDValue(), app.ClassName(), app.TagName(), len(app.Children()), app.ParentElement())
+	}
+	text := api.CreateTextNode("prefix")
+	item := api.CreateElement("section")
+	item.SetIDValue("item")
+	item.SetClassName("new")
+	if !app.Prepend(text) || !app.Append(item) || item.ParentElement() == nil || !app.RemoveChild(item) || item.ParentElement() != nil || !app.Append(item) {
+		t.Fatal("prepend/append/removeChild did not preserve node identity")
+	}
+	if !item.ContainsClass("new") || item.ToggleClass("new", nil) || !item.ToggleClass("active", nil) {
+		t.Fatal("classList contains/toggle returned an invalid state")
+	}
+	if !app.ReplaceChildren(item) || len(app.Children()) != 1 || app.Children()[0].ID() != item.ID() {
+		t.Fatal("replaceChildren did not atomically replace the tree")
+	}
+	if !app.SetInnerHTML(`<article id="article"><strong class="label">safe &amp; sound</strong><script>not executed</script></article>`) {
+		t.Fatal("SetInnerHTML() rejected a bounded fragment")
+	}
+	article := api.GetElementByID("article")
+	if article == nil || article.ParentElement() == nil || len(article.Children()) != 2 || !strings.Contains(app.InnerHTML(), `safe &amp; sound`) {
+		t.Fatalf("innerHTML result = %q article=%#v", app.InnerHTML(), article)
+	}
+	before := app.InnerHTML()
+	if app.SetInnerHTML(strings.Repeat("x", maxDOMInnerHTMLBytes+1)) || app.InnerHTML() != before || mutations < 8 {
+		t.Fatalf("innerHTML bound/mutations = accepted:%t mutations:%d", app.InnerHTML() != before, mutations)
 	}
 }
 
@@ -465,12 +522,9 @@ func TestOnMouseEnterAndLeaveProvidePublicEventData(t *testing.T) {
 	dispatcher.Dispatch(events.Event{Type: events.MouseEnter, Target: button.ID, X: 12, Y: 34})
 	dispatcher.Dispatch(events.Event{Type: events.MouseLeave, Target: button.ID, X: 56, Y: 78})
 
-	want := []Event{
-		{Type: "mouseenter", TargetID: "save", X: 12, Y: 34},
-		{Type: "mouseleave", TargetID: "save", X: 56, Y: 78},
-	}
-	if !reflect.DeepEqual(received, want) {
-		t.Fatalf("hover events = %#v, want %#v", received, want)
+	if len(received) != 2 || received[0].Type != "mouseenter" || received[0].TargetID != "save" || received[0].X != 12 || received[0].Y != 34 ||
+		received[1].Type != "mouseleave" || received[1].TargetID != "save" || received[1].X != 56 || received[1].Y != 78 {
+		t.Fatalf("hover events = %#v", received)
 	}
 }
 

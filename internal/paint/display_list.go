@@ -10,6 +10,7 @@ import (
 
 // DisplayList is an ordered collection of page painting commands.
 type DisplayList struct {
+	Revision          uint64
 	Width             float32
 	Height            float32
 	ScrollWidth       float32
@@ -179,7 +180,8 @@ func Build(tree *layout.Tree) *DisplayList {
 	}
 
 	list := &DisplayList{
-		Width: tree.Width, Height: tree.Height, ScrollWidth: tree.ScrollWidth,
+		Revision: tree.Revision,
+		Width:    tree.Width, Height: tree.Height, ScrollWidth: tree.ScrollWidth,
 		ScrollHeight: tree.ScrollHeight, Background: tree.Background,
 		CompositingLayers: append([]layout.StackingContext(nil), tree.StackingContexts...),
 	}

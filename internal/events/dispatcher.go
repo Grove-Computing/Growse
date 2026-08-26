@@ -8,31 +8,29 @@ import (
 	"github.com/Grove-Computing/Growse/internal/dom"
 )
 
-// Type はDOMイベントの種類を表す。
 type Type string
 
 const (
-	// Click はポインターによるクリックイベントを表す。
-	Click Type = "click"
-	// Input はユーザー操作で入力値が変化したイベントを表す。
-	Input Type = "input"
-	// Change は入力の編集が確定したイベントを表す。
-	Change Type = "change"
-	// Submit はformの送信操作を表す。
-	Submit Type = "submit"
-	// Reset はformがdefault stateへ戻ったイベントを表す。
-	Reset Type = "reset"
-	// Focus はControlがfocusを得たイベントを表す。
-	Focus Type = "focus"
-	// Blur はControlがfocusを失ったイベントを表す。
-	Blur Type = "blur"
-	// MouseEnter はポインターが要素のhover経路へ入ったことを表す。
+	Click      Type = "click"
+	Input      Type = "input"
+	Change     Type = "change"
+	Submit     Type = "submit"
+	Reset      Type = "reset"
+	Focus      Type = "focus"
+	Blur       Type = "blur"
 	MouseEnter Type = "mouseenter"
-	// MouseLeave はポインターが要素のhover経路から外れたことを表す。
 	MouseLeave Type = "mouseleave"
 )
 
-// Event はDOM要素へ配信するイベント情報を保持する。
+type Phase uint8
+
+const (
+	PhaseNone      Phase = 0
+	PhaseCapturing Phase = 1
+	PhaseAtTarget  Phase = 2
+	PhaseBubbling  Phase = 3
+)
+
 type Event struct {
 	Type          Type
 	Target        dom.NodeID
@@ -40,6 +38,7 @@ type Event struct {
 	Y             float32
 	Value         string
 	defaultAction *defaultAction
+	dispatch      *dispatchState
 }
 
 type defaultAction struct {
@@ -47,12 +46,17 @@ type defaultAction struct {
 	prevented bool
 }
 
-// Cancelable creates an event whose default action can be prevented.
+type dispatchState struct {
+	mu                 sync.Mutex
+	currentTarget      dom.NodeID
+	phase              Phase
+	propagationStopped bool
+}
+
 func Cancelable(eventType Type, target dom.NodeID) Event {
 	return Event{Type: eventType, Target: target, defaultAction: new(defaultAction)}
 }
 
-// PreventDefault cancels this event's default action when it is cancelable.
 func (event Event) PreventDefault() {
 	if event.defaultAction == nil {
 		return
@@ -62,12 +66,8 @@ func (event Event) PreventDefault() {
 	event.defaultAction.mu.Unlock()
 }
 
-// IsCancelable reports whether PreventDefault can affect this event.
-func (event Event) IsCancelable() bool {
-	return event.defaultAction != nil
-}
+func (event Event) IsCancelable() bool { return event.defaultAction != nil }
 
-// DefaultPrevented reports whether a listener canceled the default action.
 func (event Event) DefaultPrevented() bool {
 	if event.defaultAction == nil {
 		return false
@@ -77,36 +77,125 @@ func (event Event) DefaultPrevented() bool {
 	return event.defaultAction.prevented
 }
 
-// Listener はイベントを処理する関数である。
-type Listener func(Event)
+func (event Event) Bubbles() bool {
+	switch event.Type {
+	case Click, Input, Change, Submit, Reset:
+		return true
+	default:
+		return false
+	}
+}
 
-// Dispatcher はNodeIDとイベント種類ごとのリスナーを保持する。
+func (event Event) StopPropagation() {
+	if event.dispatch == nil {
+		return
+	}
+	event.dispatch.mu.Lock()
+	event.dispatch.propagationStopped = true
+	event.dispatch.mu.Unlock()
+}
+
+func (event Event) PropagationStopped() bool {
+	if event.dispatch == nil {
+		return false
+	}
+	event.dispatch.mu.Lock()
+	defer event.dispatch.mu.Unlock()
+	return event.dispatch.propagationStopped
+}
+
+func (event Event) CurrentTarget() dom.NodeID {
+	if event.dispatch == nil {
+		return 0
+	}
+	event.dispatch.mu.Lock()
+	defer event.dispatch.mu.Unlock()
+	return event.dispatch.currentTarget
+}
+
+func (event Event) EventPhase() Phase {
+	if event.dispatch == nil {
+		return PhaseNone
+	}
+	event.dispatch.mu.Lock()
+	defer event.dispatch.mu.Unlock()
+	return event.dispatch.phase
+}
+
+func (event *Event) setDispatch(currentTarget dom.NodeID, phase Phase) {
+	if event.dispatch == nil {
+		event.dispatch = new(dispatchState)
+	}
+	event.dispatch.mu.Lock()
+	event.dispatch.currentTarget = currentTarget
+	event.dispatch.phase = phase
+	event.dispatch.mu.Unlock()
+}
+
+type Listener func(Event)
+type ListenerID uint64
+
+type listenerEntry struct {
+	id       ListenerID
+	listener Listener
+	capture  bool
+}
+
 type Dispatcher struct {
 	mu        sync.RWMutex
-	listeners map[dom.NodeID]map[Type][]Listener
+	listeners map[dom.NodeID]map[Type][]listenerEntry
+	nextID    ListenerID
 }
 
-// NewDispatcher は空のDispatcherを生成する。
 func NewDispatcher() *Dispatcher {
-	return &Dispatcher{listeners: make(map[dom.NodeID]map[Type][]Listener)}
+	return &Dispatcher{listeners: make(map[dom.NodeID]map[Type][]listenerEntry)}
 }
 
-// AddEventListener は対象ノードへイベントリスナーを追加する。
 func (dispatcher *Dispatcher) AddEventListener(nodeID dom.NodeID, eventType Type, listener Listener) {
+	dispatcher.AddEventListenerWithCapture(nodeID, eventType, false, listener)
+}
+
+func (dispatcher *Dispatcher) AddEventListenerWithCapture(nodeID dom.NodeID, eventType Type, capture bool, listener Listener) ListenerID {
 	if dispatcher == nil || listener == nil {
-		return
+		return 0
 	}
 	dispatcher.mu.Lock()
 	defer dispatcher.mu.Unlock()
+	dispatcher.nextID++
 	byType := dispatcher.listeners[nodeID]
 	if byType == nil {
-		byType = make(map[Type][]Listener)
+		byType = make(map[Type][]listenerEntry)
 		dispatcher.listeners[nodeID] = byType
 	}
-	byType[eventType] = append(byType[eventType], listener)
+	byType[eventType] = append(byType[eventType], listenerEntry{id: dispatcher.nextID, listener: listener, capture: capture})
+	return dispatcher.nextID
 }
 
-// RemoveEventListeners は指定したノードに登録された全リスナーを削除する。
+func (dispatcher *Dispatcher) RemoveEventListener(nodeID dom.NodeID, eventType Type, id ListenerID) bool {
+	if dispatcher == nil || id == 0 {
+		return false
+	}
+	dispatcher.mu.Lock()
+	defer dispatcher.mu.Unlock()
+	entries := dispatcher.listeners[nodeID][eventType]
+	for index, entry := range entries {
+		if entry.id != id {
+			continue
+		}
+		entries = append(entries[:index], entries[index+1:]...)
+		if len(entries) == 0 {
+			delete(dispatcher.listeners[nodeID], eventType)
+		} else {
+			dispatcher.listeners[nodeID][eventType] = entries
+		}
+		if len(dispatcher.listeners[nodeID]) == 0 {
+			delete(dispatcher.listeners, nodeID)
+		}
+		return true
+	}
+	return false
+}
+
 func (dispatcher *Dispatcher) RemoveEventListeners(nodeIDs ...dom.NodeID) {
 	if dispatcher == nil {
 		return
@@ -118,25 +207,76 @@ func (dispatcher *Dispatcher) RemoveEventListeners(nodeIDs ...dom.NodeID) {
 	}
 }
 
-// Dispatch は対象ノードへ登録されたリスナーを登録順に呼び出す。
 func (dispatcher *Dispatcher) Dispatch(event Event) bool {
 	if dispatcher == nil {
 		return false
 	}
-	dispatcher.mu.RLock()
-	listeners := append([]Listener(nil), dispatcher.listeners[event.Target][event.Type]...)
-	dispatcher.mu.RUnlock()
-	for _, listener := range listeners {
-		invoke(listener, event)
+	event.setDispatch(event.Target, PhaseAtTarget)
+	handled := dispatcher.invokeNode(event, event.Target, true)
+	handled = dispatcher.invokeNode(event, event.Target, false) || handled
+	event.setDispatch(0, PhaseNone)
+	return handled
+}
+
+func (dispatcher *Dispatcher) DispatchTree(document *dom.Document, event Event) bool {
+	if dispatcher == nil || document == nil {
+		return false
 	}
-	return len(listeners) > 0
+	target, ok := document.NodeByID(event.Target)
+	if !ok || !document.IsConnected(target) {
+		return false
+	}
+	event.dispatch = new(dispatchState)
+	path := make([]dom.NodeID, 0, 8)
+	for current := target.Parent; current != nil; current = current.Parent {
+		path = append(path, current.ID)
+	}
+	handled := false
+	for index := len(path) - 1; index >= 0; index-- {
+		event.setDispatch(path[index], PhaseCapturing)
+		handled = dispatcher.invokeNode(event, path[index], true) || handled
+		if event.PropagationStopped() {
+			event.setDispatch(0, PhaseNone)
+			return handled
+		}
+	}
+	event.setDispatch(event.Target, PhaseAtTarget)
+	handled = dispatcher.invokeNode(event, event.Target, true) || handled
+	handled = dispatcher.invokeNode(event, event.Target, false) || handled
+	if event.PropagationStopped() || !event.Bubbles() {
+		event.setDispatch(0, PhaseNone)
+		return handled
+	}
+	for _, nodeID := range path {
+		event.setDispatch(nodeID, PhaseBubbling)
+		handled = dispatcher.invokeNode(event, nodeID, false) || handled
+		if event.PropagationStopped() {
+			break
+		}
+	}
+	event.setDispatch(0, PhaseNone)
+	return handled
+}
+
+func (dispatcher *Dispatcher) invokeNode(event Event, nodeID dom.NodeID, capture bool) bool {
+	dispatcher.mu.RLock()
+	entries := append([]listenerEntry(nil), dispatcher.listeners[nodeID][event.Type]...)
+	dispatcher.mu.RUnlock()
+	handled := false
+	for _, entry := range entries {
+		if entry.capture != capture {
+			continue
+		}
+		handled = true
+		invoke(entry.listener, event)
+	}
+	return handled
 }
 
 func invoke(listener Listener, event Event) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			slog.Error("WebGoイベントハンドラーでpanicが発生しました",
-				"component", "events", "type", event.Type, "target", event.Target, "panic", recovered)
+			slog.Error("WebGoイベントハンドラーでpanicが発生しました", "component", "events", "type", event.Type, "target", event.Target, "panic", recovered)
 		}
 	}()
 	listener(event)

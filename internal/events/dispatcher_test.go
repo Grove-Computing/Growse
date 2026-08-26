@@ -2,6 +2,7 @@ package events
 
 import (
 	"bytes"
+	"fmt"
 	"log/slog"
 	"reflect"
 	"strings"
@@ -76,5 +77,69 @@ func TestRemoveEventListenersRemovesSpecifiedNodes(t *testing.T) {
 	}
 	if !dispatcher.Dispatch(Event{Type: Click, Target: 2}) {
 		t.Fatal("unrelated node event listener was removed")
+	}
+}
+
+func TestDispatchTreeUsesCaptureTargetBubbleAndRemoval(t *testing.T) {
+	document := dom.NewDocument()
+	parent := document.CreateElement("main", nil)
+	target := document.CreateElement("button", nil)
+	if err := document.AppendChild(document.Root, parent); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(parent, target); err != nil {
+		t.Fatal(err)
+	}
+	dispatcher := NewDispatcher()
+	var calls []string
+	record := func(label string) Listener {
+		return func(event Event) {
+			calls = append(calls, fmt.Sprintf("%s:%d:%d:%d", label, event.Target, event.CurrentTarget(), event.EventPhase()))
+		}
+	}
+	dispatcher.AddEventListenerWithCapture(parent.ID, Click, true, record("parent-capture"))
+	removed := dispatcher.AddEventListenerWithCapture(parent.ID, Click, false, record("removed"))
+	dispatcher.AddEventListenerWithCapture(target.ID, Click, true, record("target-capture"))
+	dispatcher.AddEventListener(target.ID, Click, record("target-bubble"))
+	dispatcher.AddEventListener(parent.ID, Click, record("parent-bubble"))
+	if !dispatcher.RemoveEventListener(parent.ID, Click, removed) {
+		t.Fatal("RemoveEventListener() = false")
+	}
+	if !dispatcher.DispatchTree(document, Cancelable(Click, target.ID)) {
+		t.Fatal("DispatchTree() = false")
+	}
+	want := []string{
+		fmt.Sprintf("parent-capture:%d:%d:1", target.ID, parent.ID),
+		fmt.Sprintf("target-capture:%d:%d:2", target.ID, target.ID),
+		fmt.Sprintf("target-bubble:%d:%d:2", target.ID, target.ID),
+		fmt.Sprintf("parent-bubble:%d:%d:3", target.ID, parent.ID),
+	}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("propagation calls = %v, want %v", calls, want)
+	}
+}
+
+func TestDispatchTreeStopPropagationAndNonBubblingEvent(t *testing.T) {
+	document := dom.NewDocument()
+	parent := document.CreateElement("main", nil)
+	target := document.CreateElement("input", nil)
+	_ = document.AppendChild(document.Root, parent)
+	_ = document.AppendChild(parent, target)
+	dispatcher := NewDispatcher()
+	var calls []string
+	dispatcher.AddEventListener(target.ID, Click, func(event Event) { calls = append(calls, "first"); event.StopPropagation() })
+	dispatcher.AddEventListener(target.ID, Click, func(Event) { calls = append(calls, "second") })
+	dispatcher.AddEventListener(parent.ID, Click, func(Event) { calls = append(calls, "parent") })
+	dispatcher.DispatchTree(document, Event{Type: Click, Target: target.ID})
+	if !reflect.DeepEqual(calls, []string{"first", "second"}) {
+		t.Fatalf("stopped propagation calls = %v", calls)
+	}
+	calls = nil
+	dispatcher.AddEventListenerWithCapture(parent.ID, Focus, true, func(Event) { calls = append(calls, "capture") })
+	dispatcher.AddEventListener(target.ID, Focus, func(Event) { calls = append(calls, "target") })
+	dispatcher.AddEventListener(parent.ID, Focus, func(Event) { calls = append(calls, "bubble") })
+	dispatcher.DispatchTree(document, Event{Type: Focus, Target: target.ID})
+	if !reflect.DeepEqual(calls, []string{"capture", "target"}) {
+		t.Fatalf("non-bubbling focus calls = %v", calls)
 	}
 }

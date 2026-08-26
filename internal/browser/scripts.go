@@ -36,6 +36,10 @@ type scriptSource struct {
 }
 
 func loadScriptsForEngine(ctx context.Context, client ResourceLoader, pageURL *url.URL, document *dom.Document, engine runtimemodel.Engine) ([]Script, []string) {
+	return loadScriptsForEngineWithBase(ctx, client, pageURL, pageURL, document, engine)
+}
+
+func loadScriptsForEngineWithBase(ctx context.Context, client ResourceLoader, pageURL, baseURL *url.URL, document *dom.Document, engine runtimemodel.Engine) ([]Script, []string) {
 	if client == nil || pageURL == nil || document == nil || document.Root == nil {
 		return nil, nil
 	}
@@ -65,12 +69,12 @@ func loadScriptsForEngine(ctx context.Context, client ResourceLoader, pageURL *u
 		if engine == runtimemodel.EngineJavaScript && !candidate.inline && candidate.schedule == runtimemodel.ScriptAsync {
 			asyncCount++
 			go func(index int, candidate scriptSource) {
-				script, size, err := loadScriptCandidate(ctx, client, pageURL, engine, candidate, index)
+				script, size, err := loadScriptCandidate(ctx, client, pageURL, baseURL, engine, candidate, index)
 				asyncResults <- asyncResult{index: index, loadResult: loadResult{script: script, size: size, err: err}}
 			}(index, candidate)
 			continue
 		}
-		script, size, err := loadScriptCandidate(ctx, client, pageURL, engine, candidate, index)
+		script, size, err := loadScriptCandidate(ctx, client, pageURL, baseURL, engine, candidate, index)
 		results[index] = loadResult{script: script, size: size, err: err}
 	}
 	for fetchOrder := 1; fetchOrder <= asyncCount; fetchOrder++ {
@@ -96,18 +100,22 @@ func loadScriptsForEngine(ctx context.Context, client ResourceLoader, pageURL *u
 	return scripts, loadErrors
 }
 
-func loadScriptCandidate(ctx context.Context, client ResourceLoader, pageURL *url.URL, engine runtimemodel.Engine, candidate scriptSource, documentOrder int) (Script, int, error) {
+func loadScriptCandidate(ctx context.Context, client ResourceLoader, pageURL, baseURL *url.URL, engine runtimemodel.Engine, candidate scriptSource, documentOrder int) (Script, int, error) {
 	script := Script{Engine: engine, Kind: candidate.kind, Schedule: candidate.schedule, DocumentOrder: documentOrder}
 	if candidate.inline {
 		if len(candidate.source) > maxScriptBytes {
 			return Script{}, 0, fmt.Errorf("inline %s script exceeds %d bytes", engine, maxScriptBytes)
 		}
-		script.SourceURL, script.Source, script.Inline = cloneURL(pageURL), candidate.source, true
+		sourceURL := pageURL
+		if candidate.kind == runtimemodel.ScriptModule {
+			sourceURL = baseURL
+		}
+		script.SourceURL, script.Source, script.Inline = cloneURL(sourceURL), candidate.source, true
 		return script, len(candidate.source), nil
 	}
-	baseURL := cloneURL(pageURL)
-	baseURL.User = nil
-	scriptURL, err := baseURL.Parse(candidate.src)
+	resourceBaseURL := cloneURL(baseURL)
+	resourceBaseURL.User = nil
+	scriptURL, err := resourceBaseURL.Parse(candidate.src)
 	if err != nil {
 		return Script{}, 0, fmt.Errorf("resolve %s script %q: %v", engine, candidate.src, err)
 	}

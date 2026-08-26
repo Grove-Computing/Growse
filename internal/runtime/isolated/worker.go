@@ -136,6 +136,13 @@ func (state *workerState) load(ctx context.Context, payload json.RawMessage) (an
 	if err != nil {
 		return nil, fmt.Errorf("parse runtime base URL: %w", err)
 	}
+	resourceBaseURL := baseURL
+	if request.ResourceBaseURL != "" {
+		resourceBaseURL, err = url.Parse(request.ResourceBaseURL)
+		if err != nil {
+			return nil, fmt.Errorf("parse runtime resource base URL: %w", err)
+		}
+	}
 	scripts := make([]runtimemodel.Script, len(request.Scripts))
 	for index, script := range request.Scripts {
 		scripts[index] = runtimemodel.Script{
@@ -182,7 +189,7 @@ func (state *workerState) load(ctx context.Context, payload json.RawMessage) (an
 		return nil, err
 	}
 	environment := runtimemodel.Environment{
-		Document: document, Events: dispatcher, BaseURL: baseURL,
+		Document: document, Events: dispatcher, BaseURL: baseURL, ResourceBaseURL: resourceBaseURL,
 		ImportMap: cloneStringMap(request.ImportMap), Frames: frames, FramePolicy: request.FramePolicy, Window: request.Window,
 		LocalStorage: local, SessionStorage: session, StorageSource: request.StorageSource,
 		OnMutation: func() {
@@ -318,9 +325,9 @@ func (state *workerState) dispatchEvent(_ context.Context, payload json.RawMessa
 	}
 	handled := false
 	if queued, ok := runtime.(pageEventRuntime); ok {
-		handled = queued.DispatchPageEvent(func() bool { return dispatcher.Dispatch(event) })
+		handled = queued.DispatchPageEvent(func() bool { return dispatcher.DispatchTree(document, event) })
 	} else {
-		handled = dispatcher.Dispatch(event)
+		handled = dispatcher.DispatchTree(document, event)
 	}
 	return eventResponse{Handled: handled, DefaultPrevented: event.DefaultPrevented()}, nil
 }

@@ -69,7 +69,7 @@ func (b *Browser) prepareBlankFormSubmission(formID, submitterID dom.NodeID) (pr
 	if config.Method == "post" && config.Enctype != forms.URLEncoded {
 		return preparedFormSubmission{}, errors.New("unsupported POST form configuration")
 	}
-	target, err := resolveFormAction(page.URL, config.Action)
+	target, err := resolveFormAction(pageBaseURL(page), config.Action)
 	if err != nil {
 		return preparedFormSubmission{}, err
 	}
