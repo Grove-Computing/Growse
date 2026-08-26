@@ -228,7 +228,6 @@ func TestIsolatedRuntimeTimesOutBusyScriptAndReportsFailure(t *testing.T) {
 	document, _ := htmlparser.Parse(strings.NewReader(`<p>safe</p>`))
 	failures := make(chan error, 1)
 	runtime := New(runtimemodel.EngineJavaScript)
-	runtime.taskTimeout = 50 * time.Millisecond
 	t.Cleanup(func() { _ = runtime.Stop() })
 	environment := runtimemodel.Environment{
 		Document: document, Events: events.NewDispatcher(), BaseURL: mustURL(t, "https://example.test/"),
@@ -237,6 +236,7 @@ func TestIsolatedRuntimeTimesOutBusyScriptAndReportsFailure(t *testing.T) {
 	if err := runtime.Load(context.Background(), []runtimemodel.Script{{Engine: runtimemodel.EngineJavaScript, SourceURL: environment.BaseURL, Source: `for (;;) {}`}}, environment); err != nil {
 		t.Fatal(err)
 	}
+	runtime.taskTimeout = 50 * time.Millisecond
 	started := time.Now()
 	err := runtime.Start(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "exceeded") || time.Since(started) > time.Second {
