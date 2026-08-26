@@ -25,6 +25,8 @@ type runtimeStub struct {
 	stopCalls        atomic.Int32
 	loadErr          error
 	startErr         error
+	stopErr          error
+	loadContext      context.Context
 	scripts          []runtimemodel.Script
 	environment      runtimemodel.Environment
 	mutateOnStart    bool
@@ -138,8 +140,9 @@ func TestBrowserCloseReleasesPageClientStorageAndRuntimeReferences(t *testing.T)
 	}
 }
 
-func (runtime *runtimeStub) Load(_ context.Context, scripts []runtimemodel.Script, environment runtimemodel.Environment) error {
+func (runtime *runtimeStub) Load(ctx context.Context, scripts []runtimemodel.Script, environment runtimemodel.Environment) error {
 	runtime.loadCalls.Add(1)
+	runtime.loadContext = ctx
 	runtime.scripts = append([]runtimemodel.Script(nil), scripts...)
 	runtime.environment = environment
 	return runtime.loadErr
@@ -205,6 +208,118 @@ func TestEngineSelectionReloadsSelectedScriptsAndRemainsTabScoped(t *testing.T) 
 	}
 	if page, err := browserState.Forward(context.Background()); err != nil || page.Engine != runtimemodel.EngineJavaScript || page.URL.String() != secondURL.String() {
 		t.Fatalf("Forward() = (page=%v, error=%v), want JavaScript second Page", page, err)
+	}
+}
+
+func TestEngineSwitchFullyReplacesTopLevelAndFrameRuntimeGraphs(t *testing.T) {
+	pageURL := mustParseURL(t, "http://localhost/index.html")
+	frameURL := mustParseURL(t, "http://localhost/frame.html")
+	dualScripts := `<script type="text/go">package main; func main() {}</script><script>globalThis.loaded = true</script>`
+	loader := &routeLoader{responses: map[string]*network.Response{
+		pageURL.String(): {
+			URL: pageURL, StatusCode: 200, ContentType: "text/html",
+			Body: []byte(dualScripts + `<iframe src="/frame.html"></iframe>`),
+		},
+		frameURL.String(): {URL: frameURL, StatusCode: 200, ContentType: "text/html", Body: []byte(dualScripts)},
+	}}
+	created := make(map[runtimemodel.Engine][]*runtimeStub)
+	browserState := NewWithEngineFactory(loader, func(engine runtimemodel.Engine) runtimemodel.Runtime {
+		runtime := &runtimeStub{}
+		created[engine] = append(created[engine], runtime)
+		return runtime
+	})
+	t.Cleanup(func() { _ = browserState.Close() })
+
+	goPage, err := browserState.Navigate(context.Background(), pageURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(goPage.Frames) != 1 || len(created[runtimemodel.EngineGo]) != 2 {
+		t.Fatalf("Go graph = frames:%d runtimes:%d", len(goPage.Frames), len(created[runtimemodel.EngineGo]))
+	}
+	goFrame := goPage.Frames[0]
+	goFramePage := goFrame.Page
+	goDocument, goEvents := goPage.Document, goPage.Events
+
+	javaScriptPage, err := browserState.SetEngine(context.Background(), runtimemodel.EngineJavaScript)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertRuntimeGraphStopped(t, created[runtimemodel.EngineGo])
+	if !goFrame.Closed || len(goPage.Frames) != 0 {
+		t.Fatal("Go frame graph was not closed")
+	}
+	if len(javaScriptPage.Frames) != 1 || len(created[runtimemodel.EngineJavaScript]) != 2 {
+		t.Fatalf("JavaScript graph = frames:%d runtimes:%d", len(javaScriptPage.Frames), len(created[runtimemodel.EngineJavaScript]))
+	}
+	if javaScriptPage == goPage || javaScriptPage.Document == goDocument || javaScriptPage.Events == goEvents ||
+		javaScriptPage.Frames[0].Page == goFramePage {
+		t.Fatal("JavaScript reload shared Page-owned objects with Go")
+	}
+	javaScriptDocument, javaScriptEvents := javaScriptPage.Document, javaScriptPage.Events
+	javaScriptFramePage := javaScriptPage.Frames[0].Page
+
+	secondGoPage, err := browserState.SetEngine(context.Background(), runtimemodel.EngineGo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertRuntimeGraphStopped(t, created[runtimemodel.EngineJavaScript])
+	if len(created[runtimemodel.EngineGo]) != 4 || secondGoPage == goPage || secondGoPage == javaScriptPage ||
+		secondGoPage.Document == goDocument || secondGoPage.Document == javaScriptDocument ||
+		secondGoPage.Events == goEvents || secondGoPage.Events == javaScriptEvents ||
+		secondGoPage.Frames[0].Page == goFramePage || secondGoPage.Frames[0].Page == javaScriptFramePage {
+		t.Fatal("Engine round trip reused a previous runtime object graph")
+	}
+}
+
+func TestEngineSwitchAttemptsEveryRuntimeTeardownAfterStopError(t *testing.T) {
+	pageURL := mustParseURL(t, "http://localhost/error.html")
+	frameURL := mustParseURL(t, "http://localhost/error-frame.html")
+	body := `<script type="text/go">package main; func main() {}</script>`
+	loader := &routeLoader{responses: map[string]*network.Response{
+		pageURL.String(): {
+			URL: pageURL, StatusCode: 200, ContentType: "text/html",
+			Body: []byte(body + `<iframe src="/error-frame.html"></iframe>`),
+		},
+		frameURL.String(): {URL: frameURL, StatusCode: 200, ContentType: "text/html", Body: []byte(body)},
+	}}
+	topErr, frameErr := errors.New("top stop failed"), errors.New("frame stop failed")
+	runtimes := []*runtimeStub{{stopErr: topErr}, {stopErr: frameErr}}
+	next := 0
+	browserState := NewWithEngineFactory(loader, func(runtimemodel.Engine) runtimemodel.Runtime {
+		runtime := runtimes[next]
+		next++
+		return runtime
+	})
+	page, err := browserState.Navigate(context.Background(), pageURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	frame := page.Frames[0]
+	_, err = browserState.SetEngine(context.Background(), runtimemodel.EngineJavaScript)
+	if !errors.Is(err, topErr) || !errors.Is(err, frameErr) {
+		t.Fatalf("SetEngine() error = %v, want both teardown errors", err)
+	}
+	if runtimes[0].stopCalls.Load() != 1 || runtimes[1].stopCalls.Load() != 1 || !frame.Closed || len(page.Frames) != 0 {
+		t.Fatalf("teardown = top:%d frame:%d closed:%t frames:%d",
+			runtimes[0].stopCalls.Load(), runtimes[1].stopCalls.Load(), frame.Closed, len(page.Frames))
+	}
+}
+
+func assertRuntimeGraphStopped(t *testing.T, runtimes []*runtimeStub) {
+	t.Helper()
+	for index, runtime := range runtimes {
+		if runtime.stopCalls.Load() != 1 {
+			t.Fatalf("runtime %d Stop calls = %d, want 1", index, runtime.stopCalls.Load())
+		}
+		if runtime.loadContext == nil {
+			t.Fatalf("runtime %d has no lifecycle context", index)
+		}
+		select {
+		case <-runtime.loadContext.Done():
+		default:
+			t.Fatalf("runtime %d lifecycle context remains active", index)
+		}
 	}
 }
 
@@ -301,7 +416,7 @@ func (runtime *runtimeStub) Start(context.Context) error {
 
 func (runtime *runtimeStub) Stop() error {
 	runtime.stopCalls.Add(1)
-	return nil
+	return runtime.stopErr
 }
 
 func (runtime *runtimeStub) DispatchPopState(state string) {

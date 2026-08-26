@@ -268,13 +268,25 @@ func (b *Browser) SetEngine(ctx context.Context, engine runtimemodel.Engine) (*P
 		page.RuntimeStarted = false
 	}
 	b.mu.Unlock()
+	var teardownErr error
 	if activeRuntime != nil {
 		if err := activeRuntime.Stop(); err != nil {
-			return nil, err
+			teardownErr = errors.Join(teardownErr, fmt.Errorf("stop top-level runtime: %w", err))
 		}
 	}
 	if err := closePageFrames(page); err != nil {
-		return nil, err
+		teardownErr = errors.Join(teardownErr, fmt.Errorf("stop frame runtimes: %w", err))
+	}
+	if page != nil {
+		if page.Animations != nil {
+			page.Animations.Clear()
+		}
+		if page.Transitions != nil {
+			page.Transitions.Clear()
+		}
+	}
+	if teardownErr != nil {
+		return nil, teardownErr
 	}
 	if page == nil {
 		return nil, nil
