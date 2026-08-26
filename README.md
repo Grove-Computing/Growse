@@ -18,8 +18,12 @@ HTMLとCSSで画面を構築し、Tab単位の`Go` / `JS` selectorでWebGoまた
 | Storage | Tab間で共有する永続Local Storage、Storage Event、Tab単位のSession Storage |
 | HTTP | WebGo Fetch、Cookie、Same-Origin Policy、CORS、Freshness・再検証・Disk対応のHTTP Cache |
 | Dual Runtime | Go既定、Tab単位Go / JavaScript切替、完全reload、Engine間分離 |
+| External JavaScript | 通常HTTP(S) Pageのclassic / async / defer、ES Modules、dynamic import、import map |
+| WebAssembly | JavaScript API、streaming compile / instantiate、Memory / Table / Instance quota |
+| Browsing Context | same / cross-origin iframe、sandbox、`postMessage`、独立Runtime |
+| Offline | Service Worker registration / lifecycle / fetch、Cache Storage、idle restart |
 | Web API | Go / JavaScript共通のDOM Event、Fetch、Scheduler、History、Navigation、Storage、Console API |
-| DevTools | Engine付きConsole、Runtime状態、read-only DOM / Computed Style / Layout Inspector、credential-safe Network監視 |
+| DevTools | Console、Inspector、Network、秘密情報を持たないPage / Frame / Service Worker Runtime診断 |
 
 詳しい対応範囲と制限は、[CSS対応表](docs/css-support.md)、[Form / Fetch / Cookie対応表](docs/form-fetch-cookie-support.md)、[Storage / Cache対応表](docs/storage-cache-support.md)を参照してください。
 
@@ -44,7 +48,7 @@ wget -qO- https://github.com/Grove-Computing/Growse/releases/latest/download/ins
 Versionとインストール先を指定する場合は、環境変数を利用します。
 
 ```sh
-wget -qO- https://github.com/Grove-Computing/Growse/releases/latest/download/install.sh | GROWSE_VERSION=v0.13.0 GROWSE_INSTALL_DIR=/usr/local/bin bash
+wget -qO- https://github.com/Grove-Computing/Growse/releases/latest/download/install.sh | GROWSE_VERSION=v0.14.0 GROWSE_INSTALL_DIR=/usr/local/bin bash
 ```
 
 GUI Applicationの配置先は、`GROWSE_DATA_HOME`、`GROWSE_APPLICATIONS_DIR`、`GROWSE_WINDOWS_PROGRAMS_DIR`で変更できます。
@@ -54,7 +58,7 @@ GUI Applicationの配置先は、`GROWSE_DATA_HOME`、`GROWSE_APPLICATIONS_DIR`�
 Linux amd64のDocker imageを、GitHub Container Registryから取得できます。
 
 ```sh
-docker pull ghcr.io/grove-computing/growse:v0.13.0
+docker pull ghcr.io/grove-computing/growse:v0.14.0
 ```
 
 GrowseはGUI applicationのため、Containerから起動する場合はホストのDisplay ServerとGPU deviceを接続する必要があります。
@@ -107,6 +111,7 @@ python3 -m http.server 8080 --directory examples/data-app
 | Multi-Tab Workspace | `go run ./examples/multi-tab-workspace` | Vertical Tab、Storage Event、共有Cookie / Cache、Tab別Session / Scheduler |
 | DevTools Showcase | `go run ./examples/devtools` | Console 4 level、DOM / Style / Layout、成功Fetch、redirect、cache、HTTP error、timeout |
 | Dual Runtime Showcase | `go run ./examples/dual-runtime` | 同じUIのGo / JavaScript切替、DOM、Event、Timer、Fetch、Storage、History、Runtime error |
+| External Web Platform | `go run ./examples/external-web-platform` | 外部classic / Module、dynamic import、WASM、same / cross-origin iframe、Service Worker offline、cross-origin CSS、sandbox |
 
 WebGoソースは通常のGo build対象から除外するため、各Demoでは`_app.go`として配置しています。
 
@@ -115,6 +120,8 @@ Multi-Tab Workspaceは専用のlocal fixture serverを起動し、Growseで`http
 DevTools Showcaseも専用のlocal fixture serverだけを使用します。外部通信や実Credentialなしで、Console、Inspector、Networkの通常・error・timeout・cache状態を再現できます。
 
 Dual Runtime Showcaseもlocalhost内だけで完結します。ツールバーの`Go` / `JS`を押すとPageを完全reloadし、同じHTML/CSS上のCounterとWeb API処理を選択Engineだけで実行します。
+
+External Web Platform Showcaseはtop-level、CDN、Frameを別のlocal Originで配信し、Internet、DNS、Credentialなしでv0.14.0の外部サイト経路を再現します。起動後に表示されるURLをJavaScript Engineで開くと、Module / WASM / iframe / Service Worker / sandbox状態を確認できます。
 
 ## ブラウザの仕組み
 
@@ -145,7 +152,7 @@ Animation中のPaintとHit Testingは、同じFrameの値を参照します。DO
 
 ### Go / JavaScript Dual Runtime
 
-Goでは`<script type="text/go">`をYaegiで、JavaScriptではtype省略、`text/javascript`、`application/javascript`をgojaで実行します。自動実行はlocalhost、127.0.0.1、`::1`の信頼済みPageとsame-origin Scriptだけに限定します。選択していないEngineのScriptは取得しません。
+Goでは`<script type="text/go">`をYaegiで、JavaScriptではtype省略、`text/javascript`、`application/javascript`と`type="module"`をgojaで実行します。Go sourceはtrusted loopbackかつsame-originに限定します。JavaScriptは通常のHTTP(S) Pageでinline / external classicとES Modulesを実行し、redirect、MIME、mixed content、CORS、credentials、integrity、sizeをBrowser側で検証します。選択していないEngineのScriptは取得しません。
 
 EngineはTabごとに保持し、切り替え時は旧Runtime、Event、Timer、Fetch、Storage callbackを停止して完全reloadします。Go RuntimeとJavaScript Runtimeを同時実行せず、値やfunctionを共有しません。
 
@@ -158,9 +165,9 @@ EngineはTabごとに保持し、切り替え時は旧Runtime、Event、Timer、
 - Fetch callback: PageのEvent Queueで実行
 - Page終了時: Timer、Frame callback、実行中Fetchをcancelし、Runtime参照を解放
 
-JavaScriptは`console`、`document` / Element、DOM Event、Timer / Animation Frame、Promise形式`fetch`、`AbortController`、`localStorage` / `sessionStorage`、`location` / `history`を提供します。Node.js、npm、OS、filesystem、process、Go reflection、module、WASMは公開しません。詳細は[Runtime / Web API対応表](docs/runtime-support.md)を参照してください。
+JavaScriptは`console`、DOM / Event、Timer / Animation Frame、Promise形式`fetch`、Storage、Navigationに加え、ES Modules、WebAssembly、iframe messaging、Service Worker / Cache Storageの検証済みsubsetを提供します。Node.js、npm、CommonJS、WASI、OS、filesystem、process、Go reflectionは公開しません。詳細は[Runtime / Web API対応表](docs/runtime-support.md)を参照してください。
 
-Go / JavaScript RuntimeはProcess Sandboxではありません。信頼できるローカルページだけを開いてください。
+Go / JavaScript / WASMとService WorkerはBrowser UIとは別のresource-bounded worker processで実行し、version / size制限付きIPCとBrowserが再検証するbrokered APIだけを使用します。必須sandbox状態を検証できない場合はcodeを実行しません。この境界は未知のOS kernel、Go runtime、goja、wazero、decoderの脆弱性まで排除するものではありません。詳細は[Runtime worker / Web Platform設計](docs/runtime-worker-design.md)と[SECURITY.md](SECURITY.md)を参照してください。
 
 ### WebGo DevTools
 
@@ -169,6 +176,7 @@ Go / JavaScript RuntimeはProcess Sandboxではありません。信頼できる
 - Console: Go / JavaScript Engine、4 level、script / runtime errorを表示し、level filterとclearを提供
 - Inspector: active PageのDOM snapshotを選択し、公開attribute、主要Computed Style、Layout Boxをread-only表示
 - Network: Navigation、resource、Form、Fetchのmethod、外部Script Engine、redacted URL、timing、status、redirect、cache、size、error categoryを表示
+- Runtime: Page / Frame / Service Worker context、script kind / schedule、Engine、generation、有限error category、sandbox capabilityを表示
 
 DevToolsはRequest / Response body、Header、Cookie、Authorizationを保持しません。URL userinfoとquery valueをマスクし、password input valueもInspectorへ公開しません。安全上限と詳細は[WebGo DevTools設計](docs/devtools.md)を参照してください。
 
@@ -183,13 +191,15 @@ DevToolsはRequest / Response body、Header、Cookie、Authorizationを保持し
 | [Performance Baseline](docs/performance.md) | Layout、Paint、Form、Scheduler、History、Storage、CacheのBenchmark基準値 |
 | [WPT由来テスト](docs/wpt.md) | Web Platform Testsから移植したTestと出典 |
 | [Developer Supply Chain Security](docs/developer-security.md) | 不可視Code検査、Extension管理、署名、Credential、Incident Response |
-| [WebGo DevTools設計](docs/devtools.md) | Console、Inspector、Networkのデータ境界、redaction、安全上限 |
+| [WebGo DevTools設計](docs/devtools.md) | Console、Inspector、Network、Runtimeのデータ境界、redaction、安全上限 |
 | [Runtime / Web API対応表](docs/runtime-support.md) | Go / JavaScript Engine、Script type、API対応、制約、非対応範囲 |
+| [Runtime worker / Web Platform設計](docs/runtime-worker-design.md) | worker process、IPC、sandbox、generation、Frame / Service Worker所有境界 |
 | [v0.9.0リリース定義](docs/v0.9.0.md) | v0.9.0のTheme、Scope、完了条件 |
 | [v0.10.0リリース定義](docs/v0.10.0.md) | v0.10.0のTheme、Scope、完了条件 |
 | [v0.11.0リリース定義](docs/v0.11.0.md) | v0.11.0のTheme、Scope、完了条件 |
 | [v0.12.0リリース定義](docs/v0.12.0.md) | v0.12.0 WebGo DevToolsのTheme、Scope、完了条件 |
 | [v0.13.0リリース定義](docs/v0.13.0.md) | v0.13.0 Go / JavaScript Dual RuntimeのTheme、Scope、完了条件 |
+| [v0.14.0リリース定義](docs/v0.14.0.md) | v0.14.0 External JavaScript / Module / WASM / iframe / Service Worker / sandboxのTheme、Scope、完了条件 |
 
 ## 品質チェック
 
@@ -214,13 +224,13 @@ Go Modules、GitHub Actions、Docker base imageの依存関係は、Dependabot�
 
 ## セキュリティ
 
-GrowseとWebGo Runtimeは、信頼できないGoコードを安全に実行するSandboxではありません。信頼できないWebGoソースを開いたり、権限の高いユーザーで実行したりしないでください。
+v0.14.0のRuntime workerは外部JavaScriptのhost作用をdefault denyにしますが、実験的browserとして未知のnative/runtime脆弱性への完全耐性は保証しません。外部Go sourceは引き続きtrusted loopbackだけに限定されます。Growseを権限の高いユーザーや機密profileで実行しないでください。
 
 脆弱性の非公開報告方法、サポート対象、通信とResource LoadingのSecurity Boundaryは[SECURITY.md](SECURITY.md)を参照してください。
 
 ## リリース成果物
 
-`v0.13.0`のようなVersion tagをpushすると、GitHub Actionsが次の成果物、SHA-256 checksum、SPDX JSON SBOMをGitHub Releaseへ公開します。ArchiveとSBOMにはGitHub Artifact Attestation、Docker imageにはBuildKitのSBOMとSLSA Provenanceを付与します。
+`v0.14.0`のようなVersion tagをpushすると、GitHub Actionsが次の成果物、SHA-256 checksum、SPDX JSON SBOMをGitHub Releaseへ公開します。ArchiveとSBOMにはGitHub Artifact Attestation、Docker imageにはBuildKitのSBOMとSLSA Provenanceを付与します。
 
 - Linux amd64
 - macOS Intel
@@ -228,7 +238,7 @@ GrowseとWebGo Runtimeは、信頼できないGoコードを安全に実行す�
 - Windows amd64
 - Linux amd64 Docker imageのVersion tagと`latest` tag
 
-Archiveには、Growse本体とすべてのDemoを同梱します。Gopher cursor imageは実行ファイルへ埋め込まれるため、別途assetを配置する必要はありません。
+Archiveには、Growse本体、Runtime workerとして再起動する同一検証済み実行ファイル、すべてのDemoを同梱します。Gopher cursor imageは実行ファイルへ埋め込まれるため、別途assetを配置する必要はありません。
 
 checksum、SBOM、Provenanceを使った成果物の検証手順は、[SECURITY.mdのSupply Chain Security](SECURITY.md#supply-chain-security)を参照してください。
 

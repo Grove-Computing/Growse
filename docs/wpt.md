@@ -3,10 +3,10 @@
 GrowseはWeb Platform Tests（WPT）をブラウザで直接実行せず、対応する範囲をGoのUnit Testへ縮約して管理する。
 
 - Upstream: `web-platform-tests/wpt`
-- Revision: `816bbf3ebae17dc6866deb65b2286b1a1c162819`
+- Revision: `a7b5671e50ee3610ec3ad2e1278a33b2cb11339c`
 - License: WPTリポジトリの`LICENSE.md`（3-Clause BSD）
-- 配置: `internal/style/wpt_test.go`、`internal/layout/wpt_test.go`、`internal/forms/wpt_test.go`、`internal/browser/wpt_v09_test.go`、`internal/browser/wpt_v10_test.go`、`internal/network/wpt_test.go`、`internal/storage/wpt_test.go`、`internal/webapi/scheduler/wpt_test.go`、`internal/runtime/javascript/*_test.go`
-- v0.13.0対象: v0.11.0までの範囲に加え、JavaScript Promise adapter、Timer callback、Storage Event、History state
+- 配置: `internal/style/wpt_test.go`、`internal/layout/wpt_test.go`、`internal/forms/wpt_test.go`、`internal/browser/wpt_v*_test.go`、`internal/network/wpt_test.go`、`internal/storage/wpt_test.go`、`internal/webapi/scheduler/wpt_test.go`、`internal/runtime/javascript/wpt_v14_test.go`、`internal/serviceworker/wpt_v14_test.go`
+- v0.14.0対象: v0.13.0までの範囲に加え、Module単一評価、WASM Module validation、iframe sandbox script gate、Service Worker default scope
 
 ## 対応表
 
@@ -36,6 +36,10 @@ GrowseはWeb Platform Tests（WPT）をブラウザで直接実行せず、対�
 | `TestWPTTargetBlankCreatesDistinctTopLevelContext` | `html/semantics/links/links-created-by-a-and-area-elements/target_blank_implicit_noopener.html` | `_blank` submissionがsourceを維持して独立Top-level Contextを作ることを比較 | opener APIを提供しないためForm SubmissionとTab ID分離へ縮約 |
 | `TestWPTClosedBrowsingContextRejectsFutureWork` | `html/browsers/windows/auxiliary-browsing-contexts/opener-closed.html` | close後のBrowsing Contextを参照してもworkを配送できないことを比較 | WindowProxyの`closed` propertyをSession dispatch拒否へ縮約 |
 | `TestWPTLocalStorageEventCarriesCommittedOldAndNewValuesOnce` | `webstorage/event_basic.js` | 別Contextだけがcommitごとにold/new valueとURLを一度受信することを比較 | iframeとtestharnessを共有Storage Areaのsource-aware observerへ縮約 |
+| `TestWPTModuleSharedDependencyEvaluatesOnce` | `html/semantics/scripting-1/the-script-element/module/single-evaluation-1.html` | 2本のimport branchが共有するModuleをfetch / evaluate各1回に固定 | HTML harnessをin-memory Module graphとConsole assertionへ縮約 |
+| `TestWPTWebAssemblyModuleConstructorValidatesBytes` | `wasm/jsapi/module/constructor.any.js` | invalid binaryの`validate=false`、`CompileError`とvalid constructorを比較 | upstream fixture binaryをGrowse test生成binaryへ置換 |
+| `TestWPTIframeEmptySandboxBlocksScriptExecution` | `html/semantics/embedded-content/the-iframe-element/sandbox_005.htm` | 空sandboxがscriptとsame-originを許可せず、既知tokenだけをgrantすることを比較 | postMessage harnessを実行前FramePolicy assertionへ縮約 |
+| `TestWPTServiceWorkerDefaultScopeIsScriptDirectory` | `service-workers/service-worker/register-default-scope.https.html` | scope省略時にscript URLのdirectoryを採用することを比較 | HTTPS harnessとregistration jobをURL policyの直接assertionへ縮約 |
 
 Upstreamのファイル全体はコピーせず、assertionの意味と最小入力だけを移植する。ケースを追加または更新するときは、Revision、Source、適応内容、および意図的な差分をこの表へ記録する。
 
@@ -86,3 +90,11 @@ Upstreamのファイル全体はコピーせず、assertionの意味と最小入
 - Web StorageはJavaScriptの同期Storage操作と更新元以外へのsame-origin `storage` Eventを選定し、複数Process間EventとSession Storage Eventは対象外とする。
 - HistoryはJSONへ変換可能なstate、same-origin URL、size上限、`popstate`、`hashchange`を選定し、Window / iframe joint session historyとBFCacheは対象外とする。
 - WPTのJavaScript harnessは直接実行せず、Growseのgoja adapter、Page queue、fake scheduler、fake network、共有Storage Areaへ最小fixtureを縮約する。
+
+## v0.14.0の選定範囲
+
+- ECMAScript Moduleは共有dependencyのsingle fetch / evaluationを選定し、modulepreload、import attributes、JSON / CSS Moduleは対象外とする。
+- WebAssembly JavaScript APIはbinary validation、`Module` constructor、`CompileError`を選定し、GC、exception handling、JSPI、WASIは対象外とする。
+- iframeは空sandboxのscript / Origin gateと既知token grantを選定し、plugin、Permissions Policy、credentialless Frameは対象外とする。
+- Service Workerはscript directory由来のdefault scopeを選定し、module worker、navigation preload、Push、Background Syncは対象外とする。
+- `tests/v014-conformance.sh`は固定shuffle seedでRuntime、Browser、Service Worker packageを新規processから3回実行し、WPTとsecurity / lifecycle / quota / crash / cancel回帰の順序依存を検出する。公開DNS、実時間resource、外部APIを合否条件に使わない。
