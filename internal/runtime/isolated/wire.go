@@ -19,12 +19,15 @@ type sandboxStatusResponse struct {
 }
 
 type wireScript struct {
-	Engine      runtimemodel.Engine `json:"engine"`
-	SourceURL   string              `json:"sourceUrl,omitempty"`
-	Source      string              `json:"source"`
-	Inline      bool                `json:"inline,omitempty"`
-	Integrity   string              `json:"integrity,omitempty"`
-	CrossOrigin string              `json:"crossOrigin,omitempty"`
+	Engine        runtimemodel.Engine         `json:"engine"`
+	SourceURL     string                      `json:"sourceUrl,omitempty"`
+	Source        string                      `json:"source"`
+	Inline        bool                        `json:"inline,omitempty"`
+	Integrity     string                      `json:"integrity,omitempty"`
+	CrossOrigin   string                      `json:"crossOrigin,omitempty"`
+	Schedule      runtimemodel.ScriptSchedule `json:"schedule,omitempty"`
+	DocumentOrder int                         `json:"documentOrder,omitempty"`
+	FetchOrder    int                         `json:"fetchOrder,omitempty"`
 }
 
 type loadRequest struct {

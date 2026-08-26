@@ -1286,6 +1286,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	}, func(delta int) error {
 		return b.queueHistoryTraversal(page, navigationReady, delta)
 	}, b.historyInfo)
+	document.SetReadyState("complete")
 	if err := ctx.Err(); err != nil {
 		close(navigationReady)
 		page.Animations.Clear()
@@ -1582,11 +1583,6 @@ func startRuntime(ctx context.Context, factory runtimemodel.EngineFactory, engin
 			return nil
 		}
 	}
-	if len(page.ScriptErrors) != 0 {
-		setRuntimeError(page, fmt.Sprintf("%s script loading failed; runtime was not started", engine))
-		return nil
-	}
-
 	pageRuntime := factory(engine)
 	if pageRuntime == nil {
 		setRuntimeError(page, fmt.Sprintf("%s runtime factory returned nil", engine))

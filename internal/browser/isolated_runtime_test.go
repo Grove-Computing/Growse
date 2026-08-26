@@ -115,3 +115,31 @@ func TestBrowserExecutesCORSAndIntegrityCheckedClassicJavaScript(t *testing.T) {
 		t.Fatalf("CORS integrity JavaScript = text:%q started:%t errors:%v", got, page.RuntimeStarted, page.ScriptErrors)
 	}
 }
+
+func TestBrowserContinuesValidJavaScriptAfterIndependentLoadFailure(t *testing.T) {
+	pageURL := mustParseURL(t, "https://www.example.test/page")
+	loader := &routeLoader{responses: map[string]*network.Response{
+		pageURL.String(): {
+			URL: pageURL, StatusCode: 200, ContentType: "text/html",
+			Body: []byte(`<p id="result">idle</p>
+				<script src="/missing.js"></script>
+				<script>document.getElementById("result").textContent = document.readyState;</script>`),
+		},
+	}}
+	browserState := NewWithEngineFactory(loader, func(engine runtimemodel.Engine) runtimemodel.Runtime { return isolated.New(engine) })
+	t.Cleanup(func() { _ = browserState.Close() })
+	if _, err := browserState.SetEngine(context.Background(), runtimemodel.EngineJavaScript); err != nil {
+		t.Fatal(err)
+	}
+	page, err := browserState.Navigate(context.Background(), pageURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, _ := page.Document.GetElementByID("result")
+	if got := result.TextContent(); got != "loading" || !page.RuntimeStarted || page.RuntimeError != "" || len(page.ScriptErrors) != 1 {
+		t.Fatalf("partial JavaScript load = text:%q started:%t runtimeError:%q scriptErrors:%v", got, page.RuntimeStarted, page.RuntimeError, page.ScriptErrors)
+	}
+	if page.Document.ReadyState() != "complete" {
+		t.Fatalf("document.readyState = %q", page.Document.ReadyState())
+	}
+}

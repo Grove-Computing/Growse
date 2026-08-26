@@ -113,15 +113,22 @@ func TestEventListenerLimitAndPageClose(t *testing.T) {
 	dispatcher := events.NewDispatcher()
 	runtime := New()
 	runtime.maxListeners = 1
+	var records [][2]string
 	source := `
 		var target = document.getElementById("target");
 		target.addEventListener("click", function () {});
 		target.addEventListener("click", function () {});`
-	if err := runtime.Load(context.Background(), []runtimemodel.Script{javaScript(source)}, runtimemodel.Environment{Document: document, Events: dispatcher}); err != nil {
+	if err := runtime.Load(context.Background(), []runtimemodel.Script{javaScript(source)}, runtimemodel.Environment{
+		Document: document, Events: dispatcher,
+		ConsoleRecord: func(level, message string) { records = append(records, [2]string{level, message}) },
+	}); err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if err := runtime.Start(context.Background()); err == nil || !strings.Contains(err.Error(), "event listener limit exceeded") {
-		t.Fatalf("Start() error = %v, want listener limit error", err)
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatalf("contained Start() error = %v", err)
+	}
+	if len(records) != 1 || !strings.Contains(records[0][1], "event listener limit exceeded") {
+		t.Fatalf("event listener limit records = %v", records)
 	}
 	if err := runtime.Stop(); err != nil {
 		t.Fatalf("Stop() error = %v", err)

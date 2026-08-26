@@ -4,8 +4,10 @@ import (
 	"context"
 	"crypto/sha512"
 	"encoding/base64"
+	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Grove-Computing/Growse/internal/html"
 	"github.com/Grove-Computing/Growse/internal/network"
@@ -271,5 +273,51 @@ func TestCrossOriginClassicWithoutCORSUsesIncludedCredentials(t *testing.T) {
 	scripts, loadErrors := loadScriptsForEngine(context.Background(), loader, pageURL, document, runtimemodel.EngineJavaScript)
 	if len(scripts) != 1 || len(loadErrors) != 0 || loader.request == nil || loader.request.CORS || loader.request.Credentials != network.CredentialsInclude {
 		t.Fatalf("scripts=%v errors=%v request=%#v", scripts, loadErrors, loader.request)
+	}
+}
+
+type delayedScriptLoader struct {
+	responses map[string]*network.Response
+	delays    map[string]time.Duration
+}
+
+func (loader *delayedScriptLoader) Get(ctx context.Context, target *url.URL) (*network.Response, error) {
+	if delay := loader.delays[target.String()]; delay > 0 {
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return loader.responses[target.String()], nil
+}
+
+func TestAsyncClassicScriptsRecordFetchCompletionOrder(t *testing.T) {
+	pageURL := mustParseURL(t, "https://site.example/page")
+	firstURL := mustParseURL(t, "https://site.example/slow.js")
+	secondURL := mustParseURL(t, "https://site.example/fast.js")
+	deferURL := mustParseURL(t, "https://site.example/defer.js")
+	document, _ := html.Parse(strings.NewReader(`
+		<script async src="/slow.js"></script>
+		<script defer src="/defer.js"></script>
+		<script async defer src="/fast.js"></script>`))
+	loader := &delayedScriptLoader{
+		responses: map[string]*network.Response{
+			firstURL.String():  {URL: firstURL, StatusCode: 200, ContentType: "text/javascript", Body: []byte(`slow()`)},
+			secondURL.String(): {URL: secondURL, StatusCode: 200, ContentType: "text/javascript", Body: []byte(`fast()`)},
+			deferURL.String():  {URL: deferURL, StatusCode: 200, ContentType: "text/javascript", Body: []byte(`deferred()`)},
+		},
+		delays: map[string]time.Duration{firstURL.String(): 50 * time.Millisecond, secondURL.String(): time.Millisecond},
+	}
+	scripts, loadErrors := loadScriptsForEngine(context.Background(), loader, pageURL, document, runtimemodel.EngineJavaScript)
+	if len(loadErrors) != 0 || len(scripts) != 3 {
+		t.Fatalf("scripts=%v errors=%v", scripts, loadErrors)
+	}
+	if scripts[0].Schedule != runtimemodel.ScriptAsync || scripts[0].FetchOrder != 2 ||
+		scripts[1].Schedule != runtimemodel.ScriptDefer || scripts[1].FetchOrder != 0 ||
+		scripts[2].Schedule != runtimemodel.ScriptAsync || scripts[2].FetchOrder != 1 {
+		t.Fatalf("script scheduling = %#v", scripts)
 	}
 }

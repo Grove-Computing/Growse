@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -44,17 +45,18 @@ type Runtime struct {
 	queue      chan task
 	done       chan struct{}
 
-	scripts         []runtimemodel.Script
-	environment     runtimemodel.Environment
-	domAPI          *domapi.API
-	fetchAPI        *fetchapi.API
-	fetchClock      fetchapi.Clock
-	navigationAPI   *navigationapi.API
-	schedulerAPI    *schedulerapi.API
-	schedulerClock  schedulerapi.Clock
-	storageAPI      *storageapi.API
-	abortSignals    map[*goja.Object]*fetchapi.AbortSignal
-	windowListeners []listenerRecord
+	scripts           []runtimemodel.Script
+	environment       runtimemodel.Environment
+	domAPI            *domapi.API
+	fetchAPI          *fetchapi.API
+	fetchClock        fetchapi.Clock
+	navigationAPI     *navigationapi.API
+	schedulerAPI      *schedulerapi.API
+	schedulerClock    schedulerapi.Clock
+	storageAPI        *storageapi.API
+	abortSignals      map[*goja.Object]*fetchapi.AbortSignal
+	windowListeners   []listenerRecord
+	documentListeners []listenerRecord
 
 	elements      map[*goja.Object]*domapi.Element
 	elementByID   map[uint64]*goja.Object
@@ -138,6 +140,7 @@ func (runtime *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script,
 	runtime.abortSignals = make(map[*goja.Object]*fetchapi.AbortSignal)
 	runtime.listeners = nil
 	runtime.windowListeners = nil
+	runtime.documentListeners = nil
 	runtime.listenerCount = 0
 	runtime.loaded = true
 	queue, done := runtime.queue, runtime.done
@@ -169,7 +172,8 @@ func (runtime *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script,
 	return nil
 }
 
-// Start evaluates selected Page scripts in document order.
+// Start evaluates selected Page scripts according to classic script loading
+// semantics and delivers the document lifecycle exactly once.
 func (runtime *Runtime) Start(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -192,15 +196,20 @@ func (runtime *Runtime) Start(ctx context.Context) error {
 	runtime.mu.Unlock()
 
 	err := runtime.runSync(ctx, func(vm *goja.Runtime) error {
-		for index, script := range scripts {
-			name := fmt.Sprintf("inline-script-%03d.js", index)
-			if script.SourceURL != nil {
-				name = network.RedactedURL(script.SourceURL)
-			}
-			if _, err := vm.RunScript(name, script.Source); err != nil {
-				return fmt.Errorf("execute %s: %w", name, err)
-			}
+		blocking, deferred, asynchronous := orderClassicScripts(scripts)
+		if err := runtime.evaluateScripts(vm, blocking); err != nil {
+			return err
 		}
+		runtime.setDocumentReadyState(vm, "interactive")
+		if err := runtime.evaluateScripts(vm, deferred); err != nil {
+			return err
+		}
+		runtime.dispatchLifecycleEvent(vm, "DOMContentLoaded", true)
+		if err := runtime.evaluateScripts(vm, asynchronous); err != nil {
+			return err
+		}
+		runtime.setDocumentReadyState(vm, "complete")
+		runtime.dispatchLifecycleEvent(vm, "load", false)
 		return nil
 	})
 	if err != nil {
@@ -274,11 +283,63 @@ func (runtime *Runtime) Stop() error {
 	runtime.abortSignals = nil
 	runtime.listeners = nil
 	runtime.windowListeners = nil
+	runtime.documentListeners = nil
 	runtime.listenerCount = 0
 	runtime.loaded = false
 	runtime.mu.Unlock()
 	if dispatcher != nil && len(listenerIDs) != 0 {
 		dispatcher.RemoveEventListeners(listenerIDs...)
+	}
+	return nil
+}
+
+func orderClassicScripts(scripts []runtimemodel.Script) (blocking, deferred, asynchronous []runtimemodel.Script) {
+	for _, script := range scripts {
+		switch script.Schedule {
+		case runtimemodel.ScriptDefer:
+			deferred = append(deferred, script)
+		case runtimemodel.ScriptAsync:
+			asynchronous = append(asynchronous, script)
+		default:
+			blocking = append(blocking, script)
+		}
+	}
+	byDocumentOrder := func(values []runtimemodel.Script) {
+		sort.SliceStable(values, func(left, right int) bool { return values[left].DocumentOrder < values[right].DocumentOrder })
+	}
+	byDocumentOrder(blocking)
+	byDocumentOrder(deferred)
+	sort.SliceStable(asynchronous, func(left, right int) bool {
+		leftOrder, rightOrder := asynchronous[left].FetchOrder, asynchronous[right].FetchOrder
+		if leftOrder <= 0 {
+			leftOrder = len(asynchronous) + asynchronous[left].DocumentOrder + 1
+		}
+		if rightOrder <= 0 {
+			rightOrder = len(asynchronous) + asynchronous[right].DocumentOrder + 1
+		}
+		if leftOrder == rightOrder {
+			return asynchronous[left].DocumentOrder < asynchronous[right].DocumentOrder
+		}
+		return leftOrder < rightOrder
+	})
+	return blocking, deferred, asynchronous
+}
+
+func (runtime *Runtime) evaluateScripts(vm *goja.Runtime, scripts []runtimemodel.Script) error {
+	for index, script := range scripts {
+		name := fmt.Sprintf("inline-script-%03d.js", index)
+		if script.SourceURL != nil {
+			name = network.RedactedURL(script.SourceURL)
+		}
+		if _, err := vm.RunScript(name, script.Source); err != nil {
+			runtime.mu.Lock()
+			runtimeContext := runtime.runtimeCtx
+			runtime.mu.Unlock()
+			if runtimeContext != nil && runtimeContext.Err() != nil {
+				return context.Cause(runtimeContext)
+			}
+			runtime.recordError(fmt.Sprintf("execute %s: %v", name, err))
+		}
 	}
 	return nil
 }

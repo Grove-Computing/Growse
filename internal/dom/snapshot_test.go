@@ -67,3 +67,19 @@ func TestApplySnapshotRejectsMalformedTreesWithoutReplacingDocument(t *testing.T
 		t.Fatal("malformed snapshot replaced document root")
 	}
 }
+
+func TestDocumentSnapshotPreservesAndValidatesReadyState(t *testing.T) {
+	document := NewDocument()
+	if document.ReadyState() != "loading" || !document.SetReadyState("interactive") {
+		t.Fatalf("initial ready state = %q", document.ReadyState())
+	}
+	clone, err := NewDocumentFromSnapshot(document.Snapshot())
+	if err != nil || clone.ReadyState() != "interactive" {
+		t.Fatalf("snapshot ready state = %q, %v", clone.ReadyState(), err)
+	}
+	invalid := document.Snapshot()
+	invalid.ReadyState = "stale"
+	if err := clone.ApplySnapshot(invalid); err == nil {
+		t.Fatal("invalid ready state was accepted")
+	}
+}

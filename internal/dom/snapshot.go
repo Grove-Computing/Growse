@@ -10,8 +10,9 @@ const maxSnapshotNodes = 100_000
 // DocumentSnapshot is the pointer-free representation exchanged with an
 // isolated runtime worker. Node IDs remain stable across snapshots.
 type DocumentSnapshot struct {
-	Root   NodeSnapshot `json:"root"`
-	NextID NodeID       `json:"nextId"`
+	Root       NodeSnapshot `json:"root"`
+	NextID     NodeID       `json:"nextId"`
+	ReadyState string       `json:"readyState,omitempty"`
 }
 
 // NodeSnapshot contains only browser-visible DOM state. Parent and document
@@ -34,7 +35,7 @@ func (d *Document) Snapshot() DocumentSnapshot {
 	if d == nil || d.Root == nil {
 		return DocumentSnapshot{}
 	}
-	return DocumentSnapshot{Root: snapshotNode(d.Root), NextID: d.nextID}
+	return DocumentSnapshot{Root: snapshotNode(d.Root), NextID: d.nextID, ReadyState: d.ReadyState()}
 }
 
 // NewDocumentFromSnapshot validates snapshot and constructs an independent
@@ -55,6 +56,13 @@ func (d *Document) ApplySnapshot(snapshot DocumentSnapshot) error {
 	}
 	if snapshot.Root.ID == 0 || snapshot.Root.Type != NodeDocument {
 		return errors.New("DOM snapshot root must be a non-zero document node")
+	}
+	readyState := snapshot.ReadyState
+	if readyState == "" {
+		readyState = "loading"
+	}
+	if readyState != "loading" && readyState != "interactive" && readyState != "complete" {
+		return fmt.Errorf("DOM snapshot has invalid ready state %q", readyState)
 	}
 	flat := make(map[NodeID]NodeSnapshot)
 	if err := flattenSnapshot(snapshot.Root, flat, 0); err != nil {
@@ -101,6 +109,7 @@ func (d *Document) ApplySnapshot(snapshot DocumentSnapshot) error {
 	d.Root = nodes[snapshot.Root.ID]
 	d.nodes = nodes
 	d.nextID = snapshot.NextID
+	d.readyState = readyState
 	if d.nextID <= maximum {
 		d.nextID = maximum + 1
 	}

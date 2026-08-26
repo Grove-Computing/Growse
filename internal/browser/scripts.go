@@ -31,6 +31,7 @@ type scriptSource struct {
 	integrity   string
 	crossOrigin string
 	hasCORS     bool
+	schedule    runtimemodel.ScriptSchedule
 }
 
 func loadScriptsForEngine(ctx context.Context, client ResourceLoader, pageURL *url.URL, document *dom.Document, engine runtimemodel.Engine) ([]Script, []string) {
@@ -41,107 +42,126 @@ func loadScriptsForEngine(ctx context.Context, client ResourceLoader, pageURL *u
 	if !engine.Valid() {
 		return nil, []string{fmt.Sprintf("unsupported script engine %q", engine)}
 	}
-	var scripts []Script
-	var loadErrors []string
-	totalBytes := 0
 	candidates := collectScriptsForEngine(document.Root, engine)
+	var loadErrors []string
 	if len(candidates) > maxScriptsPerEngine {
 		loadErrors = append(loadErrors, fmt.Sprintf("%s script count exceeds %d", engine, maxScriptsPerEngine))
 		candidates = candidates[:maxScriptsPerEngine]
 	}
-	for _, candidate := range candidates {
-		if candidate.inline {
-			if len(candidate.source) > maxScriptBytes {
-				loadErrors = append(loadErrors, fmt.Sprintf("inline %s script exceeds %d bytes", engine, maxScriptBytes))
-				continue
-			}
-			if totalBytes+len(candidate.source) > maxScriptTotalBytes {
-				loadErrors = append(loadErrors, fmt.Sprintf("%s script total exceeds %d bytes", engine, maxScriptTotalBytes))
-				continue
-			}
-			totalBytes += len(candidate.source)
-			scripts = append(scripts, Script{Engine: engine, SourceURL: cloneURL(pageURL), Source: candidate.source, Inline: true})
+	type loadResult struct {
+		script Script
+		size   int
+		err    error
+	}
+	results := make([]loadResult, len(candidates))
+	type asyncResult struct {
+		index int
+		loadResult
+	}
+	asyncResults := make(chan asyncResult, len(candidates))
+	asyncCount := 0
+	for index, candidate := range candidates {
+		if engine == runtimemodel.EngineJavaScript && !candidate.inline && candidate.schedule == runtimemodel.ScriptAsync {
+			asyncCount++
+			go func(index int, candidate scriptSource) {
+				script, size, err := loadScriptCandidate(ctx, client, pageURL, engine, candidate, index)
+				asyncResults <- asyncResult{index: index, loadResult: loadResult{script: script, size: size, err: err}}
+			}(index, candidate)
 			continue
 		}
-
-		baseURL := cloneURL(pageURL)
-		baseURL.User = nil
-		scriptURL, err := baseURL.Parse(candidate.src)
-		if err != nil {
-			loadErrors = append(loadErrors, fmt.Sprintf("resolve %s script %q: %v", engine, candidate.src, err))
+		script, size, err := loadScriptCandidate(ctx, client, pageURL, engine, candidate, index)
+		results[index] = loadResult{script: script, size: size, err: err}
+	}
+	for fetchOrder := 1; fetchOrder <= asyncCount; fetchOrder++ {
+		loaded := <-asyncResults
+		loaded.script.FetchOrder = fetchOrder
+		results[loaded.index] = loaded.loadResult
+		results[loaded.index].script.FetchOrder = fetchOrder
+	}
+	var scripts []Script
+	totalBytes := 0
+	for _, result := range results {
+		if result.err != nil {
+			loadErrors = append(loadErrors, result.err.Error())
 			continue
 		}
-		if !isHTTPURL(scriptURL) {
-			loadErrors = append(loadErrors, fmt.Sprintf("block %s script from invalid URL %s", engine, network.RedactedURL(scriptURL)))
-			continue
-		}
-		if isMixedContent(pageURL, scriptURL) {
-			loadErrors = append(loadErrors, fmt.Sprintf("block mixed-content %s script %s", engine, network.RedactedURL(scriptURL)))
-			continue
-		}
-		if engine == runtimemodel.EngineGo && (!IsTrustedOrigin(scriptURL) || !network.SameOrigin(pageURL, scriptURL)) {
-			loadErrors = append(loadErrors, fmt.Sprintf("block %s script from untrusted or cross-origin URL %s", engine, network.RedactedURL(scriptURL)))
-			continue
-		}
-		credentials := scriptCredentials(candidate)
-		if engine == runtimemodel.EngineJavaScript && candidate.integrity != "" && !network.SameOrigin(pageURL, scriptURL) && !candidate.hasCORS {
-			loadErrors = append(loadErrors, fmt.Sprintf("cross-origin JavaScript integrity requires crossorigin for %s", network.RedactedURL(scriptURL)))
-			continue
-		}
-		response, err := loadScriptResource(ctx, client, scriptURL, candidate.hasCORS, credentials)
-		if err != nil {
-			loadErrors = append(loadErrors, fmt.Sprintf("load %s script %s: %v", engine, network.RedactedURL(scriptURL), err))
-			continue
-		}
-		if response == nil {
-			loadErrors = append(loadErrors, fmt.Sprintf("load %s script %s: empty response", engine, network.RedactedURL(scriptURL)))
-			continue
-		}
-		if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-			loadErrors = append(loadErrors, fmt.Sprintf("%s script %s returned HTTP status %d", engine, network.RedactedURL(scriptURL), response.StatusCode))
-			continue
-		}
-		if len(response.Body) > maxScriptBytes {
-			loadErrors = append(loadErrors, fmt.Sprintf("%s script %s exceeds %d bytes", engine, network.RedactedURL(scriptURL), maxScriptBytes))
-			continue
-		}
-		if totalBytes+len(response.Body) > maxScriptTotalBytes {
+		if totalBytes+result.size > maxScriptTotalBytes {
 			loadErrors = append(loadErrors, fmt.Sprintf("%s script total exceeds %d bytes", engine, maxScriptTotalBytes))
 			continue
 		}
-		if !isScriptContentType(engine, response.ContentType) {
-			loadErrors = append(loadErrors, fmt.Sprintf("%s script %s has unsupported Content-Type %q", engine, network.RedactedURL(scriptURL), response.ContentType))
-			continue
-		}
-		finalURL := response.URL
-		if finalURL == nil {
-			finalURL = scriptURL
-		}
-		if !isHTTPURL(finalURL) || isMixedContent(pageURL, finalURL) {
-			loadErrors = append(loadErrors, fmt.Sprintf("block redirected %s script from invalid or mixed-content URL %s", engine, network.RedactedURL(finalURL)))
-			continue
-		}
-		if engine == runtimemodel.EngineGo && (!IsTrustedOrigin(finalURL) || !network.SameOrigin(pageURL, finalURL)) {
-			loadErrors = append(loadErrors, fmt.Sprintf("block redirected %s script from untrusted or cross-origin URL %s", engine, network.RedactedURL(finalURL)))
-			continue
-		}
-		if engine == runtimemodel.EngineJavaScript {
-			if candidate.integrity != "" && !network.SameOrigin(pageURL, finalURL) && !candidate.hasCORS {
-				loadErrors = append(loadErrors, fmt.Sprintf("redirected cross-origin JavaScript integrity requires crossorigin for %s", network.RedactedURL(finalURL)))
-				continue
-			}
-			if err := verifyScriptIntegrity(response.Body, candidate.integrity); err != nil {
-				loadErrors = append(loadErrors, fmt.Sprintf("JavaScript integrity check failed for %s: %v", network.RedactedURL(finalURL), err))
-				continue
-			}
-		}
-		totalBytes += len(response.Body)
-		scripts = append(scripts, Script{
-			Engine: engine, SourceURL: cloneURL(finalURL), Source: string(response.Body),
-			Integrity: candidate.integrity, CrossOrigin: candidate.crossOrigin,
-		})
+		totalBytes += result.size
+		scripts = append(scripts, result.script)
 	}
 	return scripts, loadErrors
+}
+
+func loadScriptCandidate(ctx context.Context, client ResourceLoader, pageURL *url.URL, engine runtimemodel.Engine, candidate scriptSource, documentOrder int) (Script, int, error) {
+	script := Script{Engine: engine, Schedule: candidate.schedule, DocumentOrder: documentOrder}
+	if candidate.inline {
+		if len(candidate.source) > maxScriptBytes {
+			return Script{}, 0, fmt.Errorf("inline %s script exceeds %d bytes", engine, maxScriptBytes)
+		}
+		script.SourceURL, script.Source, script.Inline = cloneURL(pageURL), candidate.source, true
+		return script, len(candidate.source), nil
+	}
+	baseURL := cloneURL(pageURL)
+	baseURL.User = nil
+	scriptURL, err := baseURL.Parse(candidate.src)
+	if err != nil {
+		return Script{}, 0, fmt.Errorf("resolve %s script %q: %v", engine, candidate.src, err)
+	}
+	if !isHTTPURL(scriptURL) {
+		return Script{}, 0, fmt.Errorf("block %s script from invalid URL %s", engine, network.RedactedURL(scriptURL))
+	}
+	if isMixedContent(pageURL, scriptURL) {
+		return Script{}, 0, fmt.Errorf("block mixed-content %s script %s", engine, network.RedactedURL(scriptURL))
+	}
+	if engine == runtimemodel.EngineGo && (!IsTrustedOrigin(scriptURL) || !network.SameOrigin(pageURL, scriptURL)) {
+		return Script{}, 0, fmt.Errorf("block %s script from untrusted or cross-origin URL %s", engine, network.RedactedURL(scriptURL))
+	}
+	credentials := scriptCredentials(candidate)
+	if engine == runtimemodel.EngineJavaScript && candidate.integrity != "" && !network.SameOrigin(pageURL, scriptURL) && !candidate.hasCORS {
+		return Script{}, 0, fmt.Errorf("cross-origin JavaScript integrity requires crossorigin for %s", network.RedactedURL(scriptURL))
+	}
+	response, err := loadScriptResource(ctx, client, scriptURL, candidate.hasCORS, credentials)
+	if err != nil {
+		return Script{}, 0, fmt.Errorf("load %s script %s: %v", engine, network.RedactedURL(scriptURL), err)
+	}
+	if response == nil {
+		return Script{}, 0, fmt.Errorf("load %s script %s: empty response", engine, network.RedactedURL(scriptURL))
+	}
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return Script{}, 0, fmt.Errorf("%s script %s returned HTTP status %d", engine, network.RedactedURL(scriptURL), response.StatusCode)
+	}
+	if len(response.Body) > maxScriptBytes {
+		return Script{}, 0, fmt.Errorf("%s script %s exceeds %d bytes", engine, network.RedactedURL(scriptURL), maxScriptBytes)
+	}
+	if !isScriptContentType(engine, response.ContentType) {
+		return Script{}, 0, fmt.Errorf("%s script %s has unsupported Content-Type %q", engine, network.RedactedURL(scriptURL), response.ContentType)
+	}
+	finalURL := response.URL
+	if finalURL == nil {
+		finalURL = scriptURL
+	}
+	if !isHTTPURL(finalURL) || isMixedContent(pageURL, finalURL) {
+		return Script{}, 0, fmt.Errorf("block redirected %s script from invalid or mixed-content URL %s", engine, network.RedactedURL(finalURL))
+	}
+	if engine == runtimemodel.EngineGo && (!IsTrustedOrigin(finalURL) || !network.SameOrigin(pageURL, finalURL)) {
+		return Script{}, 0, fmt.Errorf("block redirected %s script from untrusted or cross-origin URL %s", engine, network.RedactedURL(finalURL))
+	}
+	if engine == runtimemodel.EngineJavaScript {
+		if candidate.integrity != "" && !network.SameOrigin(pageURL, finalURL) && !candidate.hasCORS {
+			return Script{}, 0, fmt.Errorf("redirected cross-origin JavaScript integrity requires crossorigin for %s", network.RedactedURL(finalURL))
+		}
+		if err := verifyScriptIntegrity(response.Body, candidate.integrity); err != nil {
+			return Script{}, 0, fmt.Errorf("JavaScript integrity check failed for %s: %v", network.RedactedURL(finalURL), err)
+		}
+	}
+	script = Script{
+		Engine: engine, SourceURL: cloneURL(finalURL), Source: string(response.Body),
+		Integrity: candidate.integrity, CrossOrigin: candidate.crossOrigin, Schedule: candidate.schedule, DocumentOrder: documentOrder,
+	}
+	return script, len(response.Body), nil
 }
 
 func collectScripts(root *dom.Node) []scriptSource {
@@ -162,14 +182,24 @@ func collectScriptsForEngine(root *dom.Node, engine runtimemodel.Engine) []scrip
 				src, _ := node.Attribute("src")
 				src = strings.TrimSpace(src)
 				if src != "" {
+					schedule := runtimemodel.ScriptParserBlocking
+					if engine == runtimemodel.EngineJavaScript {
+						if _, async := node.Attribute("async"); async {
+							schedule = runtimemodel.ScriptAsync
+						} else if _, deferred := node.Attribute("defer"); deferred {
+							schedule = runtimemodel.ScriptDefer
+						}
+					}
 					integrity, _ := node.Attribute("integrity")
 					crossOrigin, hasCORS := node.Attribute("crossorigin")
 					result = append(result, scriptSource{
 						engine: engine, src: src, integrity: strings.TrimSpace(integrity),
-						crossOrigin: normalizeCrossOrigin(crossOrigin, hasCORS), hasCORS: hasCORS,
+						crossOrigin: normalizeCrossOrigin(crossOrigin, hasCORS), hasCORS: hasCORS, schedule: schedule,
 					})
 				} else {
-					result = append(result, scriptSource{engine: engine, inline: true, source: node.TextContent()})
+					result = append(result, scriptSource{
+						engine: engine, inline: true, source: node.TextContent(), schedule: runtimemodel.ScriptParserBlocking,
+					})
 				}
 			}
 		}

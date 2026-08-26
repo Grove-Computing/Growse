@@ -49,11 +49,16 @@ func TestRuntimeContainsSyntaxAndRuntimeErrors(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			runtime := New()
 			t.Cleanup(func() { _ = runtime.Stop() })
-			if err := runtime.Load(context.Background(), []runtimemodel.Script{javaScript(test.source)}, runtimemodel.Environment{}); err != nil {
+			var records [][2]string
+			environment := runtimemodel.Environment{ConsoleRecord: func(level, message string) { records = append(records, [2]string{level, message}) }}
+			if err := runtime.Load(context.Background(), []runtimemodel.Script{javaScript(test.source)}, environment); err != nil {
 				t.Fatalf("Load() error = %v", err)
 			}
-			if err := runtime.Start(context.Background()); err == nil {
-				t.Fatal("Start() error = nil, want page-scoped JavaScript error")
+			if err := runtime.Start(context.Background()); err != nil {
+				t.Fatalf("contained Start() error = %v", err)
+			}
+			if len(records) != 1 || records[0][0] != "error" {
+				t.Fatalf("contained script records = %v", records)
 			}
 		})
 	}
@@ -68,11 +73,77 @@ func TestRuntimeContainsSyntaxAndRuntimeErrors(t *testing.T) {
 	}
 }
 
-func TestRuntimeInterruptsRunningScriptWhenPageIsCanceled(t *testing.T) {
-	pageContext, cancelPage := context.WithCancel(context.Background())
+func TestRuntimeOrdersClassicScriptsAndDocumentLifecycle(t *testing.T) {
+	document, _ := htmlparser.Parse(strings.NewReader(`<p>page</p>`))
+	var records [][2]string
+	environment := runtimemodel.Environment{
+		Document:      document,
+		ConsoleRecord: func(level, message string) { records = append(records, [2]string{level, message}) },
+	}
+	scripts := []runtimemodel.Script{
+		{Engine: runtimemodel.EngineJavaScript, Schedule: runtimemodel.ScriptDefer, DocumentOrder: 4, Source: `order.push("defer-2")`},
+		{Engine: runtimemodel.EngineJavaScript, Schedule: runtimemodel.ScriptAsync, DocumentOrder: 6, FetchOrder: 2, Source: `order.push("async-slow")`},
+		{Engine: runtimemodel.EngineJavaScript, Schedule: runtimemodel.ScriptParserBlocking, DocumentOrder: 1, Source: `
+			var order = ["blocking-1"];
+			document.addEventListener("readystatechange", function () { order.push("ready:" + document.readyState); });
+			document.addEventListener("DOMContentLoaded", function (event) { order.push(event.type + ":" + document.readyState); });
+			addEventListener("load", function () { order.push("load:" + document.readyState); console.log(order.join(",")); });`},
+		{Engine: runtimemodel.EngineJavaScript, Schedule: runtimemodel.ScriptAsync, DocumentOrder: 5, FetchOrder: 1, Source: `order.push("async-fast")`},
+		{Engine: runtimemodel.EngineJavaScript, Schedule: runtimemodel.ScriptParserBlocking, DocumentOrder: 2, Source: `order.push("blocking-2")`},
+		{Engine: runtimemodel.EngineJavaScript, Schedule: runtimemodel.ScriptDefer, DocumentOrder: 3, Source: `order.push("defer-1")`},
+	}
 	runtime := New()
 	t.Cleanup(func() { _ = runtime.Stop() })
-	if err := runtime.Load(pageContext, []runtimemodel.Script{javaScript(`for (;;) {}`)}, runtimemodel.Environment{}); err != nil {
+	if err := runtime.Load(context.Background(), scripts, environment); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	want := "blocking-1,blocking-2,ready:interactive,defer-1,defer-2,DOMContentLoaded:interactive,async-fast,async-slow,ready:complete,load:complete"
+	if len(records) != 1 || records[0] != [2]string{"log", want} {
+		t.Fatalf("lifecycle records = %v, want %q", records, want)
+	}
+	if got := document.ReadyState(); got != "complete" {
+		t.Fatalf("document.readyState = %q", got)
+	}
+}
+
+func TestRuntimeContinuesAfterIndependentScriptFailure(t *testing.T) {
+	var records [][2]string
+	runtime := New()
+	t.Cleanup(func() { _ = runtime.Stop() })
+	scripts := []runtimemodel.Script{
+		javaScript(`throw new Error("first failed")`),
+		javaScript(`console.log("second executed")`),
+	}
+	environment := runtimemodel.Environment{ConsoleRecord: func(level, message string) { records = append(records, [2]string{level, message}) }}
+	if err := runtime.Load(context.Background(), scripts, environment); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 2 || records[0][0] != "error" || !strings.Contains(records[0][1], "first failed") || records[1] != [2]string{"log", "second executed"} {
+		t.Fatalf("independent script records = %v", records)
+	}
+}
+
+func TestRuntimeInterruptsRunningScriptWhenPageIsCanceled(t *testing.T) {
+	pageContext, cancelPage := context.WithCancel(context.Background())
+	document, _ := htmlparser.Parse(strings.NewReader(`<p>page</p>`))
+	var records [][2]string
+	runtime := New()
+	t.Cleanup(func() { _ = runtime.Stop() })
+	source := `
+		document.addEventListener("DOMContentLoaded", function () { console.log("stale DOMContentLoaded"); });
+		addEventListener("load", function () { console.log("stale load"); });
+		for (;;) {}`
+	environment := runtimemodel.Environment{
+		Document:      document,
+		ConsoleRecord: func(level, message string) { records = append(records, [2]string{level, message}) },
+	}
+	if err := runtime.Load(pageContext, []runtimemodel.Script{javaScript(source)}, environment); err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
 
@@ -88,6 +159,9 @@ func TestRuntimeInterruptsRunningScriptWhenPageIsCanceled(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("Start() did not stop after Page cancellation")
+	}
+	if document.ReadyState() != "loading" || len(records) != 0 {
+		t.Fatalf("canceled lifecycle = state:%q records:%v", document.ReadyState(), records)
 	}
 }
 

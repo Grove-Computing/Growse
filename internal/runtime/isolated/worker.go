@@ -138,6 +138,7 @@ func (state *workerState) load(ctx context.Context, payload json.RawMessage) (an
 		scripts[index] = runtimemodel.Script{
 			Engine: script.Engine, Source: script.Source, Inline: script.Inline,
 			Integrity: script.Integrity, CrossOrigin: script.CrossOrigin,
+			Schedule: script.Schedule, DocumentOrder: script.DocumentOrder, FetchOrder: script.FetchOrder,
 		}
 		if script.SourceURL != "" {
 			scripts[index].SourceURL, err = url.Parse(script.SourceURL)
