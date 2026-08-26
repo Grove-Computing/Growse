@@ -112,14 +112,22 @@ func NewWithRuntimeFactory(client ResourceLoader, factory runtimemodel.Factory) 
 
 // NewWithRuntimeFactoryAndStorage は注入されたStorage profileを使用するBrowserを生成する。
 func NewWithRuntimeFactoryAndStorage(client ResourceLoader, factory runtimemodel.Factory, manager *storagecore.Manager) *Browser {
+	return NewWithRuntimeFactoryAndStorageAndServiceWorkers(client, factory, manager, serviceworker.NewManager())
+}
+
+// NewWithRuntimeFactoryAndStorageAndServiceWorkers injects shared profile state.
+func NewWithRuntimeFactoryAndStorageAndServiceWorkers(client ResourceLoader, factory runtimemodel.Factory, manager *storagecore.Manager, serviceWorkers *serviceworker.Manager) *Browser {
 	if manager == nil {
 		manager = storagecore.NewManager()
+	}
+	if serviceWorkers == nil {
+		serviceWorkers = serviceworker.NewManager()
 	}
 	return &Browser{
 		client: client, runtimeFactory: factory, engineFactory: runtimemodel.ForGo(factory), engine: runtimemodel.EngineGo,
 		history: newHistory(), clock: animationmodel.SystemClock{}, storage: manager, active: true,
 		storageSourceID: nextStorageSourceID.Add(1), devToolsSession: devtools.NewSessionStore(),
-		serviceWorkers: serviceworker.NewManager(),
+		serviceWorkers: serviceWorkers,
 	}
 }
 
@@ -130,14 +138,22 @@ func NewWithEngineFactory(client ResourceLoader, factory runtimemodel.EngineFact
 
 // NewWithEngineFactoryAndStorage はEngine選択と注入Storage profileを使用するBrowserを生成する。
 func NewWithEngineFactoryAndStorage(client ResourceLoader, factory runtimemodel.EngineFactory, manager *storagecore.Manager) *Browser {
+	return NewWithEngineFactoryAndStorageAndServiceWorkers(client, factory, manager, serviceworker.NewManager())
+}
+
+// NewWithEngineFactoryAndStorageAndServiceWorkers injects shared profile state.
+func NewWithEngineFactoryAndStorageAndServiceWorkers(client ResourceLoader, factory runtimemodel.EngineFactory, manager *storagecore.Manager, serviceWorkers *serviceworker.Manager) *Browser {
 	if manager == nil {
 		manager = storagecore.NewManager()
+	}
+	if serviceWorkers == nil {
+		serviceWorkers = serviceworker.NewManager()
 	}
 	return &Browser{
 		client: client, engineFactory: factory, engine: runtimemodel.EngineGo,
 		history: newHistory(), clock: animationmodel.SystemClock{}, storage: manager, active: true,
 		storageSourceID: nextStorageSourceID.Add(1), devToolsSession: devtools.NewSessionStore(),
-		serviceWorkers: serviceworker.NewManager(),
+		serviceWorkers: serviceWorkers,
 	}
 }
 

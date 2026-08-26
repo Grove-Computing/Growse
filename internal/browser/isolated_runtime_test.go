@@ -12,6 +12,8 @@ import (
 	"github.com/Grove-Computing/Growse/internal/network"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 	"github.com/Grove-Computing/Growse/internal/runtime/isolated"
+	"github.com/Grove-Computing/Growse/internal/serviceworker"
+	storagecore "github.com/Grove-Computing/Growse/internal/storage"
 )
 
 func TestBrowserSwitchesGoAndJavaScriptThroughIsolatedWorkers(t *testing.T) {
@@ -368,6 +370,51 @@ func TestBrowserRestoresNavigationFromServiceWorkerCacheStorage(t *testing.T) {
 		if request.URL.String() == offlineURL.String() {
 			t.Fatalf("cached navigation reached the network: %#v", request)
 		}
+	}
+}
+
+func TestBrowsersShareServiceWorkerProfileAcrossTabs(t *testing.T) {
+	installURL := mustParseURL(t, "https://tabs.example/app/install.html")
+	workerURL := mustParseURL(t, "https://tabs.example/app/sw.js")
+	controlledURL := mustParseURL(t, "https://tabs.example/app/controlled.html")
+	loader := &requestRouteLoader{routeLoader: routeLoader{responses: map[string]*network.Response{
+		installURL.String(): {
+			URL: installURL, StatusCode: http.StatusOK, ContentType: "text/html",
+			Body: []byte(`<script>navigator.serviceWorker.register("/app/sw.js")</script>`),
+		},
+		workerURL.String(): {
+			URL: workerURL, StatusCode: http.StatusOK, ContentType: "text/javascript",
+			Body: []byte(`
+				self.addEventListener("install", () => self.skipWaiting());
+				self.addEventListener("activate", () => clients.claim());
+				self.addEventListener("fetch", event => event.respondWith(new Response('<p id="result">shared-profile</p>', {headers: {"Content-Type": "text/html"}})));`),
+		},
+	}}}
+	profile := serviceworker.NewManager()
+	newTab := func() *Browser {
+		return NewWithEngineFactoryAndStorageAndServiceWorkers(loader, func(engine runtimemodel.Engine) runtimemodel.Runtime {
+			return isolated.New(engine)
+		}, storagecore.NewManager(), profile)
+	}
+	first := newTab()
+	second := newTab()
+	t.Cleanup(func() { _ = first.Close(); _ = second.Close() })
+	if _, err := first.SetEngine(context.Background(), runtimemodel.EngineJavaScript); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := second.SetEngine(context.Background(), runtimemodel.EngineJavaScript); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.Navigate(context.Background(), installURL.String()); err != nil {
+		t.Fatal(err)
+	}
+	page, err := second.Navigate(context.Background(), controlledURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, _ := page.Document.GetElementByID("result")
+	if got := result.TextContent(); got != "shared-profile" {
+		t.Fatalf("shared Service Worker profile result = %q", got)
 	}
 }
 

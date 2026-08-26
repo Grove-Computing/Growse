@@ -56,9 +56,11 @@ type registration struct {
 type Manager struct {
 	mu            sync.RWMutex
 	operationMu   sync.Mutex
+	persistMu     sync.Mutex
 	registrations map[string]*registration
 	nextID        uint64
 	caches        *CacheStorage
+	dataDir       string
 }
 
 // NewManager creates an empty in-memory registration store.
@@ -138,7 +140,6 @@ func (manager *Manager) Register(ctx context.Context, clientURL *url.URL, script
 		return runtimemodel.ServiceWorkerRegistration{}, err
 	}
 	manager.mu.Lock()
-	defer manager.mu.Unlock()
 	existing = manager.registrations[key]
 	if existing == nil {
 		manager.nextID++
@@ -163,7 +164,12 @@ func (manager *Manager) Register(ctx context.Context, clientURL *url.URL, script
 		existing.waitingScript = append(existing.waitingScript[:0], response.Body...)
 		existing.waitingDigest = digest
 	}
-	return snapshot(existing), nil
+	value := snapshot(existing)
+	manager.mu.Unlock()
+	if err := manager.persistOrigin(origin); err != nil {
+		return runtimemodel.ServiceWorkerRegistration{}, err
+	}
+	return value, nil
 }
 
 // Update revalidates the currently configured script URL.
@@ -189,6 +195,9 @@ func (manager *Manager) Unregister(clientURL *url.URL, scopeValue string) (bool,
 	manager.mu.Lock()
 	delete(manager.registrations, registrationKey(registration.origin, registration.scope))
 	manager.mu.Unlock()
+	if err := manager.persistOrigin(registration.origin); err != nil {
+		return false, err
+	}
 	return true, nil
 }
 
@@ -274,10 +283,16 @@ func (manager *Manager) DispatchFetch(ctx context.Context, request *network.Requ
 	if !ok {
 		return fallback(ctx, request)
 	}
-	return evaluateFetch(ctx, worker.source, worker.scriptURL, request, fallback, manager.Caches())
+	response, fetchErr := evaluateFetch(ctx, worker.source, worker.scriptURL, request, fallback, manager.Caches())
+	persistErr := manager.persistOrigin(worker.origin)
+	if fetchErr != nil || persistErr != nil {
+		return nil, errors.Join(fetchErr, persistErr)
+	}
+	return response, nil
 }
 
 type activeWorker struct {
+	origin    string
 	scriptURL *url.URL
 	source    []byte
 }
@@ -304,9 +319,9 @@ func (manager *Manager) activeWorkerFor(clientURL *url.URL) (activeWorker, bool)
 		manager.mu.RUnlock()
 		return activeWorker{}, false
 	}
-	result := activeWorker{scriptURL: cloneURL(best.activeURL), source: append([]byte(nil), best.activeScript...)}
+	result := activeWorker{origin: best.origin, scriptURL: cloneURL(best.activeURL), source: append([]byte(nil), best.activeScript...)}
 	manager.mu.RUnlock()
-	return result, result.scriptURL != nil && len(result.source) != 0
+	return result, result.scriptURL != nil
 }
 
 func (manager *Manager) registrationForScope(clientURL *url.URL, scopeValue string) (*registration, bool) {
