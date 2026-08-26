@@ -7,12 +7,14 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/Grove-Computing/Growse/internal/network"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 	fetchapi "github.com/Grove-Computing/Growse/internal/webapi/fetch"
+	"github.com/dop251/goja"
 	wabinbinary "github.com/tetratelabs/wabin/binary"
 	wabinwasm "github.com/tetratelabs/wabin/wasm"
 )
@@ -155,6 +157,113 @@ func TestWebAssemblyStreamingUsesFetchMIMEAndDoesNotProvideWASI(t *testing.T) {
 	}
 }
 
+func TestWebAssemblyResourceLimits(t *testing.T) {
+	api := newWasmAPI(context.Background(), nil)
+	t.Cleanup(api.close)
+	valid := exportedWasmBinary(t)
+
+	if _, err := api.validateBinary(make([]byte, maxWasmBinaryBytes+1)); err == nil || !strings.Contains(err.Error(), "binary exceeds") {
+		t.Fatalf("oversized validate error = %v", err)
+	}
+	api.moduleBytes = maxPageWasmBinaryBytes - len(valid) + 1
+	if _, err := api.compile(valid); err == nil || !strings.Contains(err.Error(), "Page binary total") {
+		t.Fatalf("Page binary quota error = %v", err)
+	}
+	api.moduleBytes = 0
+	api.moduleCount = maxWasmModules
+	if _, err := api.compile(valid); err == nil || !strings.Contains(err.Error(), "Module limit") {
+		t.Fatalf("Module quota error = %v", err)
+	}
+	api.moduleCount = 0
+	module, err := api.validateBinary(valid)
+	if err != nil {
+		t.Fatalf("validateBinary() error = %v", err)
+	}
+	api.instanceCount = maxWasmInstances
+	if _, err := api.instantiate(nil, module, nil); err == nil || !strings.Contains(err.Error(), "Instance limit") {
+		t.Fatalf("Instance quota error = %v", err)
+	}
+
+	tooMuchMemory := wabinbinary.EncodeModule(&wabinwasm.Module{MemorySection: &wabinwasm.Memory{Min: wasmInitialMemoryLimitPages + 1}})
+	if _, err := api.validateBinary(tooMuchMemory); err == nil || !strings.Contains(err.Error(), "initial memory") {
+		t.Fatalf("initial memory quota error = %v", err)
+	}
+	tableMaximum := uint32(maxWasmTableElements + 1)
+	tooMuchTable := wabinbinary.EncodeModule(&wabinwasm.Module{TableSection: []*wabinwasm.Table{{Min: 1, Max: &tableMaximum, Type: wabinwasm.RefTypeFuncref}}})
+	if _, err := api.validateBinary(tooMuchTable); err == nil || !strings.Contains(err.Error(), "maximum table") {
+		t.Fatalf("Table quota error = %v", err)
+	}
+
+	vmRuntime := New()
+	t.Cleanup(func() { _ = vmRuntime.Stop() })
+	if err := vmRuntime.Load(context.Background(), []runtimemodel.Script{javaScript(`console.log("loaded")`)}, runtimemodel.Environment{}); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if _, err := vmRuntime.wasmAPI.newMemory(vmRuntime.vm, vmRuntime.vm.ToValue(map[string]any{"initial": wasmInitialMemoryLimitPages + 1})); err == nil {
+		t.Fatal("WebAssembly.Memory accepted an initial size over 64 MiB")
+	}
+	if _, err := newWasmTable(vmRuntime.vm, vmRuntime.vm.ToValue(map[string]any{"element": "funcref", "initial": maxWasmTableElements + 1}), goja.Undefined()); err == nil {
+		t.Fatal("WebAssembly.Table accepted more than 65,536 elements")
+	}
+}
+
+func TestWebAssemblyFunctionCallTimesOut(t *testing.T) {
+	runtime := New()
+	t.Cleanup(func() { _ = runtime.Stop() })
+	var records [][2]string
+	environment := runtimemodel.Environment{ConsoleRecord: func(level, message string) {
+		records = append(records, [2]string{level, message})
+	}}
+	source := fmt.Sprintf(`new WebAssembly.Instance(new WebAssembly.Module(new Uint8Array(%s))).exports.spin();`, javascriptArray(t, spinningWasmBinary(false)))
+	if err := runtime.Load(context.Background(), []runtimemodel.Script{javaScript(source)}, environment); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	runtime.wasmAPI.callTimeout = 15 * time.Millisecond
+	started := time.Now()
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("WASM timeout took %s", elapsed)
+	}
+	if len(records) != 1 || records[0][0] != "error" || !strings.Contains(records[0][1], "deadline exceeded") {
+		t.Fatalf("WASM timeout records = %v", records)
+	}
+}
+
+func TestWebAssemblyStopsWithPageLifecycle(t *testing.T) {
+	runtime := New()
+	entered := make(chan struct{})
+	var once sync.Once
+	environment := runtimemodel.Environment{ConsoleRecord: func(_, message string) {
+		if message == "entered" {
+			once.Do(func() { close(entered) })
+		}
+	}}
+	source := fmt.Sprintf(`
+		const module = new WebAssembly.Module(new Uint8Array(%s));
+		new WebAssembly.Instance(module, {env: {notify: function () { console.log("entered"); }}}).exports.spin();`, javascriptArray(t, spinningWasmBinary(true)))
+	if err := runtime.Load(context.Background(), []runtimemodel.Script{javaScript(source)}, environment); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	runtime.wasmAPI.callTimeout = time.Minute
+	finished := make(chan error, 1)
+	go func() { finished <- runtime.Start(context.Background()) }()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("WASM function did not start")
+	}
+	if err := runtime.Stop(); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+	select {
+	case <-finished:
+	case <-time.After(time.Second):
+		t.Fatal("Page Stop did not cancel the running WASM function")
+	}
+}
+
 func runWasmScript(t *testing.T, source string) []string {
 	t.Helper()
 	runtime := New()
@@ -249,4 +358,20 @@ func wasiImportWasmBinary() []byte {
 			Module: "wasi_snapshot_preview1", Name: "proc_exit", Type: wabinwasm.ExternTypeFunc, DescFunc: 0,
 		}},
 	})
+}
+
+func spinningWasmBinary(notify bool) []byte {
+	module := &wabinwasm.Module{
+		TypeSection:     []*wabinwasm.FunctionType{{}},
+		FunctionSection: []wabinwasm.Index{0},
+		ExportSection:   []*wabinwasm.Export{{Name: "spin", Type: wabinwasm.ExternTypeFunc, Index: 0}},
+	}
+	body := []byte{wabinwasm.OpcodeLoop, 0x40, wabinwasm.OpcodeBr, 0, wabinwasm.OpcodeEnd, wabinwasm.OpcodeEnd}
+	if notify {
+		module.ImportSection = []*wabinwasm.Import{{Module: "env", Name: "notify", Type: wabinwasm.ExternTypeFunc, DescFunc: 0}}
+		module.ExportSection[0].Index = 1
+		body = append([]byte{wabinwasm.OpcodeCall, 0}, body...)
+	}
+	module.CodeSection = []*wabinwasm.Code{{Body: body}}
+	return wabinbinary.EncodeModule(module)
 }

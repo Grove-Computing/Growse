@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
 
 	"github.com/dop251/goja"
 	wabinbinary "github.com/tetratelabs/wabin/binary"
@@ -224,11 +223,11 @@ func copyWasmMemory(source *wasmMemoryValue, target wazeroapi.Memory) {
 }
 
 func validateImportLimits(imported *wabinwasm.Import) error {
-	if imported.Type == wabinwasm.ExternTypeMemory && imported.DescMem != nil && imported.DescMem.Min > wasmMemoryLimitPages {
-		return fmt.Errorf("imported memory minimum exceeds %d pages", wasmMemoryLimitPages)
+	if imported.Type == wabinwasm.ExternTypeMemory && imported.DescMem != nil {
+		return validateWasmMemoryLimits(imported.DescMem.Min, imported.DescMem.Max, imported.DescMem.IsMaxEncoded)
 	}
-	if imported.Type == wabinwasm.ExternTypeTable && imported.DescTable != nil && imported.DescTable.Min > math.MaxUint16 {
-		return errors.New("imported table minimum exceeds 65535 elements")
+	if imported.Type == wabinwasm.ExternTypeTable {
+		return validateWasmTableLimits(imported.DescTable)
 	}
 	return nil
 }

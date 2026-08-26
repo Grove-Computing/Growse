@@ -8,6 +8,7 @@ import (
 	"math"
 	"math/big"
 	"sort"
+	"time"
 
 	fetchapi "github.com/Grove-Computing/Growse/internal/webapi/fetch"
 	"github.com/dop251/goja"
@@ -18,7 +19,17 @@ import (
 	wazeroapi "github.com/tetratelabs/wazero/api"
 )
 
-const wasmMemoryLimitPages = 4_096
+const (
+	wasmPageBytes               = 64 << 10
+	wasmMemoryLimitPages        = 4_096
+	wasmInitialMemoryLimitPages = 1_024
+	maxWasmBinaryBytes          = 8 << 20
+	maxPageWasmBinaryBytes      = 32 << 20
+	maxWasmModules              = 32
+	maxWasmInstances            = 64
+	maxWasmTableElements        = 65_536
+	defaultWasmCallTimeout      = 5 * time.Second
+)
 
 type wasmModuleValue struct {
 	binary  []byte
@@ -62,6 +73,11 @@ type wasmAPI struct {
 	runtimes  []wazero.Runtime
 	responses map[*goja.Object]fetchapi.Response
 
+	moduleBytes   int
+	moduleCount   int
+	instanceCount int
+	callTimeout   time.Duration
+
 	moduleConstructor   *goja.Object
 	instanceConstructor *goja.Object
 	memoryConstructor   *goja.Object
@@ -73,18 +89,18 @@ func newWasmAPI(ctx context.Context, responses map[*goja.Object]fetchapi.Respons
 	return &wasmAPI{
 		ctx: ctx, modules: make(map[*goja.Object]*wasmModuleValue), instances: make(map[*goja.Object]*wasmInstanceValue),
 		memories: make(map[*goja.Object]*wasmMemoryValue), globals: make(map[*goja.Object]*wasmGlobalValue), tables: make(map[*goja.Object]*wasmTableValue),
-		responses: responses,
+		responses: responses, callTimeout: defaultWasmCallTimeout,
 	}
 }
 
 func (api *wasmAPI) install(vm *goja.Runtime) error {
 	namespace := vm.NewObject()
 	if err := namespace.Set("validate", func(call goja.FunctionCall) goja.Value {
-		binary, err := wasmBytes(vm, call.Argument(0))
+		source, err := wasmBytes(vm, call.Argument(0))
 		if err != nil {
 			return vm.ToValue(false)
 		}
-		_, err = api.compile(binary)
+		_, err = api.validateBinary(source)
 		return vm.ToValue(err == nil)
 	}); err != nil {
 		return err
@@ -212,8 +228,33 @@ func (api *wasmAPI) install(vm *goja.Runtime) error {
 }
 
 func (api *wasmAPI) compile(source []byte) (*wasmModuleValue, error) {
+	if api.moduleCount >= maxWasmModules {
+		return nil, fmt.Errorf("WebAssembly Module limit of %d reached", maxWasmModules)
+	}
+	if len(source) > maxWasmBinaryBytes {
+		return nil, fmt.Errorf("WebAssembly binary exceeds %d bytes", maxWasmBinaryBytes)
+	}
+	if api.moduleBytes > maxPageWasmBinaryBytes-len(source) {
+		return nil, fmt.Errorf("WebAssembly Page binary total exceeds %d bytes", maxPageWasmBinaryBytes)
+	}
+	module, err := api.validateBinary(source)
+	if err != nil {
+		return nil, err
+	}
+	api.moduleCount++
+	api.moduleBytes += len(source)
+	return module, nil
+}
+
+func (api *wasmAPI) validateBinary(source []byte) (*wasmModuleValue, error) {
+	if len(source) > maxWasmBinaryBytes {
+		return nil, fmt.Errorf("WebAssembly binary exceeds %d bytes", maxWasmBinaryBytes)
+	}
 	decoded, err := wabinbinary.DecodeModule(source, wabinwasm.CoreFeaturesV2)
 	if err != nil {
+		return nil, err
+	}
+	if err := validateWasmModuleLimits(decoded); err != nil {
 		return nil, err
 	}
 	runtime := api.newRuntime()
@@ -230,6 +271,9 @@ func (api *wasmAPI) compile(source []byte) (*wasmModuleValue, error) {
 func (api *wasmAPI) instantiate(vm *goja.Runtime, module *wasmModuleValue, imports goja.Value) (*wasmInstanceValue, error) {
 	if module == nil {
 		return nil, errors.New("first argument must be a WebAssembly.Module")
+	}
+	if api.instanceCount >= maxWasmInstances {
+		return nil, fmt.Errorf("WebAssembly Instance limit of %d reached", maxWasmInstances)
 	}
 	runtime := api.newRuntime()
 	if err := api.installImportProviders(vm, runtime, module.decoded, imports); err != nil {
@@ -248,6 +292,7 @@ func (api *wasmAPI) instantiate(vm *goja.Runtime, module *wasmModuleValue, impor
 		return nil, err
 	}
 	api.runtimes = append(api.runtimes, runtime)
+	api.instanceCount++
 	return &wasmInstanceValue{runtime: runtime, module: instance}, nil
 }
 
@@ -318,7 +363,13 @@ func (api *wasmAPI) functionValue(vm *goja.Runtime, function wazeroapi.Function)
 			}
 			params[index] = value
 		}
-		results, err := function.Call(api.ctx, params...)
+		callTimeout := api.callTimeout
+		if callTimeout <= 0 {
+			callTimeout = defaultWasmCallTimeout
+		}
+		callContext, cancel := context.WithTimeout(api.ctx, callTimeout)
+		defer cancel()
+		results, err := function.Call(callContext, params...)
 		if err != nil {
 			panic(vm.NewGoError(fmt.Errorf("WebAssembly.RuntimeError: %w", err)))
 		}
@@ -382,6 +433,12 @@ func (api *wasmAPI) close() {
 		_ = runtime.Close(context.Background())
 	}
 	api.runtimes = nil
+	api.modules = nil
+	api.instances = nil
+	api.memories = nil
+	api.globals = nil
+	api.tables = nil
+	api.responses = nil
 }
 
 func descriptorObject(value goja.Value) (*goja.Object, error) {
@@ -394,7 +451,7 @@ func descriptorObject(value goja.Value) (*goja.Object, error) {
 
 func descriptorLimit(object *goja.Object, name string, required bool) (uint32, bool, error) {
 	value := object.Get(name)
-	if goja.IsUndefined(value) {
+	if value == nil || goja.IsUndefined(value) {
 		if required {
 			return 0, false, fmt.Errorf("descriptor.%s is required", name)
 		}
@@ -437,4 +494,65 @@ func sortedImportModules(module *wabinwasm.Module) []string {
 	}
 	sort.Strings(result)
 	return result
+}
+
+func validateWasmModuleLimits(module *wabinwasm.Module) error {
+	if module == nil {
+		return errors.New("WebAssembly module is nil")
+	}
+	if module.MemorySection != nil {
+		if err := validateWasmMemoryLimits(module.MemorySection.Min, module.MemorySection.Max, module.MemorySection.IsMaxEncoded); err != nil {
+			return fmt.Errorf("defined memory: %w", err)
+		}
+	}
+	for _, table := range module.TableSection {
+		if err := validateWasmTableLimits(table); err != nil {
+			return fmt.Errorf("defined table: %w", err)
+		}
+	}
+	for _, imported := range module.ImportSection {
+		switch imported.Type {
+		case wabinwasm.ExternTypeMemory:
+			if imported.DescMem == nil {
+				return errors.New("imported memory descriptor is missing")
+			}
+			if err := validateWasmMemoryLimits(imported.DescMem.Min, imported.DescMem.Max, imported.DescMem.IsMaxEncoded); err != nil {
+				return fmt.Errorf("imported memory %s.%s: %w", imported.Module, imported.Name, err)
+			}
+		case wabinwasm.ExternTypeTable:
+			if err := validateWasmTableLimits(imported.DescTable); err != nil {
+				return fmt.Errorf("imported table %s.%s: %w", imported.Module, imported.Name, err)
+			}
+		}
+	}
+	return nil
+}
+
+func validateWasmMemoryLimits(initial, maximum uint32, hasMaximum bool) error {
+	if initial > wasmInitialMemoryLimitPages {
+		return fmt.Errorf("initial memory exceeds %d bytes", wasmInitialMemoryLimitPages*wasmPageBytes)
+	}
+	if hasMaximum && maximum > wasmMemoryLimitPages {
+		return fmt.Errorf("maximum memory exceeds %d bytes", wasmMemoryLimitPages*wasmPageBytes)
+	}
+	if hasMaximum && initial > maximum {
+		return errors.New("initial memory exceeds maximum")
+	}
+	return nil
+}
+
+func validateWasmTableLimits(table *wabinwasm.Table) error {
+	if table == nil {
+		return errors.New("table descriptor is missing")
+	}
+	if table.Min > maxWasmTableElements {
+		return fmt.Errorf("initial table exceeds %d elements", maxWasmTableElements)
+	}
+	if table.Max != nil && *table.Max > maxWasmTableElements {
+		return fmt.Errorf("maximum table exceeds %d elements", maxWasmTableElements)
+	}
+	if table.Max != nil && table.Min > *table.Max {
+		return errors.New("initial table exceeds maximum")
+	}
+	return nil
 }

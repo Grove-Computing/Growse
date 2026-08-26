@@ -28,8 +28,8 @@ func (api *wasmAPI) newMemory(vm *goja.Runtime, descriptor goja.Value) (*wasmMem
 	if !hasMaximum {
 		maximum = wasmMemoryLimitPages
 	}
-	if initial > maximum || maximum > wasmMemoryLimitPages {
-		return nil, fmt.Errorf("memory limits must satisfy initial <= maximum <= %d", wasmMemoryLimitPages)
+	if initial > wasmInitialMemoryLimitPages || initial > maximum || maximum > wasmMemoryLimitPages {
+		return nil, fmt.Errorf("memory limits must satisfy initial <= %d, initial <= maximum <= %d pages", wasmInitialMemoryLimitPages, wasmMemoryLimitPages)
 	}
 	memory := &wasmMemoryValue{initial: initial, maximum: maximum}
 	module := &wabinwasm.Module{
@@ -193,10 +193,10 @@ func newWasmTable(vm *goja.Runtime, descriptor, initialValue goja.Value) (*wasmT
 		return nil, err
 	}
 	if !hasMaximum {
-		maximum = math.MaxUint32
+		maximum = maxWasmTableElements
 	}
-	if initial > maximum {
-		return nil, errors.New("table initial exceeds maximum")
+	if initial > maximum || maximum > maxWasmTableElements {
+		return nil, fmt.Errorf("table limits must satisfy initial <= maximum <= %d", maxWasmTableElements)
 	}
 	if goja.IsUndefined(initialValue) {
 		initialValue = goja.Null()
@@ -273,7 +273,7 @@ func tableFromDescriptor(descriptor *wabinwasm.Table) *wasmTableValue {
 	if descriptor == nil {
 		return nil
 	}
-	maximum := uint32(math.MaxUint32)
+	maximum := uint32(maxWasmTableElements)
 	if descriptor.Max != nil {
 		maximum = *descriptor.Max
 	}
