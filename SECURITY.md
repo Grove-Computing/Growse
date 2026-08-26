@@ -6,7 +6,8 @@
 
 | Version | Supported |
 | --- | --- |
-| 0.13.x | Yes |
+| 0.14.x | Yes |
+| 0.13.x | No |
 | 0.12.x | No |
 | 0.11.x | No |
 | 0.10.x | No |
@@ -41,7 +42,7 @@ GitHub Releaseの各Archiveには、同名の`.sha256`と、`growse_<version>_<p
 たとえばLinux amd64のArchiveを検証する場合は、次を実行します。
 
 ```sh
-VERSION=v0.12.0
+VERSION=v0.14.0
 ASSET="growse_${VERSION}_linux_amd64.tar.gz"
 gh release download "$VERSION" --repo Grove-Computing/Growse \
   --pattern "$ASSET" --pattern "$ASSET.sha256" \
@@ -70,12 +71,15 @@ Developer workstationからのCredential窃取、不可視Unicode、未承認Bin
 
 ## Go / JavaScript Runtime Security Boundary
 
-Growse v0.13.0のYaegi / goja Runtimeは、信頼できないGoまたはJavaScriptコードを安全に実行するProcess Sandboxではありません。
-プロセス分離、CPU時間制限、メモリ制限、およびGo標準ライブラリ全体に対する完全な制限は提供していません。
+Growse v0.14.0はPage / FrameのYaegi・goja・WASMとService WorkerをBrowser UIとは別の専用worker processで実行します。workerはversion / length制限付きの型付きIPCを通して、BrowserがbrokerするDOM、Event、Timer、Frame、Fetch、Storage、Navigation、Console、Module、WASM操作だけを要求できます。Browser credential、任意filesystem、直接socket / DNS、subprocess、dynamic library、OS shell、Go reflection、Node.js APIをhost surfaceとして公開しません。
 
-Scriptの自動実行は`localhost`、`127.0.0.1`、`::1`のページと、同じく信頼済みsame-originから取得したGo / JavaScript Scriptに限定されます。redirect後の最終URLにも同じ判定を適用し、選択していないEngineのScriptは取得しません。ただし、ローカルで配信されるページやScriptを信頼できることは利用者自身が確認してください。FetchはSame-Origin PolicyとCORSを適用し、`omit`、`same-origin`、`include`のCredentials Modeに従います。
+Browserはcodeを渡す前に、別PID、worker executable / protocol、brokered host I/O、最小environment、parent lifecycle、memory上限を検証します。Linuxでは`no-new-privileges`とparent-death signal、macOS / Windowsでは専用process group、全platformではparent IPC EOFによる終了を適用します。必須条件が欠ける、workerがtimeout / crashする、protocolに違反する場合は対象contextだけをfail closedし、停止済みgenerationのcallbackを拒否します。
 
-JavaScript hostはOS、filesystem、process、Go reflection、Node.js APIを公開しません。Pageごとのgoja VMは単一直列queueからだけ呼び出し、Page closeとEngine切替でinterruptし、listener、Timer、Fetch、Storage callbackを解放します。これはhost surfaceの縮小とlifecycle分離であり、CPU・memory・Processを隔離するSandboxではありません。
+ここでいうsandboxはGrowseが公開する実行機能とhost作用のdefault-deny境界です。seccomp、container、VMと同等の全system call隔離や、OS kernel、Go runtime、Yaegi、goja、wazero、decoder、Growse自身の未知の脆弱性が存在しないことまでは保証しません。Growseを権限の高いユーザーや機密profileで実行しないでください。
+
+JavaScriptは通常のHTTP(S) Pageのinline / external classic、CORSを通過したECMAScript Module、WebAssemblyを実行できます。redirect、status、MIME、mixed content、credentials、CORS、integrity、sizeをBrowser側で再検証します。Go sourceは明示的な`text/go`かつtrusted loopback / same-originに限定し、外部Internet Originから暗黙実行しません。選択していないEngineのScriptは取得しません。FetchはSame-Origin PolicyとCORSを適用し、`omit`、`same-origin`、`include`のCredentials Modeに従います。
+
+Browser Sessionあたりworker 32件、IPC message 1 MiB、pending message 256件、転送中payload 8 MiB、既定task 5秒を上限とします。Page close、Navigation、Engine切替でlistener、Timer、Fetch、Frame / WASM callbackをcancelし、通常停止に応答しないworkerは終了します。
 
 Navigation、Form Submission、FetchはBrowser Session単位のメモリ内Cookie Jarを共有します。各RequestでDomain、Path、Secure、HttpOnly、SameSite、Origin、Credentialsを再評価し、WebGoからHttpOnly Cookieを参照できないようにします。Request Bodyは1 MiB、Headerは100件かつ64 KiB、Response Bodyは既定4 MiB、Redirectは10回を上限とし、Page終了時は進行中のFetchをcancelします。URLを含むErrorと表示にはuserinfoを残さず、CookieとAuthorizationの値をLogへ出力しません。
 
@@ -83,13 +87,15 @@ SchedulerはPageあたりTimer 10,000件、Animation Frame callback 10,000件、
 
 Local StorageはOSのUser Config Directory配下へOriginごとのJSONとして保存し、directoryを0700、fileを0600に制限します。暗号化機能ではないため、OS user accountとprofile directoryを信頼境界とします。同じBrowser Sessionのsame-origin TabはLocal Storageを共有しますが、Storage Eventには値をLog出力せず、更新元、cross-origin、closed Tabへ配送しません。Session StorageはTabのPage Sessionだけに保持し、Tab終了時に破棄します。key 4 KiB、value 1 MiB、Originごと5 MiB、Profile全体50 MiB、Origin数128を上限とし、transaction失敗時は更新前の状態へ戻します。
 
-TabはDOM、Runtime、History、Session Storageを分離しますが、OS ProcessやSecurity Sandboxを分離する境界ではありません。1つのBrowser SessionではLocal Storage、Cookie Jar、HTTP Cacheを仕様の範囲で共有するため、同じProfileで開くPageはすべて信頼できるものに限定してください。
+TabはDOM、Runtime worker、History、Session Storageを分離します。1つのBrowser SessionではLocal Storage、Cookie Jar、HTTP Cache、Service Worker registration / Cache Storageを仕様の範囲で共有するため、Origin policyとscopeがsecurity boundaryになります。
 
 HTTP CacheはOSのUser Cache Directory配下にprivate cacheとして保存します。Authorization、Cookie、Set-Cookieを含むentryは保存せず、Cache hit時もMIME、Origin、CORS、Credentials Policyを再適用します。memoryは1,024 entryかつCache keyごと32 variant、diskは1 entry 4 MiB、Originごと32 MiB、全体128 MiBを上限とし、schema versionとBody SHA-256が一致しないentryを破棄します。
 
-DevToolsはPageごとのread-only診断境界です。Consoleは1件4 KiB・Page 1,000件、DOM snapshotは2,000 node・深さ128・attribute 64件・文字列4 KiB、NetworkはPage 500件・Browser Session 4,000件を上限とします。Page終了後のcallbackは記録を追加できません。Network recordにはRequest / Response body、Header、Cookie、Authorization、error本文を保持せず、URL userinfoとquery valueをマスクします。Inspectorはpassword inputのvalue、WebGo callback、Runtime objectを公開しません。DevToolsは秘密情報を安全に保管するvaultではないため、URL pathやConsoleへCredentialを意図的に書き込まないでください。
+Service Worker registrationとCache StorageはOrigin profileへ保存します。registration 64件、Originあたりactive worker 1件、Cache 32件、entry 4,096件、1 response 4 MiB、Origin合計128 MiBを上限とします。scriptはsame-origin Secure Contextに限定し、scope、update redirect / MIME、fetch interceptionをBrowser側で検証します。Cacheへcredentialを永続化せず、破損dataはOrigin単位で隔離します。
 
-信頼できないGo / JavaScriptソースを開いたり、Growseを権限の高いユーザーで実行したりしないでください。
+DevToolsはPageごとのread-only診断境界です。Consoleは1件4 KiB・Page 1,000件、DOM snapshotは2,000 node・深さ128・attribute 64件・文字列4 KiB、NetworkはPage 500件・Browser Session 4,000件を上限とします。Runtime panelはPage / Frame / Service WorkerのID、generation、Engine、state、script種別、有限error category、sandbox capabilityだけを表示します。Request / Response body、Header、Cookie、Authorization、Service Worker Cache body、IPC payload、raw error本文を保持せず、diagnostic URLからuserinfo、query、fragmentを除去します。Inspectorはpassword inputのvalue、WebGo callback、Runtime objectを公開しません。
+
+外部Go sourceを信頼しないでください。外部JavaScriptはv0.14.0 sandbox boundary内で扱いますが、未知の実装脆弱性を想定し、機密情報を持つ高権限環境では実行しないでください。
 
 ## Hoverとカーソル表示
 
@@ -99,7 +105,7 @@ Gopherカーソルには`internal/ui/assets/blue.svg`から生成してビルド
 
 ## CSS Resource
 
-外部Stylesheetの`@import`は同一Originに限定し、循環を検出した上で最大深度8、最大32 Stylesheet、合計8 MiBに制限します。各Background ImageはHTTP(S)のPNG、JPEG、GIFだけを受け入れ、応答を4 MiB、Decode後の画像を1600万画素までに制限します。複数Backgroundでも各URLへ同じ検証を適用し、MIME TypeやDecodeの検証に失敗したLayerは描画せず、ページ本体の表示は継続します。
+外部Stylesheetと`@import`はsame-origin / cross-origin HTTP(S)を扱い、redirect後URL、CSS MIME、mixed content、循環を検証した上で最大深度8、最大32 Stylesheet、合計8 MiBに制限します。各Background ImageはHTTP(S)のPNG、JPEG、GIFだけを受け入れ、応答を4 MiB、Decode後の画像を1600万画素までに制限します。複数Backgroundでも各URLへ同じ検証を適用し、MIME TypeやDecodeの検証に失敗したLayerは描画せず、ページ本体の表示は継続します。
 
 Gradient、Shadow、Transform、Clip、Opacityは取得したコードを実行せず、型付きのStyle値からLayout TreeとDisplay Listを生成します。極端に大きいGridや深いStacking Contextを含む信頼できないページはCPU・メモリを消費し得るため、WebGoと同様に高い権限で実行しないでください。
 

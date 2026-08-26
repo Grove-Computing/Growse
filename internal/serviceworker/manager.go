@@ -438,7 +438,9 @@ func validateScriptResponse(requested *url.URL, response *network.Response) erro
 }
 
 func snapshot(item *registration) runtimemodel.ServiceWorkerRegistration {
-	value := runtimemodel.ServiceWorkerRegistration{ID: item.id, Scope: item.scope.String(), ScriptURL: item.scriptURL.String(), Claimed: item.claimed}
+	value := runtimemodel.ServiceWorkerRegistration{
+		ID: item.id, Generation: item.generation, Scope: item.scope.String(), ScriptURL: item.scriptURL.String(), Claimed: item.claimed,
+	}
 	if item.active {
 		value.Active = runtimemodel.ServiceWorkerActivated
 		if item.activeURL != nil {

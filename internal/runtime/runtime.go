@@ -71,6 +71,7 @@ type Script struct {
 // code was accepted by a Runtime. Constraints only contains OS controls that
 // the worker actually applied; optional controls are never treated as required.
 type SandboxStatus struct {
+	Generation         uint64   `json:"generation,omitempty"`
 	Platform           string   `json:"platform"`
 	Ready              bool     `json:"ready"`
 	ProcessBoundary    bool     `json:"processBoundary"`
@@ -192,6 +193,7 @@ const (
 // ServiceWorkerRegistration is a serializable view of one scope registration.
 type ServiceWorkerRegistration struct {
 	ID                  uint64
+	Generation          uint64
 	Scope               string
 	ScriptURL           string
 	InstallingScriptURL string

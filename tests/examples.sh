@@ -9,6 +9,7 @@ examples=(
   data-app
   devtools
   dual-runtime
+  external-web-platform
   flexbox
   persistent-app
   todo
@@ -30,8 +31,9 @@ go test \
   ./examples/data-app \
   ./examples/devtools \
   ./examples/dual-runtime \
+  ./examples/external-web-platform \
   ./examples/flexbox \
   ./examples/persistent-app \
   ./examples/todo
 
-echo "v0.13.0 Demo回帰検証成功: ${examples[*]}"
+echo "v0.14.0 Demo回帰検証成功: ${examples[*]}"

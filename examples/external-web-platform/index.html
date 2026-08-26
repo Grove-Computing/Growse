@@ -1,0 +1,28 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Growse External Web Platform</title>
+  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="{{CDN_ORIGIN}}/external.css">
+</head>
+<body>
+  <main>
+    <p class="eyebrow">Growse v0.14.0</p>
+    <h1>External Web Platform Lab</h1>
+    <section class="grid">
+      <article class="cdn-style"><h2>External scripts</h2><p id="classic-state">pending</p><p id="module-state">pending</p><p id="dynamic-state">pending</p></article>
+      <article><h2>WebAssembly</h2><p id="wasm-state">pending</p></article>
+      <article><h2>Service Worker</h2><p id="service-worker-state">pending</p><p id="offline-state">pending</p></article>
+      <article id="mutation-target"><h2>DOM mutation</h2><p id="mutation-state">pending</p></article>
+    </section>
+    <section class="frames">
+      <iframe id="same-frame" src="/same-frame.html"></iframe>
+      <iframe id="cross-frame" src="{{FRAME_ORIGIN}}/cross-frame.html"></iframe>
+      <iframe id="sandbox-frame" sandbox src="/sandbox-frame.html"></iframe>
+    </section>
+  </main>
+  <script src="{{CDN_ORIGIN}}/classic.js"></script>
+  <script type="module" src="{{CDN_ORIGIN}}/app.mjs"></script>
+</body>
+</html>

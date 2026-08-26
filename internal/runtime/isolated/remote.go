@@ -34,13 +34,17 @@ const (
 	maxSessionWorkers    = 32
 )
 
-var activeWorkers atomic.Int64
+var (
+	activeWorkers         atomic.Int64
+	nextRuntimeGeneration atomic.Uint64
+)
 
 // Runtime is a browser-side proxy for one isolated Go or JavaScript runtime.
 type Runtime struct {
 	mu sync.Mutex
 
 	engine      runtimemodel.Engine
+	generation  uint64
 	environment runtimemodel.Environment
 	peer        *peer
 	command     *exec.Cmd
@@ -57,7 +61,9 @@ type Runtime struct {
 
 // New returns a runtime proxy for engine. The worker is started by Load.
 func New(engine runtimemodel.Engine) *Runtime {
-	return &Runtime{engine: runtimemodel.NormalizeEngine(engine), taskTimeout: defaultTaskTimeout}
+	return &Runtime{
+		engine: runtimemodel.NormalizeEngine(engine), generation: nextRuntimeGeneration.Add(1), taskTimeout: defaultTaskTimeout,
+	}
 }
 
 func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, environment runtimemodel.Environment) error {
@@ -361,6 +367,7 @@ func (r *Runtime) verifySandbox(ctx context.Context) error {
 	}
 	r.mu.Lock()
 	r.sandbox = response.SandboxStatus
+	r.sandbox.Generation = r.generation
 	r.mu.Unlock()
 	return nil
 }

@@ -1,6 +1,6 @@
-# WebGo DevTools
+# Growse DevTools
 
-Growse v0.13.0は、active TabのPageを観測するread-only DevToolsを提供する。ツールバーの`DevTools`または`F12`で開閉し、Console、Inspector、Networkを切り替える。panel、Console filter、Inspector選択はTabごとに分離する。Headerには選択中のGo / JavaScript EngineとRuntimeのidle / running / stopped / error状態を表示する。
+Growse v0.14.0は、active TabのPageを観測するread-only DevToolsを提供する。ツールバーの`DevTools`または`F12`で開閉し、Console、Inspector、Network、Runtimeを切り替える。panel、Console filter、Inspector選択はTabごとに分離する。Headerには選択中のGo / JavaScript EngineとRuntimeのidle / running / stopped / error状態を表示する。
 
 ## Console
 
@@ -31,8 +31,16 @@ Request / Response bodyとHeaderはObservation型にもNetworkRecord型にも存
 - lifecycle: Page close後の追加を拒否
 - clear: 表示中Pageのrecordだけを削除し、sequenceとSession budgetは巻き戻さない
 
+## Runtime
+
+Runtime panelはtop-level Page、再帰的なFrame、same-originのService Worker registrationをcontextごとに表示する。各rowはcontext kind / ID / parent ID、browsing generation、Engine、state、worker generation、sandbox ready / process / failure、適用constraint数、script kind / schedule / location、有限error categoryを持つ。
+
+Module / WASM / sandbox / runtime / frame errorはcategoryだけを表示し、raw messageやsourceを保持しない。URLはuserinfo、query、fragmentを除去する。inline source、module namespace、WASM binary / memory、Service Worker Cache body、IPC payload、environment、filesystem pathは診断modelへ入れない。
+
+worker generationはPage reload、Frame navigation、Service Worker restartを識別するための単調増加IDであり、process IDや秘密値ではない。sandbox constraintはworkerが適用・報告しBrowserが検証した件数とready状態を示し、適用できなかったOS機能を成功として表示しない。
+
 ## 再現と検証
 
-`go run ./examples/devtools`はlocalhostだけでConsole 4 level、DOM mutation、Computed Style、Layout、成功Fetch、redirect、cache hit、HTTP 503、timeoutを再現する。fixtureには意図的なquery / Header / password credentialが含まれ、Integration TestはConsole、Inspector、Network snapshotに値が残らないことを確認する。
+`go run ./examples/devtools`はlocalhostだけでConsole 4 level、DOM mutation、Computed Style、Layout、成功Fetch、redirect、cache hit、HTTP 503、timeoutを再現する。`go run ./examples/external-web-platform`はPage / Frame / Service Worker、classic / Module / WASM、複数worker generation、sandbox状態を再現する。fixtureには意図的なquery / Header / password credentialが含まれ、Integration TestはConsole、Inspector、Network、Runtime snapshotに値が残らないことを確認する。
 
 通常・空・error・truncated状態のsemantic visual snapshotは`internal/ui/testdata/devtools-panels.golden.json`で固定する。安全上限、並行access、Tab / Page lifecycleは`internal/devtools`と`internal/browser`のUnit / Integration Testで検証する。

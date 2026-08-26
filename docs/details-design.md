@@ -1,4 +1,6 @@
-# Growse MVP 詳細設計書
+# Growse MVP 詳細設計書（歴史資料）
+
+> この文書はv0.1.0の設計判断を保存する歴史資料であり、現在のv0.14.0実装を表さない。現行のRuntime、JavaScript、WASM、iframe、Service Worker、sandbox設計は[Runtime worker / Web Platform設計](runtime-worker-design.md)を参照する。
 
 ## 1. 文書概要
 
