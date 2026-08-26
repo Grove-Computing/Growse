@@ -3,10 +3,16 @@
     "viewport=(224,92)-(1280,520)",
     "devtools=(224,520)-(1280,800)"
   ],
+  "runtime": [
+    "selector=go:Go javascript:JS",
+    "go=Engine: go · Runtime: running",
+    "javascript=Engine: javascript · Runtime: running",
+    "error=Engine: javascript · Runtime: error"
+  ],
   "console": [
     "empty=Console has no matching messages",
-    "normal=0001/info/webgo/ready",
-    "error=0002/error/failed",
+    "normal=0001/info/go/console/ready",
+    "error=0002/error/javascript/failed",
     "truncated=bytes:4096 suffix:true"
   ],
   "inspector": [
@@ -19,6 +25,8 @@
     "empty=Network has no requests for this page",
     "0001  fetch      GET   200                1.5ms      42 B  hit                 https://example.test/data?token=%5BREDACTED%5D",
     "0002  fetch      GET   error:timeout       20ms       0 B  -                   https://example.test/data?token=%5BREDACTED%5D",
-    "0003  fetch      GET   error:response_limit       0s       0 B  -                   https://example.test/data?token=%5BREDACTED%5D"
+    "0003  fetch      GET   error:response_limit       0s       0 B  -                   https://example.test/data?token=%5BREDACTED%5D",
+    "0004  script/go  GET   200                   0s       0 B  -                   http://localhost/app.go",
+    "0005  script/javascript GET   200                   0s       0 B  -                   http://localhost/app.js"
   ]
 }

@@ -8,6 +8,7 @@ examples=(
   dashboard
   data-app
   devtools
+  dual-runtime
   flexbox
   persistent-app
   todo
@@ -28,8 +29,9 @@ go test \
   ./examples/dashboard \
   ./examples/data-app \
   ./examples/devtools \
+  ./examples/dual-runtime \
   ./examples/flexbox \
   ./examples/persistent-app \
   ./examples/todo
 
-echo "v0.12.0 Demo回帰検証成功: ${examples[*]}"
+echo "v0.13.0 Demo回帰検証成功: ${examples[*]}"

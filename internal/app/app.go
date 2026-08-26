@@ -12,6 +12,7 @@ import (
 	"github.com/Grove-Computing/Growse/internal/browser"
 	"github.com/Grove-Computing/Growse/internal/network"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
+	"github.com/Grove-Computing/Growse/internal/runtime/javascript"
 	"github.com/Grove-Computing/Growse/internal/runtime/yaegi"
 	storagecore "github.com/Grove-Computing/Growse/internal/storage"
 	"github.com/Grove-Computing/Growse/internal/ui"
@@ -58,8 +59,15 @@ func runWindow(window *gioapp.Window) error {
 		log.Printf("HTTP Cache directoryを解決できませんでした: %v", err)
 	}
 	session := browser.NewSession(func() *browser.Browser {
-		state := browser.NewWithRuntimeFactoryAndStorage(networkClient, func() runtimemodel.Runtime {
-			return yaegi.New()
+		state := browser.NewWithEngineFactoryAndStorage(networkClient, func(engine runtimemodel.Engine) runtimemodel.Runtime {
+			switch runtimemodel.NormalizeEngine(engine) {
+			case runtimemodel.EngineGo:
+				return yaegi.New()
+			case runtimemodel.EngineJavaScript:
+				return javascript.New()
+			default:
+				return nil
+			}
 		}, storageManager.NewPageSession())
 		return state
 	})

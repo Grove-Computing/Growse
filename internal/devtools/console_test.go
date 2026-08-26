@@ -20,6 +20,15 @@ func TestPageStoreConsoleIsBoundedAndOrdered(t *testing.T) {
 	}
 }
 
+func TestPageStoreConsoleRetainsRuntimeEngine(t *testing.T) {
+	store := NewPageStore()
+	store.AddConsoleForEngine(ConsoleWarn, "javascript", "console", "message")
+	records := store.Console()
+	if len(records) != 1 || records[0].Engine != "javascript" || records[0].Source != "console" {
+		t.Fatalf("Console() = %#v, want JavaScript console record", records)
+	}
+}
+
 func TestPageStoreConsoleConcurrentAccessAndClose(t *testing.T) {
 	store := newPageStore(1000, 4096)
 	var group sync.WaitGroup

@@ -11,15 +11,18 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Grove-Computing/Growse/internal/browser"
 	"github.com/Grove-Computing/Growse/internal/devtools"
 	"github.com/Grove-Computing/Growse/internal/dom"
 	layoutmodel "github.com/Grove-Computing/Growse/internal/layout"
 	"github.com/Grove-Computing/Growse/internal/network"
+	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 	stylemodel "github.com/Grove-Computing/Growse/internal/style"
 )
 
 type devToolsVisualSnapshot struct {
 	Geometry  []string `json:"geometry"`
+	Runtime   []string `json:"runtime"`
 	Console   []string `json:"console"`
 	Inspector []string `json:"inspector"`
 	Network   []string `json:"network"`
@@ -28,8 +31,8 @@ type devToolsVisualSnapshot struct {
 func TestDevToolsPanelsVisualRegression(t *testing.T) {
 	geometry := calculateBrowserChromeGeometryWithDevTools(image.Pt(1280, 800), 224, 92, 280)
 	consoleStore := devtools.NewPageStore()
-	consoleStore.AddConsole(devtools.ConsoleInfo, "webgo", "ready")
-	consoleStore.AddConsole(devtools.ConsoleError, "runtime", "failed")
+	consoleStore.AddConsoleForEngine(devtools.ConsoleInfo, "go", "console", "ready")
+	consoleStore.AddConsoleForEngine(devtools.ConsoleError, "javascript", "runtime", "failed")
 	consoleStore.AddConsole(devtools.ConsoleWarn, "webgo", strings.Repeat("x", devtools.DefaultMaxMessageBytes+20))
 	consoleRecords := consoleStore.Console()
 
@@ -57,14 +60,24 @@ func TestDevToolsPanelsVisualRegression(t *testing.T) {
 	networkStore.ObserveNetwork(network.Observation{Method: "GET", URL: target, Kind: network.RequestFetch, Duration: 1500 * time.Microsecond, StatusCode: 200, CacheStatus: "hit", ResponseBytes: 42})
 	networkStore.ObserveNetwork(network.Observation{Method: "GET", URL: target, Kind: network.RequestFetch, Duration: 20 * time.Millisecond, ErrorCategory: "timeout"})
 	networkStore.ObserveNetwork(network.Observation{Method: "GET", URL: target, Kind: network.RequestFetch, ErrorCategory: "response_limit"})
+	goScript, _ := url.Parse("http://localhost/app.go")
+	javaScript, _ := url.Parse("http://localhost/app.js")
+	networkStore.ObserveNetwork(network.Observation{Method: "GET", URL: goScript, Kind: network.RequestScript, Engine: "go", StatusCode: 200})
+	networkStore.ObserveNetwork(network.Observation{Method: "GET", URL: javaScript, Kind: network.RequestScript, Engine: "javascript", StatusCode: 200})
 	networkRecords := networkStore.Network()
 
 	actual := devToolsVisualSnapshot{
 		Geometry: []string{"viewport=" + geometry.viewport.String(), "devtools=" + geometry.devTools.String()},
+		Runtime: []string{
+			"selector=go:" + engineButtonLabel(runtimemodel.EngineGo) + " javascript:" + engineButtonLabel(runtimemodel.EngineJavaScript),
+			"go=" + devToolsRuntimeLabel(&browser.Page{Engine: runtimemodel.EngineGo, RuntimeStarted: true}),
+			"javascript=" + devToolsRuntimeLabel(&browser.Page{Engine: runtimemodel.EngineJavaScript, RuntimeStarted: true}),
+			"error=" + devToolsRuntimeLabel(&browser.Page{Engine: runtimemodel.EngineJavaScript, RuntimeError: "failed"}),
+		},
 		Console: []string{
 			"empty=Console has no matching messages",
-			fmt.Sprintf("normal=%04d/%s/%s/%s", consoleRecords[0].Sequence, consoleRecords[0].Level, consoleRecords[0].Source, consoleRecords[0].Message),
-			fmt.Sprintf("error=%04d/%s/%s", consoleRecords[1].Sequence, consoleRecords[1].Level, consoleRecords[1].Message),
+			fmt.Sprintf("normal=%04d/%s/%s/%s/%s", consoleRecords[0].Sequence, consoleRecords[0].Level, consoleRecords[0].Engine, consoleRecords[0].Source, consoleRecords[0].Message),
+			fmt.Sprintf("error=%04d/%s/%s/%s", consoleRecords[1].Sequence, consoleRecords[1].Level, consoleRecords[1].Engine, consoleRecords[1].Message),
 			fmt.Sprintf("truncated=bytes:%d suffix:%t", len(consoleRecords[2].Message), strings.HasSuffix(consoleRecords[2].Message, "…")),
 		},
 		Inspector: []string{
@@ -78,6 +91,8 @@ func TestDevToolsPanelsVisualRegression(t *testing.T) {
 			networkRecordLabel(networkRecords[0], "200", "hit"),
 			networkRecordLabel(networkRecords[1], "error:timeout", "-"),
 			networkRecordLabel(networkRecords[2], "error:response_limit", "-"),
+			networkRecordLabel(networkRecords[3], "200", "-"),
+			networkRecordLabel(networkRecords[4], "200", "-"),
 		},
 	}
 	wantBytes, err := os.ReadFile("testdata/devtools-panels.golden.json")

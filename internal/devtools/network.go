@@ -46,6 +46,7 @@ type NetworkRecord struct {
 	Method        string
 	URL           string
 	Kind          string
+	Engine        string
 	StartedAt     time.Time
 	Duration      time.Duration
 	StatusCode    int
@@ -61,7 +62,7 @@ func (store *PageStore) ObserveNetwork(observation network.Observation) {
 		return
 	}
 	record := NetworkRecord{
-		Method: strings.ToUpper(observation.Method), URL: redactedNetworkURL(observation.URL), Kind: requestKindName(observation.Kind),
+		Method: strings.ToUpper(observation.Method), URL: redactedNetworkURL(observation.URL), Kind: requestKindName(observation.Kind), Engine: observation.Engine,
 		StartedAt: observation.StartedAt, Duration: observation.Duration, StatusCode: observation.StatusCode,
 		Redirected: observation.Redirected, CacheStatus: observation.CacheStatus, ResponseBytes: observation.ResponseBytes,
 		ErrorCategory: observation.ErrorCategory,
