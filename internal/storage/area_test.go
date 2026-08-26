@@ -62,6 +62,20 @@ func TestAreaDistinguishesEmptyMissingAndPreservesEnumerationOrder(t *testing.T)
 	}
 }
 
+func TestAreaEntriesReturnsDefensiveInsertionOrderedSnapshot(t *testing.T) {
+	area := NewArea()
+	_ = area.Set("first", "one")
+	_ = area.Set("second", "two")
+	entries := area.Entries()
+	if len(entries) != 2 || entries[0] != (Entry{Key: "first", Value: "one"}) || entries[1].Key != "second" {
+		t.Fatalf("Entries() = %#v", entries)
+	}
+	entries[0].Value = "changed"
+	if value, _ := area.Get("first"); value != "one" {
+		t.Fatalf("mutated snapshot changed Area to %q", value)
+	}
+}
+
 func TestAreaAppliesKeyValueAndOriginQuotasWithoutMutation(t *testing.T) {
 	area := NewArea()
 	invalidUTF8 := string([]byte{0xff})

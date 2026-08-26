@@ -59,6 +59,10 @@ type pageEventRuntime interface {
 	DispatchPageEvent(func() bool) bool
 }
 
+type isolatedDOMEventRuntime interface {
+	DispatchDOMEvent(events.Event) bool
+}
+
 // Browser owns the state for one browser window.
 //
 // MVPでは1つのアクティブページ、線形の閲覧履歴、信頼済みページごとに
@@ -314,6 +318,9 @@ func (b *Browser) dispatchPageEvent(page *Page, event events.Event) bool {
 	activeRuntime := b.activeRuntime
 	active := b.page == page
 	b.mu.RUnlock()
+	if runtime, ok := activeRuntime.(isolatedDOMEventRuntime); ok && active {
+		return runtime.DispatchDOMEvent(event)
+	}
 	if runtime, ok := activeRuntime.(pageEventRuntime); ok && active {
 		return runtime.DispatchPageEvent(func() bool {
 			return page.Events.Dispatch(event)
