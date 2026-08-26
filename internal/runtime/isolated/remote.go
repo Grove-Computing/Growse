@@ -120,7 +120,10 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 	}
 	request.Scripts = make([]wireScript, len(scripts))
 	for index, script := range scripts {
-		request.Scripts[index] = wireScript{Engine: script.Engine, Source: script.Source, Inline: script.Inline}
+		request.Scripts[index] = wireScript{
+			Engine: script.Engine, Source: script.Source, Inline: script.Inline,
+			Integrity: script.Integrity, CrossOrigin: script.CrossOrigin,
+		}
 		if script.SourceURL != nil {
 			request.Scripts[index].SourceURL = publicRuntimeURL(script.SourceURL).String()
 		}

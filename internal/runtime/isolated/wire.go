@@ -19,10 +19,12 @@ type sandboxStatusResponse struct {
 }
 
 type wireScript struct {
-	Engine    runtimemodel.Engine `json:"engine"`
-	SourceURL string              `json:"sourceUrl,omitempty"`
-	Source    string              `json:"source"`
-	Inline    bool                `json:"inline,omitempty"`
+	Engine      runtimemodel.Engine `json:"engine"`
+	SourceURL   string              `json:"sourceUrl,omitempty"`
+	Source      string              `json:"source"`
+	Inline      bool                `json:"inline,omitempty"`
+	Integrity   string              `json:"integrity,omitempty"`
+	CrossOrigin string              `json:"crossOrigin,omitempty"`
 }
 
 type loadRequest struct {

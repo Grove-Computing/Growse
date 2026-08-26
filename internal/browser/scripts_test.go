@@ -2,6 +2,8 @@ package browser
 
 import (
 	"context"
+	"crypto/sha512"
+	"encoding/base64"
 	"strings"
 	"testing"
 
@@ -185,12 +187,89 @@ func TestIsGoContentTypeAcceptsCommonGoMIMETypes(t *testing.T) {
 }
 
 func TestIsJavaScriptContentTypeAcceptsSupportedMIMETypes(t *testing.T) {
-	for _, contentType := range []string{"text/javascript", "application/javascript; charset=utf-8", "text/plain", ""} {
+	for _, contentType := range []string{"text/javascript", "application/javascript; charset=utf-8", "application/ecmascript", "text/ecmascript"} {
 		if !isJavaScriptContentType(contentType) {
 			t.Errorf("isJavaScriptContentType(%q) = false, want true", contentType)
 		}
 	}
-	if isJavaScriptContentType("text/go") {
-		t.Fatal("isJavaScriptContentType(text/go) = true, want false")
+	for _, contentType := range []string{"text/go", "text/plain", "", "application/json"} {
+		if isJavaScriptContentType(contentType) {
+			t.Errorf("isJavaScriptContentType(%q) = true, want false", contentType)
+		}
+	}
+}
+
+func TestJavaScriptClassicLoadsCrossOriginWithCORSAndIntegrity(t *testing.T) {
+	pageURL := mustParseURL(t, "https://site.example/page")
+	scriptURL := mustParseURL(t, "https://cdn.example/app.js")
+	body := []byte(`document.title = "loaded";`)
+	digest := sha512.Sum384(body)
+	integrity := "sha384-" + base64.StdEncoding.EncodeToString(digest[:])
+	document, err := html.Parse(strings.NewReader(`<script src="https://cdn.example/app.js" crossorigin="anonymous" integrity="` + integrity + `"></script>`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	loader := &requestRouteLoader{routeLoader: routeLoader{responses: map[string]*network.Response{
+		scriptURL.String(): {URL: scriptURL, StatusCode: 200, ContentType: "text/javascript", Body: body},
+	}}}
+	scripts, loadErrors := loadScriptsForEngine(context.Background(), loader, pageURL, document, runtimemodel.EngineJavaScript)
+	if len(loadErrors) != 0 || len(scripts) != 1 || scripts[0].SourceURL.String() != scriptURL.String() || scripts[0].Integrity != integrity {
+		t.Fatalf("scripts=%#v errors=%v", scripts, loadErrors)
+	}
+	if loader.request == nil || !loader.request.CORS || loader.request.Credentials != network.CredentialsSameOrigin || loader.request.Kind != network.RequestScript {
+		t.Fatalf("script request = %#v", loader.request)
+	}
+}
+
+func TestJavaScriptClassicAppliesStatusMIMEMixedContentAndIntegrityPolicy(t *testing.T) {
+	pageURL := mustParseURL(t, "https://site.example/page")
+	goodBody := []byte(`globalThis.loaded = true;`)
+	wrongDigest := sha512.Sum384([]byte("different"))
+	cases := []struct {
+		name        string
+		src         string
+		response    *network.Response
+		integrity   string
+		wantRequest bool
+		wantError   string
+	}{
+		{name: "initial mixed content", src: "http://cdn.example/app.js", wantError: "mixed-content"},
+		{name: "redirected mixed content", src: "https://cdn.example/redirect.js", response: &network.Response{URL: mustParseURL(t, "http://cdn.example/app.js"), StatusCode: 200, ContentType: "text/javascript", Body: goodBody}, wantRequest: true, wantError: "redirected"},
+		{name: "HTTP error", src: "https://cdn.example/error.js", response: &network.Response{URL: mustParseURL(t, "https://cdn.example/error.js"), StatusCode: 404, ContentType: "text/javascript", Body: goodBody}, wantRequest: true, wantError: "status 404"},
+		{name: "invalid MIME", src: "https://cdn.example/plain.js", response: &network.Response{URL: mustParseURL(t, "https://cdn.example/plain.js"), StatusCode: 200, ContentType: "text/plain", Body: goodBody}, wantRequest: true, wantError: "Content-Type"},
+		{name: "integrity mismatch", src: "https://cdn.example/hash.js", response: &network.Response{URL: mustParseURL(t, "https://cdn.example/hash.js"), StatusCode: 200, ContentType: "text/javascript", Body: goodBody}, integrity: "sha384-" + base64.StdEncoding.EncodeToString(wrongDigest[:]), wantRequest: true, wantError: "integrity"},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			markup := `<script src="` + test.src + `" crossorigin="anonymous" integrity="` + test.integrity + `"></script>`
+			document, err := html.Parse(strings.NewReader(markup))
+			if err != nil {
+				t.Fatal(err)
+			}
+			loader := &routeLoader{responses: make(map[string]*network.Response)}
+			if test.response != nil {
+				loader.responses[test.src] = test.response
+			}
+			scripts, loadErrors := loadScriptsForEngine(context.Background(), loader, pageURL, document, runtimemodel.EngineJavaScript)
+			if len(scripts) != 0 || len(loadErrors) != 1 || !strings.Contains(loadErrors[0], test.wantError) {
+				t.Fatalf("scripts=%v errors=%v", scripts, loadErrors)
+			}
+			if got := len(loader.requested) != 0; got != test.wantRequest {
+				t.Fatalf("requested=%v, wantRequest=%t", loader.requested, test.wantRequest)
+			}
+		})
+	}
+}
+
+func TestCrossOriginClassicWithoutCORSUsesIncludedCredentials(t *testing.T) {
+	pageURL := mustParseURL(t, "https://site.example/page")
+	scriptURL := mustParseURL(t, "https://cdn.example/app.js")
+	document, _ := html.Parse(strings.NewReader(`<script src="https://cdn.example/app.js"></script>`))
+	loader := &requestRouteLoader{routeLoader: routeLoader{responses: map[string]*network.Response{
+		scriptURL.String(): {URL: scriptURL, StatusCode: 200, ContentType: "text/javascript", Body: []byte(`true`)},
+	}}}
+	scripts, loadErrors := loadScriptsForEngine(context.Background(), loader, pageURL, document, runtimemodel.EngineJavaScript)
+	if len(scripts) != 1 || len(loadErrors) != 0 || loader.request == nil || loader.request.CORS || loader.request.Credentials != network.CredentialsInclude {
+		t.Fatalf("scripts=%v errors=%v request=%#v", scripts, loadErrors, loader.request)
 	}
 }

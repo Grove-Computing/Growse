@@ -41,10 +41,12 @@ func (engine Engine) Valid() bool {
 
 // Script は文書内で見つかった1つの実行ソースを表す。
 type Script struct {
-	Engine    Engine
-	SourceURL *url.URL
-	Source    string
-	Inline    bool
+	Engine      Engine
+	SourceURL   *url.URL
+	Source      string
+	Inline      bool
+	Integrity   string
+	CrossOrigin string
 }
 
 // SandboxStatus reports the process boundary that was verified before page
