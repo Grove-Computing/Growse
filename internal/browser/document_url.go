@@ -11,6 +11,9 @@ import (
 // href in tree order. Credentials are never retained in a resource base.
 func documentBaseURL(document *dom.Document, documentURL *url.URL) *url.URL {
 	fallback := cloneURL(documentURL)
+	if fallback != nil {
+		fallback.User = nil
+	}
 	if document == nil || document.Root == nil || documentURL == nil {
 		return fallback
 	}

@@ -93,4 +93,8 @@ func TestDocumentBaseURLKeepsFirstValidValueAndRemovesCredentials(t *testing.T) 
 	if got, want := base.String(), "https://cdn.example/assets/"; got != want || base.User != nil {
 		t.Fatalf("document base = %q user=%v, want %q without credentials", got, base.User, want)
 	}
+	fallback := documentBaseURL(nil, mustParseURL(t, "https://user:secret@page.example/root/index.html"))
+	if got, want := fallback.String(), "https://page.example/root/index.html"; got != want || fallback.User != nil {
+		t.Fatalf("fallback base = %q user=%v, want %q without credentials", got, fallback.User, want)
+	}
 }
