@@ -39,8 +39,8 @@ fi
 
 workflow=.github/workflows/release.yml
 require_file_value "$workflow" "needs: build"
-require_file_value "$workflow" "docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c"
-require_file_value "$workflow" "docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef"
+require_file_value "$workflow" "docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e"
+require_file_value "$workflow" "docker/login-action@dbcb813823bdd20940b903addbd779551569679f"
 require_file_value "$workflow" "docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a"
 require_file_value "$workflow" "push: true"
 require_file_value "$workflow" "sbom: true"
@@ -57,7 +57,7 @@ require_file_value "$workflow" "push-to-registry: true"
 container_attest_job=$(sed -n '/^  container-attest:/,/^  publish:/p' "$workflow")
 for value in \
     "Log in to GitHub Container Registry for attestation" \
-    "docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef" \
+    "docker/login-action@dbcb813823bdd20940b903addbd779551569679f" \
     "registry: ghcr.io" \
     'username: ${{ github.actor }}' \
     'password: ${{ github.token }}'; do
@@ -69,7 +69,7 @@ done
 
 ci_workflow=.github/workflows/ci.yml
 require_file_value "$ci_workflow" "Docker package (v0.10.0)"
-require_file_value "$ci_workflow" "docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c"
+require_file_value "$ci_workflow" "docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e"
 require_file_value "$ci_workflow" "docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a"
 require_file_value "$ci_workflow" "load: true"
 require_file_value "$ci_workflow" "push: false"
