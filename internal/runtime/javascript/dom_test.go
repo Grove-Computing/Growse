@@ -82,7 +82,8 @@ func TestDOMRejectsInvalidAndDisconnectedOperations(t *testing.T) {
 	t.Cleanup(func() { _ = runtime.Stop() })
 	environment := runtimemodel.Environment{Document: document, Events: events.NewDispatcher()}
 	source := `
-		if (document.querySelector("main > p") !== null) { throw new Error("unsupported selector accepted"); }
+		if (document.querySelector("main > p").id !== "removed") { throw new Error("complex selector rejected"); }
+		if (document.querySelector("main >> p") !== null) { throw new Error("invalid selector accepted"); }
 		if (document.createElement("bad tag") !== null) { throw new Error("invalid tag accepted"); }
 		var app = document.getElementById("app");
 		if (app.setAttribute("bad name", "value")) { throw new Error("invalid attribute accepted"); }
@@ -160,6 +161,78 @@ func TestJavaScriptNodeRelationshipsMutationsFragmentsAndCloneKeepIdentity(t *te
 	want := "9|#document|true|1|MAIN|true|true|true|true|true|true|true|0|true|true|true|true|true|true|true|yes|7"
 	if message != want {
 		t.Fatalf("Node mutation result = %q, want %q", message, want)
+	}
+}
+
+func TestJavaScriptElementReflectionSelectorsDatasetStyleAndHTMLMutation(t *testing.T) {
+	document, err := htmlparser.Parse(strings.NewReader(`<html><head></head><body><main id="host"><article id="target" class="card old" data-user-id="42" style="color: red"><span class="label" data-kind="title">Title</span></article></main></body></html>`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutations := 0
+	var message string
+	runtime := New()
+	t.Cleanup(func() { _ = runtime.Stop() })
+	source := `
+		var host = document.getElementById("host");
+		var target = document.querySelector('article.card[data-user-id="42"]');
+		var label = target.querySelector('[data-kind="title"]');
+		var selectorChecks = target.matches('main > article.card') && label.closest("article") === target && target.querySelectorAll(".label").item(0) === label;
+		var toggled = target.toggleAttribute("hidden") && target.hasAttribute("hidden");
+		target.toggleAttribute("hidden", false);
+		target.classList.add("active", "selected");
+		target.classList.remove("selected");
+		target.classList.replace("old", "new");
+		var user = target.dataset.userId;
+		target.dataset.state = "ready";
+		delete target.dataset.userId;
+		var oldColor = target.style.getPropertyValue("color");
+		target.style.setProperty("font-size", "24px", "important");
+		target.style.backgroundColor = "blue";
+		target.style.setProperty("--tone", "calm");
+		var removedColor = target.style.removeProperty("color");
+		host.insertAdjacentHTML("beforeend", '<aside id="adjacent" data-role="note">Note</aside>');
+		var adjacent = host.querySelector('[data-role="note"]');
+		adjacent.outerHTML = '<section id="replacement" class="panel">Replacement</section>';
+		var replacement = document.getElementById("replacement");
+		console.log([
+			selectorChecks,
+			toggled,
+			!target.hasAttribute("hidden"),
+			target.getAttributeNames().indexOf("class") >= 0,
+			target.className,
+			target.classList.length,
+			target.classList.item(1),
+			user,
+			target.dataset.state,
+			!("userId" in target.dataset),
+			oldColor,
+			removedColor,
+			target.style.getPropertyPriority("font-size"),
+			target.style.fontSize,
+			target.style.backgroundColor,
+			target.style.getPropertyValue("--tone"),
+			target.style.getPropertyValue("color") === "",
+			!adjacent.isConnected,
+			replacement.matches("section.panel"),
+			host.innerHTML.indexOf("Replacement") >= 0
+		].join("|"));`
+	environment := runtimemodel.Environment{
+		Document: document, Events: events.NewDispatcher(), OnMutation: func() { mutations++ },
+		ConsoleRecord: func(_, value string) { message = value },
+	}
+	if err := runtime.Load(context.Background(), []runtimemodel.Script{javaScript(source)}, environment); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	want := "true|true|true|true|card active new|3|active|42|ready|true|red|red|important|24px|blue|calm|true|true|true|true"
+	if message != want {
+		t.Fatalf("Element API result = %q, want %q", message, want)
+	}
+	if mutations < 10 {
+		t.Fatalf("Element mutations = %d, want at least 10", mutations)
 	}
 }
 

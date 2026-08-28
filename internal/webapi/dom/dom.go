@@ -2,12 +2,15 @@
 package dom
 
 import (
+	"sort"
 	"strings"
 
+	"github.com/Grove-Computing/Growse/internal/css"
 	dommodel "github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/events"
 	"github.com/Grove-Computing/Growse/internal/forms"
 	htmlparser "github.com/Grove-Computing/Growse/internal/html"
+	stylemodel "github.com/Grove-Computing/Growse/internal/style"
 )
 
 const (
@@ -122,8 +125,9 @@ func (api *API) QuerySelector(selector string) *Element {
 	if api == nil || api.document == nil {
 		return nil
 	}
-	node, ok := api.document.QuerySelector(selector)
-	if !ok {
+	selectors := css.ParseSelectorList(selector)
+	node := firstMatchingDescendant(api.document.Root, selectors, true)
+	if node == nil {
 		return nil
 	}
 	return api.element(node)
@@ -134,7 +138,8 @@ func (api *API) QuerySelectorAll(selector string) []*Element {
 	if api == nil || api.document == nil {
 		return nil
 	}
-	return api.elements(api.document.QuerySelectorAll(selector))
+	selectors := css.ParseSelectorList(selector)
+	return api.elements(matchingDescendants(api.document.Root, selectors, true, nil))
 }
 
 // GetElementsByClassName returns a bounded static collection for class tokens.
@@ -599,6 +604,100 @@ func (element *Element) RemoveAttribute(name string) bool {
 	return true
 }
 
+// HasAttribute reports whether an attribute is present.
+func (element *Element) HasAttribute(name string) bool {
+	_, present := element.GetAttribute(name)
+	return present
+}
+
+// ToggleAttribute adds or removes a boolean attribute and returns its resulting presence.
+func (element *Element) ToggleAttribute(name string, force *bool) (bool, bool) {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if !validAttributeName(name) {
+		return false, false
+	}
+	present := element.HasAttribute(name)
+	wanted := !present
+	if force != nil {
+		wanted = *force
+	}
+	if wanted == present {
+		return present, true
+	}
+	if wanted {
+		return true, element.SetAttribute(name, "")
+	}
+	return false, element.RemoveAttribute(name)
+}
+
+// AttributeNames returns a stable sorted snapshot of attribute names.
+func (element *Element) AttributeNames() []string {
+	node, ok := element.node()
+	if !ok || node.Type != dommodel.NodeElement {
+		return nil
+	}
+	result := make([]string, 0, len(node.Attributes))
+	for name := range node.Attributes {
+		result = append(result, name)
+	}
+	sort.Strings(result)
+	return result
+}
+
+// Matches evaluates a supported selector list against this element.
+func (element *Element) Matches(selector string) bool {
+	node, ok := element.node()
+	if !ok || node.Type != dommodel.NodeElement {
+		return false
+	}
+	return matchesAnySelector(node, css.ParseSelectorList(selector))
+}
+
+// Closest returns this element or its nearest element ancestor matching selector.
+func (element *Element) Closest(selector string) *Element {
+	selectors := css.ParseSelectorList(selector)
+	if len(selectors) == 0 {
+		return nil
+	}
+	node, ok := element.node()
+	if !ok {
+		return nil
+	}
+	api := &API{document: element.document, events: element.events, onMutation: element.onMutation}
+	for current := node; current != nil; current = current.Parent {
+		if current.Type == dommodel.NodeDocumentFragment {
+			break
+		}
+		if current.Type == dommodel.NodeElement && matchesAnySelector(current, selectors) {
+			return api.element(current)
+		}
+	}
+	return nil
+}
+
+// QuerySelector returns the first matching descendant.
+func (element *Element) QuerySelector(selector string) *Element {
+	selectors := css.ParseSelectorList(selector)
+	node, ok := element.node()
+	if !ok || len(selectors) == 0 {
+		return nil
+	}
+	match := firstMatchingDescendant(node, selectors, false)
+	return (&API{document: element.document, events: element.events, onMutation: element.onMutation}).element(match)
+}
+
+// QuerySelectorAll returns a bounded static descendant snapshot.
+func (element *Element) QuerySelectorAll(selector string) []*Element {
+	selectors := css.ParseSelectorList(selector)
+	node, ok := element.node()
+	if !ok || len(selectors) == 0 {
+		return nil
+	}
+	return (&API{document: element.document, events: element.events, onMutation: element.onMutation}).elements(
+		matchingDescendants(node, selectors, false, nil),
+	)
+}
+
 // AddClass は重複を避けてクラスを追加する。
 func (element *Element) AddClass(className string) bool {
 	if !validClassName(className) {
@@ -874,6 +973,232 @@ func (element *Element) SetInnerHTML(value string) bool {
 	return true
 }
 
+// OuterHTML serializes this element and its subtree.
+func (element *Element) OuterHTML() string {
+	node, ok := element.node()
+	if !ok || node.Type != dommodel.NodeElement {
+		return ""
+	}
+	value, _ := htmlparser.SerializeNode(node)
+	return value
+}
+
+// SetOuterHTML replaces this element with a bounded parsed fragment.
+func (element *Element) SetOuterHTML(value string) ([]*Element, bool) {
+	node, ok := element.node()
+	if !ok || node.Type != dommodel.NodeElement || node.Parent == nil || len(value) > maxDOMInnerHTMLBytes {
+		return nil, false
+	}
+	parent := node.Parent
+	contextTag := "div"
+	if parent.Type == dommodel.NodeElement {
+		contextTag = parent.TagName
+	}
+	nodes, ok := element.parseFragmentNodes(value, contextTag)
+	if !ok {
+		return nil, false
+	}
+	index := nodeIndex(parent.Children, node)
+	if index < 0 {
+		return nil, false
+	}
+	wanted := append([]*dommodel.Node(nil), parent.Children[:index]...)
+	wanted = append(wanted, nodes...)
+	wanted = append(wanted, parent.Children[index+1:]...)
+	if !element.document.ReplaceChildren(parent, wanted) {
+		return nil, false
+	}
+	element.notifyMutation()
+	api := &API{document: element.document, events: element.events, onMutation: element.onMutation}
+	result := make([]*Element, len(nodes))
+	for index, inserted := range nodes {
+		result[index] = api.element(inserted)
+	}
+	return result, true
+}
+
+// InsertAdjacentHTML parses and inserts HTML at one of the four standard positions.
+func (element *Element) InsertAdjacentHTML(position, value string) ([]*Element, bool) {
+	node, ok := element.node()
+	if !ok || node.Type != dommodel.NodeElement || len(value) > maxDOMInnerHTMLBytes {
+		return nil, false
+	}
+	position = strings.ToLower(strings.TrimSpace(position))
+	parent, index, contextTag := node, 0, node.TagName
+	switch position {
+	case "beforebegin", "afterend":
+		if node.Parent == nil {
+			return nil, false
+		}
+		parent = node.Parent
+		if parent.Type == dommodel.NodeElement {
+			contextTag = parent.TagName
+		} else {
+			contextTag = "div"
+		}
+		index = nodeIndex(parent.Children, node)
+		if position == "afterend" {
+			index++
+		}
+	case "afterbegin":
+		index = 0
+	case "beforeend":
+		index = len(parent.Children)
+	default:
+		return nil, false
+	}
+	if node.TagName == "template" && (position == "afterbegin" || position == "beforeend") {
+		content := element.TemplateContent()
+		if content == nil {
+			return nil, false
+		}
+		parent, _ = content.node()
+		contextTag = "template"
+		if position == "beforeend" {
+			index = len(parent.Children)
+		}
+	}
+	nodes, ok := element.parseFragmentNodes(value, contextTag)
+	if !ok || index < 0 || index > len(parent.Children) {
+		return nil, false
+	}
+	wanted := insertNodes(parent.Children, index, nodes)
+	if !element.document.ReplaceChildren(parent, wanted) {
+		return nil, false
+	}
+	element.notifyMutation()
+	api := &API{document: element.document, events: element.events, onMutation: element.onMutation}
+	result := make([]*Element, len(nodes))
+	for index, inserted := range nodes {
+		result[index] = api.element(inserted)
+	}
+	return result, true
+}
+
+func (element *Element) parseFragmentNodes(value, contextTag string) ([]*dommodel.Node, bool) {
+	fragment, err := htmlparser.ParseFragment(value, contextTag)
+	if err != nil || fragment.NodeCount()-1 > maxDOMCollectionResults || element.document.OwnedNodeCount()+fragment.NodeCount()-1 > maxDOMOwnedNodes {
+		return nil, false
+	}
+	nodes := make([]*dommodel.Node, 0, len(fragment.Root.Children))
+	for _, child := range fragment.Root.Children {
+		nodes = append(nodes, cloneNode(element.document, child, true))
+	}
+	return nodes, true
+}
+
+// InlineStyleProperty returns the last inline declaration value and priority.
+func (element *Element) InlineStyleProperty(name string) (value, priority string) {
+	name = normalizeCSSPropertyName(name)
+	for _, declaration := range element.inlineStyleDeclarations() {
+		if declaration.Property == name {
+			value = declaration.Value.Raw
+			if declaration.Important {
+				priority = "important"
+			}
+		}
+	}
+	return value, priority
+}
+
+// SetInlineStyleProperty validates and updates one inline declaration.
+func (element *Element) SetInlineStyleProperty(name, value, priority string) bool {
+	name, value, priority = normalizeCSSPropertyName(name), strings.TrimSpace(value), strings.ToLower(strings.TrimSpace(priority))
+	if name == "" || value == "" || priority != "" && priority != "important" {
+		return false
+	}
+	parsed, err := css.ParseDeclarations(name + ":" + value + map[bool]string{true: " !important"}[priority == "important"])
+	if err != nil || len(parsed) != 1 || parsed[0].Property != name {
+		return false
+	}
+	declarations := element.inlineStyleDeclarations()
+	result := make([]css.Declaration, 0, len(declarations)+1)
+	for _, declaration := range declarations {
+		if declaration.Property != name {
+			result = append(result, declaration)
+		}
+	}
+	result = append(result, parsed[0])
+	return element.setInlineStyleDeclarations(result)
+}
+
+// RemoveInlineStyleProperty removes one declaration and returns its old value.
+func (element *Element) RemoveInlineStyleProperty(name string) string {
+	name = normalizeCSSPropertyName(name)
+	declarations := element.inlineStyleDeclarations()
+	result := make([]css.Declaration, 0, len(declarations))
+	removed := ""
+	for _, declaration := range declarations {
+		if declaration.Property == name {
+			removed = declaration.Value.Raw
+			continue
+		}
+		result = append(result, declaration)
+	}
+	if removed != "" {
+		element.setInlineStyleDeclarations(result)
+	}
+	return removed
+}
+
+// InlineStyleText returns the normalized serialized style attribute.
+func (element *Element) InlineStyleText() string {
+	return serializeDeclarations(element.inlineStyleDeclarations())
+}
+
+// InlineStylePropertyNames returns declaration names in source order.
+func (element *Element) InlineStylePropertyNames() []string {
+	declarations := element.inlineStyleDeclarations()
+	result := make([]string, 0, len(declarations))
+	seen := make(map[string]bool, len(declarations))
+	for index := len(declarations) - 1; index >= 0; index-- {
+		name := declarations[index].Property
+		if !seen[name] {
+			seen[name] = true
+			result = append(result, name)
+		}
+	}
+	for left, right := 0, len(result)-1; left < right; left, right = left+1, right-1 {
+		result[left], result[right] = result[right], result[left]
+	}
+	return result
+}
+
+// SetInlineStyleText replaces the complete inline declaration list.
+func (element *Element) SetInlineStyleText(value string) bool {
+	if len(value) > maxDOMTextBytes {
+		return false
+	}
+	declarations, err := css.ParseDeclarations(value)
+	if err != nil {
+		return false
+	}
+	return element.setInlineStyleDeclarations(declarations)
+}
+
+func (element *Element) inlineStyleDeclarations() []css.Declaration {
+	value, _ := element.GetAttribute("style")
+	declarations, _ := css.ParseDeclarations(value)
+	return declarations
+}
+
+func (element *Element) setInlineStyleDeclarations(declarations []css.Declaration) bool {
+	serialized := serializeDeclarations(declarations)
+	if serialized == "" {
+		if element.HasAttribute("style") {
+			return element.RemoveAttribute("style")
+		}
+		return true
+	}
+	if len(serialized) > maxDOMTextBytes {
+		return false
+	}
+	if current, _ := element.GetAttribute("style"); current == serialized {
+		return true
+	}
+	return element.SetAttribute("style", serialized)
+}
+
 // Value はテキストinputの現在値を返す。
 func (element *Element) Value() string {
 	node, ok := element.textInputNode()
@@ -1130,6 +1455,81 @@ func insertNodes(source []*dommodel.Node, index int, inserted []*dommodel.Node) 
 	result = append(result, inserted...)
 	result = append(result, source[index:]...)
 	return result
+}
+
+func firstMatchingDescendant(root *dommodel.Node, selectors []css.Selector, includeRoot bool) *dommodel.Node {
+	if len(selectors) == 0 || root == nil {
+		return nil
+	}
+	if includeRoot && root.Type == dommodel.NodeElement && matchesAnySelector(root, selectors) {
+		return root
+	}
+	if root.Type == dommodel.NodeElement && root.TagName == "template" {
+		return nil
+	}
+	for _, child := range root.Children {
+		if child.Type == dommodel.NodeDocumentFragment && root.Type != dommodel.NodeDocumentFragment {
+			continue
+		}
+		if match := firstMatchingDescendant(child, selectors, true); match != nil {
+			return match
+		}
+	}
+	return nil
+}
+
+func matchingDescendants(root *dommodel.Node, selectors []css.Selector, includeRoot bool, result []*dommodel.Node) []*dommodel.Node {
+	if len(selectors) == 0 || root == nil || len(result) >= maxDOMCollectionResults {
+		return result
+	}
+	if includeRoot && root.Type == dommodel.NodeElement && matchesAnySelector(root, selectors) {
+		result = append(result, root)
+	}
+	if root.Type == dommodel.NodeElement && root.TagName == "template" {
+		return result
+	}
+	for _, child := range root.Children {
+		if child.Type == dommodel.NodeDocumentFragment && root.Type != dommodel.NodeDocumentFragment {
+			continue
+		}
+		result = matchingDescendants(child, selectors, true, result)
+		if len(result) >= maxDOMCollectionResults {
+			break
+		}
+	}
+	return result
+}
+
+func matchesAnySelector(node *dommodel.Node, selectors []css.Selector) bool {
+	for _, selector := range selectors {
+		if stylemodel.MatchesSelector(node, selector, stylemodel.InteractionState{}) {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeCSSPropertyName(name string) string {
+	name = strings.TrimSpace(name)
+	if strings.HasPrefix(name, "--") {
+		return name
+	}
+	return strings.ToLower(name)
+}
+
+func serializeDeclarations(declarations []css.Declaration) string {
+	parts := make([]string, 0, len(declarations))
+	for _, declaration := range declarations {
+		property, value := normalizeCSSPropertyName(declaration.Property), strings.TrimSpace(declaration.Value.Raw)
+		if property == "" || value == "" {
+			continue
+		}
+		if declaration.Important {
+			value += " !important"
+		}
+		parts = append(parts, property+": "+value)
+	}
+	return strings.Join(parts, "; ")
 }
 
 func (element *Element) textInputNode() (*dommodel.Node, bool) {

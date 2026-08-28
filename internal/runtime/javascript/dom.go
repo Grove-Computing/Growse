@@ -245,6 +245,42 @@ func (runtime *Runtime) elementValue(vm *goja.Runtime, element *domapi.Element) 
 		runtime.resourceElementChanged(vm, element)
 		return vm.ToValue(changed)
 	})
+	_ = object.Set("hasAttribute", func(call goja.FunctionCall) goja.Value {
+		return vm.ToValue(element.HasAttribute(call.Argument(0).String()))
+	})
+	_ = object.Set("toggleAttribute", func(call goja.FunctionCall) goja.Value {
+		var force *bool
+		if !goja.IsUndefined(call.Argument(1)) {
+			value := call.Argument(1).ToBoolean()
+			force = &value
+		}
+		present, ok := element.ToggleAttribute(call.Argument(0).String(), force)
+		if !ok {
+			panic(vm.NewTypeError("invalid attribute name"))
+		}
+		runtime.resourceElementChanged(vm, element)
+		return vm.ToValue(present)
+	})
+	_ = object.Set("getAttributeNames", func(goja.FunctionCall) goja.Value {
+		names := element.AttributeNames()
+		values := make([]any, len(names))
+		for index, name := range names {
+			values[index] = name
+		}
+		return vm.NewArray(values...)
+	})
+	_ = object.Set("matches", func(call goja.FunctionCall) goja.Value {
+		return vm.ToValue(element.Matches(call.Argument(0).String()))
+	})
+	_ = object.Set("closest", func(call goja.FunctionCall) goja.Value {
+		return runtime.nodeValue(vm, element.Closest(call.Argument(0).String()))
+	})
+	_ = object.Set("querySelector", func(call goja.FunctionCall) goja.Value {
+		return runtime.nodeValue(vm, element.QuerySelector(call.Argument(0).String()))
+	})
+	_ = object.Set("querySelectorAll", func(call goja.FunctionCall) goja.Value {
+		return runtime.nodeCollectionValue(vm, element.QuerySelectorAll(call.Argument(0).String()))
+	})
 	_ = object.Set("appendChild", func(call goja.FunctionCall) goja.Value {
 		childObject, ok := call.Argument(0).(*goja.Object)
 		if !ok {
@@ -416,10 +452,22 @@ func (runtime *Runtime) elementValue(vm *goja.Runtime, element *domapi.Element) 
 
 	classList := vm.NewObject()
 	_ = classList.Set("add", func(call goja.FunctionCall) goja.Value {
-		return vm.ToValue(element.AddClass(call.Argument(0).String()))
+		changed := false
+		for _, value := range call.Arguments {
+			if element.AddClass(value.String()) {
+				changed = true
+			}
+		}
+		return vm.ToValue(changed)
 	})
 	_ = classList.Set("remove", func(call goja.FunctionCall) goja.Value {
-		return vm.ToValue(element.RemoveClass(call.Argument(0).String()))
+		changed := false
+		for _, value := range call.Arguments {
+			if element.RemoveClass(value.String()) {
+				changed = true
+			}
+		}
+		return vm.ToValue(changed)
 	})
 	_ = classList.Set("contains", func(call goja.FunctionCall) goja.Value {
 		return vm.ToValue(element.ContainsClass(call.Argument(0).String()))
@@ -432,7 +480,33 @@ func (runtime *Runtime) elementValue(vm *goja.Runtime, element *domapi.Element) 
 		}
 		return vm.ToValue(element.ToggleClass(call.Argument(0).String(), force))
 	})
+	_ = classList.Set("item", func(call goja.FunctionCall) goja.Value {
+		classes := strings.Fields(element.ClassName())
+		index := int(call.Argument(0).ToInteger())
+		if index < 0 || index >= len(classes) {
+			return goja.Null()
+		}
+		return vm.ToValue(classes[index])
+	})
+	_ = classList.Set("replace", func(call goja.FunctionCall) goja.Value {
+		oldClass, newClass := call.Argument(0).String(), call.Argument(1).String()
+		if !element.ContainsClass(oldClass) || !element.RemoveClass(oldClass) {
+			return vm.ToValue(false)
+		}
+		element.AddClass(newClass)
+		return vm.ToValue(true)
+	})
+	classLengthGetter := vm.ToValue(func(goja.FunctionCall) goja.Value { return vm.ToValue(len(strings.Fields(element.ClassName()))) })
+	_ = classList.DefineAccessorProperty("length", classLengthGetter, nil, goja.FLAG_FALSE, goja.FLAG_TRUE)
+	classValueGetter := vm.ToValue(func(goja.FunctionCall) goja.Value { return vm.ToValue(element.ClassName()) })
+	classValueSetter := vm.ToValue(func(call goja.FunctionCall) goja.Value {
+		element.SetClassName(call.Argument(0).String())
+		return goja.Undefined()
+	})
+	_ = classList.DefineAccessorProperty("value", classValueGetter, classValueSetter, goja.FLAG_FALSE, goja.FLAG_TRUE)
 	_ = object.DefineDataProperty("classList", classList, goja.FLAG_FALSE, goja.FLAG_FALSE, goja.FLAG_TRUE)
+	_ = object.DefineDataProperty("dataset", vm.NewDynamicObject(&datasetObject{vm: vm, element: element}), goja.FLAG_FALSE, goja.FLAG_FALSE, goja.FLAG_TRUE)
+	_ = object.DefineDataProperty("style", newInlineStyleObject(vm, element), goja.FLAG_FALSE, goja.FLAG_FALSE, goja.FLAG_TRUE)
 
 	textGetter := vm.ToValue(func(goja.FunctionCall) goja.Value { return vm.ToValue(element.Text()) })
 	textSetter := vm.ToValue(func(call goja.FunctionCall) goja.Value {
@@ -490,6 +564,28 @@ func (runtime *Runtime) elementValue(vm *goja.Runtime, element *domapi.Element) 
 		return goja.Undefined()
 	})
 	_ = object.DefineAccessorProperty("innerHTML", innerHTMLGetter, innerHTMLSetter, goja.FLAG_FALSE, goja.FLAG_TRUE)
+	outerHTMLGetter := vm.ToValue(func(goja.FunctionCall) goja.Value { return vm.ToValue(element.OuterHTML()) })
+	outerHTMLSetter := vm.ToValue(func(call goja.FunctionCall) goja.Value {
+		hadStyles := containsStyleResource(element)
+		inserted, ok := element.SetOuterHTML(call.Argument(0).String())
+		if !ok {
+			panic(vm.NewTypeError("outerHTML fragment was rejected"))
+		}
+		runtime.prepareConnectedScripts(vm, inserted...)
+		if hadStyles {
+			runtime.refreshInlineStyles(dynamicStyleSnapshot{})
+		}
+		return goja.Undefined()
+	})
+	_ = object.DefineAccessorProperty("outerHTML", outerHTMLGetter, outerHTMLSetter, goja.FLAG_FALSE, goja.FLAG_TRUE)
+	_ = object.Set("insertAdjacentHTML", func(call goja.FunctionCall) goja.Value {
+		inserted, ok := element.InsertAdjacentHTML(call.Argument(0).String(), call.Argument(1).String())
+		if !ok {
+			panic(vm.NewTypeError("insertAdjacentHTML position or fragment was rejected"))
+		}
+		runtime.prepareConnectedScripts(vm, inserted...)
+		return goja.Undefined()
+	})
 	valueGetter := vm.ToValue(func(goja.FunctionCall) goja.Value { return vm.ToValue(element.Value()) })
 	valueSetter := vm.ToValue(func(call goja.FunctionCall) goja.Value {
 		element.SetValue(call.Argument(0).String())
@@ -499,6 +595,7 @@ func (runtime *Runtime) elementValue(vm *goja.Runtime, element *domapi.Element) 
 	runtime.installScriptElement(vm, object, element)
 	runtime.installLinkElement(vm, object, element)
 	runtime.installStyleElement(vm, object, element)
+	runtime.installHTMLElementReflection(vm, object, element)
 	runtime.installFrameElement(vm, object, id)
 	return object
 }
@@ -598,6 +695,39 @@ func (runtime *Runtime) domElementForThis(vm *goja.Runtime, value goja.Value) *d
 		panic(vm.NewTypeError("Illegal invocation"))
 	}
 	return runtime.elements[object]
+}
+
+func (runtime *Runtime) installHTMLElementReflection(vm *goja.Runtime, object *goja.Object, element *domapi.Element) {
+	for property, attribute := range map[string]string{
+		"title": "title", "name": "name", "type": "type", "alt": "alt", "href": "href", "src": "src",
+		"rel": "rel", "width": "width", "height": "height", "loading": "loading", "htmlFor": "for",
+	} {
+		attributeName := attribute
+		getter := vm.ToValue(func(goja.FunctionCall) goja.Value {
+			value, _ := element.GetAttribute(attributeName)
+			return vm.ToValue(value)
+		})
+		setter := vm.ToValue(func(call goja.FunctionCall) goja.Value {
+			element.SetAttribute(attributeName, call.Argument(0).String())
+			runtime.resourceElementChanged(vm, element)
+			return goja.Undefined()
+		})
+		_ = object.DefineAccessorProperty(property, getter, setter, goja.FLAG_FALSE, goja.FLAG_TRUE)
+	}
+	for property, attribute := range map[string]string{
+		"disabled": "disabled", "checked": "checked", "selected": "selected", "multiple": "multiple",
+		"required": "required", "readOnly": "readonly", "async": "async", "defer": "defer", "noModule": "nomodule",
+	} {
+		attributeName := attribute
+		getter := vm.ToValue(func(goja.FunctionCall) goja.Value { return vm.ToValue(element.HasAttribute(attributeName)) })
+		setter := vm.ToValue(func(call goja.FunctionCall) goja.Value {
+			wanted := call.Argument(0).ToBoolean()
+			_, _ = element.ToggleAttribute(attributeName, &wanted)
+			runtime.resourceElementChanged(vm, element)
+			return goja.Undefined()
+		})
+		_ = object.DefineAccessorProperty(property, getter, setter, goja.FLAG_FALSE, goja.FLAG_TRUE)
+	}
 }
 
 func (runtime *Runtime) elementArrayValue(vm *goja.Runtime, elements []*domapi.Element) goja.Value {

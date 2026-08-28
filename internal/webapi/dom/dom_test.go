@@ -65,7 +65,7 @@ func TestQuerySelectorReadsFirstMatchingElement(t *testing.T) {
 
 func TestQuerySelectorReturnsNilForUnsupportedSelector(t *testing.T) {
 	api := New(dommodel.NewDocument(), events.NewDispatcher(), nil)
-	if element := api.QuerySelector("main p"); element != nil {
+	if element := api.QuerySelector("main >> p"); element != nil {
 		t.Fatalf("QuerySelector() = %#v, want nil", element)
 	}
 }

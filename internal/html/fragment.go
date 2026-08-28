@@ -42,6 +42,18 @@ func SerializeChildren(parent *dom.Node) (string, error) {
 	return output.String(), nil
 }
 
+// SerializeNode renders one DOM node and its subtree as HTML.
+func SerializeNode(node *dom.Node) (string, error) {
+	if node == nil {
+		return "", nil
+	}
+	var output bytes.Buffer
+	if err := xhtml.Render(&output, renderNode(node)); err != nil {
+		return "", fmt.Errorf("serialize HTML node: %w", err)
+	}
+	return output.String(), nil
+}
+
 func renderNode(source *dom.Node) *xhtml.Node {
 	if source == nil {
 		return nil
