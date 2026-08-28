@@ -262,7 +262,7 @@ func (e *engine) walk(node *dom.Node, x, width, containingHeight float32, height
 			e.renderPositionedChild(node, style)
 			return
 		}
-		if node.TagName == "img" && e.images != nil {
+		if isImageElement(node, e.images) {
 			e.addImage(node, style, x, width, containingHeight, heightDefinite)
 			return
 		}
@@ -356,6 +356,10 @@ func (e *engine) addInput(node *dom.Node, style blockStyle, x, width, containing
 
 func isEditableTextControl(node *dom.Node) bool {
 	return forms.IsEditableTextControl(node)
+}
+
+func isImageElement(node *dom.Node, resources map[dom.NodeID]ImageResource) bool {
+	return node != nil && resources != nil && (node.TagName == "img" || node.TagName == "svg")
 }
 
 func (e *engine) addImage(node *dom.Node, style blockStyle, x, width, containingHeight float32, heightDefinite bool) {
@@ -693,7 +697,7 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 					positionedChildren = append(positionedChildren, child)
 					continue
 				}
-				if child.TagName == "img" && e.images != nil {
+				if isImageElement(child, e.images) {
 					flushInline()
 					e.addImage(child, childStyle, contentX, contentWidth, childContainingHeight, declaredHeightDefinite)
 					previousBlock = true

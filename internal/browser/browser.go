@@ -750,6 +750,9 @@ func (b *Browser) UpdateViewport(width, height float32) bool {
 		loadContext, generation := page.beginImageLoad(context.Background())
 		policy := imageViewportPolicy(page.Document, page.ComputedStyles, baseURL, width, height)
 		resources, images, failures := loadReplacedImagesWithPolicy(loadContext, imageLoader, baseURL, page.Document, width, 1, policy)
+		inlineResources, inlineImages, inlineFailures := loadInlineSVGImages(page.Document)
+		mergeImageResources(resources, images, inlineResources, inlineImages)
+		failures = append(failures, inlineFailures...)
 		b.mu.RLock()
 		active := b.page == page && page.Engine == runtimemodel.EngineJavaScript
 		b.mu.RUnlock()
@@ -1388,6 +1391,9 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	if engine == runtimemodel.EngineJavaScript {
 		imagePolicy := imageViewportPolicy(document, computedStyles, baseURL, 1280, 720)
 		replacedImages, decodedImages, imageErrors = loadReplacedImagesWithPolicy(ctx, imageResources, baseURL, document, 1280, 1, imagePolicy)
+		inlineResources, inlineImages, inlineErrors := loadInlineSVGImages(document)
+		mergeImageResources(replacedImages, decodedImages, inlineResources, inlineImages)
+		imageErrors = append(imageErrors, inlineErrors...)
 	}
 	scripts, scriptErrors := loadScriptsForEngineWithBase(ctx, scriptResources, response.URL, baseURL, document, engine)
 	var importMap map[string]string
@@ -1806,6 +1812,9 @@ func startRuntime(ctx context.Context, factory runtimemodel.EngineFactory, engin
 			generationContext, generation := page.beginImageLoad(loadContext)
 			policy := imageViewportPolicy(page.Document, page.ComputedStyles, pageBaseURL(page), page.ViewportWidth, page.ViewportHeight)
 			resources, images, failures := loadReplacedImagesWithPolicy(generationContext, page.imageLoader, pageBaseURL(page), page.Document, page.ViewportWidth, 1, policy)
+			inlineResources, inlineImages, inlineFailures := loadInlineSVGImages(page.Document)
+			mergeImageResources(resources, images, inlineResources, inlineImages)
+			failures = append(failures, inlineFailures...)
 			if generationContext.Err() != nil || !page.commitImageLoad(generation, resources, images, failures) {
 				return runtimemodel.ImageState{}, context.Canceled
 			}

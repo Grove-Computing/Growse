@@ -438,7 +438,7 @@ func (e *engine) flexIntrinsicSizes(node *dom.Node, style blockStyle, axis flexA
 	} else if isSubmitButtonControl(node) {
 		textWidth, textHeight = buttonWidth, inputHeight
 		minTextWidth = buttonWidth
-	} else if node != nil && node.TagName == "img" && e.images != nil {
+	} else if isImageElement(node, e.images) {
 		resource := e.images[node.ID]
 		textWidth, textHeight = resource.IntrinsicWidth, resource.IntrinsicHeight
 		if attribute, ok := imageDimensionAttribute(node, "width"); ok {
@@ -527,7 +527,7 @@ func (e *engine) renderFlexItem(item *flexLayoutItem, axis flexAxis, x, y, mainS
 		e.addCheckable(item.node, style, 0, outerWidth, outerHeight, true)
 	} else if isSubmitButtonControl(item.node) {
 		e.addSubmitButton(item.node, style, 0, outerWidth, outerHeight, true)
-	} else if item.node.TagName == "img" && e.images != nil {
+	} else if isImageElement(item.node, e.images) {
 		e.addImage(item.node, style, 0, outerWidth, outerHeight, true)
 	} else {
 		if style.display == stylemodel.DisplayInlineFlex {

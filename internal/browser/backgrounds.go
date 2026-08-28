@@ -3,6 +3,7 @@ package browser
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"image"
 	_ "image/gif"
 	_ "image/jpeg"
@@ -55,12 +56,7 @@ func loadBackgroundImages(ctx context.Context, client ResourceLoader, computed s
 				errors = append(errors, "background image response was rejected: "+network.RedactedURL(resourceURL))
 				continue
 			}
-			config, _, err := image.DecodeConfig(bytes.NewReader(response.Body))
-			if err != nil || config.Width <= 0 || config.Height <= 0 || config.Width > maxImagePixels/config.Height {
-				errors = append(errors, "background image dimensions were rejected: "+network.RedactedURL(resourceURL))
-				continue
-			}
-			decoded, _, err := image.Decode(bytes.NewReader(response.Body))
+			decoded, _, _, err := decodeImageResponse(response.Body, response.ContentType)
 			if err != nil {
 				errors = append(errors, "background image decode failed: "+network.RedactedURL(resourceURL))
 				continue
@@ -123,18 +119,13 @@ func loadReplacedImagesWithPolicy(ctx context.Context, client ResourceLoader, ba
 						resource.Error = "image response was rejected"
 						continue
 					}
-					config, _, decodeErr := image.DecodeConfig(bytes.NewReader(response.Body))
-					if decodeErr != nil || config.Width <= 0 || config.Height <= 0 || config.Width > maxImagePixels/config.Height {
+					decoded, decodedWidth, decodedHeight, decodeErr := decodeImageResponse(response.Body, response.ContentType)
+					if decodeErr != nil {
 						resource.Error = "image dimensions were rejected"
 						continue
 					}
-					decoded, _, decodeErr := image.Decode(bytes.NewReader(response.Body))
-					if decodeErr != nil {
-						resource.Error = "image decode failed"
-						continue
-					}
 					resource.Loaded, resource.Error = true, ""
-					resource.IntrinsicWidth, resource.IntrinsicHeight = float32(config.Width), float32(config.Height)
+					resource.IntrinsicWidth, resource.IntrinsicHeight = float32(decodedWidth), float32(decodedHeight)
 					images[resource.URL] = decoded
 					break
 				}
@@ -161,11 +152,30 @@ func isImageContentType(contentType string) bool {
 		return false
 	}
 	switch mediaType {
-	case "image/png", "image/jpeg", "image/gif", "image/webp":
+	case "image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml":
 		return true
 	default:
 		return false
 	}
+}
+
+func decodeImageResponse(body []byte, contentType string) (image.Image, int, int, error) {
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	if mediaType == "image/svg+xml" {
+		return rasterizeSVG(body)
+	}
+	config, _, err := image.DecodeConfig(bytes.NewReader(body))
+	if err != nil || config.Width <= 0 || config.Height <= 0 || config.Width > maxImagePixels/config.Height {
+		return nil, 0, 0, fmt.Errorf("image dimensions are invalid: %w", err)
+	}
+	decoded, _, err := image.Decode(bytes.NewReader(body))
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	return decoded, config.Width, config.Height, nil
 }
 
 func imageViewportPolicy(document *dom.Document, computed style.Map, baseURL *url.URL, viewportWidth, viewportHeight float32) map[dom.NodeID]bool {

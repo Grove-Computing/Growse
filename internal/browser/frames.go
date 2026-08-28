@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"image"
 	"mime"
 	"net/http"
 	"net/url"
@@ -17,6 +18,7 @@ import (
 	"github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/events"
 	htmlparser "github.com/Grove-Computing/Growse/internal/html"
+	layoutmodel "github.com/Grove-Computing/Growse/internal/layout"
 	"github.com/Grove-Computing/Growse/internal/network"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 	storagecore "github.com/Grove-Computing/Growse/internal/storage"
@@ -231,6 +233,16 @@ func (state *frameLoadState) buildPage(ctx context.Context, response *network.Re
 	}
 	computed := computeStableStyles(document, stylesheet, style.InteractionState{}, defaultFrameWidth, defaultFrameHeight, state.reducedMotion)
 	backgroundImages, backgroundErrors := loadBackgroundImages(ctx, imageResources, computed)
+	var replacedImages map[dom.NodeID]layoutmodel.ImageResource
+	var decodedImages map[string]image.Image
+	var imageErrors []string
+	if state.engine == runtimemodel.EngineJavaScript {
+		imagePolicy := imageViewportPolicy(document, computed, baseURL, defaultFrameWidth, defaultFrameHeight)
+		replacedImages, decodedImages, imageErrors = loadReplacedImagesWithPolicy(ctx, imageResources, baseURL, document, defaultFrameWidth, 1, imagePolicy)
+		inlineResources, inlineImages, inlineFailures := loadInlineSVGImages(document)
+		mergeImageResources(replacedImages, decodedImages, inlineResources, inlineImages)
+		imageErrors = append(imageErrors, inlineFailures...)
+	}
 	var scripts []Script
 	var scriptErrors []string
 	var importMap map[string]string
@@ -247,9 +259,11 @@ func (state *frameLoadState) buildPage(ctx context.Context, response *network.Re
 		Document: document, Events: events.NewDispatcher(), Stylesheet: stylesheet, ComputedStyles: computed,
 		Animations: style.NewAnimationRegistry(), Transitions: style.NewTransitionRegistry(), BackgroundImages: backgroundImages,
 		BackgroundErrors: backgroundErrors, Engine: state.engine, Scripts: scripts, ImportMap: importMap, ScriptErrors: scriptErrors,
+		ImageResources: replacedImages, Images: decodedImages, ImageErrors: imageErrors,
 		StyleRevision: 1, ReducedMotion: state.reducedMotion, ViewportWidth: defaultFrameWidth, ViewportHeight: defaultFrameHeight, DevTools: pageStore,
 		FramePolicy:    policy,
 		serviceWorkers: state.rootPage.serviceWorkers,
+		imageLoader:    imageResources,
 	}
 	for _, scriptError := range scriptErrors {
 		pageStore.AddConsole(devtools.ConsoleError, "script", scriptError)
