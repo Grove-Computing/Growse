@@ -241,6 +241,9 @@ func (runtime *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script,
 		if err := runtime.installGlobals(vm); err != nil {
 			return err
 		}
+		if err := runtime.installBrowserGlobals(vm); err != nil {
+			return err
+		}
 		if err := runtime.installServiceWorker(vm); err != nil {
 			return err
 		}
