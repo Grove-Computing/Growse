@@ -8,11 +8,13 @@ import (
 	"image/color"
 	"image/png"
 	"net/url"
+	"sync"
 	"testing"
 
 	"github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/network"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
+	runtimejavascript "github.com/Grove-Computing/Growse/internal/runtime/javascript"
 	"github.com/Grove-Computing/Growse/internal/style"
 )
 
@@ -205,6 +207,211 @@ func TestUpdateViewportReselectsResponsiveImageCandidate(t *testing.T) {
 	}
 	if !browserState.UpdateViewport(500, 700) || page.ImageResources[imageID].URL != mobileURL || page.ImageResources[imageID].IntrinsicWidth != 2 {
 		t.Fatalf("responsive candidate = %#v", page.ImageResources[imageID])
+	}
+}
+
+func TestJavaScriptImageLifecycleDispatchesInDocumentOrderAndExposesState(t *testing.T) {
+	pageURL := "https://example.com/index.html"
+	imageURL := "https://example.com/ok.png"
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, image.NewNRGBA(image.Rect(0, 0, 3, 2))); err != nil {
+		t.Fatal(err)
+	}
+	loader := &routeLoader{responses: map[string]*network.Response{
+		pageURL: {URL: mustParseURL(t, pageURL), StatusCode: 200, ContentType: "text/html", Body: []byte(`<body id="result"><img id="ok" src="ok.png"><img id="bad" src="bad.png"><script>
+const result = document.getElementById("result");
+const ok = document.getElementById("ok");
+const bad = document.getElementById("bad");
+result.setAttribute("state", [ok.complete, ok.naturalWidth, ok.naturalHeight, ok.currentSrc].join("|"));
+ok.addEventListener("load", () => result.setAttribute("events", (result.getAttribute("events") || "") + "load,"));
+bad.addEventListener("error", () => result.setAttribute("events", (result.getAttribute("events") || "") + "error,"));
+</script></body>`)},
+		imageURL:                      {URL: mustParseURL(t, imageURL), StatusCode: 200, ContentType: "image/png", Body: encoded.Bytes()},
+		"https://example.com/bad.png": {URL: mustParseURL(t, "https://example.com/bad.png"), StatusCode: 200, ContentType: "image/png", Body: []byte("broken")},
+	}}
+	browserState := NewWithEngineFactory(loader, func(engine runtimemodel.Engine) runtimemodel.Runtime {
+		if engine == runtimemodel.EngineJavaScript {
+			return runtimejavascript.New()
+		}
+		return &runtimeStub{}
+	})
+	defer browserState.Close()
+	if _, err := browserState.SetEngine(context.Background(), runtimemodel.EngineJavaScript); err != nil {
+		t.Fatal(err)
+	}
+	page, err := browserState.Navigate(context.Background(), pageURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, ok := page.Document.GetElementByID("result")
+	if !ok {
+		t.Fatal("result element is missing")
+	}
+	if state, _ := result.Attribute("state"); state != "true|3|2|"+imageURL {
+		t.Fatalf("HTMLImageElement state = %q", state)
+	}
+	if order, _ := result.Attribute("events"); order != "load,error," {
+		t.Fatalf("image event order = %q", order)
+	}
+}
+
+func TestDynamicImageSourceRelayoutsAndDispatchesOnce(t *testing.T) {
+	pageURL := "https://example.com/dynamic.html"
+	firstURL, secondURL := "https://example.com/first.png", "https://example.com/second.png"
+	encode := func(width int) []byte {
+		var output bytes.Buffer
+		if err := png.Encode(&output, image.NewNRGBA(image.Rect(0, 0, width, 1))); err != nil {
+			t.Fatal(err)
+		}
+		return output.Bytes()
+	}
+	loader := &routeLoader{responses: map[string]*network.Response{
+		pageURL: {URL: mustParseURL(t, pageURL), StatusCode: 200, ContentType: "text/html", Body: []byte(`<body id="result"><img id="hero" src="first.png"><script>
+const result = document.getElementById("result"); const hero = document.getElementById("hero");
+hero.addEventListener("load", () => result.setAttribute("loads", String(Number(result.getAttribute("loads") || "0") + 1)));
+hero.src = "second.png"; result.setAttribute("width", String(hero.naturalWidth));
+</script></body>`)},
+		firstURL:  {URL: mustParseURL(t, firstURL), ContentType: "image/png", Body: encode(2)},
+		secondURL: {URL: mustParseURL(t, secondURL), ContentType: "image/png", Body: encode(5)},
+	}}
+	browserState := NewWithEngineFactory(loader, func(engine runtimemodel.Engine) runtimemodel.Runtime {
+		if engine == runtimemodel.EngineJavaScript {
+			return runtimejavascript.New()
+		}
+		return &runtimeStub{}
+	})
+	defer browserState.Close()
+	_, _ = browserState.SetEngine(context.Background(), runtimemodel.EngineJavaScript)
+	page, err := browserState.Navigate(context.Background(), pageURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, _ := page.Document.GetElementByID("result")
+	if loads, _ := result.Attribute("loads"); loads != "1" {
+		t.Fatalf("dynamic image loads = %q, want once", loads)
+	}
+	if width, _ := result.Attribute("width"); width != "5" {
+		t.Fatalf("late naturalWidth = %q, want 5", width)
+	}
+	if page.StyleRevision < 2 {
+		t.Fatalf("StyleRevision = %d, want late relayout revision", page.StyleRevision)
+	}
+}
+
+func TestLazyImagePolicyDefersOutsideViewport(t *testing.T) {
+	baseURL := mustParseURL(t, "https://example.com/")
+	document := dom.NewDocument()
+	imageNode := document.CreateElement("img", map[string]string{"src": "lazy.png", "loading": "lazy"})
+	if err := document.AppendChild(document.Root, imageNode); err != nil {
+		t.Fatal(err)
+	}
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, image.NewNRGBA(image.Rect(0, 0, 2, 1))); err != nil {
+		t.Fatal(err)
+	}
+	loader := &routeLoader{responses: map[string]*network.Response{
+		"https://example.com/lazy.png": {URL: mustParseURL(t, "https://example.com/lazy.png"), ContentType: "image/png", Body: encoded.Bytes()},
+	}}
+	resources, _, failures := loadReplacedImagesWithPolicy(context.Background(), loader, baseURL, document, 800, 1, map[dom.NodeID]bool{imageNode.ID: false})
+	if !resources[imageNode.ID].Deferred || len(loader.requested) != 0 || len(failures) != 0 {
+		t.Fatalf("deferred resource/requests/failures = %#v / %#v / %#v", resources[imageNode.ID], loader.requested, failures)
+	}
+	resources, _, failures = loadReplacedImagesWithPolicy(context.Background(), loader, baseURL, document, 800, 1, map[dom.NodeID]bool{imageNode.ID: true})
+	if !resources[imageNode.ID].Loaded || len(loader.requested) != 1 || len(failures) != 0 {
+		t.Fatalf("eligible resource/requests/failures = %#v / %#v / %#v", resources[imageNode.ID], loader.requested, failures)
+	}
+}
+
+type cancelAwareImageLoader struct {
+	responses map[string]*network.Response
+	blocked   string
+	started   chan struct{}
+	once      sync.Once
+}
+
+func (loader *cancelAwareImageLoader) Get(ctx context.Context, target *url.URL) (*network.Response, error) {
+	if target.String() == loader.blocked {
+		loader.once.Do(func() { close(loader.started) })
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	response := loader.responses[target.String()]
+	if response == nil {
+		return nil, context.Canceled
+	}
+	copy := *response
+	copy.Body = append([]byte(nil), response.Body...)
+	return &copy, nil
+}
+
+func TestNavigationCancelsStaleResponsiveImageCompletion(t *testing.T) {
+	pageURL, nextURL := "https://example.com/page.html", "https://example.com/next.html"
+	desktopURL, mobileURL := "https://example.com/desktop.png", "https://example.com/mobile.png"
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, image.NewNRGBA(image.Rect(0, 0, 2, 1))); err != nil {
+		t.Fatal(err)
+	}
+	loader := &cancelAwareImageLoader{
+		blocked: mobileURL, started: make(chan struct{}), responses: map[string]*network.Response{
+			pageURL:    {URL: mustParseURL(t, pageURL), StatusCode: 200, ContentType: "text/html", Body: []byte(`<picture><source media="(max-width:600px)" srcset="mobile.png"><img src="desktop.png"></picture>`)},
+			nextURL:    {URL: mustParseURL(t, nextURL), StatusCode: 200, ContentType: "text/html", Body: []byte(`<p>next</p>`)},
+			desktopURL: {URL: mustParseURL(t, desktopURL), ContentType: "image/png", Body: encoded.Bytes()},
+		},
+	}
+	browserState := NewWithEngineFactory(loader, func(runtimemodel.Engine) runtimemodel.Runtime { return &runtimeStub{} })
+	defer browserState.Close()
+	_, _ = browserState.SetEngine(context.Background(), runtimemodel.EngineJavaScript)
+	oldPage, err := browserState.Navigate(context.Background(), pageURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() {
+		browserState.UpdateViewport(500, 700)
+		close(done)
+	}()
+	<-loader.started
+	if _, err := browserState.Navigate(context.Background(), nextURL); err != nil {
+		t.Fatal(err)
+	}
+	<-done
+	for _, resource := range oldPage.ImageResources {
+		if resource.URL == mobileURL {
+			t.Fatalf("stale image completion committed after navigation: %#v", resource)
+		}
+	}
+}
+
+func TestPageCloseCancelsPendingResponsiveImage(t *testing.T) {
+	pageURL := "https://example.com/page.html"
+	desktopURL, mobileURL := "https://example.com/desktop.png", "https://example.com/mobile.png"
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, image.NewNRGBA(image.Rect(0, 0, 2, 1))); err != nil {
+		t.Fatal(err)
+	}
+	loader := &cancelAwareImageLoader{
+		blocked: mobileURL, started: make(chan struct{}), responses: map[string]*network.Response{
+			pageURL:    {URL: mustParseURL(t, pageURL), StatusCode: 200, ContentType: "text/html", Body: []byte(`<picture><source media="(max-width:600px)" srcset="mobile.png"><img src="desktop.png"></picture>`)},
+			desktopURL: {URL: mustParseURL(t, desktopURL), ContentType: "image/png", Body: encoded.Bytes()},
+		},
+	}
+	browserState := NewWithEngineFactory(loader, func(runtimemodel.Engine) runtimemodel.Runtime { return &runtimeStub{} })
+	_, _ = browserState.SetEngine(context.Background(), runtimemodel.EngineJavaScript)
+	if _, err := browserState.Navigate(context.Background(), pageURL); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() {
+		browserState.UpdateViewport(500, 700)
+		close(done)
+	}()
+	<-loader.started
+	if err := browserState.Close(); err != nil {
+		t.Fatal(err)
+	}
+	<-done
+	if browserState.Page() != nil {
+		t.Fatal("closed Page retained after pending image cancellation")
 	}
 }
 

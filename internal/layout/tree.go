@@ -136,6 +136,7 @@ type ImageResource struct {
 	IntrinsicWidth, IntrinsicHeight float32
 	Alt                             string
 	Loaded                          bool
+	Deferred                        bool
 	Error                           string
 }
 

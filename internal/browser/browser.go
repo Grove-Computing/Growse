@@ -264,6 +264,9 @@ func (b *Browser) SetEngine(ctx context.Context, engine runtimemodel.Engine) (*P
 	}
 	b.engine = engine
 	b.navigationID++
+	if b.page != nil {
+		b.page.cancelImageLoads()
+	}
 	if b.navigationCancel != nil {
 		b.navigationCancel()
 		b.navigationCancel = nil
@@ -744,14 +747,17 @@ func (b *Browser) UpdateViewport(width, height float32) bool {
 		runtime.UpdateMediaEnvironment(media)
 	}
 	if engine == runtimemodel.EngineJavaScript && imageLoader != nil {
-		resources, images, failures := loadReplacedImages(context.Background(), imageLoader, baseURL, page.Document, width, 1)
-		b.mu.Lock()
-		if b.page == page && page.Engine == runtimemodel.EngineJavaScript {
-			page.ImageResources, page.Images, page.ImageErrors = resources, images, failures
-			page.StyleRevision++
+		loadContext, generation := page.beginImageLoad(context.Background())
+		policy := imageViewportPolicy(page.Document, page.ComputedStyles, baseURL, width, height)
+		resources, images, failures := loadReplacedImagesWithPolicy(loadContext, imageLoader, baseURL, page.Document, width, 1, policy)
+		b.mu.RLock()
+		active := b.page == page && page.Engine == runtimemodel.EngineJavaScript
+		b.mu.RUnlock()
+		committed := active && loadContext.Err() == nil && page.commitImageLoad(generation, resources, images, failures)
+		if committed {
+			dispatchImageResourceEvents(b, page)
 		}
-		b.mu.Unlock()
-		if onMutation != nil {
+		if committed && onMutation != nil {
 			onMutation()
 		}
 	}
@@ -790,6 +796,9 @@ func (b *Browser) SetReducedMotion(reduce bool) bool {
 func (b *Browser) SetPage(page *Page) {
 	b.mu.Lock()
 	b.navigationID++
+	if b.page != nil {
+		b.page.cancelImageLoads()
+	}
 	if b.navigationCancel != nil {
 		b.navigationCancel()
 		b.navigationCancel = nil
@@ -844,6 +853,9 @@ func (b *Browser) SetPage(page *Page) {
 func (b *Browser) Close() error {
 	b.mu.Lock()
 	b.navigationID++
+	if b.page != nil {
+		b.page.cancelImageLoads()
+	}
 	if b.navigationCancel != nil {
 		b.navigationCancel()
 		b.navigationCancel = nil
@@ -983,6 +995,9 @@ func (b *Browser) SubmitPOST(ctx context.Context, formID, submitterID dom.NodeID
 		return nil, errors.New("network client does not support POST")
 	}
 	b.navigationID++
+	if b.page != nil {
+		b.page.cancelImageLoads()
+	}
 	navigationID := b.navigationID
 	engineFactory := b.engineFactory
 	engine := runtimemodel.NormalizeEngine(b.engine)
@@ -1222,6 +1237,9 @@ func (b *Browser) loadWithClient(ctx context.Context, pageURL *url.URL, commit h
 	}
 	b.navigationCancel = cancel
 	b.navigationID++
+	if b.page != nil {
+		b.page.cancelImageLoads()
+	}
 	navigationID := b.navigationID
 	client := b.client
 	engineFactory := b.engineFactory
@@ -1368,7 +1386,8 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	var decodedImages map[string]image.Image
 	var imageErrors []string
 	if engine == runtimemodel.EngineJavaScript {
-		replacedImages, decodedImages, imageErrors = loadReplacedImages(ctx, imageResources, baseURL, document, 1280, 1)
+		imagePolicy := imageViewportPolicy(document, computedStyles, baseURL, 1280, 720)
+		replacedImages, decodedImages, imageErrors = loadReplacedImagesWithPolicy(ctx, imageResources, baseURL, document, 1280, 1, imagePolicy)
 	}
 	scripts, scriptErrors := loadScriptsForEngineWithBase(ctx, scriptResources, response.URL, baseURL, document, engine)
 	var importMap map[string]string
@@ -1520,6 +1539,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	if previousPage != nil && previousPage != page {
 		_ = closePageFrames(previousPage)
 	}
+	dispatchImageResourceEvents(b, page)
 	dispatchFrameLoadEvents(b, page)
 	if dispatchPopState {
 		if dispatcher, ok := pageRuntime.(runtimemodel.NavigationEventDispatcher); ok {
@@ -1782,7 +1802,21 @@ func startRuntime(ctx context.Context, factory runtimemodel.EngineFactory, engin
 		ReadRender: func(readContext context.Context, nodeID dom.NodeID) (runtimemodel.RenderSnapshot, error) {
 			return pageRenderSnapshot(readContext, page, nodeID)
 		},
-		Media: pageMediaEnvironment(page),
+		RefreshImage: func(loadContext context.Context, nodeID dom.NodeID) (runtimemodel.ImageState, error) {
+			generationContext, generation := page.beginImageLoad(loadContext)
+			policy := imageViewportPolicy(page.Document, page.ComputedStyles, pageBaseURL(page), page.ViewportWidth, page.ViewportHeight)
+			resources, images, failures := loadReplacedImagesWithPolicy(generationContext, page.imageLoader, pageBaseURL(page), page.Document, page.ViewportWidth, 1, policy)
+			if generationContext.Err() != nil || !page.commitImageLoad(generation, resources, images, failures) {
+				return runtimemodel.ImageState{}, context.Canceled
+			}
+			if onMutation != nil {
+				onMutation()
+			}
+			return page.imageState(nodeID), nil
+		},
+		ReadImage:           page.imageState,
+		ImageEventDelivered: page.markImageEventDelivered,
+		Media:               pageMediaEnvironment(page),
 		FrameScope: func(current time.Time, callback func()) {
 			frameMu.Lock()
 			frameTime = current

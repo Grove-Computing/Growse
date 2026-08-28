@@ -9,8 +9,10 @@ import (
 	_ "image/png"
 	"mime"
 	"net/url"
+	"strings"
 
 	"github.com/Grove-Computing/Growse/internal/dom"
+	"github.com/Grove-Computing/Growse/internal/events"
 	"github.com/Grove-Computing/Growse/internal/layout"
 	"github.com/Grove-Computing/Growse/internal/network"
 	"github.com/Grove-Computing/Growse/internal/style"
@@ -70,6 +72,10 @@ func loadBackgroundImages(ctx context.Context, client ResourceLoader, computed s
 }
 
 func loadReplacedImages(ctx context.Context, client ResourceLoader, baseURL *url.URL, document *dom.Document, viewportWidth, deviceScale float32) (map[dom.NodeID]layout.ImageResource, map[string]image.Image, []string) {
+	return loadReplacedImagesWithPolicy(ctx, client, baseURL, document, viewportWidth, deviceScale, nil)
+}
+
+func loadReplacedImagesWithPolicy(ctx context.Context, client ResourceLoader, baseURL *url.URL, document *dom.Document, viewportWidth, deviceScale float32, eligible map[dom.NodeID]bool) (map[dom.NodeID]layout.ImageResource, map[string]image.Image, []string) {
 	resources := make(map[dom.NodeID]layout.ImageResource)
 	images := make(map[string]image.Image)
 	var errors []string
@@ -89,8 +95,19 @@ func loadReplacedImages(ctx context.Context, client ResourceLoader, baseURL *url
 				resource.Error = "image source is missing or invalid"
 				resources[node.ID] = resource
 			} else {
+				if loading, _ := node.Attribute("loading"); strings.EqualFold(strings.TrimSpace(loading), "lazy") && eligible != nil && !eligible[node.ID] {
+					resource.URL, resource.Deferred = candidates[0].String(), true
+					resources[node.ID] = resource
+					for _, child := range node.Children {
+						visit(child)
+					}
+					return
+				}
 				var lastTarget *url.URL
 				for _, target := range candidates {
+					if ctx.Err() != nil {
+						return
+					}
 					lastTarget = target
 					resource.URL = target.String()
 					if target.Scheme != "http" && target.Scheme != "https" {
@@ -148,5 +165,83 @@ func isImageContentType(contentType string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+func imageViewportPolicy(document *dom.Document, computed style.Map, baseURL *url.URL, viewportWidth, viewportHeight float32) map[dom.NodeID]bool {
+	eligible := make(map[dom.NodeID]bool)
+	placeholders := make(map[dom.NodeID]layout.ImageResource)
+	if document == nil {
+		return eligible
+	}
+	var visit func(*dom.Node)
+	visit = func(node *dom.Node) {
+		if node == nil {
+			return
+		}
+		if node.Type == dom.NodeElement && node.TagName == "img" {
+			alt, _ := node.Attribute("alt")
+			placeholder := layout.ImageResource{Alt: alt, Deferred: true}
+			if candidates := imageCandidates(node, baseURL, viewportWidth, 1); len(candidates) != 0 {
+				placeholder.URL = candidates[0].String()
+			}
+			placeholders[node.ID] = placeholder
+			loading, _ := node.Attribute("loading")
+			eligible[node.ID] = !strings.EqualFold(strings.TrimSpace(loading), "lazy")
+		}
+		for _, child := range node.Children {
+			visit(child)
+		}
+	}
+	visit(document.Root)
+	tree := layout.BuildWithScrollAndImages(document, computed, placeholders, viewportWidth, viewportHeight, 0, 0)
+	nearBottom := viewportHeight * 2
+	for nodeID := range placeholders {
+		if bounds, ok := tree.Bounds[nodeID]; ok && bounds.Y <= nearBottom && bounds.Y+bounds.Height >= -viewportHeight {
+			eligible[nodeID] = true
+		}
+	}
+	return eligible
+}
+
+func dispatchImageResourceEvents(browserState *Browser, page *Page) {
+	if browserState == nil || page == nil || page.Document == nil {
+		return
+	}
+	var pending []events.Event
+	page.imageMu.Lock()
+	if page.imageEvents == nil {
+		page.imageEvents = make(map[dom.NodeID]string)
+	}
+	var visit func(*dom.Node)
+	visit = func(node *dom.Node) {
+		if node == nil {
+			return
+		}
+		if node.Type == dom.NodeElement && node.TagName == "img" {
+			resource, exists := page.ImageResources[node.ID]
+			if exists && !resource.Deferred {
+				signature := resource.URL + "\x00" + resource.Error
+				if resource.Loaded {
+					signature += "\x00loaded"
+				}
+				if page.imageEvents[node.ID] != signature {
+					page.imageEvents[node.ID] = signature
+					eventType := events.Error
+					if resource.Loaded {
+						eventType = events.Load
+					}
+					pending = append(pending, events.New(eventType, node.ID, false, false))
+				}
+			}
+		}
+		for _, child := range node.Children {
+			visit(child)
+		}
+	}
+	visit(page.Document.Root)
+	page.imageMu.Unlock()
+	for _, event := range pending {
+		browserState.dispatchPageEvent(page, event)
 	}
 }

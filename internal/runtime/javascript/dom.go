@@ -8,6 +8,7 @@ import (
 
 	dommodel "github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/events"
+	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 	domapi "github.com/Grove-Computing/Growse/internal/webapi/dom"
 	"github.com/dop251/goja"
 )
@@ -642,8 +643,28 @@ func (runtime *Runtime) elementValue(vm *goja.Runtime, element *domapi.Element) 
 	runtime.installLinkElement(vm, object, element)
 	runtime.installStyleElement(vm, object, element)
 	runtime.installHTMLElementReflection(vm, object, element)
+	runtime.installImageElement(vm, object, element)
 	runtime.installFrameElement(vm, object, id)
 	return object
+}
+
+func (runtime *Runtime) installImageElement(vm *goja.Runtime, object *goja.Object, element *domapi.Element) {
+	if element == nil || !strings.EqualFold(element.TagName(), "img") {
+		return
+	}
+	read := func() runtimemodel.ImageState {
+		runtime.mu.Lock()
+		callback := runtime.environment.ReadImage
+		runtime.mu.Unlock()
+		if callback == nil {
+			return runtimemodel.ImageState{}
+		}
+		return callback(element.ID())
+	}
+	_ = object.DefineAccessorProperty("complete", vm.ToValue(func(goja.FunctionCall) goja.Value { return vm.ToValue(read().Complete) }), nil, goja.FLAG_FALSE, goja.FLAG_TRUE)
+	_ = object.DefineAccessorProperty("naturalWidth", vm.ToValue(func(goja.FunctionCall) goja.Value { return vm.ToValue(read().NaturalWidth) }), nil, goja.FLAG_FALSE, goja.FLAG_TRUE)
+	_ = object.DefineAccessorProperty("naturalHeight", vm.ToValue(func(goja.FunctionCall) goja.Value { return vm.ToValue(read().NaturalHeight) }), nil, goja.FLAG_FALSE, goja.FLAG_TRUE)
+	_ = object.DefineAccessorProperty("currentSrc", vm.ToValue(func(goja.FunctionCall) goja.Value { return vm.ToValue(read().URL) }), nil, goja.FLAG_FALSE, goja.FLAG_TRUE)
 }
 
 func (runtime *Runtime) installDOMInterfaces(vm *goja.Runtime) error {
