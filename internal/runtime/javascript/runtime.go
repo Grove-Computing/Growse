@@ -82,6 +82,8 @@ type Runtime struct {
 	modulePreloads    map[uint64]struct{}
 	moduleRegistry    *moduleRegistry
 	moduleEvaluations map[string]*moduleEvaluation
+	stylesheetStates  map[uint64]string
+	preloadStates     map[uint64]string
 
 	loaded    bool
 	started   bool
@@ -172,6 +174,8 @@ func (runtime *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script,
 	runtime.modulePreloads = make(map[uint64]struct{})
 	runtime.moduleRegistry = newModuleRegistry(environment)
 	runtime.moduleEvaluations = make(map[string]*moduleEvaluation)
+	runtime.stylesheetStates = make(map[uint64]string)
+	runtime.preloadStates = make(map[uint64]string)
 	runtime.windowListeners = nil
 	runtime.documentListeners = nil
 	runtime.microtasks = nil
@@ -352,6 +356,8 @@ func (runtime *Runtime) Stop() error {
 	runtime.modulePreloads = nil
 	runtime.moduleRegistry = nil
 	runtime.moduleEvaluations = nil
+	runtime.stylesheetStates = nil
+	runtime.preloadStates = nil
 	runtime.windowListeners = nil
 	runtime.documentListeners = nil
 	runtime.microtasks = nil

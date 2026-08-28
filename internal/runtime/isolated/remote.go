@@ -438,6 +438,7 @@ func (r *Runtime) installHostHandlers(p *peer) {
 	})
 	p.handleEvent("storage.change", r.applyStorageChange)
 	p.handleRequest("host.fetch", r.handleFetch)
+	p.handleRequest("host.styles-refresh", r.handleStylesRefresh)
 	p.handleRequest("host.navigate", r.handleNavigate)
 	p.handleRequest("host.history-push", r.handleHistoryPush)
 	p.handleRequest("host.history-replace", r.handleHistoryReplace)
@@ -451,6 +452,16 @@ func (r *Runtime) installHostHandlers(p *peer) {
 	p.handleRequest("host.service-worker-get", r.handleServiceWorkerGet)
 	p.handleRequest("host.service-worker-list", r.handleServiceWorkerList)
 	p.handleRequest("host.service-worker-controller", r.handleServiceWorkerController)
+}
+
+func (r *Runtime) handleStylesRefresh(ctx context.Context, _ json.RawMessage) (any, error) {
+	r.mu.Lock()
+	refresh := r.environment.RefreshStyles
+	r.mu.Unlock()
+	if refresh == nil {
+		return nil, errors.New("browser stylesheet refresh is unavailable")
+	}
+	return nil, refresh(ctx)
 }
 
 func (r *Runtime) serviceWorkerHost() (*runtimemodel.ServiceWorkerHost, error) {

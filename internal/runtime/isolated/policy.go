@@ -37,7 +37,9 @@ func validateBrokeredFetch(request *network.Request, pageURL *url.URL, engine st
 	default:
 		return fmt.Errorf("sandbox fetch method %q is not allowed", method)
 	}
-	if requestedKind == network.RequestModule || requestedKind == network.RequestScript {
+	resourceRequest := requestedKind == network.RequestModule || requestedKind == network.RequestScript ||
+		requestedKind == network.RequestStylesheet || requestedKind == network.RequestImage || requestedKind == network.RequestSubresource
+	if resourceRequest {
 		if engine != string(runtimemodel.EngineJavaScript) || method != http.MethodGet || len(request.Body) != 0 || len(request.Header) != 0 {
 			return errors.New("sandbox script fetch must be a header-free JavaScript GET")
 		}
@@ -47,7 +49,7 @@ func validateBrokeredFetch(request *network.Request, pageURL *url.URL, engine st
 			request.Credentials = network.CredentialsSameOrigin
 		}
 		request.CORS = true
-	} else if requestedKind == network.RequestScript {
+	} else if resourceRequest {
 		if request.CORS && request.Credentials != network.CredentialsInclude {
 			request.Credentials = network.CredentialsSameOrigin
 		} else if !request.CORS && request.Credentials == "" {
@@ -69,8 +71,8 @@ func validateBrokeredFetch(request *network.Request, pageURL *url.URL, engine st
 	request.SiteURL = publicRuntimeURL(pageURL)
 	if requestedKind == network.RequestModule {
 		request.Kind = network.RequestModule
-	} else if requestedKind == network.RequestScript {
-		request.Kind = network.RequestScript
+	} else if resourceRequest {
+		request.Kind = requestedKind
 	} else {
 		request.Kind = network.RequestFetch
 	}

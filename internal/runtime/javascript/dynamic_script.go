@@ -34,10 +34,10 @@ func (runtime *Runtime) installScriptElement(vm *goja.Runtime, object *goja.Obje
 	if element == nil || !strings.EqualFold(element.TagName(), "script") {
 		return
 	}
-	reflectStringAttribute(vm, object, element, "src", "src")
-	reflectStringAttribute(vm, object, element, "type", "type")
-	reflectStringAttribute(vm, object, element, "integrity", "integrity")
-	reflectStringAttribute(vm, object, element, "crossOrigin", "crossorigin")
+	runtime.reflectStringAttribute(vm, object, element, "src", "src")
+	runtime.reflectStringAttribute(vm, object, element, "type", "type")
+	runtime.reflectStringAttribute(vm, object, element, "integrity", "integrity")
+	runtime.reflectStringAttribute(vm, object, element, "crossOrigin", "crossorigin")
 
 	asyncGetter := vm.ToValue(func(goja.FunctionCall) goja.Value {
 		_, present := element.GetAttribute("async")
@@ -65,20 +65,21 @@ func (runtime *Runtime) installLinkElement(vm *goja.Runtime, object *goja.Object
 	if element == nil || !strings.EqualFold(element.TagName(), "link") {
 		return
 	}
-	reflectStringAttribute(vm, object, element, "href", "href")
-	reflectStringAttribute(vm, object, element, "rel", "rel")
-	reflectStringAttribute(vm, object, element, "as", "as")
-	reflectStringAttribute(vm, object, element, "integrity", "integrity")
-	reflectStringAttribute(vm, object, element, "crossOrigin", "crossorigin")
+	runtime.reflectStringAttribute(vm, object, element, "href", "href")
+	runtime.reflectStringAttribute(vm, object, element, "rel", "rel")
+	runtime.reflectStringAttribute(vm, object, element, "as", "as")
+	runtime.reflectStringAttribute(vm, object, element, "integrity", "integrity")
+	runtime.reflectStringAttribute(vm, object, element, "crossOrigin", "crossorigin")
 }
 
-func reflectStringAttribute(vm *goja.Runtime, object *goja.Object, element *domapi.Element, property, attribute string) {
+func (runtime *Runtime) reflectStringAttribute(vm *goja.Runtime, object *goja.Object, element *domapi.Element, property, attribute string) {
 	getter := vm.ToValue(func(goja.FunctionCall) goja.Value {
 		value, _ := element.GetAttribute(attribute)
 		return vm.ToValue(value)
 	})
 	setter := vm.ToValue(func(call goja.FunctionCall) goja.Value {
 		element.SetAttribute(attribute, call.Argument(0).String())
+		runtime.resourceElementChanged(vm, element)
 		return goja.Undefined()
 	})
 	_ = object.DefineAccessorProperty(property, getter, setter, goja.FLAG_FALSE, goja.FLAG_TRUE)
@@ -103,6 +104,10 @@ func (runtime *Runtime) prepareConnectedScriptTree(vm *goja.Runtime, element *do
 		}
 	} else if strings.EqualFold(element.TagName(), "link") && linkRelIncludes(element, "modulepreload") {
 		runtime.prepareModulePreload(vm, element)
+	} else if strings.EqualFold(element.TagName(), "style") {
+		runtime.prepareDynamicStyle(vm, element)
+	} else if strings.EqualFold(element.TagName(), "link") {
+		runtime.prepareDynamicLink(vm, element)
 	}
 	for _, child := range element.Children() {
 		runtime.prepareConnectedScriptTree(vm, child)

@@ -95,6 +95,20 @@ func TestBrokerPreservesDynamicClassicScriptPolicy(t *testing.T) {
 	}
 }
 
+func TestBrokerPreservesJavaScriptDynamicResourceKinds(t *testing.T) {
+	pageURL := parsePolicyURL(t, "https://app.example/page")
+	target := parsePolicyURL(t, "https://cdn.example/resource")
+	for _, kind := range []network.RequestKind{network.RequestStylesheet, network.RequestImage, network.RequestSubresource} {
+		request := &network.Request{Method: http.MethodGet, URL: target, Kind: kind}
+		if err := validateBrokeredFetch(request, pageURL, "javascript"); err != nil {
+			t.Fatalf("kind %d validation error = %v", kind, err)
+		}
+		if request.Kind != kind || request.Engine != "javascript" || request.Credentials != network.CredentialsInclude {
+			t.Fatalf("kind %d broker policy = %#v", kind, request)
+		}
+	}
+}
+
 func TestWorkerEnvironmentDoesNotInheritBrowserSecrets(t *testing.T) {
 	const secretName = "GROWSE_TEST_BROWSER_SECRET"
 	t.Setenv(secretName, "credential")

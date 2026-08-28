@@ -153,10 +153,14 @@ func (runtime *Runtime) elementValue(vm *goja.Runtime, element *domapi.Element) 
 		return vm.ToValue(value)
 	})
 	_ = object.Set("setAttribute", func(call goja.FunctionCall) goja.Value {
-		return vm.ToValue(element.SetAttribute(call.Argument(0).String(), call.Argument(1).String()))
+		changed := element.SetAttribute(call.Argument(0).String(), call.Argument(1).String())
+		runtime.resourceElementChanged(vm, element)
+		return vm.ToValue(changed)
 	})
 	_ = object.Set("removeAttribute", func(call goja.FunctionCall) goja.Value {
-		return vm.ToValue(element.RemoveAttribute(call.Argument(0).String()))
+		changed := element.RemoveAttribute(call.Argument(0).String())
+		runtime.resourceElementChanged(vm, element)
+		return vm.ToValue(changed)
 	})
 	_ = object.Set("appendChild", func(call goja.FunctionCall) goja.Value {
 		childObject, ok := call.Argument(0).(*goja.Object)
@@ -195,18 +199,27 @@ func (runtime *Runtime) elementValue(vm *goja.Runtime, element *domapi.Element) 
 		if child == nil || !element.RemoveChild(child) {
 			return goja.Null()
 		}
+		runtime.refreshRemovedStyleTree(child)
 		return childObject
 	})
 	_ = object.Set("replaceChildren", func(call goja.FunctionCall) goja.Value {
+		oldChildren := element.Children()
 		children, ok := runtime.domArguments(vm, call.Arguments)
 		if !ok || !element.ReplaceChildren(children...) {
 			panic(vm.NewTypeError("replaceChildren arguments are invalid"))
 		}
 		runtime.prepareConnectedScripts(vm, children...)
+		for _, oldChild := range oldChildren {
+			runtime.refreshRemovedStyleTree(oldChild)
+		}
 		return goja.Undefined()
 	})
 	_ = object.Set("remove", func(goja.FunctionCall) goja.Value {
+		hadStyles := containsStyleResource(element)
 		element.Remove()
+		if hadStyles {
+			runtime.refreshInlineStyles(dynamicStyleSnapshot{})
+		}
 		return goja.Undefined()
 	})
 	_ = object.Set("addEventListener", func(call goja.FunctionCall) goja.Value {
@@ -241,6 +254,7 @@ func (runtime *Runtime) elementValue(vm *goja.Runtime, element *domapi.Element) 
 	textGetter := vm.ToValue(func(goja.FunctionCall) goja.Value { return vm.ToValue(element.Text()) })
 	textSetter := vm.ToValue(func(call goja.FunctionCall) goja.Value {
 		element.SetText(call.Argument(0).String())
+		runtime.resourceElementChanged(vm, element)
 		return goja.Undefined()
 	})
 	_ = object.DefineAccessorProperty("textContent", textGetter, textSetter, goja.FLAG_FALSE, goja.FLAG_TRUE)
@@ -268,6 +282,8 @@ func (runtime *Runtime) elementValue(vm *goja.Runtime, element *domapi.Element) 
 		if !element.SetInnerHTML(call.Argument(0).String()) {
 			panic(vm.NewTypeError("innerHTML fragment was rejected"))
 		}
+		runtime.prepareConnectedScripts(vm, element.Children()...)
+		runtime.refreshInlineStyles(dynamicStyleSnapshot{})
 		return goja.Undefined()
 	})
 	_ = object.DefineAccessorProperty("innerHTML", innerHTMLGetter, innerHTMLSetter, goja.FLAG_FALSE, goja.FLAG_TRUE)
@@ -279,6 +295,7 @@ func (runtime *Runtime) elementValue(vm *goja.Runtime, element *domapi.Element) 
 	_ = object.DefineAccessorProperty("value", valueGetter, valueSetter, goja.FLAG_FALSE, goja.FLAG_TRUE)
 	runtime.installScriptElement(vm, object, element)
 	runtime.installLinkElement(vm, object, element)
+	runtime.installStyleElement(vm, object, element)
 	runtime.installFrameElement(vm, object, id)
 	return object
 }
