@@ -11,6 +11,14 @@ import (
 	parser "github.com/tdewolff/parse/v2/css"
 )
 
+type atRuleFrame struct {
+	active         bool
+	isMedia        bool
+	media          []MediaQuery
+	keyframesIndex int
+	layer          string
+}
+
 // Parse reads a stylesheet. Unsupported selectors and at-rules are ignored.
 func Parse(reader io.Reader) (*Stylesheet, error) {
 	input, err := io.ReadAll(reader)
@@ -22,12 +30,6 @@ func Parse(reader io.Reader) (*Stylesheet, error) {
 	stylesheet := &Stylesheet{}
 	var current *Rule
 	var currentKeyframe *Keyframe
-	type atRuleFrame struct {
-		active         bool
-		isMedia        bool
-		media          []MediaQuery
-		keyframesIndex int
-	}
 	var atRules []atRuleFrame
 	importsAllowed := true
 
@@ -67,6 +69,7 @@ func Parse(reader io.Reader) (*Stylesheet, error) {
 			}
 			active := true
 			var mediaGroups [][]MediaQuery
+			layer := ""
 			for _, frame := range atRules {
 				if !frame.active {
 					active = false
@@ -74,6 +77,9 @@ func Parse(reader io.Reader) (*Stylesheet, error) {
 				}
 				if frame.isMedia {
 					mediaGroups = append(mediaGroups, append([]MediaQuery(nil), frame.media...))
+				}
+				if frame.layer != "" {
+					layer = frame.layer
 				}
 			}
 			if !active {
@@ -87,7 +93,7 @@ func Parse(reader io.Reader) (*Stylesheet, error) {
 				continue
 			}
 			stylesheet.Rules = append(stylesheet.Rules, Rule{
-				Kind: RuleStyle, Selectors: selectors, Order: len(stylesheet.Rules), Media: mediaGroups,
+				Kind: RuleStyle, Selectors: selectors, Order: len(stylesheet.Rules), Media: mediaGroups, Layer: layer,
 			})
 			current = &stylesheet.Rules[len(stylesheet.Rules)-1]
 		case parser.DeclarationGrammar, parser.CustomPropertyGrammar:
@@ -118,7 +124,21 @@ func Parse(reader io.Reader) (*Stylesheet, error) {
 			name := strings.ToLower(strings.TrimSpace(string(data)))
 			if len(atRules) == 0 && name == "@import" && importsAllowed {
 				if importRule, ok := parseImportRule(tokenText(p.Values())); ok {
+					if importRule.Layered && importRule.Layer == "" {
+						importRule.Layer = newAnonymousLayer()
+					}
+					if importRule.Layered {
+						stylesheet.ensureLayer(importRule.Layer)
+					}
 					stylesheet.Imports = append(stylesheet.Imports, importRule)
+				}
+			} else if name == "@layer" {
+				parent := currentLayer(atRules)
+				for _, layerName := range strings.Split(tokenText(p.Values()), ",") {
+					layerName = strings.TrimSpace(layerName)
+					if validLayerName(layerName) {
+						stylesheet.ensureLayer(joinLayer(parent, layerName))
+					}
 				}
 			} else if len(atRules) == 0 && name != "@charset" {
 				importsAllowed = false
@@ -133,6 +153,17 @@ func Parse(reader io.Reader) (*Stylesheet, error) {
 			if name == "@media" {
 				frame.active, frame.isMedia = true, true
 				frame.media = parseMediaQueryList(tokenText(p.Values()))
+			} else if name == "@layer" {
+				parent := currentLayer(atRules)
+				layerName := strings.TrimSpace(tokenText(p.Values()))
+				if layerName == "" {
+					layerName = newAnonymousLayer()
+				}
+				if validLayerName(layerName) || strings.HasPrefix(layerName, "\x00anonymous-") {
+					frame.active = true
+					frame.layer = joinLayer(parent, layerName)
+					stylesheet.ensureLayer(frame.layer)
+				}
 			} else if len(atRules) == 0 && name == "@keyframes" {
 				if keyframesName, valid := parseKeyframesName(tokenText(p.Values())); valid && len(stylesheet.Keyframes) < MaxKeyframesRules {
 					stylesheet.Keyframes = append(stylesheet.Keyframes, KeyframesRule{Name: keyframesName})
@@ -149,6 +180,15 @@ func Parse(reader io.Reader) (*Stylesheet, error) {
 			current, currentKeyframe = nil, nil
 		}
 	}
+}
+
+func currentLayer(frames []atRuleFrame) string {
+	for index := len(frames) - 1; index >= 0; index-- {
+		if frames[index].layer != "" {
+			return frames[index].layer
+		}
+	}
+	return ""
 }
 
 func parseKeyframesName(value string) (string, bool) {
@@ -255,6 +295,9 @@ func componentKind(tokenType parser.TokenType) ComponentKind {
 func (s *Stylesheet) Append(other *Stylesheet) {
 	if other == nil {
 		return
+	}
+	for _, layer := range other.LayerOrder {
+		s.ensureLayer(layer)
 	}
 	for _, rule := range other.Rules {
 		rule.Order = len(s.Rules)

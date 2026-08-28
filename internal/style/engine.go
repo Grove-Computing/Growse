@@ -21,6 +21,8 @@ type winner struct {
 	inline      bool
 	specificity [3]int
 	order       [2]int
+	layer       string
+	layerOrder  int
 }
 
 // Compute applies UA defaults, inheritance, selector matching and cascade.
@@ -206,7 +208,11 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 	if stylesheet == nil {
 		stylesheet = &css.Stylesheet{}
 	}
-	winners := make(map[string]winner)
+	layerOrders := make(map[string]int, len(stylesheet.LayerOrder))
+	for index, layer := range stylesheet.LayerOrder {
+		layerOrders[layer] = index
+	}
+	candidates := make(map[string][]winner)
 	for _, rule := range stylesheet.Rules {
 		if !matchesMediaGroups(rule.Media, environment) {
 			continue
@@ -222,12 +228,12 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 				for _, property := range expandedProperties(declaration.Property) {
 					candidate := winner{
 						value: declaration.Value.Raw, source: declaration.Property, important: declaration.Important,
-						specificity: selector.Specificity(), order: [2]int{rule.Order, declarationIndex},
+						specificity: selector.Specificity(), order: [2]int{rule.Order, declarationIndex}, layer: rule.Layer,
 					}
-					current, exists := winners[property]
-					if !exists || outranks(candidate, current) {
-						winners[property] = candidate
+					if rule.Layer != "" {
+						candidate.layerOrder = layerOrders[rule.Layer]
 					}
+					candidates[property] = append(candidates[property], candidate)
 				}
 			}
 		}
@@ -240,11 +246,14 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 					value: declaration.Value.Raw, source: declaration.Property, important: declaration.Important, inline: true,
 					order: [2]int{0, declarationIndex},
 				}
-				current, exists := winners[property]
-				if !exists || outranks(candidate, current) {
-					winners[property] = candidate
-				}
+				candidates[property] = append(candidates[property], candidate)
 			}
+		}
+	}
+	winners := make(map[string]winner, len(candidates))
+	for property, propertyCandidates := range candidates {
+		if selected, ok := selectCascadeWinner(propertyCandidates); ok {
+			winners[property] = selected
 		}
 	}
 	for property, candidate := range winners {
@@ -859,8 +868,11 @@ func applyGeneratedContent(node *dom.Node, computed ComputedStyle, stylesheet *c
 		{css.PseudoElementBefore, &computed.BeforeContent},
 		{css.PseudoElementAfter, &computed.AfterContent},
 	} {
-		var selected winner
-		found := false
+		layerOrders := make(map[string]int, len(stylesheet.LayerOrder))
+		for index, layer := range stylesheet.LayerOrder {
+			layerOrders[layer] = index
+		}
+		var candidates []winner
 		for _, rule := range stylesheet.Rules {
 			if !matchesMediaGroups(rule.Media, environment) {
 				continue
@@ -875,14 +887,16 @@ func applyGeneratedContent(node *dom.Node, computed ComputedStyle, stylesheet *c
 					}
 					candidate := winner{
 						value: declaration.Value.Raw, source: declaration.Property, important: declaration.Important,
-						specificity: selector.Specificity(), order: [2]int{rule.Order, declarationIndex},
+						specificity: selector.Specificity(), order: [2]int{rule.Order, declarationIndex}, layer: rule.Layer,
 					}
-					if !found || outranks(candidate, selected) {
-						selected, found = candidate, true
+					if rule.Layer != "" {
+						candidate.layerOrder = layerOrders[rule.Layer]
 					}
+					candidates = append(candidates, candidate)
 				}
 			}
 		}
+		selected, found := selectCascadeWinner(candidates)
 		if found {
 			resolved, valid := resolveVariables(selected.value, computed.CustomProperties)
 			if !valid {
@@ -1536,6 +1550,19 @@ func outranks(candidate, current winner) bool {
 	if candidate.inline != current.inline {
 		return candidate.inline
 	}
+	candidateLayered, currentLayered := candidate.layer != "", current.layer != ""
+	if candidateLayered != currentLayered {
+		if candidate.important {
+			return candidateLayered
+		}
+		return !candidateLayered
+	}
+	if candidateLayered && candidate.layerOrder != current.layerOrder {
+		if candidate.important {
+			return candidate.layerOrder < current.layerOrder
+		}
+		return candidate.layerOrder > current.layerOrder
+	}
 	for index := range candidate.specificity {
 		if candidate.specificity[index] != current.specificity[index] {
 			return candidate.specificity[index] > current.specificity[index]
@@ -1545,6 +1572,38 @@ func outranks(candidate, current winner) bool {
 		return candidate.order[0] > current.order[0]
 	}
 	return candidate.order[1] >= current.order[1]
+}
+
+func selectCascadeWinner(candidates []winner) (winner, bool) {
+	remaining := append([]winner(nil), candidates...)
+	for len(remaining) != 0 {
+		selectedIndex := 0
+		for index := 1; index < len(remaining); index++ {
+			if outranks(remaining[index], remaining[selectedIndex]) {
+				selectedIndex = index
+			}
+		}
+		selected := remaining[selectedIndex]
+		if !strings.EqualFold(strings.TrimSpace(selected.value), "revert-layer") {
+			return selected, true
+		}
+		filtered := remaining[:0]
+		for _, candidate := range remaining {
+			if sameCascadeLayer(candidate, selected) {
+				continue
+			}
+			filtered = append(filtered, candidate)
+		}
+		remaining = filtered
+	}
+	return winner{}, false
+}
+
+func sameCascadeLayer(left, right winner) bool {
+	if left.inline || right.inline {
+		return left.inline == right.inline
+	}
+	return left.layer == right.layer
 }
 
 func parseFontWeight(value string) (int, bool) {

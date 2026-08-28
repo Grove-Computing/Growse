@@ -1,6 +1,12 @@
 // Package css parses CSS syntax into Growse-owned rules.
 package css
 
+import (
+	"fmt"
+	"strings"
+	"sync/atomic"
+)
+
 const (
 	// MaxKeyframesRules bounds named keyframe storage per stylesheet.
 	MaxKeyframesRules = 256
@@ -17,7 +23,11 @@ type Stylesheet struct {
 	Rules     []Rule
 	Imports   []ImportRule
 	Keyframes []KeyframesRule
+	// LayerOrder contains author cascade layers in first-declaration order.
+	LayerOrder []string
 }
+
+var anonymousLayerSequence atomic.Uint64
 
 // KeyframesRule is one named CSS animation keyframe list.
 type KeyframesRule struct {
@@ -33,8 +43,10 @@ type Keyframe struct {
 
 // ImportRule references a stylesheet and an optional media query list.
 type ImportRule struct {
-	URL   string
-	Media []MediaQuery
+	URL     string
+	Media   []MediaQuery
+	Layer   string
+	Layered bool
 }
 
 // RuleKind identifies the grammar represented by a rule.
@@ -54,6 +66,8 @@ type Rule struct {
 	Declarations []Declaration
 	Order        int
 	Media        [][]MediaQuery
+	// Layer is empty for unlayered author rules.
+	Layer string
 }
 
 // MediaModifier changes how one media query is interpreted.
@@ -278,4 +292,68 @@ func addSpecificity(target *[3]int, addition [3]int) {
 	for index := range target {
 		target[index] += addition[index]
 	}
+}
+
+func newAnonymousLayer() string {
+	return fmt.Sprintf("\x00anonymous-%d", anonymousLayerSequence.Add(1))
+}
+
+func (s *Stylesheet) ensureLayer(name string) {
+	if name == "" {
+		return
+	}
+	for _, existing := range s.LayerOrder {
+		if existing == name {
+			return
+		}
+	}
+	s.LayerOrder = append(s.LayerOrder, name)
+}
+
+// NestUnderLayer makes every rule in a loaded stylesheet participate in the
+// layer named by an @import layer() clause.
+func (s *Stylesheet) NestUnderLayer(parent string) {
+	if s == nil || parent == "" {
+		return
+	}
+	order := []string{parent}
+	for _, name := range s.LayerOrder {
+		order = append(order, parent+"."+name)
+	}
+	for index := range s.Rules {
+		if s.Rules[index].Layer == "" {
+			s.Rules[index].Layer = parent
+		} else {
+			s.Rules[index].Layer = parent + "." + s.Rules[index].Layer
+		}
+	}
+	s.LayerOrder = order
+	for index := range s.Imports {
+		if s.Imports[index].Layered {
+			s.Imports[index].Layer = parent + "." + s.Imports[index].Layer
+		}
+	}
+}
+
+func joinLayer(parent, child string) string {
+	if parent == "" {
+		return child
+	}
+	if child == "" {
+		return parent
+	}
+	return parent + "." + child
+}
+
+func validLayerName(name string) bool {
+	parts := strings.Split(strings.TrimSpace(name), ".")
+	if len(parts) == 0 {
+		return false
+	}
+	for _, part := range parts {
+		if part == "" || !validName(part) {
+			return false
+		}
+	}
+	return true
 }
