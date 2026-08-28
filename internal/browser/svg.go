@@ -57,6 +57,15 @@ var allowedSVGElements = map[string]bool{
 }
 
 func rasterizeSVG(source []byte) (image.Image, int, int, error) {
+	return rasterizeSVGWithBudget(source, nil)
+}
+
+func rasterizeSVGWithBudget(source []byte, budget *imageDecodeBudget) (decoded image.Image, widthResult, heightResult int, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			decoded, widthResult, heightResult, err = nil, 0, 0, fmt.Errorf("SVG decoder panic: %v", recovered)
+		}
+	}()
 	if err := validateSVG(source); err != nil {
 		return nil, 0, 0, err
 	}
@@ -86,6 +95,9 @@ func rasterizeSVG(source []byte) (image.Image, int, int, error) {
 	if pixelWidth <= 0 || pixelHeight <= 0 || pixelWidth > maxSVGSurfaceBytes/4/pixelHeight {
 		return nil, 0, 0, errors.New("SVG raster surface is too large")
 	}
+	if !budget.allowsSurface(pixelWidth, pixelHeight) {
+		return nil, 0, 0, errors.New("page image decode surface limit exceeded")
+	}
 	icon.ViewBox.X, icon.ViewBox.Y, icon.ViewBox.W, icon.ViewBox.H = viewBox[0], viewBox[1], viewBox[2], viewBox[3]
 	result := image.NewRGBA(image.Rect(0, 0, pixelWidth, pixelHeight))
 	icon.SetTarget(0, 0, float64(pixelWidth), float64(pixelHeight))
@@ -93,6 +105,7 @@ func rasterizeSVG(source []byte) (image.Image, int, int, error) {
 	icon.Draw(rasterx.NewDasher(pixelWidth, pixelHeight, scanner), 1)
 	paintSVGText(result, metadata)
 	applySVGClip(result, metadata)
+	budget.commitSurface(pixelWidth, pixelHeight)
 	return result, pixelWidth, pixelHeight, nil
 }
 
@@ -374,6 +387,10 @@ func applySVGClip(target *image.RGBA, metadata svgMetadata) {
 }
 
 func loadInlineSVGImages(document *dom.Document) (map[dom.NodeID]layout.ImageResource, map[string]image.Image, []string) {
+	return loadInlineSVGImagesWithBudget(document, nil)
+}
+
+func loadInlineSVGImagesWithBudget(document *dom.Document, budget *imageDecodeBudget) (map[dom.NodeID]layout.ImageResource, map[string]image.Image, []string) {
 	resources := make(map[dom.NodeID]layout.ImageResource)
 	images := make(map[string]image.Image)
 	var failures []string
@@ -386,9 +403,15 @@ func loadInlineSVGImages(document *dom.Document) (map[dom.NodeID]layout.ImageRes
 			return
 		}
 		if node.Type == dom.NodeElement && node.TagName == "svg" {
-			source := serializeSVGNode(node)
-			decoded, width, height, err := rasterizeSVG(source)
 			resourceURL := fmt.Sprintf("growse:inline-svg/%d", node.ID)
+			if !budget.claim(resourceURL) {
+				resource := layout.ImageResource{URL: resourceURL, Error: "inline SVG resource limit exceeded"}
+				resources[node.ID] = resource
+				failures = append(failures, resource.Error)
+				return
+			}
+			source := serializeSVGNode(node)
+			decoded, width, height, err := rasterizeSVGWithBudget(source, budget)
 			resource := layout.ImageResource{URL: resourceURL, IntrinsicWidth: float32(width), IntrinsicHeight: float32(height), Loaded: err == nil}
 			if err != nil {
 				resource.Error = "inline SVG decode failed"

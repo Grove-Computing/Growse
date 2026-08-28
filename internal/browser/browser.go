@@ -749,8 +749,9 @@ func (b *Browser) UpdateViewport(width, height float32) bool {
 	if engine == runtimemodel.EngineJavaScript && imageLoader != nil {
 		loadContext, generation := page.beginImageLoad(context.Background())
 		policy := imageViewportPolicy(page.Document, page.ComputedStyles, baseURL, width, height)
-		resources, images, failures := loadReplacedImagesWithPolicy(loadContext, imageLoader, baseURL, page.Document, width, 1, policy)
-		inlineResources, inlineImages, inlineFailures := loadInlineSVGImages(page.Document)
+		budget := newImageDecodeBudgetWithImages(page.BackgroundImages)
+		resources, images, failures := loadReplacedImagesWithPolicyAndBudget(loadContext, imageLoader, baseURL, page.Document, width, 1, policy, budget)
+		inlineResources, inlineImages, inlineFailures := loadInlineSVGImagesWithBudget(page.Document, budget)
 		mergeImageResources(resources, images, inlineResources, inlineImages)
 		failures = append(failures, inlineFailures...)
 		b.mu.RLock()
@@ -1386,7 +1387,8 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 		return nil, fmt.Errorf("load styles for %s: %w", network.RedactedURL(pageURL), err)
 	}
 	computedStyles := computeStableStyles(document, stylesheet, style.InteractionState{}, 1280, 720, reducedMotion)
-	backgroundImages, backgroundErrors := loadBackgroundImages(ctx, imageResources, computedStyles)
+	imageBudget := newImageDecodeBudget()
+	backgroundImages, backgroundErrors := loadBackgroundImagesWithBudget(ctx, imageResources, computedStyles, imageBudget)
 	var replacedImages map[dom.NodeID]layoutengine.ImageResource
 	var decodedImages map[string]image.Image
 	var imageErrors []string
@@ -1394,8 +1396,8 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	var fontErrors []string
 	if engine == runtimemodel.EngineJavaScript {
 		imagePolicy := imageViewportPolicy(document, computedStyles, baseURL, 1280, 720)
-		replacedImages, decodedImages, imageErrors = loadReplacedImagesWithPolicy(ctx, imageResources, baseURL, document, 1280, 1, imagePolicy)
-		inlineResources, inlineImages, inlineErrors := loadInlineSVGImages(document)
+		replacedImages, decodedImages, imageErrors = loadReplacedImagesWithPolicyAndBudget(ctx, imageResources, baseURL, document, 1280, 1, imagePolicy, imageBudget)
+		inlineResources, inlineImages, inlineErrors := loadInlineSVGImagesWithBudget(document, imageBudget)
 		mergeImageResources(replacedImages, decodedImages, inlineResources, inlineImages)
 		imageErrors = append(imageErrors, inlineErrors...)
 		fonts, fontErrors = loadWebFonts(ctx, fontResources, response.URL, stylesheet)
@@ -1819,8 +1821,9 @@ func startRuntime(ctx context.Context, factory runtimemodel.EngineFactory, engin
 		RefreshImage: func(loadContext context.Context, nodeID dom.NodeID) (runtimemodel.ImageState, error) {
 			generationContext, generation := page.beginImageLoad(loadContext)
 			policy := imageViewportPolicy(page.Document, page.ComputedStyles, pageBaseURL(page), page.ViewportWidth, page.ViewportHeight)
-			resources, images, failures := loadReplacedImagesWithPolicy(generationContext, page.imageLoader, pageBaseURL(page), page.Document, page.ViewportWidth, 1, policy)
-			inlineResources, inlineImages, inlineFailures := loadInlineSVGImages(page.Document)
+			budget := newImageDecodeBudgetWithImages(page.BackgroundImages)
+			resources, images, failures := loadReplacedImagesWithPolicyAndBudget(generationContext, page.imageLoader, pageBaseURL(page), page.Document, page.ViewportWidth, 1, policy, budget)
+			inlineResources, inlineImages, inlineFailures := loadInlineSVGImagesWithBudget(page.Document, budget)
 			mergeImageResources(resources, images, inlineResources, inlineImages)
 			failures = append(failures, inlineFailures...)
 			if generationContext.Err() != nil || !page.commitImageLoad(generation, resources, images, failures) {

@@ -233,7 +233,8 @@ func (state *frameLoadState) buildPage(ctx context.Context, response *network.Re
 		return nil, fmt.Errorf("load iframe styles: %w", err)
 	}
 	computed := computeStableStyles(document, stylesheet, style.InteractionState{}, defaultFrameWidth, defaultFrameHeight, state.reducedMotion)
-	backgroundImages, backgroundErrors := loadBackgroundImages(ctx, imageResources, computed)
+	imageBudget := newImageDecodeBudget()
+	backgroundImages, backgroundErrors := loadBackgroundImagesWithBudget(ctx, imageResources, computed, imageBudget)
 	var replacedImages map[dom.NodeID]layoutmodel.ImageResource
 	var decodedImages map[string]image.Image
 	var imageErrors []string
@@ -241,8 +242,8 @@ func (state *frameLoadState) buildPage(ctx context.Context, response *network.Re
 	var fontErrors []string
 	if state.engine == runtimemodel.EngineJavaScript {
 		imagePolicy := imageViewportPolicy(document, computed, baseURL, defaultFrameWidth, defaultFrameHeight)
-		replacedImages, decodedImages, imageErrors = loadReplacedImagesWithPolicy(ctx, imageResources, baseURL, document, defaultFrameWidth, 1, imagePolicy)
-		inlineResources, inlineImages, inlineFailures := loadInlineSVGImages(document)
+		replacedImages, decodedImages, imageErrors = loadReplacedImagesWithPolicyAndBudget(ctx, imageResources, baseURL, document, defaultFrameWidth, 1, imagePolicy, imageBudget)
+		inlineResources, inlineImages, inlineFailures := loadInlineSVGImagesWithBudget(document, imageBudget)
 		mergeImageResources(replacedImages, decodedImages, inlineResources, inlineImages)
 		imageErrors = append(imageErrors, inlineFailures...)
 		fonts, fontErrors = loadWebFonts(ctx, fontResources, response.URL, stylesheet)

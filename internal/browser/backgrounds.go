@@ -3,6 +3,7 @@ package browser
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"image"
 	_ "image/gif"
@@ -21,11 +22,67 @@ import (
 )
 
 const (
-	maxImageBytes  = 4 << 20
-	maxImagePixels = 16 << 20
+	maxImageBytes            = 16 << 20
+	maxImageDimension        = 16_384
+	maxImagePixels           = 100_000_000
+	maxPageImageSurfaceBytes = 256 << 20
+	maxPageImageResources    = 512
 )
 
+type imageDecodeBudget struct {
+	resources    map[string]struct{}
+	surfaceBytes int64
+}
+
+func newImageDecodeBudget() *imageDecodeBudget {
+	return &imageDecodeBudget{resources: make(map[string]struct{})}
+}
+
+func newImageDecodeBudgetWithImages(images map[string]image.Image) *imageDecodeBudget {
+	budget := newImageDecodeBudget()
+	for resource, decoded := range images {
+		if decoded == nil || !budget.claim("background:"+resource) {
+			continue
+		}
+		bounds := decoded.Bounds()
+		budget.commitSurface(bounds.Dx(), bounds.Dy())
+	}
+	return budget
+}
+
+func (budget *imageDecodeBudget) claim(resource string) bool {
+	if budget == nil {
+		return true
+	}
+	if _, exists := budget.resources[resource]; exists {
+		return true
+	}
+	if len(budget.resources) >= maxPageImageResources {
+		return false
+	}
+	budget.resources[resource] = struct{}{}
+	return true
+}
+
+func (budget *imageDecodeBudget) allowsSurface(width, height int) bool {
+	if budget == nil {
+		return true
+	}
+	bytes := int64(width) * int64(height) * 4
+	return bytes > 0 && bytes <= maxPageImageSurfaceBytes-budget.surfaceBytes
+}
+
+func (budget *imageDecodeBudget) commitSurface(width, height int) {
+	if budget != nil {
+		budget.surfaceBytes += int64(width) * int64(height) * 4
+	}
+}
+
 func loadBackgroundImages(ctx context.Context, client ResourceLoader, computed style.Map) (map[string]image.Image, []string) {
+	return loadBackgroundImagesWithBudget(ctx, client, computed, nil)
+}
+
+func loadBackgroundImagesWithBudget(ctx context.Context, client ResourceLoader, computed style.Map, budget *imageDecodeBudget) (map[string]image.Image, []string) {
 	images := make(map[string]image.Image)
 	var errors []string
 	if client == nil {
@@ -42,6 +99,10 @@ func loadBackgroundImages(ctx context.Context, client ResourceLoader, computed s
 				continue
 			}
 			seen[background.URL] = true
+			if !budget.claim("background:" + background.URL) {
+				errors = append(errors, "background image resource limit exceeded")
+				continue
+			}
 			resourceURL, err := url.Parse(background.URL)
 			if err != nil || resourceURL.Scheme != "http" && resourceURL.Scheme != "https" {
 				errors = append(errors, "background image URL is not a supported HTTP(S) URL")
@@ -56,7 +117,7 @@ func loadBackgroundImages(ctx context.Context, client ResourceLoader, computed s
 				errors = append(errors, "background image response was rejected: "+network.RedactedURL(resourceURL))
 				continue
 			}
-			decoded, _, _, err := decodeImageResponse(response.Body, response.ContentType)
+			decoded, _, _, err := decodeImageResponseWithBudget(response.Body, response.ContentType, budget)
 			if err != nil {
 				errors = append(errors, "background image decode failed: "+network.RedactedURL(resourceURL))
 				continue
@@ -72,6 +133,10 @@ func loadReplacedImages(ctx context.Context, client ResourceLoader, baseURL *url
 }
 
 func loadReplacedImagesWithPolicy(ctx context.Context, client ResourceLoader, baseURL *url.URL, document *dom.Document, viewportWidth, deviceScale float32, eligible map[dom.NodeID]bool) (map[dom.NodeID]layout.ImageResource, map[string]image.Image, []string) {
+	return loadReplacedImagesWithPolicyAndBudget(ctx, client, baseURL, document, viewportWidth, deviceScale, eligible, nil)
+}
+
+func loadReplacedImagesWithPolicyAndBudget(ctx context.Context, client ResourceLoader, baseURL *url.URL, document *dom.Document, viewportWidth, deviceScale float32, eligible map[dom.NodeID]bool, budget *imageDecodeBudget) (map[dom.NodeID]layout.ImageResource, map[string]image.Image, []string) {
 	resources := make(map[dom.NodeID]layout.ImageResource)
 	images := make(map[string]image.Image)
 	var errors []string
@@ -106,6 +171,10 @@ func loadReplacedImagesWithPolicy(ctx context.Context, client ResourceLoader, ba
 					}
 					lastTarget = target
 					resource.URL = target.String()
+					if !budget.claim("image:" + resource.URL) {
+						resource.Error = "image resource limit exceeded"
+						continue
+					}
 					if target.Scheme != "http" && target.Scheme != "https" {
 						resource.Error = "image URL is not a supported HTTP(S) URL"
 						continue
@@ -119,7 +188,7 @@ func loadReplacedImagesWithPolicy(ctx context.Context, client ResourceLoader, ba
 						resource.Error = "image response was rejected"
 						continue
 					}
-					decoded, decodedWidth, decodedHeight, decodeErr := decodeImageResponse(response.Body, response.ContentType)
+					decoded, decodedWidth, decodedHeight, decodeErr := decodeImageResponseWithBudget(response.Body, response.ContentType, budget)
 					if decodeErr != nil {
 						resource.Error = "image dimensions were rejected"
 						continue
@@ -160,21 +229,41 @@ func isImageContentType(contentType string) bool {
 }
 
 func decodeImageResponse(body []byte, contentType string) (image.Image, int, int, error) {
+	return decodeImageResponseWithBudget(body, contentType, nil)
+}
+
+func decodeImageResponseWithBudget(body []byte, contentType string, budget *imageDecodeBudget) (decoded image.Image, width, height int, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			decoded, width, height, err = nil, 0, 0, fmt.Errorf("image decoder panic: %v", recovered)
+		}
+	}()
 	mediaType, _, err := mime.ParseMediaType(contentType)
 	if err != nil {
 		return nil, 0, 0, err
 	}
 	if mediaType == "image/svg+xml" {
-		return rasterizeSVG(body)
+		return rasterizeSVGWithBudget(body, budget)
 	}
 	config, _, err := image.DecodeConfig(bytes.NewReader(body))
-	if err != nil || config.Width <= 0 || config.Height <= 0 || config.Width > maxImagePixels/config.Height {
+	if err != nil {
 		return nil, 0, 0, fmt.Errorf("image dimensions are invalid: %w", err)
 	}
-	decoded, _, err := image.Decode(bytes.NewReader(body))
+	if config.Width <= 0 || config.Height <= 0 || config.Width > maxImageDimension || config.Height > maxImageDimension || config.Width > maxImagePixels/config.Height {
+		return nil, 0, 0, errors.New("image dimensions are invalid")
+	}
+	if !budget.allowsSurface(config.Width, config.Height) {
+		return nil, 0, 0, errors.New("page image decode surface limit exceeded")
+	}
+	decoded, _, err = image.Decode(bytes.NewReader(body))
 	if err != nil {
 		return nil, 0, 0, err
 	}
+	bounds := decoded.Bounds()
+	if bounds.Dx() != config.Width || bounds.Dy() != config.Height {
+		return nil, 0, 0, errors.New("decoded image dimensions changed")
+	}
+	budget.commitSurface(config.Width, config.Height)
 	return decoded, config.Width, config.Height, nil
 }
 

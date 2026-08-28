@@ -2,10 +2,12 @@ package browser
 
 import (
 	"bytes"
+	"compress/zlib"
 	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"mime"
 	"net/http"
 	"net/url"
@@ -21,13 +23,16 @@ import (
 )
 
 const (
-	maxFontBytes     = 2 << 20
-	maxPageFontBytes = 16 << 20
-	maxFontFaces     = 128
-	fontBlockTimeout = 3 * time.Second
-	fontFallbackWait = 100 * time.Millisecond
-	fontOptionalWait = 50 * time.Millisecond
-	pageFontTimeout  = 5 * time.Second
+	maxFontBytes        = 8 << 20
+	maxPageFontBytes    = 64 << 20
+	maxFontFaces        = 64
+	maxFontTables       = 128
+	maxFontGlyphs       = 50_000
+	maxDecodedFontBytes = 64 << 20
+	fontBlockTimeout    = 3 * time.Second
+	fontFallbackWait    = 100 * time.Millisecond
+	fontOptionalWait    = 50 * time.Millisecond
+	pageFontTimeout     = 5 * time.Second
 )
 
 // FontRange is one inclusive @font-face unicode-range interval.
@@ -54,11 +59,12 @@ func loadWebFonts(ctx context.Context, client ResourceLoader, pageURL *url.URL, 
 		return nil, nil
 	}
 	faces := stylesheet.FontFaces
+	var failures []string
 	if len(faces) > maxFontFaces {
 		faces = faces[:maxFontFaces]
+		failures = append(failures, "font face limit exceeded")
 	}
 	resources := make([]FontResource, 0, len(faces))
-	var failures []string
 	totalBytes := 0
 	pageContext, cancelPage := context.WithTimeout(ctx, pageFontTimeout)
 	defer cancelPage()
@@ -98,12 +104,12 @@ func loadWebFonts(ctx context.Context, client ResourceLoader, pageURL *url.URL, 
 				resource.Error = err.Error()
 				continue
 			}
+			totalBytes += len(response.Body)
 			face, decoded, err := decodeWebFont(response.Body, source.format)
 			if err != nil {
 				resource.Error = "font decode failed"
 				continue
 			}
-			totalBytes += len(response.Body)
 			resource.Face, resource.Loaded, resource.Decoded, resource.Error = face, true, decoded, ""
 			break
 		}
@@ -198,27 +204,105 @@ func fontMIMEMatches(mediaType, format string) bool {
 	}
 }
 
-func decodeWebFont(source []byte, format string) (*textfont.Face, bool, error) {
+func decodeWebFont(source []byte, format string) (face *textfont.Face, decoded bool, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			face, decoded, err = nil, false, fmt.Errorf("font decoder panic: %v", recovered)
+		}
+	}()
 	switch format {
 	case "woff":
-		if len(source) < 44 || string(source[:4]) != "wOFF" {
-			return nil, false, errors.New("invalid WOFF signature")
+		if err := validateWOFFLimits(source); err != nil {
+			return nil, false, err
 		}
-		face, err := textfont.ParseTTF(bytes.NewReader(source))
+		face, err = textfont.ParseTTF(bytes.NewReader(source))
 		return face, err == nil, err
 	case "woff2":
 		if err := validateWOFF2(source); err != nil {
 			return nil, false, err
 		}
 		decoded, err := woff2.DecodeBytes(source)
-		if err != nil || len(decoded) == 0 || len(decoded) > 32<<20 {
+		if err != nil || len(decoded) == 0 || len(decoded) > maxDecodedFontBytes {
 			return nil, false, errors.New("invalid WOFF2 payload")
 		}
-		face, err := textfont.ParseTTF(bytes.NewReader(decoded))
+		if err := validateSFNTLimits(decoded); err != nil {
+			return nil, false, err
+		}
+		face, err = textfont.ParseTTF(bytes.NewReader(decoded))
 		return face, err == nil, err
 	default:
 		return nil, false, errors.New("unsupported web font format")
 	}
+}
+
+func validateWOFFLimits(source []byte) error {
+	if len(source) < 44 || string(source[:4]) != "wOFF" {
+		return errors.New("invalid WOFF signature")
+	}
+	tableCount := int(binary.BigEndian.Uint16(source[12:14]))
+	decodedSize := binary.BigEndian.Uint32(source[16:20])
+	if tableCount == 0 || tableCount > maxFontTables || decodedSize == 0 || decodedSize > maxDecodedFontBytes || len(source) < 44+tableCount*20 {
+		return errors.New("WOFF table limit exceeded")
+	}
+	for index := 0; index < tableCount; index++ {
+		directory := source[44+index*20 : 44+(index+1)*20]
+		offset := int(binary.BigEndian.Uint32(directory[4:8]))
+		compressedLength := int(binary.BigEndian.Uint32(directory[8:12]))
+		originalLength := int(binary.BigEndian.Uint32(directory[12:16]))
+		if offset < 0 || compressedLength <= 0 || originalLength <= 0 || compressedLength > originalLength || offset > len(source)-compressedLength {
+			return errors.New("WOFF table bounds are invalid")
+		}
+		if string(directory[:4]) != "maxp" {
+			continue
+		}
+		payload := source[offset : offset+compressedLength]
+		if compressedLength < originalLength {
+			reader, err := zlib.NewReader(bytes.NewReader(payload))
+			if err != nil {
+				return errors.New("WOFF maxp table is invalid")
+			}
+			payload, err = io.ReadAll(io.LimitReader(reader, int64(originalLength)+1))
+			closeErr := reader.Close()
+			if err != nil || closeErr != nil || len(payload) != originalLength {
+				return errors.New("WOFF maxp table is invalid")
+			}
+		}
+		return validateMaxpGlyphCount(payload)
+	}
+	return errors.New("WOFF maxp table is missing")
+}
+
+func validateSFNTLimits(source []byte) error {
+	if len(source) < 12 {
+		return errors.New("SFNT header is invalid")
+	}
+	tableCount := int(binary.BigEndian.Uint16(source[4:6]))
+	if tableCount == 0 || tableCount > maxFontTables || len(source) < 12+tableCount*16 {
+		return errors.New("font table limit exceeded")
+	}
+	for index := 0; index < tableCount; index++ {
+		directory := source[12+index*16 : 12+(index+1)*16]
+		offset := int(binary.BigEndian.Uint32(directory[8:12]))
+		length := int(binary.BigEndian.Uint32(directory[12:16]))
+		if offset < 0 || length <= 0 || offset > len(source)-length {
+			return errors.New("font table bounds are invalid")
+		}
+		if string(directory[:4]) == "maxp" {
+			return validateMaxpGlyphCount(source[offset : offset+length])
+		}
+	}
+	return errors.New("font maxp table is missing")
+}
+
+func validateMaxpGlyphCount(table []byte) error {
+	if len(table) < 6 {
+		return errors.New("font maxp table is invalid")
+	}
+	glyphs := int(binary.BigEndian.Uint16(table[4:6]))
+	if glyphs == 0 || glyphs > maxFontGlyphs {
+		return errors.New("font glyph limit exceeded")
+	}
+	return nil
 }
 
 func validateWOFF2(source []byte) error {
@@ -228,7 +312,7 @@ func validateWOFF2(source []byte) error {
 	numTables := binary.BigEndian.Uint16(source[12:14])
 	totalSFNT := binary.BigEndian.Uint32(source[16:20])
 	compressed := binary.BigEndian.Uint32(source[20:24])
-	if numTables == 0 || numTables > 256 || totalSFNT == 0 || totalSFNT > 32<<20 || compressed == 0 || int(compressed) > len(source)-48 {
+	if numTables == 0 || numTables > maxFontTables || totalSFNT == 0 || totalSFNT > maxDecodedFontBytes || compressed == 0 || int(compressed) > len(source)-48 {
 		return errors.New("invalid WOFF2 table bounds")
 	}
 	return nil
