@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -81,6 +82,18 @@ func TestNextJSSSRFixtureHydratesWithoutReplacingDOM(t *testing.T) {
 	}
 	if requests.count("/_next/static/chunks/app.mjs") != 1 || requests.count("/_next/static/chunks/counter.chunk.mjs") != 1 {
 		t.Fatalf("Next.js chunk requests = %#v", requests.paths)
+	}
+	foundChunkDiagnostic := false
+	for _, context := range page.RuntimeDiagnostics() {
+		for _, diagnostic := range context.Diagnostics {
+			if diagnostic.Category == "resource/module" && diagnostic.State == "loaded" &&
+				strings.Contains(diagnostic.Subject, "counter.chunk.mjs") && diagnostic.Initiator == "module-graph" {
+				foundChunkDiagnostic = true
+			}
+		}
+	}
+	if !foundChunkDiagnostic {
+		t.Fatalf("DevTools did not expose the dynamic chunk: %+v", page.RuntimeDiagnostics())
 	}
 
 	if !engine.DispatchClick(fixtureNode(t, page, "next-counter").ID, 0, 0) {

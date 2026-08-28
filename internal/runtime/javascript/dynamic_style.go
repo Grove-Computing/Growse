@@ -260,6 +260,7 @@ func (runtime *Runtime) fetchDynamicResource(snapshot dynamicStyleSnapshot) (res
 	response, resourceErr = environment.Fetch(ctx, &network.Request{
 		Method: http.MethodGet, URL: snapshot.target, SiteURL: environment.BaseURL,
 		Kind: snapshot.kind, Engine: "javascript", CORS: hasCORS, Credentials: credentials,
+		Initiator: "dom-insertion", Schedule: "dynamic",
 	})
 	if resourceErr != nil {
 		return nil, resourceErr

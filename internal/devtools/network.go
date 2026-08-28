@@ -45,8 +45,11 @@ type NetworkRecord struct {
 	Sequence      uint64
 	Method        string
 	URL           string
+	FinalURL      string
 	Kind          string
 	Engine        string
+	Initiator     string
+	Schedule      string
 	StartedAt     time.Time
 	Duration      time.Duration
 	StatusCode    int
@@ -63,6 +66,7 @@ func (store *PageStore) ObserveNetwork(observation network.Observation) {
 	}
 	record := NetworkRecord{
 		Method: strings.ToUpper(observation.Method), URL: redactedNetworkURL(observation.URL), Kind: requestKindName(observation.Kind), Engine: observation.Engine,
+		FinalURL: redactedNetworkURL(observation.FinalURL), Initiator: boundedMetadata(observation.Initiator), Schedule: boundedMetadata(observation.Schedule),
 		StartedAt: observation.StartedAt, Duration: observation.Duration, StatusCode: observation.StatusCode,
 		Redirected: observation.Redirected, CacheStatus: observation.CacheStatus, ResponseBytes: observation.ResponseBytes,
 		ErrorCategory: observation.ErrorCategory,
@@ -75,6 +79,14 @@ func (store *PageStore) ObserveNetwork(observation network.Observation) {
 	store.nextNetwork++
 	record.Sequence = store.nextNetwork
 	store.network = append(store.network, record)
+}
+
+func boundedMetadata(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) > 128 {
+		value = value[:128]
+	}
+	return value
 }
 
 // Network returns retained request metadata in start-completion order.
