@@ -35,7 +35,8 @@ go test \
   ./examples/external-web-platform \
   ./examples/flexbox \
   ./examples/modern-web-compat \
+  ./examples/multi-tab-workspace \
   ./examples/persistent-app \
   ./examples/todo
 
-echo "v0.14.0 Demo回帰検証成功: ${examples[*]}"
+echo "v0.15.0 Demo回帰検証成功: ${examples[*]} multi-tab-workspace"

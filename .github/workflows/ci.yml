@@ -101,6 +101,9 @@ jobs:
       - name: Run v0.15.0 modern web security tests
         run: bash tests/v015-security.sh
 
+      - name: Run v0.15.0 WebGo and Go runtime regression tests
+        run: bash tests/v015-regression.sh
+
       - name: Run race tests with coverage
         run: go test -race -covermode=atomic -coverprofile=coverage.out ./...
 
