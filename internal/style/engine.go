@@ -235,6 +235,21 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 		layerOrders[layer] = index
 	}
 	candidates := make(map[string][]winner)
+	customCandidateCount := 0
+	appendCandidate := func(property string, candidate winner) {
+		if strings.HasPrefix(property, "--") {
+			if len(candidate.value) > css.MaxCustomPropertyValueBytes {
+				return
+			}
+			if _, exists := candidates[property]; !exists {
+				if customCandidateCount >= css.MaxCustomProperties {
+					return
+				}
+				customCandidateCount++
+			}
+		}
+		candidates[property] = append(candidates[property], candidate)
+	}
 	for _, rule := range stylesheet.Rules {
 		if !matchesMediaGroups(rule.Media, environment) || !matchesSupportsGroups(rule.Supports) || !matchesContainerGroups(node, rule.Containers, computedAncestors, environment) {
 			continue
@@ -255,7 +270,7 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 					if rule.Layer != "" {
 						candidate.layerOrder = layerOrders[rule.Layer]
 					}
-					candidates[property] = append(candidates[property], candidate)
+					appendCandidate(property, candidate)
 				}
 			}
 		}
@@ -268,7 +283,7 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 					value: declaration.Value.Raw, source: declaration.Property, important: declaration.Important, inline: true,
 					order: [2]int{0, declarationIndex},
 				}
-				candidates[property] = append(candidates[property], candidate)
+				appendCandidate(property, candidate)
 			}
 		}
 	}
@@ -776,6 +791,10 @@ func resolveOverflow(value string, parent Overflow) (Overflow, bool) {
 
 func applyCustomProperties(inherited map[string]string, winners map[string]winner, stylesheet *css.Stylesheet, context LengthContext, parentValues map[string]string) map[string]string {
 	result := inherited
+	canStore := func(property string) bool {
+		_, exists := result[property]
+		return exists || len(result) < css.MaxCustomProperties
+	}
 	for property, candidate := range winners {
 		if !strings.HasPrefix(property, "--") {
 			continue
@@ -786,12 +805,12 @@ func applyCustomProperties(inherited map[string]string, winners map[string]winne
 				delete(result, property)
 			}
 		case globalInherit:
-			if parentValue, ok := parentValues[property]; ok {
+			if parentValue, ok := parentValues[property]; ok && canStore(property) {
 				result[property] = parentValue
 			}
 		case globalUnset:
 			if registration, registered := registeredProperty(stylesheet, property); !registered || registration.Inherits {
-				if parentValue, ok := parentValues[property]; ok {
+				if parentValue, ok := parentValues[property]; ok && canStore(property) {
 					result[property] = parentValue
 				}
 			}
@@ -807,21 +826,29 @@ func applyCustomProperties(inherited map[string]string, winners map[string]winne
 			if result == nil {
 				result = make(map[string]string)
 			}
-			result[property] = value
+			if canStore(property) {
+				result[property] = value
+			}
 		}
 	}
 	return result
 }
 
 func registeredPropertyBase(inherited map[string]string, stylesheet *css.Stylesheet, context LengthContext) map[string]string {
-	result := make(map[string]string, len(inherited))
+	result := make(map[string]string, min(len(inherited), css.MaxCustomProperties))
 	for name, value := range inherited {
+		if len(result) >= css.MaxCustomProperties {
+			break
+		}
 		result[name] = value
 	}
 	if stylesheet == nil {
 		return result
 	}
 	for _, registration := range stylesheet.Properties {
+		if _, exists := result[registration.Name]; !exists && len(result) >= css.MaxCustomProperties {
+			continue
+		}
 		if !registration.Valid || !validRegisteredValue(registration.Syntax, registration.InitialValue, context) {
 			continue
 		}
@@ -848,10 +875,16 @@ func registeredProperty(stylesheet *css.Stylesheet, name string) (css.PropertyRu
 }
 
 func resolveVariables(value string, customProperties map[string]string) (string, bool) {
-	return resolveVariablesWithStack(value, customProperties, make(map[string]bool))
+	if len(value) > css.MaxCustomPropertyValueBytes {
+		return "", false
+	}
+	return resolveVariablesWithStack(value, customProperties, make(map[string]bool), 0)
 }
 
-func resolveVariablesWithStack(value string, customProperties map[string]string, resolving map[string]bool) (string, bool) {
+func resolveVariablesWithStack(value string, customProperties map[string]string, resolving map[string]bool, depth int) (string, bool) {
+	if depth > css.MaxCSSFunctionDepth || len(value) > css.MaxCustomPropertyValueBytes {
+		return "", false
+	}
 	var result strings.Builder
 	for position := 0; position < len(value); {
 		functionStart := findVarFunction(value, position)
@@ -874,7 +907,7 @@ func resolveVariablesWithStack(value string, customProperties map[string]string,
 		resolved := ""
 		if found && !resolving[name] {
 			resolving[name] = true
-			resolved, found = resolveVariablesWithStack(replacement, customProperties, resolving)
+			resolved, found = resolveVariablesWithStack(replacement, customProperties, resolving, depth+1)
 			delete(resolving, name)
 		} else {
 			found = false
@@ -883,15 +916,18 @@ func resolveVariablesWithStack(value string, customProperties map[string]string,
 			if !hasFallback {
 				return "", false
 			}
-			resolved, found = resolveVariablesWithStack(fallback, customProperties, resolving)
+			resolved, found = resolveVariablesWithStack(fallback, customProperties, resolving, depth+1)
 			if !found {
 				return "", false
 			}
 		}
 		result.WriteString(resolved)
+		if result.Len() > css.MaxCustomPropertyValueBytes {
+			return "", false
+		}
 		position = end + 1
 	}
-	return result.String(), true
+	return result.String(), result.Len() <= css.MaxCustomPropertyValueBytes
 }
 
 func findVarFunction(value string, start int) int {

@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Grove-Computing/Growse/internal/css"
 	"golang.org/x/image/colornames"
 )
 
@@ -13,7 +14,7 @@ func parseColor(value string, currentColor uint32) (uint32, bool) {
 }
 
 func parseColorDepth(value string, currentColor uint32, depth int) (uint32, bool) {
-	if depth >= 64 {
+	if depth > css.MaxCSSFunctionDepth {
 		return 0, false
 	}
 	value = strings.ToLower(strings.TrimSpace(value))

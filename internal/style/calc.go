@@ -4,6 +4,8 @@ import (
 	"math"
 	"strconv"
 	"strings"
+
+	"github.com/Grove-Computing/Growse/internal/css"
 )
 
 type calculationKind uint8
@@ -23,6 +25,7 @@ type calculationParser struct {
 	input   string
 	context LengthContext
 	pos     int
+	depth   int
 }
 
 func resolveCalculation(value string, context LengthContext) (LengthPercentage, bool) {
@@ -147,6 +150,10 @@ func (parser *calculationParser) parsePrimary() (calculationValue, bool) {
 		return calculationValue{}, false
 	}
 	if parser.input[parser.pos] == '(' {
+		if parser.depth >= css.MaxCSSFunctionDepth {
+			return calculationValue{}, false
+		}
+		parser.depth++
 		parser.pos++
 		value, ok := parser.parseExpression()
 		parser.skipWhitespace()
@@ -154,13 +161,20 @@ func (parser *calculationParser) parsePrimary() (calculationValue, bool) {
 			return calculationValue{}, false
 		}
 		parser.pos++
+		parser.depth--
 		return value, true
 	}
 	for _, name := range []string{"calc", "min", "max", "clamp"} {
 		prefix := name + "("
 		if parser.pos+len(prefix) <= len(parser.input) && strings.EqualFold(parser.input[parser.pos:parser.pos+len(prefix)], prefix) {
+			if parser.depth >= css.MaxCSSFunctionDepth {
+				return calculationValue{}, false
+			}
+			parser.depth++
 			parser.pos += len(prefix)
-			return parser.parseMathFunction(name)
+			result, ok := parser.parseMathFunction(name)
+			parser.depth--
+			return result, ok
 		}
 	}
 	number, unit, next, ok := scanCalculationDimension(parser.input, parser.pos)

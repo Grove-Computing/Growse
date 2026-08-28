@@ -33,3 +33,9 @@ func TestNavigationStabilizesContainerQueriesAgainstLayout(t *testing.T) {
 		t.Fatalf("stable container style = %#v", computed)
 	}
 }
+
+func TestContainerQueryIterationBudgetMatchesReleaseBoundary(t *testing.T) {
+	if maxContainerQueryIterations != 16 {
+		t.Fatalf("container query iterations = %d, want 16", maxContainerQueryIterations)
+	}
+}

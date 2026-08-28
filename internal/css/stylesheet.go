@@ -385,16 +385,20 @@ func newAnonymousLayer() string {
 	return fmt.Sprintf("\x00anonymous-%d", anonymousLayerSequence.Add(1))
 }
 
-func (s *Stylesheet) ensureLayer(name string) {
+func (s *Stylesheet) ensureLayer(name string) bool {
 	if name == "" {
-		return
+		return false
 	}
 	for _, existing := range s.LayerOrder {
 		if existing == name {
-			return
+			return true
 		}
 	}
+	if len(s.LayerOrder) >= MaxCascadeLayers {
+		return false
+	}
 	s.LayerOrder = append(s.LayerOrder, name)
+	return true
 }
 
 // NestUnderLayer makes every rule in a loaded stylesheet participate in the
@@ -405,6 +409,9 @@ func (s *Stylesheet) NestUnderLayer(parent string) {
 	}
 	order := []string{parent}
 	for _, name := range s.LayerOrder {
+		if len(order) >= MaxCascadeLayers {
+			break
+		}
 		order = append(order, parent+"."+name)
 	}
 	for index := range s.Rules {

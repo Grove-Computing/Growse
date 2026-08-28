@@ -114,7 +114,10 @@ func Parse(reader io.Reader) (*Stylesheet, error) {
 			}
 			selectorText := string(data) + tokenText(p.Values())
 			selectorTexts, validList := splitSelectorList(selectorText)
-			if len(rulesets) != 0 {
+			if len(selectorTexts) > MaxSelectorsPerRule {
+				validList = false
+			}
+			if len(rulesets) != 0 && validList {
 				if len(rulesets) >= maxNestingDepth || rulesets[len(rulesets)-1].ruleIndex < 0 {
 					validList = false
 				} else {
@@ -123,9 +126,9 @@ func Parse(reader io.Reader) (*Stylesheet, error) {
 			}
 			selectors := []Selector(nil)
 			if validList {
-				selectors = parseSelectorList(strings.Join(selectorTexts, ","))
+				selectors = parseSelectorTexts(selectorTexts, maxExpandedNestedSelectors)
 			}
-			if len(selectors) == 0 {
+			if len(selectors) == 0 || len(stylesheet.Rules) >= MaxStylesheetRules {
 				current = nil
 				rulesets = append(rulesets, rulesetFrame{ruleIndex: -1})
 				continue
@@ -143,6 +146,10 @@ func Parse(reader io.Reader) (*Stylesheet, error) {
 				if frame.fontFaceIndex >= 0 {
 					if property == "growse-property-name" && strings.HasPrefix(value, "--") && validName(strings.TrimPrefix(value, "--")) {
 						stylesheet.FontFaces = stylesheet.FontFaces[:frame.fontFaceIndex]
+						if len(stylesheet.Properties) >= MaxCustomProperties {
+							frame.fontFaceIndex, frame.propertyIndex = -1, -1
+							continue
+						}
 						stylesheet.Properties = append(stylesheet.Properties, PropertyRule{Name: value})
 						frame.fontFaceIndex = -1
 						frame.propertyIndex = len(stylesheet.Properties) - 1
@@ -165,7 +172,8 @@ func Parse(reader io.Reader) (*Stylesheet, error) {
 			if !strings.HasPrefix(property, "--") {
 				property = strings.ToLower(property)
 			}
-			if property != "" && rawValue != "" {
+			if property != "" && rawValue != "" && functionDepthWithin(rawValue, MaxCSSFunctionDepth) &&
+				(!strings.HasPrefix(property, "--") || len(rawValue) <= MaxCustomPropertyValueBytes) {
 				declaration := Declaration{
 					Property: property, Value: parseValue(rawValue), Important: important,
 				}
@@ -194,7 +202,10 @@ func Parse(reader io.Reader) (*Stylesheet, error) {
 						importRule.Layer = newAnonymousLayer()
 					}
 					if importRule.Layered {
-						stylesheet.ensureLayer(importRule.Layer)
+						if !stylesheet.ensureLayer(importRule.Layer) {
+							current = nil
+							continue
+						}
 					}
 					stylesheet.Imports = append(stylesheet.Imports, importRule)
 				}
@@ -240,9 +251,8 @@ func Parse(reader io.Reader) (*Stylesheet, error) {
 					layerName = newAnonymousLayer()
 				}
 				if validLayerName(layerName) || strings.HasPrefix(layerName, "\x00anonymous-") {
-					frame.active = true
 					frame.layer = joinLayer(parent, layerName)
-					stylesheet.ensureLayer(frame.layer)
+					frame.active = stylesheet.ensureLayer(frame.layer)
 				}
 			} else if len(atRules) == 0 && name == "@keyframes" {
 				if keyframesName, valid := parseKeyframesName(tokenText(p.Values())); valid && len(stylesheet.Keyframes) < MaxKeyframesRules {
@@ -253,7 +263,7 @@ func Parse(reader io.Reader) (*Stylesheet, error) {
 			} else if len(atRules) == 0 && name == "@font-face" && strings.TrimSpace(tokenText(p.Values())) == "" {
 				stylesheet.FontFaces = append(stylesheet.FontFaces, FontFaceRule{})
 				frame.fontFaceIndex = len(stylesheet.FontFaces) - 1
-			} else if len(atRules) == 0 && name == "@property" {
+			} else if len(atRules) == 0 && name == "@property" && len(stylesheet.Properties) < MaxCustomProperties {
 				propertyName := strings.TrimSpace(tokenText(p.Values()))
 				if strings.HasPrefix(propertyName, "--") && validName(strings.TrimPrefix(propertyName, "--")) {
 					stylesheet.Properties = append(stylesheet.Properties, PropertyRule{Name: propertyName})
@@ -425,6 +435,42 @@ func parseValue(raw string) Value {
 	return result
 }
 
+func functionDepthWithin(value string, limit int) bool {
+	depth := 0
+	var quote byte
+	escaped := false
+	for position := 0; position < len(value); position++ {
+		character := value[position]
+		if quote != 0 {
+			if escaped {
+				escaped = false
+			} else if character == '\\' {
+				escaped = true
+			} else if character == quote {
+				quote = 0
+			}
+			continue
+		}
+		if character == '\'' || character == '"' {
+			quote = character
+			continue
+		}
+		switch character {
+		case '(':
+			depth++
+			if depth > limit {
+				return false
+			}
+		case ')':
+			depth--
+			if depth < 0 {
+				return false
+			}
+		}
+	}
+	return quote == 0 && depth == 0
+}
+
 func componentKind(tokenType parser.TokenType) ComponentKind {
 	switch tokenType {
 	case parser.IdentToken, parser.CustomPropertyNameToken, parser.CustomPropertyValueToken:
@@ -478,10 +524,16 @@ func (s *Stylesheet) Append(other *Stylesheet) {
 			}
 		}
 		if !replaced {
+			if len(s.Properties) >= MaxCustomProperties {
+				continue
+			}
 			s.Properties = append(s.Properties, registered)
 		}
 	}
 	for _, rule := range other.Rules {
+		if len(s.Rules) >= MaxStylesheetRules {
+			break
+		}
 		rule.Order = len(s.Rules)
 		s.Rules = append(s.Rules, rule)
 	}
@@ -507,7 +559,14 @@ func tokenText(tokens []parser.Token) string {
 
 func parseSelectorList(value string) []Selector {
 	parts, ok := splitSelectorList(value)
-	if !ok {
+	if !ok || len(parts) > MaxSelectorsPerRule {
+		return nil
+	}
+	return parseSelectorTexts(parts, MaxSelectorsPerRule)
+}
+
+func parseSelectorTexts(parts []string, limit int) []Selector {
+	if len(parts) == 0 || len(parts) > limit {
 		return nil
 	}
 	selectors := make([]Selector, 0, len(parts))
@@ -529,13 +588,20 @@ func ParseSelectorList(value string) []Selector {
 }
 
 func parseSelector(value string) (Selector, bool) {
+	return parseSelectorDepth(value, 0)
+}
+
+func parseSelectorDepth(value string, depth int) (Selector, bool) {
+	if depth > MaxFunctionalSelectorDepth {
+		return Selector{}, false
+	}
 	parts, combinators, ok := splitComplexSelector(value)
-	if !ok {
+	if !ok || len(combinators) > MaxSelectorCombinators {
 		return Selector{}, false
 	}
 	compounds := make([]CompoundSelector, 0, len(parts))
 	for _, part := range parts {
-		compound, ok := parseCompoundSelector(part)
+		compound, ok := parseCompoundSelectorDepth(part, depth)
 		if !ok {
 			return Selector{}, false
 		}
@@ -568,6 +634,10 @@ func parseSelector(value string) (Selector, bool) {
 }
 
 func parseCompoundSelector(value string) (CompoundSelector, bool) {
+	return parseCompoundSelectorDepth(value, 0)
+}
+
+func parseCompoundSelectorDepth(value string, depth int) (CompoundSelector, bool) {
 	if value == "" {
 		return CompoundSelector{}, false
 	}
@@ -625,7 +695,7 @@ func parseCompoundSelector(value string) (CompoundSelector, bool) {
 				position = next
 				continue
 			}
-			pseudo, next, ok := parsePseudoClass(value, position)
+			pseudo, next, ok := parsePseudoClassDepth(value, position, depth)
 			if !ok {
 				return CompoundSelector{}, false
 			}
@@ -784,6 +854,10 @@ func selectorNameEnd(value string, start int) int {
 }
 
 func parsePseudoClass(value string, start int) (*PseudoClass, int, bool) {
+	return parsePseudoClassDepth(value, start, 0)
+}
+
+func parsePseudoClassDepth(value string, start, depth int) (*PseudoClass, int, bool) {
 	if start+1 >= len(value) || value[start+1] == ':' {
 		return nil, 0, false
 	}
@@ -851,7 +925,10 @@ func parsePseudoClass(value string, start int) (*PseudoClass, int, bool) {
 		if argument == nil {
 			return nil, 0, false
 		}
-		selectors, ok := parseFunctionalSelectorList(*argument, false, false)
+		if depth >= MaxFunctionalSelectorDepth {
+			return nil, 0, false
+		}
+		selectors, ok := parseFunctionalSelectorListDepth(*argument, false, false, depth+1)
 		if !ok {
 			return nil, 0, false
 		}
@@ -864,7 +941,10 @@ func parsePseudoClass(value string, start int) (*PseudoClass, int, bool) {
 			return nil, 0, false
 		}
 		relative := name == "has"
-		selectors, ok := parseFunctionalSelectorList(*argument, true, relative)
+		if depth >= MaxFunctionalSelectorDepth {
+			return nil, 0, false
+		}
+		selectors, ok := parseFunctionalSelectorListDepth(*argument, true, relative, depth+1)
 		if !ok {
 			return nil, 0, false
 		}
@@ -924,8 +1004,15 @@ func parsePseudoClass(value string, start int) (*PseudoClass, int, bool) {
 }
 
 func parseFunctionalSelectorList(value string, forgiving, relative bool) ([]Selector, bool) {
+	return parseFunctionalSelectorListDepth(value, forgiving, relative, 1)
+}
+
+func parseFunctionalSelectorListDepth(value string, forgiving, relative bool, depth int) ([]Selector, bool) {
+	if depth > MaxFunctionalSelectorDepth {
+		return nil, false
+	}
 	parts, ok := splitSelectorList(value)
-	if !ok {
+	if !ok || len(parts) > MaxSelectorsPerRule {
 		return nil, false
 	}
 	selectors := make([]Selector, 0, len(parts))
@@ -941,7 +1028,7 @@ func parseFunctionalSelectorList(value string, forgiving, relative bool) ([]Sele
 				part = ":scope " + part
 			}
 		}
-		selector, valid := parseSelector(part)
+		selector, valid := parseSelectorDepth(part, depth)
 		if !valid || selectorPseudoElementKind(selector) != PseudoElementNone {
 			if forgiving {
 				continue
