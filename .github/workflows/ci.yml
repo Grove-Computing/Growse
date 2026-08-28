@@ -95,6 +95,9 @@ jobs:
       - name: Run v0.15.0 visual regression tests
         run: bash tests/v015-visual.sh
 
+      - name: Run v0.15.0 selected WPT conformance tests
+        run: bash tests/v015-conformance.sh
+
       - name: Run race tests with coverage
         run: go test -race -covermode=atomic -coverprofile=coverage.out ./...
 
