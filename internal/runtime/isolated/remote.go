@@ -615,7 +615,7 @@ func (r *Runtime) handleFetch(ctx context.Context, payload json.RawMessage) (any
 	r.mu.Unlock()
 	brokered := &network.Request{
 		Method: request.Method, URL: target, Header: request.Header, Body: request.Body,
-		Kind: request.Kind, Engine: request.Engine, Credentials: request.Credentials,
+		Kind: request.Kind, Engine: request.Engine, Credentials: request.Credentials, CORS: request.CORS,
 	}
 	if err := validateBrokeredFetch(brokered, pageURL, engine); err != nil {
 		return nil, err

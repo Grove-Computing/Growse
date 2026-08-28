@@ -263,6 +263,16 @@ func (element *Element) AddEventListener(eventType string, handler func(Event)) 
 
 // AddEventListenerWithCapture registers a removable listener with propagation options.
 func (element *Element) AddEventListenerWithCapture(eventType string, capture bool, handler func(Event)) events.ListenerID {
+	return element.addPublicEventListener(eventType, capture, handler, true)
+}
+
+// AddEventListenerForJavaScript registers EventTarget listeners on Document-owned
+// detached nodes so JavaScript can attach handlers before connecting an element.
+func (element *Element) AddEventListenerForJavaScript(eventType string, capture bool, handler func(Event)) events.ListenerID {
+	return element.addPublicEventListener(eventType, capture, handler, false)
+}
+
+func (element *Element) addPublicEventListener(eventType string, capture bool, handler func(Event), requireConnected bool) events.ListenerID {
 	if handler == nil {
 		return 0
 	}
@@ -270,7 +280,7 @@ func (element *Element) AddEventListenerWithCapture(eventType string, capture bo
 	if !ok {
 		return 0
 	}
-	return element.addEventListenerWithCapture(internal, capture, func(event events.Event) {
+	return element.addEventListenerWithConnectionPolicy(internal, capture, requireConnected, func(event events.Event) {
 		handler(element.publicEvent(event))
 	})
 }
@@ -304,6 +314,10 @@ func supportedEventType(eventType string) (events.Type, bool) {
 		return events.MouseEnter, true
 	case string(events.MouseLeave):
 		return events.MouseLeave, true
+	case string(events.Load):
+		return events.Load, true
+	case string(events.Error):
+		return events.Error, true
 	default:
 		return "", false
 	}
@@ -312,6 +326,12 @@ func supportedEventType(eventType string) (events.Type, bool) {
 // AppendChild は未接続の子要素を接続済みの要素の末尾へ追加する。
 func (element *Element) AppendChild(child *Element) bool {
 	return element.Append(child)
+}
+
+// IsConnected reports whether this handle currently participates in its Document tree.
+func (element *Element) IsConnected() bool {
+	node, ok := element.node()
+	return ok && element.document.IsConnected(node)
 }
 
 // Append moves nodes to the end of this element's child list.
@@ -385,6 +405,21 @@ func (element *Element) SetAttribute(name, value string) bool {
 	}
 	name = strings.ToLower(strings.TrimSpace(name))
 	if !validAttributeName(name) || !element.document.SetAttribute(element.id, name, value) {
+		return false
+	}
+	if element.onMutation != nil {
+		element.onMutation()
+	}
+	return true
+}
+
+// RemoveAttribute removes an element attribute and notifies the active Page once.
+func (element *Element) RemoveAttribute(name string) bool {
+	if element == nil || element.document == nil {
+		return false
+	}
+	name = strings.ToLower(strings.TrimSpace(name))
+	if !validAttributeName(name) || !element.document.RemoveAttribute(element.id, name) {
 		return false
 	}
 	if element.onMutation != nil {
@@ -749,11 +784,15 @@ func (element *Element) addEventListener(eventType events.Type, listener events.
 }
 
 func (element *Element) addEventListenerWithCapture(eventType events.Type, capture bool, listener events.Listener) events.ListenerID {
+	return element.addEventListenerWithConnectionPolicy(eventType, capture, true, listener)
+}
+
+func (element *Element) addEventListenerWithConnectionPolicy(eventType events.Type, capture, requireConnected bool, listener events.Listener) events.ListenerID {
 	if element == nil || element.document == nil || element.events == nil || listener == nil {
 		return 0
 	}
 	node, ok := element.document.NodeByID(element.id)
-	if !ok || !element.document.IsConnected(node) {
+	if !ok || requireConnected && !element.document.IsConnected(node) {
 		return 0
 	}
 	return element.events.AddEventListenerWithCapture(element.id, eventType, capture, listener)

@@ -20,6 +20,8 @@ const (
 	Blur       Type = "blur"
 	MouseEnter Type = "mouseenter"
 	MouseLeave Type = "mouseleave"
+	Load       Type = "load"
+	Error      Type = "error"
 )
 
 type Phase uint8

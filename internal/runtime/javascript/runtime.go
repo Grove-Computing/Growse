@@ -73,11 +73,12 @@ type Runtime struct {
 	maxMicrotasks     int
 	moduleTimeout     time.Duration
 
-	elements      map[*goja.Object]*domapi.Element
-	elementByID   map[uint64]*goja.Object
-	listeners     []listenerRecord
-	listenerCount int
-	maxListeners  int
+	elements       map[*goja.Object]*domapi.Element
+	elementByID    map[uint64]*goja.Object
+	listeners      []listenerRecord
+	listenerCount  int
+	maxListeners   int
+	dynamicScripts map[uint64]struct{}
 
 	loaded    bool
 	started   bool
@@ -164,6 +165,7 @@ func (runtime *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script,
 	runtime.elementByID = make(map[uint64]*goja.Object)
 	runtime.abortSignals = make(map[*goja.Object]*fetchapi.AbortSignal)
 	runtime.listeners = nil
+	runtime.dynamicScripts = make(map[uint64]struct{})
 	runtime.windowListeners = nil
 	runtime.documentListeners = nil
 	runtime.microtasks = nil
@@ -333,6 +335,7 @@ func (runtime *Runtime) Stop() error {
 	runtime.elementByID = nil
 	runtime.abortSignals = nil
 	runtime.listeners = nil
+	runtime.dynamicScripts = nil
 	runtime.windowListeners = nil
 	runtime.documentListeners = nil
 	runtime.microtasks = nil

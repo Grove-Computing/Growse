@@ -480,7 +480,7 @@ func (state *workerState) fetch(ctx context.Context, request *network.Request) (
 	}
 	wire := fetchRequest{
 		Method: request.Method, URL: request.URL.String(), Header: request.Header, Body: request.Body,
-		Kind: request.Kind, Engine: request.Engine, Credentials: request.Credentials,
+		Kind: request.Kind, Engine: request.Engine, Credentials: request.Credentials, CORS: request.CORS,
 	}
 	if request.SiteURL != nil {
 		wire.SiteURL = request.SiteURL.String()

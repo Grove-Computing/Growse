@@ -155,6 +155,9 @@ func (runtime *Runtime) elementValue(vm *goja.Runtime, element *domapi.Element) 
 	_ = object.Set("setAttribute", func(call goja.FunctionCall) goja.Value {
 		return vm.ToValue(element.SetAttribute(call.Argument(0).String(), call.Argument(1).String()))
 	})
+	_ = object.Set("removeAttribute", func(call goja.FunctionCall) goja.Value {
+		return vm.ToValue(element.RemoveAttribute(call.Argument(0).String()))
+	})
 	_ = object.Set("appendChild", func(call goja.FunctionCall) goja.Value {
 		childObject, ok := call.Argument(0).(*goja.Object)
 		if !ok {
@@ -164,6 +167,7 @@ func (runtime *Runtime) elementValue(vm *goja.Runtime, element *domapi.Element) 
 		if child == nil || !element.AppendChild(child) {
 			return goja.Null()
 		}
+		runtime.prepareConnectedScripts(vm, child)
 		return childObject
 	})
 	_ = object.Set("append", func(call goja.FunctionCall) goja.Value {
@@ -171,6 +175,7 @@ func (runtime *Runtime) elementValue(vm *goja.Runtime, element *domapi.Element) 
 		if !ok || len(children) != 0 && !element.Append(children...) {
 			panic(vm.NewTypeError("append arguments are invalid"))
 		}
+		runtime.prepareConnectedScripts(vm, children...)
 		return goja.Undefined()
 	})
 	_ = object.Set("prepend", func(call goja.FunctionCall) goja.Value {
@@ -178,6 +183,7 @@ func (runtime *Runtime) elementValue(vm *goja.Runtime, element *domapi.Element) 
 		if !ok || len(children) != 0 && !element.Prepend(children...) {
 			panic(vm.NewTypeError("prepend arguments are invalid"))
 		}
+		runtime.prepareConnectedScripts(vm, children...)
 		return goja.Undefined()
 	})
 	_ = object.Set("removeChild", func(call goja.FunctionCall) goja.Value {
@@ -196,6 +202,7 @@ func (runtime *Runtime) elementValue(vm *goja.Runtime, element *domapi.Element) 
 		if !ok || !element.ReplaceChildren(children...) {
 			panic(vm.NewTypeError("replaceChildren arguments are invalid"))
 		}
+		runtime.prepareConnectedScripts(vm, children...)
 		return goja.Undefined()
 	})
 	_ = object.Set("remove", func(goja.FunctionCall) goja.Value {
@@ -250,6 +257,8 @@ func (runtime *Runtime) elementValue(vm *goja.Runtime, element *domapi.Element) 
 	})
 	_ = object.DefineAccessorProperty("className", classNameGetter, classNameSetter, goja.FLAG_FALSE, goja.FLAG_TRUE)
 	_ = object.DefineDataProperty("tagName", vm.ToValue(element.TagName()), goja.FLAG_FALSE, goja.FLAG_FALSE, goja.FLAG_TRUE)
+	connectedGetter := vm.ToValue(func(goja.FunctionCall) goja.Value { return vm.ToValue(element.IsConnected()) })
+	_ = object.DefineAccessorProperty("isConnected", connectedGetter, nil, goja.FLAG_FALSE, goja.FLAG_TRUE)
 	childrenGetter := vm.ToValue(func(goja.FunctionCall) goja.Value { return runtime.elementArrayValue(vm, element.Children()) })
 	_ = object.DefineAccessorProperty("children", childrenGetter, nil, goja.FLAG_FALSE, goja.FLAG_TRUE)
 	parentGetter := vm.ToValue(func(goja.FunctionCall) goja.Value { return runtime.elementValue(vm, element.ParentElement()) })
@@ -268,6 +277,7 @@ func (runtime *Runtime) elementValue(vm *goja.Runtime, element *domapi.Element) 
 		return goja.Undefined()
 	})
 	_ = object.DefineAccessorProperty("value", valueGetter, valueSetter, goja.FLAG_FALSE, goja.FLAG_TRUE)
+	runtime.installScriptElement(vm, object, element)
 	runtime.installFrameElement(vm, object, id)
 	return object
 }
@@ -319,7 +329,7 @@ func (runtime *Runtime) addEventListener(vm *goja.Runtime, object *goja.Object, 
 	}
 	runtime.mu.Unlock()
 
-	token := element.AddEventListenerWithCapture(eventType, capture, func(event domapi.Event) {
+	token := element.AddEventListenerForJavaScript(eventType, capture, func(event domapi.Event) {
 		invoke := func(vm *goja.Runtime) error {
 			eventObject := runtime.eventValue(vm, object, event)
 			_, err := callable(object, eventObject)

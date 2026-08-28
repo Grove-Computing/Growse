@@ -37,14 +37,22 @@ func validateBrokeredFetch(request *network.Request, pageURL *url.URL, engine st
 	default:
 		return fmt.Errorf("sandbox fetch method %q is not allowed", method)
 	}
-	if requestedKind == network.RequestModule {
+	if requestedKind == network.RequestModule || requestedKind == network.RequestScript {
 		if engine != string(runtimemodel.EngineJavaScript) || method != http.MethodGet || len(request.Body) != 0 || len(request.Header) != 0 {
-			return errors.New("sandbox module fetch must be a header-free JavaScript GET")
+			return errors.New("sandbox script fetch must be a header-free JavaScript GET")
 		}
+	}
+	if requestedKind == network.RequestModule {
 		if request.Credentials != network.CredentialsInclude {
 			request.Credentials = network.CredentialsSameOrigin
 		}
 		request.CORS = true
+	} else if requestedKind == network.RequestScript {
+		if request.CORS && request.Credentials != network.CredentialsInclude {
+			request.Credentials = network.CredentialsSameOrigin
+		} else if !request.CORS && request.Credentials == "" {
+			request.Credentials = network.CredentialsInclude
+		}
 	}
 	if len(request.Body) > maxBrokerRequestBodyBytes {
 		return errors.New("sandbox fetch body exceeds size limit")
@@ -61,6 +69,8 @@ func validateBrokeredFetch(request *network.Request, pageURL *url.URL, engine st
 	request.SiteURL = publicRuntimeURL(pageURL)
 	if requestedKind == network.RequestModule {
 		request.Kind = network.RequestModule
+	} else if requestedKind == network.RequestScript {
+		request.Kind = network.RequestScript
 	} else {
 		request.Kind = network.RequestFetch
 	}
