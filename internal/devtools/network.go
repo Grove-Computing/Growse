@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	DefaultMaxNetworkRecords        = 500
+	DefaultMaxNetworkRecords        = 2000
 	DefaultMaxSessionNetworkRecords = 4000
 )
 
@@ -65,8 +65,8 @@ func (store *PageStore) ObserveNetwork(observation network.Observation) {
 		return
 	}
 	record := NetworkRecord{
-		Method: strings.ToUpper(observation.Method), URL: redactedNetworkURL(observation.URL), Kind: requestKindName(observation.Kind), Engine: observation.Engine,
-		FinalURL: redactedNetworkURL(observation.FinalURL), Initiator: boundedMetadata(observation.Initiator), Schedule: boundedMetadata(observation.Schedule),
+		Method: strings.ToUpper(observation.Method), URL: truncateUTF8(redactedNetworkURL(observation.URL), DefaultMaxMessageBytes), Kind: requestKindName(observation.Kind), Engine: observation.Engine,
+		FinalURL: truncateUTF8(redactedNetworkURL(observation.FinalURL), DefaultMaxMessageBytes), Initiator: boundedMetadata(observation.Initiator), Schedule: boundedMetadata(observation.Schedule),
 		StartedAt: observation.StartedAt, Duration: observation.Duration, StatusCode: observation.StatusCode,
 		Redirected: observation.Redirected, CacheStatus: observation.CacheStatus, ResponseBytes: observation.ResponseBytes,
 		ErrorCategory: observation.ErrorCategory,
@@ -135,6 +135,9 @@ func requestKindName(kind network.RequestKind) string {
 func redactedNetworkURL(target *url.URL) string {
 	if target == nil {
 		return "unknown"
+	}
+	if target.Scheme == "file" || target.Scheme == "" && target.IsAbs() {
+		return "[LOCAL_PATH_REDACTED]"
 	}
 	copy := *target
 	copy.User = nil

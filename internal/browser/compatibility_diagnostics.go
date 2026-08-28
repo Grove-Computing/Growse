@@ -3,6 +3,7 @@ package browser
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/Grove-Computing/Growse/internal/css"
 	"github.com/Grove-Computing/Growse/internal/devtools"
@@ -12,18 +13,35 @@ import (
 
 const maxCompatibilityDiagnostics = 2000
 
+const maxCompatibilityDiagnosticBytes = 4 * 1024
+
+const maxCompatibilityDiagnosticCount = 1_000_000
+
 func compatibilityDiagnostics(page *Page) []devtools.CompatibilityDiagnostic {
 	if page == nil {
 		return nil
 	}
 	diagnostics := make([]devtools.CompatibilityDiagnostic, 0)
+	indexes := make(map[devtools.CompatibilityDiagnostic]int)
 	appendDiagnostic := func(diagnostic devtools.CompatibilityDiagnostic) {
-		if len(diagnostics) >= maxCompatibilityDiagnostics {
-			return
-		}
+		diagnostic = normalizeCompatibilityDiagnostic(diagnostic)
 		if diagnostic.Count <= 0 {
 			diagnostic.Count = 1
 		}
+		key := diagnostic
+		key.Count = 0
+		if index, exists := indexes[key]; exists {
+			if diagnostics[index].Count > maxCompatibilityDiagnosticCount-diagnostic.Count {
+				diagnostics[index].Count = maxCompatibilityDiagnosticCount
+			} else {
+				diagnostics[index].Count += diagnostic.Count
+			}
+			return
+		}
+		if len(diagnostics) >= maxCompatibilityDiagnostics {
+			return
+		}
+		indexes[key] = len(diagnostics)
 		diagnostics = append(diagnostics, diagnostic)
 	}
 
@@ -51,14 +69,14 @@ func compatibilityDiagnostics(page *Page) []devtools.CompatibilityDiagnostic {
 	}
 
 	appendStyleDiagnostics(page, appendDiagnostic)
-	for index, failure := range page.FontErrors {
-		appendDiagnostic(devtools.CompatibilityDiagnostic{Category: "font", Subject: fmt.Sprintf("font#%d", index+1), State: "fallback", Reason: fallbackCategory(failure)})
+	for _, failure := range page.FontErrors {
+		appendDiagnostic(devtools.CompatibilityDiagnostic{Category: "font", Subject: "font", State: "fallback", Reason: fallbackCategory(failure)})
 	}
-	for index, failure := range append(append([]string(nil), page.ImageErrors...), page.BackgroundErrors...) {
-		appendDiagnostic(devtools.CompatibilityDiagnostic{Category: "image", Subject: fmt.Sprintf("image#%d", index+1), State: "fallback", Reason: fallbackCategory(failure)})
+	for _, failure := range append(append([]string(nil), page.ImageErrors...), page.BackgroundErrors...) {
+		appendDiagnostic(devtools.CompatibilityDiagnostic{Category: "image", Subject: "image", State: "fallback", Reason: fallbackCategory(failure)})
 	}
-	for index, failure := range page.ScriptErrors {
-		appendDiagnostic(devtools.CompatibilityDiagnostic{Category: "runtime", Subject: fmt.Sprintf("script#%d", index+1), State: "error", Reason: runtimeErrorCategory(failure)})
+	for _, failure := range page.ScriptErrors {
+		appendDiagnostic(devtools.CompatibilityDiagnostic{Category: "runtime", Subject: "script", State: "error", Reason: runtimeErrorCategory(failure)})
 	}
 	if page.RuntimeError != "" {
 		appendDiagnostic(devtools.CompatibilityDiagnostic{Category: "runtime", Subject: "page", State: "error", Reason: runtimeErrorCategory(page.RuntimeError)})
@@ -73,22 +91,46 @@ func compatibilityDiagnostics(page *Page) []devtools.CompatibilityDiagnostic {
 				continue
 			}
 			appendDiagnostic(devtools.CompatibilityDiagnostic{
-				Category: "runtime", Subject: "console/" + boundedDiagnosticLabel(record.Source), State: "error", Reason: reason,
+				Category: "runtime", Subject: "console/" + diagnosticSourceCategory(record.Source), State: "error", Reason: reason,
 			})
 		}
 	}
 	return diagnostics
 }
 
-func boundedDiagnosticLabel(value string) string {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return "unknown"
+func diagnosticSourceCategory(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "console", "runtime", "script", "event", "scheduler", "module", "observer":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return "other"
 	}
-	if len(value) > 64 {
-		return value[:64]
+}
+
+func normalizeCompatibilityDiagnostic(diagnostic devtools.CompatibilityDiagnostic) devtools.CompatibilityDiagnostic {
+	diagnostic.Category = truncateDiagnosticUTF8(diagnostic.Category)
+	diagnostic.Subject = truncateDiagnosticUTF8(diagnostic.Subject)
+	diagnostic.State = truncateDiagnosticUTF8(diagnostic.State)
+	diagnostic.Reason = truncateDiagnosticUTF8(diagnostic.Reason)
+	diagnostic.Initiator = truncateDiagnosticUTF8(diagnostic.Initiator)
+	diagnostic.Schedule = truncateDiagnosticUTF8(diagnostic.Schedule)
+	if diagnostic.Count > maxCompatibilityDiagnosticCount {
+		diagnostic.Count = maxCompatibilityDiagnosticCount
 	}
-	return value
+	return diagnostic
+}
+
+func truncateDiagnosticUTF8(value string) string {
+	value = strings.ToValidUTF8(value, "�")
+	if len(value) <= maxCompatibilityDiagnosticBytes {
+		return value
+	}
+	const suffix = "…"
+	limit := maxCompatibilityDiagnosticBytes - len(suffix)
+	for limit > 0 && !utf8.ValidString(value[:limit]) {
+		limit--
+	}
+	return value[:limit] + suffix
 }
 
 func compatibilityResourceKind(kind string) bool {

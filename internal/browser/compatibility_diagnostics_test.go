@@ -3,8 +3,10 @@ package browser
 import (
 	"fmt"
 	"net/url"
+	"reflect"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/Grove-Computing/Growse/internal/css"
 	"github.com/Grove-Computing/Growse/internal/devtools"
@@ -67,6 +69,47 @@ func TestCompatibilityDiagnosticsExplainResourcesStylesFallbacksAndRuntimeErrors
 	for _, secret := range []string{"password", "secret", "/private/"} {
 		if strings.Contains(encoded, secret) {
 			t.Fatalf("compatibility diagnostics leaked %q: %s", secret, encoded)
+		}
+	}
+}
+
+func TestCompatibilityDiagnosticsAggregateAndBoundMetadataWithoutPayloadCopies(t *testing.T) {
+	page := NewPage(nil)
+	page.FontErrors = make([]string, 2500)
+	for index := range page.FontErrors {
+		page.FontErrors[index] = "font CORS rejected credential=must-not-survive"
+	}
+	diagnostics := compatibilityDiagnostics(page)
+	if len(diagnostics) != 1 || diagnostics[0].Category != "font" || diagnostics[0].Reason != "cors" || diagnostics[0].Count != 2500 {
+		t.Fatalf("aggregated diagnostics = %+v", diagnostics)
+	}
+	if strings.Contains(fmt.Sprint(diagnostics), "must-not-survive") {
+		t.Fatalf("aggregated diagnostics retained the raw failure: %+v", diagnostics)
+	}
+	limitedPage := NewPage(nil)
+	for index := 0; index < maxCompatibilityDiagnostics+100; index++ {
+		target, _ := url.Parse(fmt.Sprintf("https://fixture.test/resource-%d.mjs", index))
+		limitedPage.DevTools.ObserveNetwork(network.Observation{Method: "GET", URL: target, Kind: network.RequestModule, StatusCode: 200})
+	}
+	if got := len(compatibilityDiagnostics(limitedPage)); got != maxCompatibilityDiagnostics {
+		t.Fatalf("compatibility diagnostic limit = %d, want %d", got, maxCompatibilityDiagnostics)
+	}
+
+	long := strings.Repeat("界", maxCompatibilityDiagnosticBytes)
+	bounded := normalizeCompatibilityDiagnostic(devtools.CompatibilityDiagnostic{Category: "runtime", Subject: long, Count: maxCompatibilityDiagnosticCount + 1})
+	if len(bounded.Subject) > maxCompatibilityDiagnosticBytes || !utf8.ValidString(bounded.Subject) || bounded.Count != maxCompatibilityDiagnosticCount {
+		t.Fatalf("bounded diagnostic bytes/count = %d / %d", len(bounded.Subject), bounded.Count)
+	}
+
+	typeOfDiagnostic := reflect.TypeOf(devtools.CompatibilityDiagnostic{})
+	for index := range typeOfDiagnostic.NumField() {
+		field := typeOfDiagnostic.Field(index)
+		if field.Type.Kind() != reflect.String && field.Type.Kind() != reflect.Int {
+			t.Fatalf("diagnostic field %s can retain a payload: %s", field.Name, field.Type)
+		}
+		name := strings.ToLower(field.Name)
+		if strings.Contains(name, "body") || strings.Contains(name, "source") || strings.Contains(name, "bytes") || strings.Contains(name, "image") || strings.Contains(name, "font") {
+			t.Fatalf("diagnostic model exposes payload-like field %s", field.Name)
 		}
 	}
 }

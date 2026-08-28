@@ -26,7 +26,7 @@ Network recordはNavigation、stylesheet、image、font、external Go / JavaScri
 
 Request / Response bodyとHeaderはObservation型にもNetworkRecord型にも存在しない。Cookie、Authorization、API key、raw error本文を保存しない。URL userinfoを除去し、queryはkeyだけを残して全valueを`[REDACTED]`へ置換する。CORS、timeout、cancel、redirect loop / limit、request / response limit、network failureを限定されたcategoryへ変換する。
 
-- retention: Page 500件
+- retention: Page 2,000件
 - Browser Session: 4,000件
 - lifecycle: Page close後の追加を拒否
 - clear: 表示中Pageのrecordだけを削除し、sequenceとSession budgetは巻き戻さない
@@ -38,6 +38,10 @@ Runtime panelはtop-level Page、再帰的なFrame、same-originのService Worke
 Module / chunk / hydration / observer / stale generation / host API / WASM / sandbox / runtime / frame errorはcategoryだけを表示し、raw messageやsourceを保持しない。URLはuserinfoとquery value、fragmentを除去する。inline source、module namespace、WASM binary / memory、Service Worker Cache body、IPC payload、environment、filesystem pathは診断modelへ入れない。
 
 Runtime contextのcompatibility diagnosticsはdynamic resourceのinitiator / schedule、Styles ruleのlayerと適用状態、selector / media / supports / containerによる無視理由、font / image fallbackの有限categoryを表示する。診断はrule番号やresource metadataだけを参照し、CSS source body、font bytes、decoded image、raw exceptionを複製しない。
+
+- compatibility diagnostics: Page 2,000種類、同一category / subject / state / reason / initiator / scheduleは`count`へ集約
+- diagnostic string: 各field 4 KiB、invalid UTF-8を置換して切り詰め
+- aggregate count: 1,000,000で飽和
 
 worker generationはPage reload、Frame navigation、Service Worker restartを識別するための単調増加IDであり、process IDや秘密値ではない。sandbox constraintはworkerが適用・報告しBrowserが検証した件数とready状態を示し、適用できなかったOS機能を成功として表示しない。
 

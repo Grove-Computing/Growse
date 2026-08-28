@@ -1,6 +1,7 @@
 package devtools
 
 import (
+	"fmt"
 	"net/url"
 	"strings"
 	"testing"
@@ -94,5 +95,18 @@ func TestNetworkRecordProductionSessionLimit(t *testing.T) {
 	}
 	if total != DefaultMaxSessionNetworkRecords {
 		t.Fatalf("session records = %d, want %d", total, DefaultMaxSessionNetworkRecords)
+	}
+}
+
+func TestNetworkRecordBoundsURLsAndRedactsLocalPaths(t *testing.T) {
+	store := NewPageStore()
+	longURL, _ := url.Parse("https://example.test/" + strings.Repeat("x", DefaultMaxMessageBytes*2) + "?token=secret")
+	store.ObserveNetwork(network.Observation{Method: "GET", URL: longURL, FinalURL: &url.URL{Scheme: "file", Path: "/home/user/private/font.woff2"}})
+	records := store.Network()
+	if len(records) != 1 || len(records[0].URL) > DefaultMaxMessageBytes || records[0].FinalURL != "[LOCAL_PATH_REDACTED]" {
+		t.Fatalf("bounded/redacted Network record = %+v", records)
+	}
+	if strings.Contains(fmt.Sprint(records), "secret") || strings.Contains(fmt.Sprint(records), "/home/user") {
+		t.Fatalf("Network record leaked credential/local path: %+v", records)
 	}
 }
