@@ -330,8 +330,12 @@ func (runtime *Runtime) prepareDynamicClassicScript(vm *goja.Runtime, element *d
 		if snapshot.source == "" {
 			return
 		}
-		if _, err := vm.RunScript(fmt.Sprintf("dynamic-inline-script-%d.js", id), snapshot.source); err != nil {
-			runtime.recordScriptError(fmt.Sprintf("dynamic-inline-script-%d.js", id), err)
+		previousScript := runtime.currentScript
+		runtime.setCurrentScript(vm, element)
+		_, scriptErr := vm.RunScript(fmt.Sprintf("dynamic-inline-script-%d.js", id), snapshot.source)
+		runtime.currentScript = previousScript
+		if scriptErr != nil {
+			runtime.recordScriptError(fmt.Sprintf("dynamic-inline-script-%d.js", id), scriptErr)
 		}
 		return
 	}
@@ -441,8 +445,12 @@ func (runtime *Runtime) finishDynamicScript(snapshot dynamicScriptSnapshot, resp
 		if response != nil && response.URL != nil {
 			name = network.RedactedURL(response.URL)
 		}
-		if _, err := vm.RunScript(name, string(response.Body)); err != nil {
-			runtime.recordScriptError(name, err)
+		previousScript := runtime.currentScript
+		runtime.setCurrentScript(vm, snapshot.element)
+		_, scriptErr := vm.RunScript(name, string(response.Body))
+		runtime.currentScript = previousScript
+		if scriptErr != nil {
+			runtime.recordScriptError(name, scriptErr)
 			runtime.dispatchDynamicScriptEvent(vm, snapshot, events.Error)
 			return nil
 		}

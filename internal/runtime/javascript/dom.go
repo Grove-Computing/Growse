@@ -12,6 +12,27 @@ import (
 
 func (runtime *Runtime) installDOM(vm *goja.Runtime) error {
 	document := vm.NewObject()
+	currentScriptGetter := vm.ToValue(func(goja.FunctionCall) goja.Value {
+		if runtime.currentScript == nil {
+			return goja.Null()
+		}
+		return runtime.currentScript
+	})
+	if err := document.DefineAccessorProperty("currentScript", currentScriptGetter, nil, goja.FLAG_FALSE, goja.FLAG_TRUE); err != nil {
+		return err
+	}
+	scriptsGetter := vm.ToValue(func(goja.FunctionCall) goja.Value {
+		return runtime.elementCollectionValue(vm, runtime.domAPI.GetElementsByTagName("script"))
+	})
+	if err := document.DefineAccessorProperty("scripts", scriptsGetter, nil, goja.FLAG_FALSE, goja.FLAG_TRUE); err != nil {
+		return err
+	}
+	styleSheetsGetter := vm.ToValue(func(goja.FunctionCall) goja.Value {
+		return runtime.styleSheetCollectionValue(vm)
+	})
+	if err := document.DefineAccessorProperty("styleSheets", styleSheetsGetter, nil, goja.FLAG_FALSE, goja.FLAG_TRUE); err != nil {
+		return err
+	}
 	readyStateGetter := vm.ToValue(func(goja.FunctionCall) goja.Value {
 		if runtime.environment.Document == nil {
 			return vm.ToValue("loading")

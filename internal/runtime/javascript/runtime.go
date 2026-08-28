@@ -84,6 +84,7 @@ type Runtime struct {
 	moduleEvaluations map[string]*moduleEvaluation
 	stylesheetStates  map[uint64]string
 	preloadStates     map[uint64]string
+	currentScript     *goja.Object
 
 	loaded    bool
 	started   bool
@@ -176,6 +177,7 @@ func (runtime *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script,
 	runtime.moduleEvaluations = make(map[string]*moduleEvaluation)
 	runtime.stylesheetStates = make(map[uint64]string)
 	runtime.preloadStates = make(map[uint64]string)
+	runtime.currentScript = nil
 	runtime.windowListeners = nil
 	runtime.documentListeners = nil
 	runtime.microtasks = nil
@@ -358,6 +360,7 @@ func (runtime *Runtime) Stop() error {
 	runtime.moduleEvaluations = nil
 	runtime.stylesheetStates = nil
 	runtime.preloadStates = nil
+	runtime.currentScript = nil
 	runtime.windowListeners = nil
 	runtime.documentListeners = nil
 	runtime.microtasks = nil
@@ -421,6 +424,8 @@ func (runtime *Runtime) evaluateScripts(ctx context.Context, scripts []runtimemo
 		}
 		var containedErr error
 		if err := runtime.runSync(ctx, func(vm *goja.Runtime) error {
+			runtime.setCurrentScript(vm, runtime.initialScriptElement(script.DocumentOrder))
+			defer runtime.setCurrentScript(vm, nil)
 			_, containedErr = vm.RunScript(name, script.Source)
 			return nil
 		}); err != nil {
