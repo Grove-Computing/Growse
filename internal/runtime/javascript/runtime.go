@@ -24,12 +24,17 @@ import (
 )
 
 const (
-	MaxEventListeners    = 10_000
-	maxModuleBytes       = 2 << 20
-	maxCallStackSize     = 1_000
-	callbackQueueSize    = 64
-	maxMicrotaskQueue    = 4_096
-	defaultModuleTimeout = 5 * time.Second
+	MaxEventListeners         = 10_000
+	maxModuleBytes            = 2 << 20
+	maxCallStackSize          = 1_000
+	callbackQueueSize         = 64
+	maxMicrotaskQueue         = 4_096
+	defaultModuleTimeout      = 5 * time.Second
+	maxPageScripts            = 256
+	maxPageScriptBytes        = 32 << 20
+	maxDynamicInsertDepth     = 32
+	maxResourceReprepares     = 8
+	maxResourceFailureRetries = 3
 )
 
 var errRuntimeStopped = errors.New("javascript runtime is stopped")
@@ -73,18 +78,23 @@ type Runtime struct {
 	maxMicrotasks     int
 	moduleTimeout     time.Duration
 
-	elements          map[*goja.Object]*domapi.Element
-	elementByID       map[uint64]*goja.Object
-	listeners         []listenerRecord
-	listenerCount     int
-	maxListeners      int
-	dynamicScripts    map[uint64]struct{}
-	modulePreloads    map[uint64]struct{}
-	moduleRegistry    *moduleRegistry
-	moduleEvaluations map[string]*moduleEvaluation
-	stylesheetStates  map[uint64]string
-	preloadStates     map[uint64]string
-	currentScript     *goja.Object
+	elements              map[*goja.Object]*domapi.Element
+	elementByID           map[uint64]*goja.Object
+	listeners             []listenerRecord
+	listenerCount         int
+	maxListeners          int
+	dynamicScripts        map[uint64]struct{}
+	modulePreloads        map[uint64]struct{}
+	moduleRegistry        *moduleRegistry
+	moduleEvaluations     map[string]*moduleEvaluation
+	stylesheetStates      map[uint64]string
+	preloadStates         map[uint64]string
+	currentScript         *goja.Object
+	scriptCount           int
+	scriptBytes           int
+	dynamicInsertDepth    int
+	resourcePrepareCounts map[uint64]int
+	resourceFailures      map[string]int
 
 	loaded    bool
 	started   bool
@@ -119,6 +129,19 @@ func (runtime *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script,
 	for _, script := range scripts {
 		if runtimemodel.NormalizeEngine(script.Engine) != runtimemodel.EngineJavaScript {
 			return fmt.Errorf("script uses engine %q; want %q", script.Engine, runtimemodel.EngineJavaScript)
+		}
+	}
+	if len(scripts) > maxPageScripts {
+		return fmt.Errorf("JavaScript Page exceeds %d scripts", maxPageScripts)
+	}
+	initialScriptBytes := 0
+	for _, script := range scripts {
+		if len(script.Source) > maxModuleBytes {
+			return fmt.Errorf("JavaScript source exceeds %d bytes", maxModuleBytes)
+		}
+		initialScriptBytes += len(script.Source)
+		if initialScriptBytes > maxPageScriptBytes {
+			return fmt.Errorf("JavaScript Page source exceeds %d bytes", maxPageScriptBytes)
 		}
 	}
 
@@ -173,11 +196,16 @@ func (runtime *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script,
 	runtime.listeners = nil
 	runtime.dynamicScripts = make(map[uint64]struct{})
 	runtime.modulePreloads = make(map[uint64]struct{})
-	runtime.moduleRegistry = newModuleRegistry(environment)
+	runtime.moduleRegistry = newModuleRegistry(environment, runtime.reserveScriptBytes)
 	runtime.moduleEvaluations = make(map[string]*moduleEvaluation)
 	runtime.stylesheetStates = make(map[uint64]string)
 	runtime.preloadStates = make(map[uint64]string)
 	runtime.currentScript = nil
+	runtime.scriptCount = len(scripts)
+	runtime.scriptBytes = initialScriptBytes
+	runtime.dynamicInsertDepth = 0
+	runtime.resourcePrepareCounts = make(map[uint64]int)
+	runtime.resourceFailures = make(map[string]int)
 	runtime.windowListeners = nil
 	runtime.documentListeners = nil
 	runtime.microtasks = nil
@@ -361,6 +389,11 @@ func (runtime *Runtime) Stop() error {
 	runtime.stylesheetStates = nil
 	runtime.preloadStates = nil
 	runtime.currentScript = nil
+	runtime.scriptCount = 0
+	runtime.scriptBytes = 0
+	runtime.dynamicInsertDepth = 0
+	runtime.resourcePrepareCounts = nil
+	runtime.resourceFailures = nil
 	runtime.windowListeners = nil
 	runtime.documentListeners = nil
 	runtime.microtasks = nil

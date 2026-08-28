@@ -20,7 +20,7 @@ import (
 const (
 	moduleNamespace     = "growse-module"
 	moduleEntryPath     = "growse-entry"
-	maxModulesPerGraph  = 256
+	maxModulesPerGraph  = 512
 	maxModuleGraphBytes = 16 << 20
 	maxModuleGraphDepth = 64
 )
@@ -60,6 +60,7 @@ type moduleRegistry struct {
 	environment runtimemodel.Environment
 	mu          sync.Mutex
 	entries     map[moduleCacheKey]*moduleCacheEntry
+	reserve     func(int) bool
 }
 
 type moduleEvaluation struct {
@@ -67,8 +68,12 @@ type moduleEvaluation struct {
 	err   error
 }
 
-func newModuleRegistry(environment runtimemodel.Environment) *moduleRegistry {
-	return &moduleRegistry{environment: environment, entries: make(map[moduleCacheKey]*moduleCacheEntry)}
+func newModuleRegistry(environment runtimemodel.Environment, reserve ...func(int) bool) *moduleRegistry {
+	registry := &moduleRegistry{environment: environment, entries: make(map[moduleCacheKey]*moduleCacheEntry)}
+	if len(reserve) != 0 {
+		registry.reserve = reserve[0]
+	}
+	return registry
 }
 
 func bundleModule(ctx context.Context, script runtimemodel.Script, environment runtimemodel.Environment, registry *moduleRegistry) (string, error) {
@@ -309,6 +314,9 @@ func (registry *moduleRegistry) fetchUncached(ctx context.Context, target *url.U
 	}
 	if mixedModuleContent(registry.environment.BaseURL, finalURL) {
 		return nil, fmt.Errorf("block mixed-content module %s", network.RedactedURL(finalURL))
+	}
+	if registry.reserve != nil && !registry.reserve(len(response.Body)) {
+		return nil, fmt.Errorf("JavaScript Page source exceeds %d bytes", maxPageScriptBytes)
 	}
 	return cloneModuleResponse(response), nil
 }

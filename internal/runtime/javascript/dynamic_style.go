@@ -15,7 +15,11 @@ import (
 	"github.com/dop251/goja"
 )
 
-const maxDynamicStylesheetBytes = 4 << 20
+const (
+	maxDynamicStylesheetBytes = 4 << 20
+	maxDynamicStylesheets     = 128
+	maxPagePreloads           = 256
+)
 
 type dynamicStyleSnapshot struct {
 	element     *domapi.Element
@@ -48,7 +52,12 @@ func (runtime *Runtime) resourceElementChanged(vm *goja.Runtime, element *domapi
 
 func (runtime *Runtime) prepareDynamicStyle(vm *goja.Runtime, element *domapi.Element) {
 	signature := "style\x00" + element.Text()
-	if !runtime.updateResourceSignature(runtime.stylesheetStates, uint64(element.ID()), signature) {
+	changed, err := runtime.updateResourceSignature(runtime.stylesheetStates, uint64(element.ID()), signature, maxDynamicStylesheets)
+	if err != nil {
+		runtime.recordError(err.Error())
+		return
+	}
+	if !changed {
 		return
 	}
 	snapshot := dynamicStyleSnapshot{element: element, id: uint64(element.ID()), signature: signature}
@@ -75,7 +84,13 @@ func (runtime *Runtime) prepareExternalStylesheet(vm *goja.Runtime, element *dom
 	crossOrigin, _ := element.GetAttribute("crossorigin")
 	mediaValue, _ := element.GetAttribute("media")
 	signature := strings.Join([]string{"stylesheet", href, integrity, crossOrigin, mediaValue}, "\x00")
-	if !runtime.updateResourceSignature(runtime.stylesheetStates, uint64(element.ID()), signature) {
+	changed, prepareErr := runtime.updateResourceSignature(runtime.stylesheetStates, uint64(element.ID()), signature, maxDynamicStylesheets)
+	if prepareErr != nil {
+		runtime.recordError(prepareErr.Error())
+		runtime.dispatchDynamicStyleEvent(vm, dynamicStyleSnapshot{element: element, id: uint64(element.ID())}, events.Error)
+		return
+	}
+	if !changed {
 		return
 	}
 	target, err := runtime.resolvePageResourceURL(href)
@@ -131,7 +146,22 @@ func (runtime *Runtime) prepareResourcePreload(vm *goja.Runtime, element *domapi
 	integrity, _ := element.GetAttribute("integrity")
 	crossOrigin, _ := element.GetAttribute("crossorigin")
 	signature := strings.Join([]string{"preload", href, asValue, integrity, crossOrigin}, "\x00")
-	if !runtime.updateResourceSignature(runtime.preloadStates, uint64(element.ID()), signature) {
+	runtime.mu.Lock()
+	_, existingPreload := runtime.preloadStates[uint64(element.ID())]
+	preloadCount := len(runtime.preloadStates) + len(runtime.modulePreloads)
+	runtime.mu.Unlock()
+	if !existingPreload && preloadCount >= maxPagePreloads {
+		runtime.recordError(fmt.Sprintf("Page exceeds %d preloads", maxPagePreloads))
+		runtime.dispatchDynamicStyleEvent(vm, dynamicStyleSnapshot{element: element, id: uint64(element.ID())}, events.Error)
+		return
+	}
+	changed, prepareErr := runtime.updateResourceSignature(runtime.preloadStates, uint64(element.ID()), signature, maxPagePreloads)
+	if prepareErr != nil {
+		runtime.recordError(prepareErr.Error())
+		runtime.dispatchDynamicStyleEvent(vm, dynamicStyleSnapshot{element: element, id: uint64(element.ID())}, events.Error)
+		return
+	}
+	if !changed {
 		return
 	}
 	kind, ok := preloadRequestKind(asValue)
@@ -169,24 +199,29 @@ func preloadRequestKind(value string) (network.RequestKind, bool) {
 	}
 }
 
-func (runtime *Runtime) fetchDynamicResource(snapshot dynamicStyleSnapshot) (*network.Response, error) {
+func (runtime *Runtime) fetchDynamicResource(snapshot dynamicStyleSnapshot) (response *network.Response, resourceErr error) {
 	runtime.mu.Lock()
 	environment, ctx := runtime.environment, runtime.runtimeCtx
 	runtime.mu.Unlock()
 	if environment.Fetch == nil || ctx == nil {
 		return nil, errors.New("resource fetch is unavailable")
 	}
+	key := fmt.Sprintf("%d:%s", snapshot.kind, snapshot.target)
+	if !runtime.allowResourceAttempt(key) {
+		return nil, fmt.Errorf("resource failure retry limit %d exceeded", maxResourceFailureRetries)
+	}
+	defer func() { runtime.recordResourceFailure(key, resourceErr) }()
 	hasCORS := strings.TrimSpace(snapshot.crossOrigin) != ""
 	credentials := network.CredentialsInclude
 	if hasCORS && !strings.EqualFold(strings.TrimSpace(snapshot.crossOrigin), "use-credentials") {
 		credentials = network.CredentialsSameOrigin
 	}
-	response, err := environment.Fetch(ctx, &network.Request{
+	response, resourceErr = environment.Fetch(ctx, &network.Request{
 		Method: http.MethodGet, URL: snapshot.target, SiteURL: environment.BaseURL,
 		Kind: snapshot.kind, Engine: "javascript", CORS: hasCORS, Credentials: credentials,
 	})
-	if err != nil {
-		return nil, err
+	if resourceErr != nil {
+		return nil, resourceErr
 	}
 	if response == nil {
 		return nil, errors.New("empty resource response")
@@ -253,16 +288,6 @@ func (runtime *Runtime) resolvePageResourceURL(reference string) (*url.URL, erro
 	}
 	runtime.mu.Unlock()
 	return resolveDynamicScriptURL(baseURL, reference)
-}
-
-func (runtime *Runtime) updateResourceSignature(states map[uint64]string, id uint64, signature string) bool {
-	runtime.mu.Lock()
-	defer runtime.mu.Unlock()
-	if states[id] == signature {
-		return false
-	}
-	states[id] = signature
-	return true
 }
 
 func (runtime *Runtime) clearResourceSignature(states map[uint64]string, id uint64) bool {

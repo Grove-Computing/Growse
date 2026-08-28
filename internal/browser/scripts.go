@@ -19,8 +19,8 @@ import (
 
 const (
 	maxScriptBytes      = 2 << 20
-	maxScriptsPerEngine = 64
-	maxScriptTotalBytes = 8 << 20
+	maxScriptsPerEngine = 256
+	maxScriptTotalBytes = 32 << 20
 )
 
 type scriptSource struct {

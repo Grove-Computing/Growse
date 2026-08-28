@@ -140,12 +140,14 @@ func linkRelIncludes(element *domapi.Element, wanted string) bool {
 
 func (runtime *Runtime) prepareDynamicModuleScript(vm *goja.Runtime, element *domapi.Element) {
 	id := uint64(element.ID())
-	runtime.mu.Lock()
-	if _, prepared := runtime.dynamicScripts[id]; prepared {
-		runtime.mu.Unlock()
+	if err := runtime.claimDynamicScript(id); err != nil {
+		if !errors.Is(err, errResourceAlreadyPrepared) {
+			runtime.recordError(err.Error())
+			runtime.dispatchDynamicScriptEvent(vm, dynamicScriptSnapshot{element: element, id: element.ID()}, events.Error)
+		}
 		return
 	}
-	runtime.dynamicScripts[id] = struct{}{}
+	runtime.mu.Lock()
 	environment := runtime.environment
 	runtime.mu.Unlock()
 
@@ -168,6 +170,11 @@ func (runtime *Runtime) prepareDynamicModuleScript(vm *goja.Runtime, element *do
 		query.Set("__growse_inline_module", fmt.Sprint(id))
 		inlineURL.RawQuery = query.Encode()
 		snapshot.sourceURL = &inlineURL
+		if !runtime.reserveScriptBytes(len(snapshot.source)) {
+			runtime.recordError(fmt.Sprintf("dynamic module exceeds Page source limit %d", maxPageScriptBytes))
+			runtime.dispatchDynamicScriptEvent(vm, snapshot, events.Error)
+			return
+		}
 		script := runtimemodel.Script{
 			Engine: runtimemodel.EngineJavaScript, Kind: runtimemodel.ScriptModule, Inline: true,
 			SourceURL: snapshot.sourceURL, Source: snapshot.source, DocumentOrder: int(id),
@@ -253,6 +260,12 @@ func (runtime *Runtime) prepareModulePreload(vm *goja.Runtime, element *domapi.E
 		runtime.mu.Unlock()
 		return
 	}
+	if len(runtime.modulePreloads)+len(runtime.preloadStates) >= maxPagePreloads {
+		runtime.mu.Unlock()
+		runtime.recordError(fmt.Sprintf("Page exceeds %d preloads", maxPagePreloads))
+		runtime.dispatchDynamicScriptEvent(vm, dynamicScriptSnapshot{element: element, id: element.ID()}, events.Error)
+		return
+	}
 	runtime.modulePreloads[id] = struct{}{}
 	environment, registry, runtimeContext := runtime.environment, runtime.moduleRegistry, runtime.runtimeCtx
 	runtime.mu.Unlock()
@@ -313,12 +326,14 @@ func (runtime *Runtime) prepareDynamicClassicScript(vm *goja.Runtime, element *d
 	}
 
 	id := uint64(element.ID())
-	runtime.mu.Lock()
-	if _, prepared := runtime.dynamicScripts[id]; prepared {
-		runtime.mu.Unlock()
+	if err := runtime.claimDynamicScript(id); err != nil {
+		if !errors.Is(err, errResourceAlreadyPrepared) {
+			runtime.recordError(err.Error())
+			runtime.dispatchDynamicScriptEvent(vm, dynamicScriptSnapshot{element: element, id: element.ID()}, events.Error)
+		}
 		return
 	}
-	runtime.dynamicScripts[id] = struct{}{}
+	runtime.mu.Lock()
 	environment := runtime.environment
 	runtime.mu.Unlock()
 
@@ -330,6 +345,17 @@ func (runtime *Runtime) prepareDynamicClassicScript(vm *goja.Runtime, element *d
 		if snapshot.source == "" {
 			return
 		}
+		if !runtime.reserveScriptBytes(len(snapshot.source)) {
+			runtime.recordError(fmt.Sprintf("dynamic script exceeds Page source limit %d", maxPageScriptBytes))
+			runtime.dispatchDynamicScriptEvent(vm, snapshot, events.Error)
+			return
+		}
+		if !runtime.beginDynamicInsertion() {
+			runtime.recordError(fmt.Sprintf("dynamic script insertion exceeds depth %d", maxDynamicInsertDepth))
+			runtime.dispatchDynamicScriptEvent(vm, snapshot, events.Error)
+			return
+		}
+		defer runtime.endDynamicInsertion()
 		previousScript := runtime.currentScript
 		runtime.setCurrentScript(vm, element)
 		_, scriptErr := vm.RunScript(fmt.Sprintf("dynamic-inline-script-%d.js", id), snapshot.source)
@@ -389,10 +415,19 @@ func (runtime *Runtime) fetchDynamicClassicScript(snapshot dynamicScriptSnapshot
 		Method: http.MethodGet, URL: snapshot.sourceURL, SiteURL: environment.BaseURL,
 		Kind: network.RequestScript, Engine: "javascript", CORS: hasCORS, Credentials: credentials,
 	}
+	key := snapshot.sourceURL.String()
+	if !runtime.allowResourceAttempt(key) {
+		runtime.finishDynamicScript(snapshot, nil, fmt.Errorf("resource failure retry limit %d exceeded", maxResourceFailureRetries))
+		return
+	}
 	response, err := environment.Fetch(runtimeContext, request)
 	if err == nil {
 		err = validateDynamicClassicScriptResponse(environment.BaseURL, snapshot, response)
 	}
+	if err == nil && !runtime.reserveScriptBytes(len(response.Body)) {
+		err = fmt.Errorf("JavaScript Page source exceeds %d bytes", maxPageScriptBytes)
+	}
+	runtime.recordResourceFailure(key, err)
 	runtime.finishDynamicScript(snapshot, response, err)
 }
 
@@ -445,6 +480,12 @@ func (runtime *Runtime) finishDynamicScript(snapshot dynamicScriptSnapshot, resp
 		if response != nil && response.URL != nil {
 			name = network.RedactedURL(response.URL)
 		}
+		if !runtime.beginDynamicInsertion() {
+			runtime.recordError(fmt.Sprintf("dynamic script insertion exceeds depth %d", maxDynamicInsertDepth))
+			runtime.dispatchDynamicScriptEvent(vm, snapshot, events.Error)
+			return nil
+		}
+		defer runtime.endDynamicInsertion()
 		previousScript := runtime.currentScript
 		runtime.setCurrentScript(vm, snapshot.element)
 		_, scriptErr := vm.RunScript(name, string(response.Body))

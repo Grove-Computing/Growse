@@ -21,7 +21,7 @@ type stylesheetSource struct {
 const (
 	maxCSSImportDepth     = 8
 	maxCSSStylesheetCount = 32
-	maxCSSTotalBytes      = 8 << 20
+	maxCSSTotalBytes      = 16 << 20
 )
 
 type stylesheetLoadState struct {
