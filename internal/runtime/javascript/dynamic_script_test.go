@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -202,5 +203,97 @@ func TestDynamicModuleAndModulePreloadShareGraphAndEvaluateOnce(t *testing.T) {
 		if fetches[path] != 1 {
 			t.Fatalf("module fetches = %v; %s count = %d, want 1", fetches, path, fetches[path])
 		}
+	}
+}
+
+func TestStoppedRuntimeDropsDynamicResourcesHydrationCallbacksAndMutations(t *testing.T) {
+	document, err := htmlparser.Parse(strings.NewReader(`<main id="host"><output id="result">idle</output></main>`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseURL, _ := url.Parse("https://app.example/page")
+	started := make(chan string, 3)
+	returned := make(chan struct{}, 3)
+	release := make(chan struct{})
+	var mutations atomic.Int64
+	var refreshes atomic.Int64
+	var recordsMu sync.Mutex
+	var records [][2]string
+	environment := runtimemodel.Environment{
+		Document: document, Events: events.NewDispatcher(), BaseURL: baseURL,
+		OnMutation:    func() { mutations.Add(1) },
+		RefreshStyles: func(context.Context) error { refreshes.Add(1); return nil },
+		ConsoleRecord: func(level, message string) {
+			recordsMu.Lock()
+			records = append(records, [2]string{level, message})
+			recordsMu.Unlock()
+		},
+		Fetch: func(_ context.Context, request *network.Request) (*network.Response, error) {
+			started <- request.URL.Path
+			<-release
+			returned <- struct{}{}
+			body, contentType := `document.getElementById("result").textContent = "stale-classic";`, "text/javascript"
+			switch request.URL.Path {
+			case "/module.js":
+				body = `document.getElementById("result").textContent = "stale-module"; export const stale = true;`
+			case "/style.css":
+				body, contentType = `#result { color: red; }`, "text/css"
+			}
+			return &network.Response{URL: request.URL, StatusCode: http.StatusOK, ContentType: contentType, Body: []byte(body)}, nil
+		},
+	}
+	runtime := New()
+	source := `
+		var host = document.getElementById("host");
+		var result = document.getElementById("result");
+		var classic = document.createElement("script");
+		classic.src = "/classic.js";
+		classic.addEventListener("load", function () { result.textContent = "stale-classic-load"; });
+		host.appendChild(classic);
+		var module = document.createElement("script");
+		module.type = "module";
+		module.src = "/module.js";
+		module.addEventListener("load", function () { result.textContent = "stale-module-load"; });
+		host.appendChild(module);
+		var style = document.createElement("link");
+		style.rel = "stylesheet";
+		style.href = "/style.css";
+		style.addEventListener("load", function () { result.textContent = "stale-style-load"; });
+		host.appendChild(style);
+		setTimeout(function () { result.textContent = "stale-hydration"; }, 25);`
+	if err := runtime.Load(context.Background(), []runtimemodel.Script{javaScript(source)}, environment); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			t.Fatal("dynamic resource fetch did not start")
+		}
+	}
+	mutationsBeforeStop := mutations.Load()
+	if err := runtime.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	for range 3 {
+		select {
+		case <-returned:
+		case <-time.After(time.Second):
+			t.Fatal("released resource fetch did not return")
+		}
+	}
+	time.Sleep(40 * time.Millisecond)
+	result, _ := document.GetElementByID("result")
+	if result.TextContent() != "idle" || mutations.Load() != mutationsBeforeStop || refreshes.Load() != 0 {
+		t.Fatalf("stale completion = text:%q mutations:%d/%d refreshes:%d", result.TextContent(), mutations.Load(), mutationsBeforeStop, refreshes.Load())
+	}
+	recordsMu.Lock()
+	defer recordsMu.Unlock()
+	if len(records) != 0 {
+		t.Fatalf("stale completion console records = %v", records)
 	}
 }
