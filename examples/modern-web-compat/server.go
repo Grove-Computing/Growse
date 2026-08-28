@@ -6,7 +6,7 @@ import (
 	"net/http"
 )
 
-//go:embed fixtures/nextjs/* fixtures/sveltekit/*
+//go:embed fixtures/nextjs/* fixtures/sveltekit/* fixtures/tailwind/*
 var modernWebCompatibilityAssets embed.FS
 
 func modernWebCompatibilityHandler() http.Handler {
@@ -15,6 +15,7 @@ func modernWebCompatibilityHandler() http.Handler {
 	mux.Handle("/_next/static/", nextJSFixtureHandler())
 	mux.Handle("/svelte/", svelteKitFixtureHandler())
 	mux.Handle("/_app/immutable/", svelteKitFixtureHandler())
+	mux.Handle("/tailwind/", tailwindFixtureHandler())
 	return mux
 }
 
@@ -58,6 +59,26 @@ func svelteKitFixtureHandler() http.Handler {
 			request.URL.Path = "/start.mjs"
 		case "/_app/immutable/nodes/app.mjs":
 			request.URL.Path = "/app.mjs"
+		default:
+			http.NotFound(response, request)
+			return
+		}
+		files.ServeHTTP(response, request)
+	})
+}
+
+func tailwindFixtureHandler() http.Handler {
+	assets, err := fs.Sub(modernWebCompatibilityAssets, "fixtures/tailwind")
+	if err != nil {
+		panic(err)
+	}
+	files := http.FileServer(http.FS(assets))
+	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/tailwind/":
+			request.URL.Path = "/"
+		case "/tailwind/app.css":
+			request.URL.Path = "/app.css"
 		default:
 			http.NotFound(response, request)
 			return
