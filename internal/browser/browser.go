@@ -1763,6 +1763,27 @@ func startRuntime(ctx context.Context, factory runtimemodel.EngineFactory, engin
 		Window:        page.window,
 		ServiceWorker: serviceWorkerHost(ctx, page, client),
 	}
+	if engine == runtimemodel.EngineJavaScript {
+		environment.RefreshStyles = func(refreshContext context.Context) error {
+			styleClient := client
+			if loader, ok := client.(requestLoader); ok {
+				styleClient = pageResourceLoader{
+					loader: loader, siteURL: page.URL, kind: network.RequestStylesheet,
+					engine: string(engine), observer: page.ensureDevTools().ObserveNetwork,
+				}
+			}
+			stylesheet, err := loadStylesWithBase(refreshContext, styleClient, page.URL, pageBaseURL(page), page.Document)
+			if err != nil {
+				return err
+			}
+			page.Stylesheet = stylesheet
+			recomputePageStyles(page, runtimeNow())
+			if onMutation != nil {
+				onMutation()
+			}
+			return nil
+		}
+	}
 	if page.windows != nil {
 		environment.PostMessage = func(target runtimemodel.WindowReference, targetOrigin string, payload []byte) error {
 			return page.windows.post(page.window.Self, target, targetOrigin, payload)

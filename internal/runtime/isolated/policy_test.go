@@ -68,6 +68,47 @@ func TestBrokerForcesModuleFetchPolicy(t *testing.T) {
 	}
 }
 
+func TestBrokerPreservesDynamicClassicScriptPolicy(t *testing.T) {
+	pageURL := parsePolicyURL(t, "https://app.example/page")
+	target := parsePolicyURL(t, "https://cdn.example/classic.js")
+	request := &network.Request{
+		Method: http.MethodGet, URL: target, Kind: network.RequestScript,
+		CORS: true, Credentials: network.CredentialsSameOrigin,
+	}
+	if err := validateBrokeredFetch(request, pageURL, "javascript"); err != nil {
+		t.Fatalf("validateBrokeredFetch() error = %v", err)
+	}
+	if request.Kind != network.RequestScript || !request.CORS || request.Credentials != network.CredentialsSameOrigin || request.Engine != "javascript" {
+		t.Fatalf("classic script broker policy = %#v", request)
+	}
+	for _, invalid := range []struct {
+		request *network.Request
+		engine  string
+	}{
+		{request: &network.Request{Method: http.MethodPost, URL: target, Kind: network.RequestScript}, engine: "javascript"},
+		{request: &network.Request{Method: http.MethodGet, URL: target, Kind: network.RequestScript, Header: http.Header{"X-Test": {"value"}}}, engine: "javascript"},
+		{request: &network.Request{Method: http.MethodGet, URL: target, Kind: network.RequestScript}, engine: "go"},
+	} {
+		if err := validateBrokeredFetch(invalid.request, pageURL, invalid.engine); err == nil {
+			t.Fatalf("invalid classic script request passed: %#v", invalid.request)
+		}
+	}
+}
+
+func TestBrokerPreservesJavaScriptDynamicResourceKinds(t *testing.T) {
+	pageURL := parsePolicyURL(t, "https://app.example/page")
+	target := parsePolicyURL(t, "https://cdn.example/resource")
+	for _, kind := range []network.RequestKind{network.RequestStylesheet, network.RequestImage, network.RequestSubresource} {
+		request := &network.Request{Method: http.MethodGet, URL: target, Kind: kind}
+		if err := validateBrokeredFetch(request, pageURL, "javascript"); err != nil {
+			t.Fatalf("kind %d validation error = %v", kind, err)
+		}
+		if request.Kind != kind || request.Engine != "javascript" || request.Credentials != network.CredentialsInclude {
+			t.Fatalf("kind %d broker policy = %#v", kind, request)
+		}
+	}
+}
+
 func TestWorkerEnvironmentDoesNotInheritBrowserSecrets(t *testing.T) {
 	const secretName = "GROWSE_TEST_BROWSER_SECRET"
 	t.Setenv(secretName, "credential")

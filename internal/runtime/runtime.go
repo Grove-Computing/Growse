@@ -101,6 +101,7 @@ type Environment struct {
 	SessionStorage  *storagecore.Area
 	StorageSource   storagecore.MutationSource
 	OnMutation      func()
+	RefreshStyles   func(context.Context) error
 	RequestFrame    func()
 	FrameScope      func(time.Time, func())
 	ConsoleLog      func(message string)

@@ -91,6 +91,42 @@ func TestBrowserExecutesExternalClassicJavaScriptOnOrdinaryHTTPSPage(t *testing.
 	}
 }
 
+func TestBrowserRefreshesDynamicInlineStyleFromIsolatedJavaScriptWorker(t *testing.T) {
+	pageURL := mustParseURL(t, "https://app.example/dynamic-style.html")
+	loader := &requestRouteLoader{routeLoader: routeLoader{responses: map[string]*network.Response{
+		pageURL.String(): {
+			URL: pageURL, StatusCode: http.StatusOK, ContentType: "text/html",
+			Body: []byte(`<p id="target">styled</p><script>
+				var style = document.createElement("style");
+				style.textContent = "#target { color: red; font-size: 29px; }";
+				document.getElementById("target").appendChild(style);
+			</script>`),
+		},
+	}}}
+	browserState := NewWithEngineFactory(loader, func(engine runtimemodel.Engine) runtimemodel.Runtime { return isolated.New(engine) })
+	t.Cleanup(func() { _ = browserState.Close() })
+	if _, err := browserState.SetEngine(context.Background(), runtimemodel.EngineJavaScript); err != nil {
+		t.Fatal(err)
+	}
+	page, err := browserState.Navigate(context.Background(), pageURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		target, ok := page.Document.GetElementByID("target")
+		if ok {
+			computed := page.ComputedStyles[target.ID]
+			if computed.Color == 0xff0000ff && computed.FontSize == 29 {
+				return
+			}
+		}
+		time.Sleep(time.Millisecond)
+	}
+	target, _ := page.Document.GetElementByID("target")
+	t.Fatalf("isolated dynamic style = %#v, runtimeError=%q", page.ComputedStyles[target.ID], page.RuntimeError)
+}
+
 func TestBrowserBridgesSameOriginIframeDOMThroughIsolatedWorker(t *testing.T) {
 	pageURL := mustParseURL(t, "https://page.example/index.html")
 	sameURL := mustParseURL(t, "https://page.example/frame.html")

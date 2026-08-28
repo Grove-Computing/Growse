@@ -231,6 +231,11 @@ func (state *workerState) load(ctx context.Context, payload json.RawMessage) (an
 			return state.peer.call(runtimeContext, "host.post-message", postMessageRequest{Target: target, TargetOrigin: targetOrigin, Payload: payload}, nil)
 		},
 	}
+	if request.Engine == runtimemodel.EngineJavaScript {
+		environment.RefreshStyles = func(refreshContext context.Context) error {
+			return state.peer.call(refreshContext, "host.styles-refresh", nil, nil)
+		}
+	}
 	if request.ServiceWorker {
 		environment.ServiceWorker = state.serviceWorkerHost(runtimeContext)
 	}
@@ -480,7 +485,7 @@ func (state *workerState) fetch(ctx context.Context, request *network.Request) (
 	}
 	wire := fetchRequest{
 		Method: request.Method, URL: request.URL.String(), Header: request.Header, Body: request.Body,
-		Kind: request.Kind, Engine: request.Engine, Credentials: request.Credentials,
+		Kind: request.Kind, Engine: request.Engine, Credentials: request.Credentials, CORS: request.CORS,
 	}
 	if request.SiteURL != nil {
 		wire.SiteURL = request.SiteURL.String()

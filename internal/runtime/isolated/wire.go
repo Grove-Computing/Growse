@@ -136,6 +136,7 @@ type fetchRequest struct {
 	Kind        network.RequestKind     `json:"kind"`
 	Engine      string                  `json:"engine,omitempty"`
 	Credentials network.CredentialsMode `json:"credentials,omitempty"`
+	CORS        bool                    `json:"cors,omitempty"`
 }
 
 type fetchResponse struct {
