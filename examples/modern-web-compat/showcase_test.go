@@ -58,12 +58,12 @@ func TestModernWebCompatibilityShowcaseRunsEntirelyLocally(t *testing.T) {
 	if goPage.Engine != runtimemodel.EngineGo || fixtureNode(t, goPage, "next-hydration-marker").TextContent() != "not hydrated" {
 		t.Fatal("showcase did not start with SSR-only Go Engine")
 	}
-	jsPage, err := engine.SetEngine(context.Background(), runtimemodel.EngineJavaScript)
+	_, err = engine.SetEngine(context.Background(), runtimemodel.EngineJavaScript)
 	if err != nil {
 		t.Fatal(err)
 	}
 	waitForFixtureText(t, engine, mutations, "next-hydration-marker", "hydrated")
-	jsPage = engine.Page()
+	jsPage := engine.Page()
 	if len(jsPage.Fonts) != 1 || !jsPage.Fonts[0].Decoded {
 		t.Fatalf("showcase Web Font = %+v errors=%v", jsPage.Fonts, jsPage.FontErrors)
 	}

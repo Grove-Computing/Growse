@@ -18,14 +18,14 @@ func TestTailwindFixtureAppliesModernUtilitiesToGeometryAndPaint(t *testing.T) {
 	engine := browser.New(network.NewClientWithLimits(server.Client(), 4<<20))
 	defer engine.Close()
 
-	page, err := engine.Navigate(context.Background(), server.URL+"/tailwind/")
+	_, err := engine.Navigate(context.Background(), server.URL+"/tailwind/")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !engine.UpdateViewport(1024, 720) {
 		t.Fatal("wide viewport was not applied")
 	}
-	page = engine.Page()
+	page := engine.Page()
 	root := fixtureNode(t, page, "tailwind-root")
 	grid := fixtureNode(t, page, "tailwind-grid")
 	card := fixtureNode(t, page, "tailwind-card")
