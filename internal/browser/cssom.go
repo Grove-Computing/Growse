@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"strconv"
+	"strings"
 
 	"github.com/Grove-Computing/Growse/internal/dom"
 	layoutengine "github.com/Grove-Computing/Growse/internal/layout"
@@ -63,7 +64,16 @@ func cssomProperties(computed stylemodel.ComputedStyle, width, height float32) m
 	result := map[string]string{
 		"display": displayCSS(computed.Display), "position": positionCSS(computed.Position),
 		"visibility": visibilityCSS(computed.Visibility), "box-sizing": boxSizingCSS(computed.BoxSizing),
-		"font-size": px(computed.FontSize), "font-weight": strconv.Itoa(computed.FontWeight), "line-height": px(computed.LineHeight),
+		"font-size": px(computed.FontSize), "font-weight": strconv.Itoa(computed.FontWeight), "font-family": strings.Join(computed.FontFamilies, ", "),
+		"font-style": computed.FontStyle, "font-stretch": computed.FontStretch, "line-height": px(computed.LineHeight),
+		"text-align": textAlignCSS(computed.TextAlign), "text-transform": textTransformCSS(computed.TextTransform), "text-indent": lengthPercentageCSS(computed.TextIndent),
+		"letter-spacing": spacingCSS(computed.LetterSpacing), "word-spacing": spacingCSS(computed.WordSpacing),
+		"word-break": wordBreakCSS(computed.WordBreak), "overflow-wrap": overflowWrapCSS(computed.OverflowWrap),
+		"vertical-align": verticalAlignCSS(computed.VerticalAlign), "text-overflow": textOverflowCSS(computed.TextOverflow),
+		"object-fit": objectFitCSS(computed.ObjectFit), "object-position": lengthPercentageCSS(computed.ObjectPosition.X) + " " + lengthPercentageCSS(computed.ObjectPosition.Y),
+		"list-style-type": listStyleTypeCSS(computed.ListStyleType), "list-style-position": listStylePositionCSS(computed.ListStylePosition), "list-style-image": listStyleImageCSS(computed.ListStyleImage),
+		"appearance": appearanceCSS(computed.Appearance), "accent-color": accentColorCSS(computed), "cursor": cursorCSS(computed.Cursor),
+		"filter": filterListCSS(computed.Filters), "backdrop-filter": filterListCSS(computed.BackdropFilters), "mix-blend-mode": blendModeCSS(computed.MixBlendMode),
 		"color": cssColor(computed.Color), "background-color": cssColor(computed.BackgroundColor),
 		"opacity": numberCSS(computed.Opacity), "z-index": strconv.Itoa(computed.ZIndex),
 		"width": px(computedWidth), "height": px(computedHeight), "overflow-x": overflowCSS(computed.OverflowX), "overflow-y": overflowCSS(computed.OverflowY),
@@ -78,6 +88,155 @@ func cssomProperties(computed stylemodel.ComputedStyle, width, height float32) m
 		result[name] = value
 	}
 	return result
+}
+
+func textAlignCSS(value stylemodel.TextAlign) string {
+	values := [...]string{"start", "end", "left", "right", "center", "justify"}
+	if int(value) < len(values) {
+		return values[value]
+	}
+	return "start"
+}
+
+func textTransformCSS(value stylemodel.TextTransform) string {
+	values := [...]string{"none", "uppercase", "lowercase", "capitalize"}
+	if int(value) < len(values) {
+		return values[value]
+	}
+	return "none"
+}
+
+func wordBreakCSS(value stylemodel.WordBreak) string {
+	values := [...]string{"normal", "break-all", "keep-all"}
+	if int(value) < len(values) {
+		return values[value]
+	}
+	return "normal"
+}
+
+func overflowWrapCSS(value stylemodel.OverflowWrap) string {
+	values := [...]string{"normal", "break-word", "anywhere"}
+	if int(value) < len(values) {
+		return values[value]
+	}
+	return "normal"
+}
+
+func spacingCSS(value float32) string {
+	if value == 0 {
+		return "normal"
+	}
+	return px(value)
+}
+
+func verticalAlignCSS(value stylemodel.VerticalAlign) string {
+	values := [...]string{"baseline", "sub", "super", "middle", "text-top", "text-bottom", "top", "bottom", ""}
+	if value.Kind == stylemodel.VerticalAlignLength {
+		return px(value.Value)
+	}
+	if int(value.Kind) < len(values) {
+		return values[value.Kind]
+	}
+	return "baseline"
+}
+
+func textOverflowCSS(value stylemodel.TextOverflow) string {
+	if value == stylemodel.TextOverflowEllipsis {
+		return "ellipsis"
+	}
+	return "clip"
+}
+
+func objectFitCSS(value stylemodel.ObjectFit) string {
+	values := [...]string{"fill", "contain", "cover", "none", "scale-down"}
+	if int(value) < len(values) {
+		return values[value]
+	}
+	return "fill"
+}
+
+func listStyleTypeCSS(value stylemodel.ListStyleType) string {
+	values := [...]string{"disc", "circle", "square", "decimal", "none"}
+	if int(value) < len(values) {
+		return values[value]
+	}
+	return "disc"
+}
+
+func listStylePositionCSS(value stylemodel.ListStylePosition) string {
+	if value == stylemodel.ListStyleInside {
+		return "inside"
+	}
+	return "outside"
+}
+func listStyleImageCSS(value string) string {
+	if value == "" {
+		return "none"
+	}
+	return `url("` + value + `")`
+}
+func appearanceCSS(value stylemodel.Appearance) string {
+	if value == stylemodel.AppearanceNone {
+		return "none"
+	}
+	return "auto"
+}
+func accentColorCSS(value stylemodel.ComputedStyle) string {
+	if value.AccentColorAuto {
+		return "auto"
+	}
+	return cssColor(value.AccentColor)
+}
+
+func cursorCSS(value stylemodel.Cursor) string {
+	values := [...]string{"auto", "default", "pointer", "text", "crosshair", "move", "grab", "grabbing", "not-allowed", "wait", "progress", "col-resize", "row-resize"}
+	if int(value) < len(values) {
+		return values[value]
+	}
+	return "auto"
+}
+
+func blendModeCSS(value stylemodel.BlendMode) string {
+	values := [...]string{"normal", "multiply", "screen", "overlay", "darken", "lighten"}
+	if int(value) < len(values) {
+		return values[value]
+	}
+	return "normal"
+}
+
+func filterListCSS(filters []stylemodel.Filter) string {
+	if len(filters) == 0 {
+		return "none"
+	}
+	parts := make([]string, 0, len(filters))
+	for _, filter := range filters {
+		switch filter.Kind {
+		case stylemodel.FilterBlur:
+			parts = append(parts, "blur("+px(filter.Radius)+")")
+		case stylemodel.FilterBrightness:
+			parts = append(parts, "brightness("+numberCSS(filter.Amount)+")")
+		case stylemodel.FilterContrast:
+			parts = append(parts, "contrast("+numberCSS(filter.Amount)+")")
+		case stylemodel.FilterGrayscale:
+			parts = append(parts, "grayscale("+numberCSS(filter.Amount)+")")
+		case stylemodel.FilterHueRotate:
+			parts = append(parts, "hue-rotate("+numberCSS(filter.Angle)+"deg)")
+		case stylemodel.FilterInvert:
+			parts = append(parts, "invert("+numberCSS(filter.Amount)+")")
+		case stylemodel.FilterOpacity:
+			parts = append(parts, "opacity("+numberCSS(filter.Amount)+")")
+		case stylemodel.FilterSaturate:
+			parts = append(parts, "saturate("+numberCSS(filter.Amount)+")")
+		case stylemodel.FilterSepia:
+			parts = append(parts, "sepia("+numberCSS(filter.Amount)+")")
+		case stylemodel.FilterDropShadow:
+			parts = append(parts, fmt.Sprintf("drop-shadow(%s %s %s %s)", px(filter.Shadow.OffsetX), px(filter.Shadow.OffsetY), px(filter.Shadow.Blur), cssColor(filter.Shadow.Color)))
+		}
+	}
+	if len(parts) == 0 {
+		return "none"
+	}
+	return strings.Join(parts, " ")
 }
 
 func px(value float32) string { return numberCSS(value) + "px" }
@@ -138,10 +297,10 @@ func overflowCSS(value stylemodel.Overflow) string {
 
 func lengthPercentageCSS(value stylemodel.LengthPercentage) string {
 	if value.Percentage != 0 && value.Pixels != 0 {
-		return fmt.Sprintf("calc(%s%% + %s)", numberCSS(value.Percentage*100), px(value.Pixels))
+		return fmt.Sprintf("calc(%s%% + %s)", numberCSS(value.Percentage), px(value.Pixels))
 	}
 	if value.Percentage != 0 {
-		return numberCSS(value.Percentage*100) + "%"
+		return numberCSS(value.Percentage) + "%"
 	}
 	return px(value.Pixels)
 }

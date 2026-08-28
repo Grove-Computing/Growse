@@ -77,3 +77,31 @@ func TestResolveLengthRejectsInvalidCalcDimensions(t *testing.T) {
 		}
 	}
 }
+
+func TestResolveLengthSupportsMathFunctionsAndDynamicViewportUnits(t *testing.T) {
+	context := LengthContext{
+		FontSize: 16, RootFontSize: 16, ViewportWidth: 1000, ViewportHeight: 600,
+		PercentageBase: 400, ContainerWidth: 300, ContainerHeight: 200,
+	}
+	tests := []struct {
+		value string
+		want  float32
+	}{
+		{"min(50%, 250px)", 200},
+		{"max(10cqw, calc(20px + 5cqw))", 35},
+		{"clamp(100px, calc(50% + 10px), 180px)", 180},
+		{"calc(min(20dvw, 250px) - max(2svw, 10px))", 180},
+		{"10lvh", 60},
+	}
+	for _, test := range tests {
+		resolved, ok := ResolveLength(test.value, context)
+		if !ok || math.Abs(float64(resolved.Resolve(context.PercentageBase)-test.want)) > 0.001 {
+			t.Errorf("ResolveLength(%q) = %#v, %t; want %v", test.value, resolved, ok, test.want)
+		}
+	}
+	for _, invalid := range []string{"min(1px, 2)", "clamp(1px, 2px)", "max(1px, nanpx)", "clamp(1px, calc(1px / 0), 2px)"} {
+		if _, ok := ResolveLength(invalid, context); ok {
+			t.Errorf("ResolveLength(%q) was valid", invalid)
+		}
+	}
+}

@@ -420,10 +420,10 @@ func (e *engine) collectFlexItems(container *dom.Node, axis flexAxis, availableM
 
 func (e *engine) flexIntrinsicSizes(node *dom.Node, style blockStyle, axis flexAxis, availableMain, width, height float32, heightDefinite bool) (float32, float32, float32) {
 	text := normalizeWhitespace(e.inlineText(node))
-	textWidth, textHeight, _ := measureText(text, style.fontSize, style.bold)
+	textWidth, textHeight, _ := measureStyledText(text, style)
 	minTextWidth := float32(0)
 	for _, word := range strings.Fields(text) {
-		wordWidth, _, _ := measureText(word, style.fontSize, style.bold)
+		wordWidth, _, _ := measureStyledText(word, style)
 		minTextWidth = max(minTextWidth, wordWidth)
 	}
 	if textHeight <= 0 {

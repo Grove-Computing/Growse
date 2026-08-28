@@ -229,10 +229,7 @@ func (state *frameLoadState) buildPage(ctx context.Context, response *network.Re
 		pageStore.Close()
 		return nil, fmt.Errorf("load iframe styles: %w", err)
 	}
-	computed := style.ComputeWithEnvironment(document, stylesheet, style.InteractionState{}, style.Environment{
-		ViewportWidth: defaultFrameWidth, ViewportHeight: defaultFrameHeight, RootFontSize: 16, ResolutionDPI: 96,
-		ColorScheme: "light", Hover: true, Pointer: "fine", ReducedMotion: state.reducedMotion,
-	})
+	computed := computeStableStyles(document, stylesheet, style.InteractionState{}, defaultFrameWidth, defaultFrameHeight, state.reducedMotion)
 	backgroundImages, backgroundErrors := loadBackgroundImages(ctx, imageResources, computed)
 	var scripts []Script
 	var scriptErrors []string

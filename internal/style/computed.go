@@ -291,6 +291,171 @@ const (
 	WhiteSpacePreLine
 )
 
+// TextAlign controls inline content alignment in a line box.
+type TextAlign uint8
+
+const (
+	TextAlignStart TextAlign = iota
+	TextAlignEnd
+	TextAlignLeft
+	TextAlignRight
+	TextAlignCenter
+	TextAlignJustify
+)
+
+// TextTransform controls the case transformation applied before shaping.
+type TextTransform uint8
+
+const (
+	TextTransformNone TextTransform = iota
+	TextTransformUppercase
+	TextTransformLowercase
+	TextTransformCapitalize
+)
+
+// WordBreak controls emergency break opportunities inside words.
+type WordBreak uint8
+
+const (
+	WordBreakNormal WordBreak = iota
+	WordBreakBreakAll
+	WordBreakKeepAll
+)
+
+// OverflowWrap controls whether an otherwise unbreakable word may wrap.
+type OverflowWrap uint8
+
+const (
+	OverflowWrapNormal OverflowWrap = iota
+	OverflowWrapBreakWord
+	OverflowWrapAnywhere
+)
+
+// VerticalAlignKind identifies the inline-axis alignment mode.
+type VerticalAlignKind uint8
+
+const (
+	VerticalAlignBaseline VerticalAlignKind = iota
+	VerticalAlignSub
+	VerticalAlignSuper
+	VerticalAlignMiddle
+	VerticalAlignTextTop
+	VerticalAlignTextBottom
+	VerticalAlignTop
+	VerticalAlignBottom
+	VerticalAlignLength
+)
+
+// VerticalAlign stores either a keyword or a computed length. Positive
+// lengths raise the inline box, as defined by CSS vertical-align.
+type VerticalAlign struct {
+	Kind  VerticalAlignKind
+	Value float32
+}
+
+// TextOverflow controls the marker painted for clipped single-line text.
+type TextOverflow uint8
+
+const (
+	TextOverflowClip TextOverflow = iota
+	TextOverflowEllipsis
+)
+
+// ObjectFit selects how replaced content maps into its content box.
+type ObjectFit uint8
+
+const (
+	ObjectFitFill ObjectFit = iota
+	ObjectFitContain
+	ObjectFitCover
+	ObjectFitNone
+	ObjectFitScaleDown
+)
+
+// ListStyleType is the bounded marker subset used by framework fixtures.
+type ListStyleType uint8
+
+const (
+	ListStyleDisc ListStyleType = iota
+	ListStyleCircle
+	ListStyleSquare
+	ListStyleDecimal
+	ListStyleNone
+)
+
+// ListStylePosition controls whether a marker is inside or outside the item.
+type ListStylePosition uint8
+
+const (
+	ListStyleOutside ListStylePosition = iota
+	ListStyleInside
+)
+
+// Appearance controls native form-control chrome.
+type Appearance uint8
+
+const (
+	AppearanceAuto Appearance = iota
+	AppearanceNone
+)
+
+// Cursor is the implemented platform cursor subset.
+type Cursor uint8
+
+const (
+	CursorAuto Cursor = iota
+	CursorDefault
+	CursorPointer
+	CursorText
+	CursorCrosshair
+	CursorMove
+	CursorGrab
+	CursorGrabbing
+	CursorNotAllowed
+	CursorWait
+	CursorProgress
+	CursorColResize
+	CursorRowResize
+)
+
+// FilterKind identifies a supported bounded CSS filter function.
+type FilterKind uint8
+
+const (
+	FilterBlur FilterKind = iota
+	FilterBrightness
+	FilterContrast
+	FilterGrayscale
+	FilterHueRotate
+	FilterInvert
+	FilterOpacity
+	FilterSaturate
+	FilterSepia
+	FilterDropShadow
+)
+
+// Filter is one validated filter function. Amount is a normalized scalar,
+// Angle uses degrees, Radius uses CSS px, and Shadow is used by drop-shadow.
+type Filter struct {
+	Kind   FilterKind
+	Amount float32
+	Angle  float32
+	Radius float32
+	Shadow Shadow
+}
+
+// BlendMode is the fixture-supported mix-blend-mode subset.
+type BlendMode uint8
+
+const (
+	BlendNormal BlendMode = iota
+	BlendMultiply
+	BlendScreen
+	BlendOverlay
+	BlendDarken
+	BlendLighten
+)
+
 // Overflow controls clipping and scroll-container creation on one axis.
 type Overflow uint8
 
@@ -376,11 +541,38 @@ type ComputedStyle struct {
 	BackgroundLayers    []BackgroundLayer
 	FontSize            float32
 	FontWeight          int
+	FontFamilies        []string
+	FontStyle           string
+	FontStretch         string
+	FontFaceIndex       int
 	LineHeight          float32
 	WhiteSpace          WhiteSpace
+	TextAlign           TextAlign
+	TextTransform       TextTransform
+	TextIndent          LengthPercentage
+	LetterSpacing       float32
+	WordSpacing         float32
+	WordBreak           WordBreak
+	OverflowWrap        OverflowWrap
+	VerticalAlign       VerticalAlign
+	TextOverflow        TextOverflow
+	ObjectFit           ObjectFit
+	ObjectPosition      BackgroundPosition
+	ListStyleType       ListStyleType
+	ListStylePosition   ListStylePosition
+	ListStyleImage      string
+	Appearance          Appearance
+	AccentColor         uint32
+	AccentColorAuto     bool
+	Cursor              Cursor
+	Filters             []Filter
+	BackdropFilters     []Filter
+	MixBlendMode        BlendMode
 	OverflowX           Overflow
 	OverflowY           Overflow
 	Display             Display
+	ContainerType       ContainerType
+	ContainerName       string
 	Visibility          Visibility
 	FlexDirection       FlexDirection
 	FlexWrap            FlexWrap
@@ -440,6 +632,14 @@ type ComputedStyle struct {
 	AfterContent        string
 	CustomProperties    map[string]string
 }
+
+// ContainerType identifies size containment exposed to @container queries.
+type ContainerType uint8
+
+const (
+	ContainerTypeNormal ContainerType = iota
+	ContainerTypeInlineSize
+)
 
 // AnimationDirection controls iteration playback direction.
 type AnimationDirection uint8
@@ -501,9 +701,11 @@ type Map map[dom.NodeID]ComputedStyle
 
 // InteractionState contains transient browser state used by selector matching.
 type InteractionState struct {
-	Hovered  map[dom.NodeID]bool
-	Focused  dom.NodeID
-	Document *dom.Document
+	Hovered      map[dom.NodeID]bool
+	Focused      dom.NodeID
+	FocusVisible bool
+	Scope        dom.NodeID
+	Document     *dom.Document
 }
 
 // For returns a node's computed style and whether one was calculated.

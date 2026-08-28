@@ -89,6 +89,9 @@ func (state *stylesheetLoadState) loadContent(ctx context.Context, content []byt
 				)
 			}
 		}
+		if importRule.Layered {
+			imported.NestUnderLayer(importRule.Layer)
+		}
 		combined.Append(imported)
 	}
 	combined.Append(parsed)

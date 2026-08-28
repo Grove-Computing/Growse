@@ -16,6 +16,7 @@ func TestParseColorSupportsCSSColorLevel3(t *testing.T) {
 		{"rgb(255, 128, 0)", 0xff8000ff},
 		{"rgb(100%, 50%, 0%)", 0xff8000ff},
 		{"rgba(255, 0, 0, 0.5)", 0xff000080},
+		{"rgba(1, 2, 3, 50%)", 0x01020380},
 		{"hsl(120, 100%, 50%)", 0x00ff00ff},
 		{"hsla(240, 100%, 50%, 0.25)", 0x0000ff40},
 		{"hsl(-120, 100%, 50%)", 0x0000ffff},
@@ -37,7 +38,7 @@ func TestParseColorSupportsCSSColorLevel3(t *testing.T) {
 func TestParseColorRejectsInvalidValues(t *testing.T) {
 	for _, value := range []string{
 		"rebeccapurple", "#12", "#ggg", "rgb(1, 2)", "rgb(10%, 2, 3)",
-		"rgba(1, 2, 3, 50%)", "hsl(10, 20, 30%)", "hsl(nan, 20%, 30%)",
+		"hsl(10, 20, 30%)", "hsl(nan, 20%, 30%)",
 	} {
 		if _, ok := parseColor(value, 0); ok {
 			t.Fatalf("parseColor(%q) was valid", value)

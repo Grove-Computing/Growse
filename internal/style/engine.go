@@ -21,6 +21,8 @@ type winner struct {
 	inline      bool
 	specificity [3]int
 	order       [2]int
+	layer       string
+	layerOrder  int
 }
 
 // Compute applies UA defaults, inheritance, selector matching and cascade.
@@ -30,15 +32,21 @@ func Compute(document *dom.Document, stylesheet *css.Stylesheet) Map {
 
 // Environment contains rendering metrics needed during value computation.
 type Environment struct {
-	ViewportWidth  float32
-	ViewportHeight float32
-	RootFontSize   float32
-	ResolutionDPI  float32
-	ColorScheme    string
-	Hover          bool
-	Pointer        string
-	ReducedMotion  bool
+	ViewportWidth   float32
+	ViewportHeight  float32
+	RootFontSize    float32
+	ResolutionDPI   float32
+	ColorScheme     string
+	Hover           bool
+	Pointer         string
+	ReducedMotion   bool
+	ContainerSizes  map[dom.NodeID]ContainerSize
+	ContainerWidth  float32
+	ContainerHeight float32
 }
+
+// ContainerSize is the previous layout iteration's content-box size.
+type ContainerSize struct{ Width, Height float32 }
 
 func defaultEnvironment() Environment {
 	return Environment{
@@ -91,8 +99,8 @@ func computeNode(node *dom.Node, parent ComputedStyle, stylesheet *css.Styleshee
 	} else if node.Type == dom.NodeElement {
 		computed = applyUADefaults(node.TagName, computed)
 		computed = applyPresentationalHints(node, computed)
-		computed = applyAuthorRules(node, computed, parent, stylesheet, state, environment)
-		computed = applyGeneratedContent(node, computed, stylesheet, state, environment)
+		computed = applyAuthorRules(node, computed, parent, stylesheet, state, environment, result)
+		computed = applyGeneratedContent(node, computed, stylesheet, state, environment, result)
 		result[node.ID] = computed
 	} else if node.Type == dom.NodeText {
 		result[node.ID] = computed
@@ -101,6 +109,11 @@ func computeNode(node *dom.Node, parent ComputedStyle, stylesheet *css.Styleshee
 	childEnvironment := environment
 	if node.Type == dom.NodeElement && node.TagName == "html" {
 		childEnvironment.RootFontSize = computed.FontSize
+	}
+	if node.Type == dom.NodeElement && computed.ContainerType == ContainerTypeInlineSize {
+		if size, ok := environment.ContainerSizes[node.ID]; ok {
+			childEnvironment.ContainerWidth, childEnvironment.ContainerHeight = size.Width, size.Height
+		}
 	}
 	for _, child := range node.Children {
 		computeNode(child, computed, stylesheet, state, childEnvironment, result)
@@ -127,6 +140,8 @@ func applyPresentationalHints(node *dom.Node, computed ComputedStyle) ComputedSt
 func initialStyle() ComputedStyle {
 	return ComputedStyle{
 		Color: defaultTextColor, BackgroundColor: transparent, FontSize: 16, FontWeight: 400,
+		FontFamilies: []string{"Growse Sans", "sans-serif"}, FontStyle: "normal", FontStretch: "normal", FontFaceIndex: -1,
+		ObjectPosition: BackgroundPosition{X: LengthPercentage{Percentage: 50}, Y: LengthPercentage{Percentage: 50}}, AccentColorAuto: true,
 		BackgroundRepeat: BackgroundRepeat{X: true, Y: true},
 		DecorationColor:  defaultTextColor, Opacity: 1, FlexShrink: 1,
 		ZIndexAuto: true,
@@ -142,7 +157,13 @@ func initialStyle() ComputedStyle {
 func inheritedStyle(parent ComputedStyle) ComputedStyle {
 	computed := ComputedStyle{
 		Color: parent.Color, FontSize: parent.FontSize, FontWeight: parent.FontWeight,
+		FontFamilies: append([]string(nil), parent.FontFamilies...), FontStyle: parent.FontStyle, FontStretch: parent.FontStretch, FontFaceIndex: parent.FontFaceIndex,
 		LineHeight: parent.LineHeight, WhiteSpace: parent.WhiteSpace, Visibility: parent.Visibility,
+		TextAlign: parent.TextAlign, TextTransform: parent.TextTransform, TextIndent: parent.TextIndent,
+		LetterSpacing: parent.LetterSpacing, WordSpacing: parent.WordSpacing, WordBreak: parent.WordBreak, OverflowWrap: parent.OverflowWrap,
+		ListStyleType: parent.ListStyleType, ListStylePosition: parent.ListStylePosition, ListStyleImage: parent.ListStyleImage,
+		AccentColor: parent.AccentColor, AccentColorAuto: parent.AccentColorAuto, Cursor: parent.Cursor,
+		ObjectPosition:  BackgroundPosition{X: LengthPercentage{Percentage: 50}, Y: LengthPercentage{Percentage: 50}},
 		BackgroundColor: transparent, Display: DisplayInline,
 		BackgroundRepeat: BackgroundRepeat{X: true, Y: true},
 		DecorationColor:  parent.Color, Opacity: 1, FlexShrink: 1,
@@ -167,6 +188,9 @@ func applyUADefaults(tag string, computed ComputedStyle) ComputedStyle {
 	switch tag {
 	case "html", "body", "div", "main", "section", "article", "header", "footer", "nav", "form", "ul", "ol", "input":
 		computed.Display = DisplayBlock
+		if tag == "ol" {
+			computed.ListStyleType = ListStyleDecimal
+		}
 	case "h1":
 		computed.Display, computed.FontSize, computed.FontWeight = DisplayBlock, 32, 700
 		computed.Margin = Edges{Top: 12, Bottom: 12}
@@ -202,13 +226,32 @@ func applyUADefaults(tag string, computed ComputedStyle) ComputedStyle {
 	return computed
 }
 
-func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet *css.Stylesheet, state InteractionState, environment Environment) ComputedStyle {
+func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet *css.Stylesheet, state InteractionState, environment Environment, computedAncestors Map) ComputedStyle {
 	if stylesheet == nil {
 		stylesheet = &css.Stylesheet{}
 	}
-	winners := make(map[string]winner)
+	layerOrders := make(map[string]int, len(stylesheet.LayerOrder))
+	for index, layer := range stylesheet.LayerOrder {
+		layerOrders[layer] = index
+	}
+	candidates := make(map[string][]winner)
+	customCandidateCount := 0
+	appendCandidate := func(property string, candidate winner) {
+		if strings.HasPrefix(property, "--") {
+			if len(candidate.value) > css.MaxCustomPropertyValueBytes {
+				return
+			}
+			if _, exists := candidates[property]; !exists {
+				if customCandidateCount >= css.MaxCustomProperties {
+					return
+				}
+				customCandidateCount++
+			}
+		}
+		candidates[property] = append(candidates[property], candidate)
+	}
 	for _, rule := range stylesheet.Rules {
-		if !matchesMediaGroups(rule.Media, environment) {
+		if !matchesMediaGroups(rule.Media, environment) || !matchesSupportsGroups(rule.Supports) || !matchesContainerGroups(node, rule.Containers, computedAncestors, environment) {
 			continue
 		}
 		for _, selector := range rule.Selectors {
@@ -222,12 +265,12 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 				for _, property := range expandedProperties(declaration.Property) {
 					candidate := winner{
 						value: declaration.Value.Raw, source: declaration.Property, important: declaration.Important,
-						specificity: selector.Specificity(), order: [2]int{rule.Order, declarationIndex},
+						specificity: selector.Specificity(), order: [2]int{rule.Order, declarationIndex}, layer: rule.Layer,
 					}
-					current, exists := winners[property]
-					if !exists || outranks(candidate, current) {
-						winners[property] = candidate
+					if rule.Layer != "" {
+						candidate.layerOrder = layerOrders[rule.Layer]
 					}
+					appendCandidate(property, candidate)
 				}
 			}
 		}
@@ -240,11 +283,14 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 					value: declaration.Value.Raw, source: declaration.Property, important: declaration.Important, inline: true,
 					order: [2]int{0, declarationIndex},
 				}
-				current, exists := winners[property]
-				if !exists || outranks(candidate, current) {
-					winners[property] = candidate
-				}
+				appendCandidate(property, candidate)
 			}
+		}
+	}
+	winners := make(map[string]winner, len(candidates))
+	for property, propertyCandidates := range candidates {
+		if selected, ok := selectCascadeWinner(propertyCandidates); ok {
+			winners[property] = selected
 		}
 	}
 	for property, candidate := range winners {
@@ -256,11 +302,14 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 		}
 		computed.ImportantProperties[property] = true
 	}
-	computed.CustomProperties = applyCustomProperties(computed.CustomProperties, winners)
+	propertyContext := LengthContext{FontSize: parent.FontSize, RootFontSize: environment.RootFontSize, ViewportWidth: environment.ViewportWidth, ViewportHeight: environment.ViewportHeight, ContainerWidth: environment.ContainerWidth, ContainerHeight: environment.ContainerHeight}
+	computed.CustomProperties = registeredPropertyBase(parent.CustomProperties, stylesheet, propertyContext)
+	computed.CustomProperties = applyCustomProperties(computed.CustomProperties, winners, stylesheet, propertyContext, parent.CustomProperties)
 	fontContext := LengthContext{
 		FontSize: parent.FontSize, RootFontSize: environment.RootFontSize,
 		ViewportWidth: environment.ViewportWidth, ViewportHeight: environment.ViewportHeight,
 		PercentageBase: parent.FontSize,
+		ContainerWidth: environment.ContainerWidth, ContainerHeight: environment.ContainerHeight,
 	}
 
 	if value, ok := winners["color"]; ok {
@@ -366,6 +415,7 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 	computed = applyBackgroundLayers(computed, parent, winners, computed.CustomProperties, fontContext)
 	if value, ok := winners["font-size"]; ok {
 		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
+			resolved = fontCandidateComponent(value, resolved, "font-size")
 			parseFontSize := func(value string) (float32, bool) {
 				length, valid := ResolveLength(value, fontContext)
 				resolved := length.Resolve(fontContext.PercentageBase)
@@ -376,15 +426,63 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 			}
 		}
 	}
+	if value, ok := winners["font-family"]; ok {
+		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
+			resolved = fontCandidateComponent(value, resolved, "font-family")
+			switch parseGlobalKeyword(resolved) {
+			case globalInherit, globalUnset:
+				computed.FontFamilies = append([]string(nil), parent.FontFamilies...)
+			case globalInitial:
+				computed.FontFamilies = []string{"Growse Sans", "sans-serif"}
+			default:
+				if parsed, valid := parseFontFamilies(resolved); valid {
+					computed.FontFamilies = parsed
+				}
+			}
+		}
+	}
+	if value, ok := winners["font-style"]; ok {
+		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
+			resolved = fontCandidateComponent(value, resolved, "font-style")
+			switch parseGlobalKeyword(resolved) {
+			case globalInherit, globalUnset:
+				computed.FontStyle = parent.FontStyle
+			case globalInitial:
+				computed.FontStyle = "normal"
+			default:
+				if parsed, valid := parseFontStyle(resolved); valid {
+					computed.FontStyle = parsed
+				}
+			}
+		}
+	}
+	if value, ok := winners["font-stretch"]; ok {
+		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
+			resolved = fontCandidateComponent(value, resolved, "font-stretch")
+			switch parseGlobalKeyword(resolved) {
+			case globalInherit, globalUnset:
+				computed.FontStretch = parent.FontStretch
+			case globalInitial:
+				computed.FontStretch = "normal"
+			default:
+				if parsed, valid := parseFontStretch(resolved); valid {
+					computed.FontStretch = parsed
+				}
+			}
+		}
+	}
 	if value, ok := winners["font-weight"]; ok {
 		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
+			resolved = fontCandidateComponent(value, resolved, "font-weight")
 			if parsed, valid := resolveInt(resolved, parent.FontWeight, 400, true, parseFontWeight); valid {
 				computed.FontWeight = parsed
 			}
 		}
 	}
+	computed.FontFaceIndex = selectFontFace(stylesheet, computed.FontFamilies, computed.FontStyle, computed.FontWeight, computed.FontStretch)
 	if value, ok := winners["line-height"]; ok {
 		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
+			resolved = fontCandidateComponent(value, resolved, "line-height")
 			if parsed, valid := resolveLineHeight(resolved, parent.LineHeight, computed.FontSize, fontContext); valid {
 				computed.LineHeight = parsed
 			}
@@ -397,6 +495,8 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 			}
 		}
 	}
+	computed = applyTextProperties(computed, parent, winners, fontContext)
+	computed = applyVisualProperties(computed, parent, winners, fontContext)
 	if value, ok := winners["overflow-x"]; ok {
 		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
 			if parsed, valid := resolveOverflow(resolved, parent.OverflowX); valid {
@@ -442,10 +542,31 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 			}
 		}
 	}
+	if value, ok := winners["container-type"]; ok {
+		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
+			switch strings.ToLower(strings.TrimSpace(resolved)) {
+			case "inline-size":
+				computed.ContainerType = ContainerTypeInlineSize
+			case "normal", "initial", "unset":
+				computed.ContainerType = ContainerTypeNormal
+			}
+		}
+	}
+	if value, ok := winners["container-name"]; ok {
+		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
+			name := strings.TrimSpace(resolved)
+			if name == "none" || name == "initial" || name == "unset" {
+				computed.ContainerName = ""
+			} else if !strings.ContainsAny(name, " \t\r\n/()") {
+				computed.ContainerName = name
+			}
+		}
+	}
 	lengthContext := LengthContext{
 		FontSize: computed.FontSize, RootFontSize: environment.RootFontSize,
 		ViewportWidth: environment.ViewportWidth, ViewportHeight: environment.ViewportHeight,
 		PercentageBase: environment.ViewportWidth,
+		ContainerWidth: environment.ContainerWidth, ContainerHeight: environment.ContainerHeight,
 	}
 	computed.Width = resolveSizeWinner("width", computed.Width, parent.Width, winners, computed.CustomProperties, lengthContext)
 	computed.Height = resolveSizeWinner("height", computed.Height, parent.Height, winners, computed.CustomProperties, lengthContext)
@@ -668,34 +789,102 @@ func resolveOverflow(value string, parent Overflow) (Overflow, bool) {
 	}
 }
 
-func applyCustomProperties(inherited map[string]string, winners map[string]winner) map[string]string {
+func applyCustomProperties(inherited map[string]string, winners map[string]winner, stylesheet *css.Stylesheet, context LengthContext, parentValues map[string]string) map[string]string {
 	result := inherited
+	canStore := func(property string) bool {
+		_, exists := result[property]
+		return exists || len(result) < css.MaxCustomProperties
+	}
 	for property, candidate := range winners {
 		if !strings.HasPrefix(property, "--") {
 			continue
 		}
 		switch parseGlobalKeyword(candidate.value) {
 		case globalInitial:
-			if result != nil {
+			if _, registered := registeredProperty(stylesheet, property); !registered && result != nil {
 				delete(result, property)
 			}
-		case globalInherit, globalUnset:
-			// Custom properties inherit, so the inherited value is retained.
+		case globalInherit:
+			if parentValue, ok := parentValues[property]; ok && canStore(property) {
+				result[property] = parentValue
+			}
+		case globalUnset:
+			if registration, registered := registeredProperty(stylesheet, property); !registered || registration.Inherits {
+				if parentValue, ok := parentValues[property]; ok && canStore(property) {
+					result[property] = parentValue
+				}
+			}
 		default:
+			value := candidate.value
+			if registration, ok := registeredProperty(stylesheet, property); ok {
+				resolved, valid := resolveVariables(value, result)
+				if !valid || !validRegisteredValue(registration.Syntax, resolved, context) {
+					continue
+				}
+				value = resolved
+			}
 			if result == nil {
 				result = make(map[string]string)
 			}
-			result[property] = candidate.value
+			if canStore(property) {
+				result[property] = value
+			}
 		}
 	}
 	return result
 }
 
-func resolveVariables(value string, customProperties map[string]string) (string, bool) {
-	return resolveVariablesWithStack(value, customProperties, make(map[string]bool))
+func registeredPropertyBase(inherited map[string]string, stylesheet *css.Stylesheet, context LengthContext) map[string]string {
+	result := make(map[string]string, min(len(inherited), css.MaxCustomProperties))
+	for name, value := range inherited {
+		if len(result) >= css.MaxCustomProperties {
+			break
+		}
+		result[name] = value
+	}
+	if stylesheet == nil {
+		return result
+	}
+	for _, registration := range stylesheet.Properties {
+		if _, exists := result[registration.Name]; !exists && len(result) >= css.MaxCustomProperties {
+			continue
+		}
+		if !registration.Valid || !validRegisteredValue(registration.Syntax, registration.InitialValue, context) {
+			continue
+		}
+		if registration.Inherits {
+			if _, ok := result[registration.Name]; ok {
+				continue
+			}
+		}
+		result[registration.Name] = registration.InitialValue
+	}
+	return result
 }
 
-func resolveVariablesWithStack(value string, customProperties map[string]string, resolving map[string]bool) (string, bool) {
+func registeredProperty(stylesheet *css.Stylesheet, name string) (css.PropertyRule, bool) {
+	if stylesheet == nil {
+		return css.PropertyRule{}, false
+	}
+	for index := len(stylesheet.Properties) - 1; index >= 0; index-- {
+		if stylesheet.Properties[index].Name == name && stylesheet.Properties[index].Valid {
+			return stylesheet.Properties[index], true
+		}
+	}
+	return css.PropertyRule{}, false
+}
+
+func resolveVariables(value string, customProperties map[string]string) (string, bool) {
+	if len(value) > css.MaxCustomPropertyValueBytes {
+		return "", false
+	}
+	return resolveVariablesWithStack(value, customProperties, make(map[string]bool), 0)
+}
+
+func resolveVariablesWithStack(value string, customProperties map[string]string, resolving map[string]bool, depth int) (string, bool) {
+	if depth > css.MaxCSSFunctionDepth || len(value) > css.MaxCustomPropertyValueBytes {
+		return "", false
+	}
 	var result strings.Builder
 	for position := 0; position < len(value); {
 		functionStart := findVarFunction(value, position)
@@ -718,7 +907,7 @@ func resolveVariablesWithStack(value string, customProperties map[string]string,
 		resolved := ""
 		if found && !resolving[name] {
 			resolving[name] = true
-			resolved, found = resolveVariablesWithStack(replacement, customProperties, resolving)
+			resolved, found = resolveVariablesWithStack(replacement, customProperties, resolving, depth+1)
 			delete(resolving, name)
 		} else {
 			found = false
@@ -727,15 +916,18 @@ func resolveVariablesWithStack(value string, customProperties map[string]string,
 			if !hasFallback {
 				return "", false
 			}
-			resolved, found = resolveVariablesWithStack(fallback, customProperties, resolving)
+			resolved, found = resolveVariablesWithStack(fallback, customProperties, resolving, depth+1)
 			if !found {
 				return "", false
 			}
 		}
 		result.WriteString(resolved)
+		if result.Len() > css.MaxCustomPropertyValueBytes {
+			return "", false
+		}
 		position = end + 1
 	}
-	return result.String(), true
+	return result.String(), result.Len() <= css.MaxCustomPropertyValueBytes
 }
 
 func findVarFunction(value string, start int) int {
@@ -848,7 +1040,7 @@ func isCSSNameByte(value byte) bool {
 		value >= 'A' && value <= 'Z' || value >= '0' && value <= '9' || value >= 0x80
 }
 
-func applyGeneratedContent(node *dom.Node, computed ComputedStyle, stylesheet *css.Stylesheet, state InteractionState, environment Environment) ComputedStyle {
+func applyGeneratedContent(node *dom.Node, computed ComputedStyle, stylesheet *css.Stylesheet, state InteractionState, environment Environment, computedAncestors Map) ComputedStyle {
 	if stylesheet == nil {
 		return computed
 	}
@@ -859,10 +1051,13 @@ func applyGeneratedContent(node *dom.Node, computed ComputedStyle, stylesheet *c
 		{css.PseudoElementBefore, &computed.BeforeContent},
 		{css.PseudoElementAfter, &computed.AfterContent},
 	} {
-		var selected winner
-		found := false
+		layerOrders := make(map[string]int, len(stylesheet.LayerOrder))
+		for index, layer := range stylesheet.LayerOrder {
+			layerOrders[layer] = index
+		}
+		var candidates []winner
 		for _, rule := range stylesheet.Rules {
-			if !matchesMediaGroups(rule.Media, environment) {
+			if !matchesMediaGroups(rule.Media, environment) || !matchesSupportsGroups(rule.Supports) || !matchesContainerGroups(node, rule.Containers, computedAncestors, environment) {
 				continue
 			}
 			for _, selector := range rule.Selectors {
@@ -875,14 +1070,16 @@ func applyGeneratedContent(node *dom.Node, computed ComputedStyle, stylesheet *c
 					}
 					candidate := winner{
 						value: declaration.Value.Raw, source: declaration.Property, important: declaration.Important,
-						specificity: selector.Specificity(), order: [2]int{rule.Order, declarationIndex},
+						specificity: selector.Specificity(), order: [2]int{rule.Order, declarationIndex}, layer: rule.Layer,
 					}
-					if !found || outranks(candidate, selected) {
-						selected, found = candidate, true
+					if rule.Layer != "" {
+						candidate.layerOrder = layerOrders[rule.Layer]
 					}
+					candidates = append(candidates, candidate)
 				}
 			}
 		}
+		selected, found := selectCascadeWinner(candidates)
 		if found {
 			resolved, valid := resolveVariables(selected.value, computed.CustomProperties)
 			if !valid {
@@ -915,8 +1112,41 @@ func expandedProperties(property string) []string {
 	switch property {
 	case "margin", "padding":
 		return []string{property + "-top", property + "-right", property + "-bottom", property + "-left"}
+	case "margin-block", "padding-block":
+		prefix := strings.TrimSuffix(property, "-block")
+		return []string{prefix + "-top", prefix + "-bottom"}
+	case "margin-inline", "padding-inline":
+		prefix := strings.TrimSuffix(property, "-inline")
+		return []string{prefix + "-left", prefix + "-right"}
+	case "margin-block-start", "padding-block-start":
+		return []string{strings.TrimSuffix(property, "-block-start") + "-top"}
+	case "margin-block-end", "padding-block-end":
+		return []string{strings.TrimSuffix(property, "-block-end") + "-bottom"}
+	case "margin-inline-start", "padding-inline-start":
+		return []string{strings.TrimSuffix(property, "-inline-start") + "-left"}
+	case "margin-inline-end", "padding-inline-end":
+		return []string{strings.TrimSuffix(property, "-inline-end") + "-right"}
 	case "border":
 		return borderPropertyKeys("")
+	case "border-block":
+		return borderLogicalKeys([]string{"top", "bottom"}, "")
+	case "border-inline":
+		return borderLogicalKeys([]string{"left", "right"}, "")
+	case "border-block-width", "border-block-style", "border-block-color":
+		return borderLogicalKeys([]string{"top", "bottom"}, strings.TrimPrefix(property, "border-block-"))
+	case "border-inline-width", "border-inline-style", "border-inline-color":
+		return borderLogicalKeys([]string{"left", "right"}, strings.TrimPrefix(property, "border-inline-"))
+	case "border-block-start", "border-block-end", "border-inline-start", "border-inline-end":
+		side := map[string]string{"border-block-start": "top", "border-block-end": "bottom", "border-inline-start": "left", "border-inline-end": "right"}[property]
+		return borderLogicalKeys([]string{side}, "")
+	case "border-block-start-width", "border-block-start-style", "border-block-start-color",
+		"border-block-end-width", "border-block-end-style", "border-block-end-color",
+		"border-inline-start-width", "border-inline-start-style", "border-inline-start-color",
+		"border-inline-end-width", "border-inline-end-style", "border-inline-end-color":
+		parts := strings.Split(property, "-")
+		axis, edge, component := parts[1], parts[2], parts[3]
+		side := map[string]string{"block-start": "top", "block-end": "bottom", "inline-start": "left", "inline-end": "right"}[axis+"-"+edge]
+		return borderLogicalKeys([]string{side}, component)
 	case "border-width", "border-style", "border-color":
 		component := strings.TrimPrefix(property, "border-")
 		return []string{"border-top-" + component, "border-right-" + component, "border-bottom-" + component, "border-left-" + component}
@@ -926,10 +1156,24 @@ func expandedProperties(property string) []string {
 		return []string{"overflow-x", "overflow-y"}
 	case "border-radius":
 		return []string{"border-top-left-radius", "border-top-right-radius", "border-bottom-right-radius", "border-bottom-left-radius"}
+	case "border-start-start-radius":
+		return []string{"border-top-left-radius"}
+	case "border-start-end-radius":
+		return []string{"border-top-right-radius"}
+	case "border-end-start-radius":
+		return []string{"border-bottom-left-radius"}
+	case "border-end-end-radius":
+		return []string{"border-bottom-right-radius"}
 	case "flex-flow":
 		return []string{"flex-direction", "flex-wrap"}
 	case "flex":
 		return []string{"flex-grow", "flex-shrink", "flex-basis"}
+	case "font":
+		return []string{"font-style", "font-weight", "font-stretch", "font-size", "line-height", "font-family"}
+	case "list-style":
+		return []string{"list-style-type", "list-style-position", "list-style-image"}
+	case "-webkit-appearance":
+		return []string{"appearance"}
 	case "gap":
 		return []string{"row-gap", "column-gap"}
 	case "place-content":
@@ -952,6 +1196,18 @@ func expandedProperties(property string) []string {
 		return []string{"left"}
 	case "inset-inline-end":
 		return []string{"right"}
+	case "inline-size":
+		return []string{"width"}
+	case "block-size":
+		return []string{"height"}
+	case "min-inline-size":
+		return []string{"min-width"}
+	case "min-block-size":
+		return []string{"min-height"}
+	case "max-inline-size":
+		return []string{"max-width"}
+	case "max-block-size":
+		return []string{"max-height"}
 	case "outline":
 		return []string{"outline-width", "outline-style", "outline-color"}
 	case "transition":
@@ -961,6 +1217,20 @@ func expandedProperties(property string) []string {
 	default:
 		return []string{property}
 	}
+}
+
+func borderLogicalKeys(sides []string, component string) []string {
+	components := []string{"width", "style", "color"}
+	if component != "" {
+		components = []string{component}
+	}
+	result := make([]string, 0, len(sides)*len(components))
+	for _, side := range sides {
+		for _, part := range components {
+			result = append(result, "border-"+side+"-"+part)
+		}
+	}
+	return result
 }
 
 func borderPropertyKeys(_ string) []string {
@@ -994,7 +1264,11 @@ func applyEdges(edges, parent Edges, prefix string, winners map[string]winner, c
 		case globalInitial, globalUnset:
 			parsed, valid = 0, true
 		default:
-			parsed, valid = parseEdgeValue(resolved, index, context)
+			component, componentValid := logicalEdgeComponent(candidate.source, resolved, index, prefix)
+			if !componentValid {
+				continue
+			}
+			parsed, valid = parseEdgeValue(component, index, context)
 			if prefix == "padding" && parsed < 0 {
 				valid = false
 			}
@@ -1069,7 +1343,8 @@ func setBorderComponent(target *BorderSide, component string, source BorderSide)
 }
 
 func borderComponentValue(source, component string, side int, value string) (string, bool) {
-	if source == "border" || source == "border-top" || source == "border-right" || source == "border-bottom" || source == "border-left" {
+	if source == "border" || source == "border-top" || source == "border-right" || source == "border-bottom" || source == "border-left" ||
+		source == "border-block" || source == "border-inline" || source == "border-block-start" || source == "border-block-end" || source == "border-inline-start" || source == "border-inline-end" {
 		parts, ok := splitCSSSpaceSeparated(value)
 		if !ok {
 			return "", false
@@ -1106,7 +1381,55 @@ func borderComponentValue(source, component string, side int, value string) (str
 		}
 		return edgePart(parts, side), true
 	}
+	if strings.HasPrefix(source, "border-block-") || strings.HasPrefix(source, "border-inline-") {
+		parts, ok := splitCSSSpaceSeparated(value)
+		if !ok || len(parts) < 1 || len(parts) > 2 {
+			return "", false
+		}
+		if source == "border-block-width" || source == "border-block-style" || source == "border-block-color" {
+			if side == 2 && len(parts) == 2 {
+				return parts[1], true
+			}
+			return parts[0], true
+		}
+		if source == "border-inline-width" || source == "border-inline-style" || source == "border-inline-color" {
+			if side == 1 && len(parts) == 2 {
+				return parts[1], true
+			}
+			return parts[0], true
+		}
+	}
 	return value, true
+}
+
+func logicalEdgeComponent(source, value string, side int, prefix string) (string, bool) {
+	if source == prefix {
+		return value, true
+	}
+	parts, ok := splitCSSSpaceSeparated(value)
+	if !ok || len(parts) == 0 {
+		return "", false
+	}
+	switch source {
+	case prefix + "-block":
+		if len(parts) > 2 || side != 0 && side != 2 {
+			return "", false
+		}
+		if side == 2 && len(parts) == 2 {
+			return parts[1], true
+		}
+		return parts[0], true
+	case prefix + "-inline":
+		if len(parts) > 2 || side != 1 && side != 3 {
+			return "", false
+		}
+		if side == 1 && len(parts) == 2 {
+			return parts[1], true
+		}
+		return parts[0], true
+	default:
+		return value, true
+	}
 }
 
 func edgePart(parts []string, side int) string {
@@ -1407,7 +1730,29 @@ func matchesPseudoClass(node *dom.Node, pseudo css.PseudoClass, state Interactio
 	case css.PseudoNthLastOfType:
 		return matchesNth(elementPosition(node, true, true), pseudo.A, pseudo.B)
 	case css.PseudoNot:
-		return pseudo.Negation != nil && !matchesCompound(node, *pseudo.Negation, state)
+		if len(pseudo.Selectors) == 0 && pseudo.Negation != nil {
+			return !matchesCompound(node, *pseudo.Negation, state)
+		}
+		for _, selector := range pseudo.Selectors {
+			if matches(node, selector, state) {
+				return false
+			}
+		}
+		return len(pseudo.Selectors) != 0
+	case css.PseudoIs, css.PseudoWhere:
+		for _, selector := range pseudo.Selectors {
+			if matches(node, selector, state) {
+				return true
+			}
+		}
+		return false
+	case css.PseudoHas:
+		return matchesHas(node, pseudo.Selectors, state)
+	case css.PseudoScope, css.PseudoRelativeScope:
+		if state.Scope != 0 {
+			return state.Scope == node.ID
+		}
+		return node.Parent != nil && node.Parent.Type == dom.NodeDocument
 	case css.PseudoLink:
 		_, hasReference := node.Attribute("href")
 		return (node.TagName == "a" || node.TagName == "area") && hasReference
@@ -1429,9 +1774,98 @@ func matchesPseudoClass(node *dom.Node, pseudo css.PseudoClass, state Interactio
 		return forms.WillValidate(node) && forms.ValidateControl(state.Document, node).Valid()
 	case css.PseudoInvalid:
 		return forms.WillValidate(node) && !forms.ValidateControl(state.Document, node).Valid()
+	case css.PseudoDefined:
+		return !strings.Contains(node.TagName, "-")
+	case css.PseudoPlaceholderShown:
+		_, placeholder := node.Attribute("placeholder")
+		return placeholder && (node.TagName == "textarea" || node.TagName == "input") && forms.CurrentValue(node) == ""
+	case css.PseudoReadOnly:
+		return !isReadWrite(node)
+	case css.PseudoReadWrite:
+		return isReadWrite(node)
+	case css.PseudoRequired:
+		_, required := node.Attribute("required")
+		return supportsRequired(node) && required
+	case css.PseudoOptional:
+		_, required := node.Attribute("required")
+		return supportsRequired(node) && !required
+	case css.PseudoFocusVisible:
+		return state.Focused == node.ID && (state.FocusVisible || forms.IsEditableTextControl(node))
+	case css.PseudoFocusWithin:
+		return focusWithin(node, state)
 	default:
 		return false
 	}
+}
+
+func isReadWrite(node *dom.Node) bool {
+	if node == nil || forms.Disabled(node) {
+		return false
+	}
+	if forms.IsEditableTextControl(node) {
+		return !forms.ReadOnly(node)
+	}
+	editable, exists := node.Attribute("contenteditable")
+	return exists && (strings.EqualFold(strings.TrimSpace(editable), "true") || editable == "")
+}
+
+func supportsRequired(node *dom.Node) bool {
+	if node == nil {
+		return false
+	}
+	return node.TagName == "input" || node.TagName == "select" || node.TagName == "textarea"
+}
+
+func focusWithin(node *dom.Node, state InteractionState) bool {
+	if node == nil || state.Focused == 0 || state.Document == nil {
+		return false
+	}
+	focused, ok := state.Document.NodeByID(state.Focused)
+	if !ok {
+		return false
+	}
+	for current := focused; current != nil; current = current.Parent {
+		if current == node {
+			return true
+		}
+	}
+	return false
+}
+
+func matchesHas(anchor *dom.Node, selectors []css.Selector, state InteractionState) bool {
+	if anchor == nil || len(selectors) == 0 {
+		return false
+	}
+	root := anchor
+	for root.Parent != nil && root.Parent.Type != dom.NodeDocumentFragment {
+		root = root.Parent
+	}
+	state.Scope = anchor.ID
+	visited := 0
+	var walk func(*dom.Node) bool
+	walk = func(candidate *dom.Node) bool {
+		if candidate == nil || visited >= 50_000 {
+			return false
+		}
+		visited++
+		if candidate.Type == dom.NodeElement {
+			for _, selector := range selectors {
+				if matches(candidate, selector, state) {
+					return true
+				}
+			}
+		}
+		if candidate.Type == dom.NodeElement && candidate.TagName == "template" {
+			return false
+		}
+		for _, child := range candidate.Children {
+			if walk(child) {
+				return true
+			}
+		}
+		return false
+	}
+	return walk(root)
 }
 
 func isFormControl(node *dom.Node) bool {
@@ -1536,6 +1970,19 @@ func outranks(candidate, current winner) bool {
 	if candidate.inline != current.inline {
 		return candidate.inline
 	}
+	candidateLayered, currentLayered := candidate.layer != "", current.layer != ""
+	if candidateLayered != currentLayered {
+		if candidate.important {
+			return candidateLayered
+		}
+		return !candidateLayered
+	}
+	if candidateLayered && candidate.layerOrder != current.layerOrder {
+		if candidate.important {
+			return candidate.layerOrder < current.layerOrder
+		}
+		return candidate.layerOrder > current.layerOrder
+	}
 	for index := range candidate.specificity {
 		if candidate.specificity[index] != current.specificity[index] {
 			return candidate.specificity[index] > current.specificity[index]
@@ -1545,6 +1992,38 @@ func outranks(candidate, current winner) bool {
 		return candidate.order[0] > current.order[0]
 	}
 	return candidate.order[1] >= current.order[1]
+}
+
+func selectCascadeWinner(candidates []winner) (winner, bool) {
+	remaining := append([]winner(nil), candidates...)
+	for len(remaining) != 0 {
+		selectedIndex := 0
+		for index := 1; index < len(remaining); index++ {
+			if outranks(remaining[index], remaining[selectedIndex]) {
+				selectedIndex = index
+			}
+		}
+		selected := remaining[selectedIndex]
+		if !strings.EqualFold(strings.TrimSpace(selected.value), "revert-layer") {
+			return selected, true
+		}
+		filtered := remaining[:0]
+		for _, candidate := range remaining {
+			if sameCascadeLayer(candidate, selected) {
+				continue
+			}
+			filtered = append(filtered, candidate)
+		}
+		remaining = filtered
+	}
+	return winner{}, false
+}
+
+func sameCascadeLayer(left, right winner) bool {
+	if left.inline || right.inline {
+		return left.inline == right.inline
+	}
+	return left.layer == right.layer
 }
 
 func parseFontWeight(value string) (int, bool) {

@@ -36,6 +36,22 @@ func parseImportRule(value string) (ImportRule, bool) {
 		return ImportRule{}, false
 	}
 	result := ImportRule{URL: location}
+	if strings.EqualFold(rest, "layer") || strings.HasPrefix(strings.ToLower(rest), "layer(") {
+		result.Layered = true
+		if !strings.EqualFold(rest, "layer") {
+			end, ok := parenthesisEnd(rest, len("layer"))
+			if !ok {
+				return ImportRule{}, false
+			}
+			result.Layer = strings.TrimSpace(rest[len("layer("):end])
+			if !validLayerName(result.Layer) {
+				return ImportRule{}, false
+			}
+			rest = strings.TrimSpace(rest[end+1:])
+		} else {
+			rest = ""
+		}
+	}
 	if rest != "" {
 		result.Media = parseMediaQueryList(rest)
 		if len(result.Media) == 0 {

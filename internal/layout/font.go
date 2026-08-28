@@ -3,6 +3,7 @@ package layout
 import (
 	"math"
 	"sync"
+	"unicode"
 
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/gofont/gobold"
@@ -38,6 +39,44 @@ func measureText(text string, size float32, bold bool) (width, height, ascent fl
 	metrics := face.Metrics()
 	return float32(font.MeasureString(face, text)) / 64,
 		float32(metrics.Height) / 64, float32(metrics.Ascent) / 64
+}
+
+func measureStyledText(text string, style blockStyle) (width, height, ascent float32) {
+	width, height, ascent = measureText(text, style.fontSize, style.bold)
+	runes := []rune(text)
+	if len(runes) > 1 {
+		width += float32(len(runes)-1) * style.letterSpacing
+	}
+	for _, character := range runes {
+		if unicode.IsSpace(character) {
+			width += style.wordSpacing
+		}
+	}
+	width *= fontStretchScale(style.fontStretch)
+	return max(width, float32(0)), height, ascent
+}
+
+func fontStretchScale(value string) float32 {
+	switch value {
+	case "ultra-condensed":
+		return .5
+	case "extra-condensed":
+		return .625
+	case "condensed":
+		return .75
+	case "semi-condensed":
+		return .875
+	case "semi-expanded":
+		return 1.125
+	case "expanded":
+		return 1.25
+	case "extra-expanded":
+		return 1.5
+	case "ultra-expanded":
+		return 2
+	default:
+		return 1
+	}
 }
 
 func usedLineMetrics(run inlineRun) (height, ascent float32) {

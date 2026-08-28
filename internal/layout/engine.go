@@ -1,6 +1,7 @@
 package layout
 
 import (
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -23,6 +24,9 @@ const (
 type blockStyle struct {
 	fontSize            float32
 	bold                bool
+	fontFamilies        []string
+	fontStyle           string
+	fontStretch         string
 	color               uint32
 	background          uint32
 	image               stylemodel.BackgroundImage
@@ -58,6 +62,27 @@ type blockStyle struct {
 	maxHeight           stylemodel.SizeValue
 	lineHeight          float32
 	whiteSpace          stylemodel.WhiteSpace
+	textAlign           stylemodel.TextAlign
+	textTransform       stylemodel.TextTransform
+	textIndent          stylemodel.LengthPercentage
+	letterSpacing       float32
+	wordSpacing         float32
+	wordBreak           stylemodel.WordBreak
+	overflowWrap        stylemodel.OverflowWrap
+	verticalAlign       stylemodel.VerticalAlign
+	textOverflow        stylemodel.TextOverflow
+	objectFit           stylemodel.ObjectFit
+	objectPosition      stylemodel.BackgroundPosition
+	listStyleType       stylemodel.ListStyleType
+	listStylePosition   stylemodel.ListStylePosition
+	listStyleImage      string
+	appearance          stylemodel.Appearance
+	accentColor         uint32
+	accentColorAuto     bool
+	cursor              stylemodel.Cursor
+	filters             []stylemodel.Filter
+	backdropFilters     []stylemodel.Filter
+	mixBlendMode        stylemodel.BlendMode
 	overflowX           stylemodel.Overflow
 	overflowY           stylemodel.Overflow
 	flexDirection       stylemodel.FlexDirection
@@ -299,6 +324,9 @@ func (e *engine) addInput(node *dom.Node, style blockStyle, x, width, containing
 		InputType:   inputType,
 		Disabled:    forms.Disabled(node),
 		ReadOnly:    forms.ReadOnly(node),
+		Appearance:  style.appearance,
+		AccentColor: resolvedAccentColor(style),
+		Cursor:      style.cursor,
 		X:           x,
 		Y:           e.y,
 		Width:       usedWidth,
@@ -342,7 +370,7 @@ func (e *engine) addSubmitButton(node *dom.Node, style blockStyle, x, width, con
 	if label == "" {
 		label = "Submit"
 	}
-	textWidth, textHeight, _ := measureText(label, style.fontSize, style.bold)
+	textWidth, textHeight, _ := measureStyledText(label, style)
 	naturalWidth := textWidth + style.padding.Left + style.padding.Right + style.border.Left.Width + style.border.Right.Width
 	naturalHeight := textHeight + style.padding.Top + style.padding.Bottom + style.border.Top.Width + style.border.Bottom.Width
 	usedWidth, usedHeight := max(buttonWidth, naturalWidth), max(inputHeight, naturalHeight)
@@ -355,6 +383,7 @@ func (e *engine) addSubmitButton(node *dom.Node, style blockStyle, x, width, con
 	e.tree.Boxes = append(e.tree.Boxes, Box{
 		Order: e.nextOrder(), StackingID: e.stackingID, NodeID: node.ID, Tag: node.TagName,
 		Text: label, Button: true, Disabled: forms.Disabled(node),
+		Appearance: style.appearance, AccentColor: resolvedAccentColor(style), Cursor: style.cursor,
 		X: x, Y: e.y, Width: max(usedWidth, float32(1)), Height: max(usedHeight, float32(1)), Color: style.color,
 		Clip: cloneRect(e.clip), Clips: cloneClipRegions(e.clips), Opacity: e.opacity * style.opacity,
 		Transform: stylemodel.IdentityMatrix(), Hidden: style.hidden,
@@ -377,6 +406,7 @@ func (e *engine) addCheckable(node *dom.Node, style blockStyle, x, width, contai
 	e.tree.Boxes = append(e.tree.Boxes, Box{
 		Order: e.nextOrder(), StackingID: e.stackingID, NodeID: node.ID, Tag: node.TagName,
 		Checkable: true, Checked: state.Checked, InputType: state.Kind,
+		Appearance: style.appearance, AccentColor: resolvedAccentColor(style), Cursor: style.cursor,
 		Disabled: forms.Disabled(node),
 		X:        x, Y: e.y, Width: max(usedWidth, float32(1)), Height: max(usedHeight, float32(1)), Color: style.color,
 		Clip: cloneRect(e.clip), Clips: cloneClipRegions(e.clips), Opacity: e.opacity * style.opacity,
@@ -408,6 +438,7 @@ func (e *engine) addSelect(node *dom.Node, style blockStyle, x, width, containin
 	e.tree.Boxes = append(e.tree.Boxes, Box{
 		Order: e.nextOrder(), StackingID: e.stackingID, NodeID: node.ID, Tag: node.TagName,
 		Text: label, Select: true, Options: options, Selected: selected,
+		Appearance: style.appearance, AccentColor: resolvedAccentColor(style), Cursor: style.cursor,
 		Disabled: forms.Disabled(node),
 		X:        x, Y: e.y, Width: usedWidth, Height: usedHeight, Color: style.color,
 		Clip: cloneRect(e.clip), Clips: cloneClipRegions(e.clips), Opacity: e.opacity * style.opacity,
@@ -420,9 +451,10 @@ func (e *engine) addSelect(node *dom.Node, style blockStyle, x, width, containin
 func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containingHeight float32, heightDefinite bool, topMargin *float32) {
 	geometryBoxStart, geometryDecorationStart := len(e.tree.Boxes), len(e.tree.Decorations)
 	previousStackingID := e.stackingID
-	if style.opacity < 1 || len(style.transform) != 0 || style.layoutPosition != stylemodel.PositionStatic && !style.zIndexAuto {
+	effectRequested := len(style.filters) != 0 || len(style.backdropFilters) != 0 || style.mixBlendMode != stylemodel.BlendNormal
+	if style.opacity < 1 || len(style.transform) != 0 || effectRequested || style.layoutPosition != stylemodel.PositionStatic && !style.zIndexAuto {
 		e.stackingID = len(e.tree.StackingContexts)
-		e.tree.StackingContexts = append(e.tree.StackingContexts, StackingContext{Parent: previousStackingID, NodeID: node.ID, ZIndex: style.zIndex, Order: e.order, Opacity: style.opacity, Offscreen: style.opacity < 1})
+		e.tree.StackingContexts = append(e.tree.StackingContexts, StackingContext{Parent: previousStackingID, NodeID: node.ID, ZIndex: style.zIndex, Order: e.order, Opacity: style.opacity, Offscreen: style.opacity < 1 || effectRequested})
 	}
 	previousOpacity := e.opacity
 	e.opacity *= style.opacity
@@ -463,7 +495,7 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 	}
 	boxTop := e.y
 	decorationIndex := -1
-	if style.background != 0 || style.image.Kind != stylemodel.BackgroundImageNone || hasVisibleBorder(style.border) || len(style.boxShadows) != 0 || style.outline.Style != stylemodel.BorderNone {
+	if style.background != 0 || style.image.Kind != stylemodel.BackgroundImageNone || hasVisibleBorder(style.border) || len(style.boxShadows) != 0 || style.outline.Style != stylemodel.BorderNone || effectRequested {
 		decorationIndex = len(e.tree.Decorations)
 		e.tree.Decorations = append(e.tree.Decorations, Decoration{
 			Order: e.nextOrder(), StackingID: e.stackingID, NodeID: node.ID,
@@ -473,6 +505,7 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 			Clips:  cloneClipRegions(e.clips),
 			Border: style.border, Opacity: e.opacity, BoxShadows: append([]stylemodel.Shadow(nil), style.boxShadows...),
 			Outline: style.outline, OutlineOffset: style.outlineOffset,
+			Filters: append([]stylemodel.Filter(nil), style.filters...), BackdropFilters: append([]stylemodel.Filter(nil), style.backdropFilters...), BlendMode: style.mixBlendMode, Cursor: style.cursor,
 			Transform: stylemodel.IdentityMatrix(),
 			Hidden:    style.hidden,
 		})
@@ -516,7 +549,8 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 	} else if style.display == stylemodel.DisplayGrid {
 		e.addGridChildren(node, style, contentX, contentWidth, childContainingHeight, declaredHeightDefinite)
 	} else {
-		inlineRuns := e.generatedRuns(node, true, style)
+		inlineRuns := e.listMarkerRuns(node, style)
+		inlineRuns = append(inlineRuns, e.generatedRuns(node, true, style)...)
 		previousBlock := false
 		previousBottomMargin := float32(0)
 		flushInline := func() {
@@ -605,6 +639,14 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 	if decorationIndex >= 0 {
 		e.tree.Decorations[decorationIndex].Height = outerHeight
 		e.tree.Decorations[decorationIndex].Radius = resolveBorderRadii(style.radius, outerWidth, outerHeight)
+		if effectRequested && !stylemodel.FilterSurfaceAllowed(outerWidth, outerHeight) {
+			e.tree.Decorations[decorationIndex].Filters = nil
+			e.tree.Decorations[decorationIndex].BackdropFilters = nil
+			e.tree.Decorations[decorationIndex].BlendMode = stylemodel.BlendNormal
+			if e.stackingID > 0 && e.stackingID < len(e.tree.StackingContexts) && style.opacity >= 1 {
+				e.tree.StackingContexts[e.stackingID].Offscreen = false
+			}
+		}
 	}
 	if e.positionCB != nil && style.layoutPosition != stylemodel.PositionStatic {
 		e.positionCB.Height = max(outerHeight-verticalBorder, float32(0))
@@ -798,6 +840,47 @@ func (e *engine) generatedRuns(node *dom.Node, before bool, style blockStyle) []
 	return e.generatedRunsWithOpacity(node, before, style, e.opacity)
 }
 
+func (e *engine) listMarkerRuns(node *dom.Node, style blockStyle) []inlineRun {
+	if node == nil || node.TagName != "li" || style.listStyleType == stylemodel.ListStyleNone {
+		return nil
+	}
+	marker := "•"
+	switch style.listStyleType {
+	case stylemodel.ListStyleCircle:
+		marker = "◦"
+	case stylemodel.ListStyleSquare:
+		marker = "▪"
+	case stylemodel.ListStyleDecimal:
+		index := 1
+		if node.Parent != nil {
+			index = 0
+			for _, sibling := range node.Parent.Children {
+				if sibling.Type == dom.NodeElement && sibling.TagName == "li" {
+					index++
+				}
+				if sibling == node {
+					break
+				}
+			}
+			if index == 0 {
+				index = 1
+			}
+		}
+		marker = strconv.Itoa(index) + "."
+	}
+	if style.listStyleImage != "" {
+		marker = "◆"
+	}
+	return []inlineRun{{nodeID: node.ID, tag: "::marker", text: marker + " ", style: style, opacity: e.opacity}}
+}
+
+func resolvedAccentColor(style blockStyle) uint32 {
+	if !style.accentColorAuto {
+		return style.accentColor
+	}
+	return 0x0969daff
+}
+
 func (e *engine) generatedRunsWithOpacity(node *dom.Node, before bool, style blockStyle, opacity float32) []inlineRun {
 	computed, ok := e.computed.For(node)
 	if !ok {
@@ -840,19 +923,65 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 	var lineText strings.Builder
 	var usedWidth, lineHeight, lineAscent float32
 	var pendingSpace *inlineRun
+	lineX, lineWidth := x, width
+	firstLine := true
+	if indent := container.textIndent.Resolve(width); indent != 0 {
+		lineX += indent
+		lineWidth = max(width-indent, float32(1))
+	}
 
-	flushLine := func() {
+	flushLine := func(final bool) {
 		if len(lineRuns) == 0 {
 			return
+		}
+		if final && container.textOverflow == stylemodel.TextOverflowEllipsis &&
+			container.whiteSpace == stylemodel.WhiteSpaceNowrap && container.overflowX != stylemodel.OverflowVisible && usedWidth > lineWidth {
+			lineRuns, usedWidth = truncateTextRuns(lineRuns, lineWidth)
+			lineText.Reset()
+			for _, run := range lineRuns {
+				if run.Tag != "::marker" {
+					lineText.WriteString(run.Text)
+				}
+			}
 		}
 		if lineHeight == 0 {
 			lineHeight = container.fontSize * 1.4
 		}
+		for index := range lineRuns {
+			lineRuns[index].Baseline = e.y + lineAscent - lineRuns[index].VerticalOffset
+		}
+		alignmentOffset := float32(0)
+		free := max(lineWidth-usedWidth, float32(0))
+		switch container.textAlign {
+		case stylemodel.TextAlignEnd, stylemodel.TextAlignRight:
+			alignmentOffset = free
+		case stylemodel.TextAlignCenter:
+			alignmentOffset = free / 2
+		case stylemodel.TextAlignJustify:
+			if !final {
+				spaces := 0
+				for _, run := range lineRuns {
+					spaces += strings.Count(run.Text, " ")
+				}
+				if spaces > 0 {
+					extra := free / float32(spaces)
+					for index := range lineRuns {
+						count := strings.Count(lineRuns[index].Text, " ")
+						lineRuns[index].WordSpacing += extra
+						lineRuns[index].Width += float32(count) * extra
+					}
+					usedWidth = lineWidth
+				}
+			}
+		}
 		e.tree.Boxes = append(e.tree.Boxes, Box{
 			Order: e.nextOrder(), StackingID: e.stackingID,
 			NodeID: nodeID, Tag: tag, Text: lineText.String(),
-			X: x, Y: e.y, Width: width, Height: lineHeight,
+			X: lineX + alignmentOffset, Y: e.y, Width: max(lineWidth-alignmentOffset, usedWidth), Height: lineHeight,
 			FontSize: container.fontSize, Bold: container.bold, Color: container.color,
+			FontFamilies: append([]string(nil), container.fontFamilies...), FontStyle: container.fontStyle, FontStretch: container.fontStretch,
+			LetterSpacing: container.letterSpacing, WordSpacing: container.wordSpacing,
+			Cursor:  container.cursor,
 			Opacity: e.opacity, Decoration: container.decoration, DecorationColor: container.decorationColor,
 			TextShadows: append([]stylemodel.Shadow(nil), container.textShadows...),
 			Transform:   stylemodel.IdentityMatrix(),
@@ -861,7 +990,7 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 			Baseline:    e.y + lineAscent, Clip: cloneRect(e.clip), Clips: cloneClipRegions(e.clips),
 		})
 		for _, placement := range flexPlacements {
-			placementX, placementY := x+placement.widthOffset, e.y+lineAscent-placement.baseline
+			placementX, placementY := lineX+alignmentOffset+placement.widthOffset, e.y+lineAscent-placement.baseline
 			if placement.grid {
 				e.renderInlineGrid(placement, placementX, placementY)
 			} else {
@@ -875,36 +1004,44 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 		lineText.Reset()
 		usedWidth, lineHeight, lineAscent, pendingSpace = 0, 0, 0, nil
 		flexPlacements = flexPlacements[:0]
+		if firstLine {
+			firstLine = false
+			lineX, lineWidth = x, width
+		}
 	}
 
 	appendPiece := func(run inlineRun, text string, pieceWidth float32) {
 		textRun := TextRun{
 			NodeID: run.nodeID, Tag: run.tag, Text: text, Width: pieceWidth,
 			FontSize: run.style.fontSize, Bold: run.style.bold,
+			FontFamilies: append([]string(nil), run.style.fontFamilies...), FontStyle: run.style.fontStyle, FontStretch: run.style.fontStretch,
+			LetterSpacing: run.style.letterSpacing, WordSpacing: run.style.wordSpacing, VerticalOffset: verticalAlignOffset(run.style),
 			Color: run.style.color, Background: run.style.background,
 			Decoration: run.style.decoration, DecorationColor: run.style.decorationColor, Opacity: run.opacity,
 			TextShadows: append([]stylemodel.Shadow(nil), run.style.textShadows...),
 		}
 		runHeight, runAscent := usedLineMetrics(run)
-		textRun.Baseline = e.y + runAscent
+		textRun.Baseline = e.y + runAscent - textRun.VerticalOffset
 		if len(lineRuns) > 0 && sameTextStyle(lineRuns[len(lineRuns)-1], textRun) {
 			lineRuns[len(lineRuns)-1].Text += text
 			lineRuns[len(lineRuns)-1].Width += pieceWidth
 		} else {
 			lineRuns = append(lineRuns, textRun)
 		}
-		lineText.WriteString(text)
+		if run.tag != "::marker" {
+			lineText.WriteString(text)
+		}
 		usedWidth += pieceWidth
-		height := runHeight
+		height := runHeight + absFloat32(textRun.VerticalOffset)
 		if height > lineHeight {
 			lineHeight = height
 		}
-		if runAscent > lineAscent {
-			lineAscent = runAscent
+		if adjusted := runAscent + max(textRun.VerticalOffset, float32(0)); adjusted > lineAscent {
+			lineAscent = adjusted
 		}
 	}
 
-	for _, token := range tokenizeInlineRuns(runs) {
+	for _, token := range tokenizeInlineRuns(transformInlineRuns(runs)) {
 		if token.atomic {
 			if token.flex {
 				token.width, token.height, token.baseline = e.resolveInlineFlexSize(token.node, token.style, width)
@@ -913,8 +1050,8 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 			} else {
 				token.width, token.height = resolveAtomicSize(token, width)
 			}
-			if usedWidth > 0 && usedWidth+token.width > width && wrapsWhitespace(token.style.whiteSpace) {
-				flushLine()
+			if usedWidth > 0 && usedWidth+token.width > lineWidth && wrapsWhitespace(token.style.whiteSpace) {
+				flushLine(false)
 			}
 			if token.flex || token.grid {
 				token.widthOffset = usedWidth
@@ -926,14 +1063,14 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 			continue
 		}
 		if token.text == "\n" {
-			flushLine()
+			flushLine(false)
 			continue
 		}
 		if token.text == " " {
 			if preservesSpaces(token.style.whiteSpace) {
-				spaceWidth, _, _ := measureText(" ", token.style.fontSize, token.style.bold)
-				if usedWidth > 0 && usedWidth+spaceWidth > width && wrapsWhitespace(token.style.whiteSpace) {
-					flushLine()
+				spaceWidth, _, _ := measureStyledText(" ", token.style)
+				if usedWidth > 0 && usedWidth+spaceWidth > lineWidth && wrapsWhitespace(token.style.whiteSpace) {
+					flushLine(false)
 				}
 				appendPiece(token, " ", spaceWidth)
 				continue
@@ -947,11 +1084,11 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 
 		spaceWidth := float32(0)
 		if pendingSpace != nil {
-			spaceWidth, _, _ = measureText(" ", pendingSpace.style.fontSize, pendingSpace.style.bold)
+			spaceWidth, _, _ = measureStyledText(" ", pendingSpace.style)
 		}
-		wordWidth, _, _ := measureText(token.text, token.style.fontSize, token.style.bold)
-		if usedWidth > 0 && usedWidth+spaceWidth+wordWidth > width && wrapsWhitespace(token.style.whiteSpace) {
-			flushLine()
+		wordWidth, _, _ := measureStyledText(token.text, token.style)
+		if usedWidth > 0 && usedWidth+spaceWidth+wordWidth > lineWidth && wrapsWhitespace(token.style.whiteSpace) {
+			flushLine(false)
 			spaceWidth = 0
 		}
 		if pendingSpace != nil && usedWidth > 0 {
@@ -959,14 +1096,20 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 		}
 		pendingSpace = nil
 
+		breakInside := token.style.wordBreak == stylemodel.WordBreakBreakAll || token.style.overflowWrap == stylemodel.OverflowWrapAnywhere ||
+			token.style.overflowWrap == stylemodel.OverflowWrapBreakWord && wordWidth > lineWidth
+		if !breakInside || !wrapsWhitespace(token.style.whiteSpace) {
+			appendPiece(token, token.text, wordWidth)
+			continue
+		}
 		remaining := []rune(token.text)
 		for len(remaining) > 0 {
-			available := width - usedWidth
-			mWidth, _, _ := measureText("m", token.style.fontSize, token.style.bold)
+			available := lineWidth - usedWidth
+			mWidth, _, _ := measureStyledText("m", token.style)
 			characters := int(available / max(mWidth, float32(1)))
 			if characters < 1 {
 				if wrapsWhitespace(token.style.whiteSpace) && usedWidth > 0 {
-					flushLine()
+					flushLine(false)
 					continue
 				}
 				characters = 1
@@ -978,15 +1121,15 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 				characters = len(remaining)
 			}
 			piece := string(remaining[:characters])
-			pieceWidth, _, _ := measureText(piece, token.style.fontSize, token.style.bold)
+			pieceWidth, _, _ := measureStyledText(piece, token.style)
 			appendPiece(token, piece, pieceWidth)
 			remaining = remaining[characters:]
 			if len(remaining) > 0 && wrapsWhitespace(token.style.whiteSpace) {
-				flushLine()
+				flushLine(false)
 			}
 		}
 	}
-	flushLine()
+	flushLine(true)
 }
 
 func isBlockLevelDisplay(display stylemodel.Display) bool {
@@ -1041,7 +1184,7 @@ func tokenizeInlineRuns(runs []inlineRun) []inlineRun {
 func resolveAtomicSize(run inlineRun, containingWidth float32) (float32, float32) {
 	horizontal := run.style.padding.Left + run.style.padding.Right + run.style.border.Left.Width + run.style.border.Right.Width
 	vertical := run.style.padding.Top + run.style.padding.Bottom + run.style.border.Top.Width + run.style.border.Bottom.Width
-	width, _, _ := measureText(normalizeWhitespace(run.text), run.style.fontSize, run.style.bold)
+	width, _, _ := measureStyledText(normalizeWhitespace(run.text), run.style)
 	if resolved, ok := resolveSize(run.style.width, containingWidth, true); ok {
 		width = resolved
 	}
@@ -1061,7 +1204,110 @@ func resolveAtomicSize(run inlineRun, containingWidth float32) (float32, float32
 func sameTextStyle(left, right TextRun) bool {
 	return left.NodeID == right.NodeID && left.Tag == right.Tag && left.FontSize == right.FontSize &&
 		left.Bold == right.Bold && left.Color == right.Color && left.Background == right.Background &&
+		left.FontStyle == right.FontStyle && left.FontStretch == right.FontStretch && strings.Join(left.FontFamilies, "\x00") == strings.Join(right.FontFamilies, "\x00") &&
+		left.LetterSpacing == right.LetterSpacing && left.WordSpacing == right.WordSpacing && left.VerticalOffset == right.VerticalOffset &&
 		left.Decoration == right.Decoration && left.DecorationColor == right.DecorationColor && left.Opacity == right.Opacity
+}
+
+func transformInlineRuns(runs []inlineRun) []inlineRun {
+	result := append([]inlineRun(nil), runs...)
+	for index := range result {
+		switch result[index].style.textTransform {
+		case stylemodel.TextTransformUppercase:
+			result[index].text = strings.ToUpper(result[index].text)
+		case stylemodel.TextTransformLowercase:
+			result[index].text = strings.ToLower(result[index].text)
+		case stylemodel.TextTransformCapitalize:
+			start := true
+			result[index].text = strings.Map(func(character rune) rune {
+				if unicode.IsSpace(character) || unicode.IsPunct(character) {
+					start = true
+					return character
+				}
+				if start {
+					start = false
+					return unicode.ToUpper(character)
+				}
+				return character
+			}, result[index].text)
+		}
+	}
+	return result
+}
+
+func verticalAlignOffset(style blockStyle) float32 {
+	switch style.verticalAlign.Kind {
+	case stylemodel.VerticalAlignLength:
+		return style.verticalAlign.Value
+	case stylemodel.VerticalAlignSuper:
+		return style.fontSize * .35
+	case stylemodel.VerticalAlignSub:
+		return -style.fontSize * .2
+	case stylemodel.VerticalAlignMiddle:
+		return style.fontSize * .15
+	case stylemodel.VerticalAlignTextTop, stylemodel.VerticalAlignTop:
+		return style.fontSize * .2
+	case stylemodel.VerticalAlignTextBottom, stylemodel.VerticalAlignBottom:
+		return -style.fontSize * .2
+	default:
+		return 0
+	}
+}
+
+func truncateTextRuns(runs []TextRun, width float32) ([]TextRun, float32) {
+	if len(runs) == 0 {
+		return runs, 0
+	}
+	last := runs[len(runs)-1]
+	ellipsisWidth := measureTextRun("…", last)
+	limit := max(width-ellipsisWidth, float32(0))
+	result := make([]TextRun, 0, len(runs))
+	used := float32(0)
+	for _, run := range runs {
+		kept := run
+		kept.Text, kept.Width = "", 0
+		for _, character := range run.Text {
+			piece := string(character)
+			pieceWidth := measureTextRun(piece, run)
+			if kept.Text != "" {
+				pieceWidth += run.LetterSpacing
+			}
+			if used+pieceWidth > limit {
+				break
+			}
+			kept.Text += piece
+			kept.Width += pieceWidth
+			used += pieceWidth
+		}
+		if kept.Text != "" {
+			result = append(result, kept)
+		}
+		if kept.Text != run.Text {
+			break
+		}
+	}
+	marker := last
+	marker.Text, marker.Width = "…", ellipsisWidth
+	if len(result) > 0 && sameTextStyle(result[len(result)-1], marker) {
+		result[len(result)-1].Text += marker.Text
+		result[len(result)-1].Width += marker.Width
+	} else {
+		result = append(result, marker)
+	}
+	return result, min(used+ellipsisWidth, width)
+}
+
+func measureTextRun(text string, run TextRun) float32 {
+	style := blockStyle{fontSize: run.FontSize, bold: run.Bold, fontStretch: run.FontStretch, letterSpacing: run.LetterSpacing, wordSpacing: run.WordSpacing}
+	width, _, _ := measureStyledText(text, style)
+	return width
+}
+
+func absFloat32(value float32) float32 {
+	if value < 0 {
+		return -value
+	}
+	return value
 }
 
 func preservesSpaces(value stylemodel.WhiteSpace) bool {
@@ -1151,6 +1397,16 @@ func (e *engine) styleFor(node *dom.Node) blockStyle {
 	if computed, ok := e.computed.For(node); ok {
 		style = applyComputed(style, computed)
 	}
+	if style.cursor == stylemodel.CursorAuto {
+		switch node.TagName {
+		case "a", "button", "select":
+			style.cursor = stylemodel.CursorPointer
+		case "input", "textarea":
+			style.cursor = stylemodel.CursorText
+		default:
+			style.cursor = stylemodel.CursorDefault
+		}
+	}
 	return style
 }
 
@@ -1195,12 +1451,14 @@ func uaStyle(tag string) blockStyle {
 }
 
 func defaultStyle() blockStyle {
-	return blockStyle{fontSize: 16, color: textColor, decorationColor: textColor, opacity: 1, display: stylemodel.DisplayInline}
+	return blockStyle{fontSize: 16, fontFamilies: []string{"Growse Sans", "sans-serif"}, fontStyle: "normal", fontStretch: "normal", color: textColor, decorationColor: textColor, opacity: 1, display: stylemodel.DisplayInline, listStyleType: stylemodel.ListStyleDisc, accentColorAuto: true}
 }
 
 func applyComputed(block blockStyle, computed stylemodel.ComputedStyle) blockStyle {
 	block.fontSize = computed.FontSize
 	block.bold = computed.Bold()
+	block.fontFamilies = append([]string(nil), computed.FontFamilies...)
+	block.fontStyle, block.fontStretch = computed.FontStyle, computed.FontStretch
 	block.color = computed.Color
 	block.background = computed.BackgroundColor
 	block.image = cloneBackgroundImage(computed.BackgroundImage)
@@ -1229,6 +1487,16 @@ func applyComputed(block blockStyle, computed stylemodel.ComputedStyle) blockSty
 	block.minWidth, block.minHeight = computed.MinWidth, computed.MinHeight
 	block.maxWidth, block.maxHeight = computed.MaxWidth, computed.MaxHeight
 	block.lineHeight, block.whiteSpace = computed.LineHeight, computed.WhiteSpace
+	block.textAlign, block.textTransform, block.textIndent = computed.TextAlign, computed.TextTransform, computed.TextIndent
+	block.letterSpacing, block.wordSpacing = computed.LetterSpacing, computed.WordSpacing
+	block.wordBreak, block.overflowWrap = computed.WordBreak, computed.OverflowWrap
+	block.verticalAlign, block.textOverflow = computed.VerticalAlign, computed.TextOverflow
+	block.objectFit, block.objectPosition = computed.ObjectFit, computed.ObjectPosition
+	block.listStyleType, block.listStylePosition, block.listStyleImage = computed.ListStyleType, computed.ListStylePosition, computed.ListStyleImage
+	block.appearance, block.accentColor, block.accentColorAuto, block.cursor = computed.Appearance, computed.AccentColor, computed.AccentColorAuto, computed.Cursor
+	block.filters = append([]stylemodel.Filter(nil), computed.Filters...)
+	block.backdropFilters = append([]stylemodel.Filter(nil), computed.BackdropFilters...)
+	block.mixBlendMode = computed.MixBlendMode
 	block.overflowX, block.overflowY = computed.OverflowX, computed.OverflowY
 	block.flexDirection, block.flexWrap = computed.FlexDirection, computed.FlexWrap
 	block.justifyContent, block.alignItems, block.justifyItems, block.alignContent = computed.JustifyContent, computed.AlignItems, computed.JustifyItems, computed.AlignContent

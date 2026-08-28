@@ -18,11 +18,13 @@ import (
 	"unicode/utf8"
 
 	animationmodel "github.com/Grove-Computing/Growse/internal/animation"
+	"github.com/Grove-Computing/Growse/internal/css"
 	"github.com/Grove-Computing/Growse/internal/devtools"
 	"github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/events"
 	"github.com/Grove-Computing/Growse/internal/forms"
 	htmlparser "github.com/Grove-Computing/Growse/internal/html"
+	layoutengine "github.com/Grove-Computing/Growse/internal/layout"
 	"github.com/Grove-Computing/Growse/internal/network"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 	"github.com/Grove-Computing/Growse/internal/serviceworker"
@@ -666,6 +668,10 @@ func (b *Browser) ClearHover() bool {
 
 // UpdateFocus updates the element which matches the :focus pseudo-class.
 func (b *Browser) UpdateFocus(nodeID dom.NodeID) bool {
+	return b.updateFocus(nodeID, false)
+}
+
+func (b *Browser) updateFocus(nodeID dom.NodeID, visible bool) bool {
 	b.mu.Lock()
 	page := b.page
 	onMutation := b.onMutation
@@ -674,12 +680,14 @@ func (b *Browser) UpdateFocus(nodeID dom.NodeID) bool {
 		return false
 	}
 	target := validFocusTarget(page.Document, nodeID)
-	if page.FocusTarget == target {
+	visible = target != 0 && visible
+	if page.FocusTarget == target && page.FocusVisible == visible {
 		b.mu.Unlock()
 		return false
 	}
 	previous := page.FocusTarget
 	page.FocusTarget = target
+	page.FocusVisible = visible
 	recomputePageStyles(page, b.currentTime())
 	dispatcher := page.Events
 	b.mu.Unlock()
@@ -707,7 +715,7 @@ func (b *Browser) MoveFormFocus(reverse bool) bool {
 	}
 	target := forms.NextFocusable(page.Document, page.FocusTarget, reverse)
 	b.mu.RUnlock()
-	return b.UpdateFocus(target)
+	return b.updateFocus(target, true)
 }
 
 // UpdateViewport recomputes viewport-relative values when the content area changes.
@@ -1337,10 +1345,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	if err != nil {
 		return nil, fmt.Errorf("load styles for %s: %w", network.RedactedURL(pageURL), err)
 	}
-	computedStyles := style.ComputeWithEnvironment(document, stylesheet, style.InteractionState{}, style.Environment{
-		ViewportWidth: 1280, ViewportHeight: 720, RootFontSize: 16, ResolutionDPI: 96,
-		ColorScheme: "light", Hover: true, Pointer: "fine", ReducedMotion: reducedMotion,
-	})
+	computedStyles := computeStableStyles(document, stylesheet, style.InteractionState{}, 1280, 720, reducedMotion)
 	backgroundImages, backgroundErrors := loadBackgroundImages(ctx, imageResources, computedStyles)
 	scripts, scriptErrors := loadScriptsForEngineWithBase(ctx, scriptResources, response.URL, baseURL, document, engine)
 	var importMap map[string]string
@@ -1880,7 +1885,7 @@ func hoverPath(document *dom.Document, nodeID dom.NodeID) []dom.NodeID {
 
 func interactionState(page *Page) style.InteractionState {
 	state := style.InteractionState{
-		Hovered: make(map[dom.NodeID]bool, len(page.HoverPath)), Focused: page.FocusTarget,
+		Hovered: make(map[dom.NodeID]bool, len(page.HoverPath)), Focused: page.FocusTarget, FocusVisible: page.FocusVisible,
 	}
 	for _, nodeID := range page.HoverPath {
 		state.Hovered[nodeID] = true
@@ -1892,11 +1897,53 @@ func computePageStyles(page *Page) style.Map {
 	if page == nil {
 		return nil
 	}
-	return style.ComputeWithEnvironment(page.Document, page.Stylesheet, interactionState(page), style.Environment{
-		ViewportWidth: page.ViewportWidth, ViewportHeight: page.ViewportHeight, RootFontSize: 16,
-		ResolutionDPI: 96, ColorScheme: "light", Hover: true, Pointer: "fine",
-		ReducedMotion: page.ReducedMotion,
-	})
+	return computeStableStyles(page.Document, page.Stylesheet, interactionState(page), page.ViewportWidth, page.ViewportHeight, page.ReducedMotion)
+}
+
+const maxContainerQueryIterations = 16
+
+func computeStableStyles(document *dom.Document, stylesheet *css.Stylesheet, state style.InteractionState, width, height float32, reducedMotion bool) style.Map {
+	var computed style.Map
+	sizes := make(map[dom.NodeID]style.ContainerSize)
+	for iteration := 0; iteration < maxContainerQueryIterations; iteration++ {
+		computed = style.ComputeWithEnvironment(document, stylesheet, state, style.Environment{
+			ViewportWidth: width, ViewportHeight: height, RootFontSize: 16, ResolutionDPI: 96,
+			ColorScheme: "light", Hover: true, Pointer: "fine", ReducedMotion: reducedMotion,
+			ContainerSizes: sizes,
+		})
+		tree := layoutengine.BuildWithViewport(document, computed, width, height)
+		next := make(map[dom.NodeID]style.ContainerSize)
+		for nodeID, computedStyle := range computed {
+			if computedStyle.ContainerType != style.ContainerTypeInlineSize {
+				continue
+			}
+			bounds, ok := tree.Bounds[nodeID]
+			if !ok {
+				continue
+			}
+			contentWidth := max(bounds.Width-computedStyle.Padding.Left-computedStyle.Padding.Right-computedStyle.Border.Left.Width-computedStyle.Border.Right.Width, float32(0))
+			contentHeight := max(bounds.Height-computedStyle.Padding.Top-computedStyle.Padding.Bottom-computedStyle.Border.Top.Width-computedStyle.Border.Bottom.Width, float32(0))
+			next[nodeID] = style.ContainerSize{Width: contentWidth, Height: contentHeight}
+		}
+		if sameContainerSizes(sizes, next) {
+			return computed
+		}
+		sizes = next
+	}
+	return computed
+}
+
+func sameContainerSizes(left, right map[dom.NodeID]style.ContainerSize) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for nodeID, size := range left {
+		other, ok := right[nodeID]
+		if !ok || size.Width != other.Width || size.Height != other.Height {
+			return false
+		}
+	}
+	return true
 }
 
 func recomputePageStyles(page *Page, current time.Time) {
