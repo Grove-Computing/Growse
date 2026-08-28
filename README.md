@@ -10,8 +10,8 @@ HTMLとCSSで画面を構築し、Tab単位の`Go` / `JS` selectorでWebGoまた
 | --- | --- |
 | ブラウジング | 左側Vertical Tab、URL入力、リンク遷移、same-document Routing、戻る、進む、再読込、Scroll復元 |
 | HTML / DOM | 要素の検索・生成・追加・削除、属性・class・Form値の操作 |
-| CSS Layout | Box Model、Flexbox、Grid、Position、Overflow |
-| CSS Paint | Color、Gradient、複数Background、Shadow、Opacity、2D Transform |
+| CSS Layout | Box Model、Flexbox、Grid、Position、Overflow、logical property、container query |
+| CSS Paint | Color Level 4、Gradient、複数Background、Shadow、Opacity、2D Transform、bounded Filter / Blend |
 | Animation | CSS Transition、`@keyframes`、Easing、Iteration、Direction、Fill Mode、Pause、`prefers-reduced-motion` |
 | Form | Form Controls、Focus、Constraint Validation、GET / POST Submission |
 | Scheduler | timeout、interval、Animation Frame、Page終了時の自動解除 |
@@ -19,6 +19,7 @@ HTMLとCSSで画面を構築し、Tab単位の`Go` / `JS` selectorでWebGoまた
 | HTTP | WebGo Fetch、Cookie、Same-Origin Policy、CORS、Freshness・再検証・Disk対応のHTTP Cache |
 | Dual Runtime | Go既定、Tab単位Go / JavaScript切替、完全reload、Engine間分離 |
 | External JavaScript | 通常HTTP(S) Pageのclassic / async / defer、ES Modules、dynamic import、import map |
+| Modern Web Compatibility | 明示的にJSを選んだTabでdynamic script / stylesheet、hydration DOM、CSSOM、observer、Next.js / SvelteKit / Tailwind縮約fixture |
 | WebAssembly | JavaScript API、streaming compile / instantiate、Memory / Table / Instance quota |
 | Browsing Context | same / cross-origin iframe、sandbox、`postMessage`、独立Runtime |
 | Offline | Service Worker registration / lifecycle / fetch、Cache Storage、idle restart |
@@ -48,7 +49,7 @@ wget -qO- https://github.com/Grove-Computing/Growse/releases/latest/download/ins
 Versionとインストール先を指定する場合は、環境変数を利用します。
 
 ```sh
-wget -qO- https://github.com/Grove-Computing/Growse/releases/latest/download/install.sh | GROWSE_VERSION=v0.14.0 GROWSE_INSTALL_DIR=/usr/local/bin bash
+wget -qO- https://github.com/Grove-Computing/Growse/releases/latest/download/install.sh | GROWSE_VERSION=v0.15.0 GROWSE_INSTALL_DIR=/usr/local/bin bash
 ```
 
 GUI Applicationの配置先は、`GROWSE_DATA_HOME`、`GROWSE_APPLICATIONS_DIR`、`GROWSE_WINDOWS_PROGRAMS_DIR`で変更できます。
@@ -58,7 +59,7 @@ GUI Applicationの配置先は、`GROWSE_DATA_HOME`、`GROWSE_APPLICATIONS_DIR`�
 Linux amd64のDocker imageを、GitHub Container Registryから取得できます。
 
 ```sh
-docker pull ghcr.io/grove-computing/growse:v0.14.0
+docker pull ghcr.io/grove-computing/growse:v0.15.0
 ```
 
 GrowseはGUI applicationのため、Containerから起動する場合はホストのDisplay ServerとGPU deviceを接続する必要があります。
@@ -112,6 +113,7 @@ python3 -m http.server 8080 --directory examples/data-app
 | DevTools Showcase | `go run ./examples/devtools` | Console 4 level、DOM / Style / Layout、成功Fetch、redirect、cache、HTTP error、timeout |
 | Dual Runtime Showcase | `go run ./examples/dual-runtime` | 同じUIのGo / JavaScript切替、DOM、Event、Timer、Fetch、Storage、History、Runtime error |
 | External Web Platform | `go run ./examples/external-web-platform` | 外部classic / Module、dynamic import、WASM、same / cross-origin iframe、Service Worker offline、cross-origin CSS、sandbox |
+| Modern Web Compatibility | `go run ./examples/modern-web-compat` | Next.js / SvelteKit SSR、Tailwind CSS、hydration、dynamic chunk、responsive、font / image / SVG、失敗診断 |
 
 WebGoソースは通常のGo build対象から除外するため、各Demoでは`_app.go`として配置しています。
 
@@ -121,7 +123,9 @@ DevTools Showcaseも専用のlocal fixture serverだけを使用します。外�
 
 Dual Runtime Showcaseもlocalhost内だけで完結します。ツールバーの`Go` / `JS`を押すとPageを完全reloadし、同じHTML/CSS上のCounterとWeb API処理を選択Engineだけで実行します。
 
-External Web Platform Showcaseはtop-level、CDN、Frameを別のlocal Originで配信し、Internet、DNS、Credentialなしでv0.14.0の外部サイト経路を再現します。起動後に表示されるURLをJavaScript Engineで開くと、Module / WASM / iframe / Service Worker / sandbox状態を確認できます。
+External Web Platform Showcaseはtop-level、CDN、Frameを別のlocal Originで配信し、Internet、DNS、Credentialなしで外部サイト経路を再現します。起動後に表示されるURLをJavaScript Engineで開くと、Module / WASM / iframe / Service Worker / sandbox状態を確認できます。
+
+Modern Web Compatibility ShowcaseはNext.js、SvelteKit、Tailwindの生成済み縮約artifactをlocalhostだけで配信します。Go EngineではSSR HTMLとEngine非依存のCSS / image / fontだけを表示し、JavaScriptを取得・実行しません。ツールバーで`JS`を明示選択すると完全reload後にhydration、dynamic chunk、操作、client-side Navigation、responsive表示、DevToolsのfallback診断を確認できます。
 
 ## ブラウザの仕組み
 
@@ -165,7 +169,7 @@ EngineはTabごとに保持し、切り替え時は旧Runtime、Event、Timer、
 - Fetch callback: PageのEvent Queueで実行
 - Page終了時: Timer、Frame callback、実行中Fetchをcancelし、Runtime参照を解放
 
-JavaScriptは`console`、DOM / Event、Timer / Animation Frame、Promise形式`fetch`、Storage、Navigationに加え、ES Modules、WebAssembly、iframe messaging、Service Worker / Cache Storageの検証済みsubsetを提供します。Node.js、npm、CommonJS、WASI、OS、filesystem、process、Go reflectionは公開しません。詳細は[Runtime / Web API対応表](docs/runtime-support.md)を参照してください。
+JavaScriptは`console`、DOM / Event、Timer / Animation Frame、Promise形式`fetch`、Storage、Navigationに加え、ES Modules、dynamic resource、hydration向けDOM / CSSOM / observer、WebAssembly、iframe messaging、Service Worker / Cache Storageの検証済みsubsetを提供します。これらは利用者が`JS`を明示選択したTabだけで有効になり、Go Engineへhost objectやcallbackを公開しません。Node.js、npm、CommonJS、WASI、OS、filesystem、process、Go reflectionは公開しません。詳細は[Runtime / Web API対応表](docs/runtime-support.md)を参照してください。
 
 Go / JavaScript / WASMとService WorkerはBrowser UIとは別のresource-bounded worker processで実行し、version / size制限付きIPCとBrowserが再検証するbrokered APIだけを使用します。必須sandbox状態を検証できない場合はcodeを実行しません。この境界は未知のOS kernel、Go runtime、goja、wazero、decoderの脆弱性まで排除するものではありません。詳細は[Runtime worker / Web Platform設計](docs/runtime-worker-design.md)と[SECURITY.md](SECURITY.md)を参照してください。
 
@@ -187,7 +191,7 @@ DevToolsはRequest / Response body、Header、Cookie、Authorizationを保持し
 | [CSS対応表](docs/css-support.md) | CSS Property、Layout、Animationの対応状況と制限 |
 | [Form / Fetch / Cookie対応表](docs/form-fetch-cookie-support.md) | Form、HTTP、Cookie、CORSの対応状況と制限 |
 | [Storage / Cache対応表](docs/storage-cache-support.md) | Web Storage、HTTP Cache、永続化、quotaの対応状況と制限 |
-| [Visual Regression Test](docs/visual-regression.md) | 固定Viewport、Font、ScaleによるDashboardとPersistent Appの画像回帰テスト |
+| [Visual Regression Test](docs/visual-regression.md) | 固定Viewport、Font、ScaleによるDashboard、Persistent App、DevTools、framework状態遷移の回帰テスト |
 | [Performance Baseline](docs/performance.md) | Layout、Paint、Form、Scheduler、History、Storage、CacheのBenchmark基準値 |
 | [WPT由来テスト](docs/wpt.md) | Web Platform Testsから移植したTestと出典 |
 | [Developer Supply Chain Security](docs/developer-security.md) | 不可視Code検査、Extension管理、署名、Credential、Incident Response |
@@ -200,6 +204,7 @@ DevToolsはRequest / Response body、Header、Cookie、Authorizationを保持し
 | [v0.12.0リリース定義](docs/v0.12.0.md) | v0.12.0 WebGo DevToolsのTheme、Scope、完了条件 |
 | [v0.13.0リリース定義](docs/v0.13.0.md) | v0.13.0 Go / JavaScript Dual RuntimeのTheme、Scope、完了条件 |
 | [v0.14.0リリース定義](docs/v0.14.0.md) | v0.14.0 External JavaScript / Module / WASM / iframe / Service Worker / sandboxのTheme、Scope、完了条件 |
+| [v0.15.0リリース定義](docs/v0.15.0.md) | v0.15.0 Modern Web Compatibility、framework CSS / hydration、image / SVG / fontのTheme、Scope、完了条件 |
 
 ## 品質チェック
 
@@ -224,13 +229,13 @@ Go Modules、GitHub Actions、Docker base imageの依存関係は、Dependabot�
 
 ## セキュリティ
 
-v0.14.0のRuntime workerは外部JavaScriptのhost作用をdefault denyにしますが、実験的browserとして未知のnative/runtime脆弱性への完全耐性は保証しません。外部Go sourceは引き続きtrusted loopbackだけに限定されます。Growseを権限の高いユーザーや機密profileで実行しないでください。
+v0.15.0のRuntime workerは外部JavaScriptとhydration resourceのhost作用をdefault denyにしますが、実験的browserとして未知のnative/runtime/decoder脆弱性への完全耐性は保証しません。外部Go sourceは引き続きtrusted loopbackだけに限定されます。Growseを権限の高いユーザーや機密profileで実行しないでください。
 
 脆弱性の非公開報告方法、サポート対象、通信とResource LoadingのSecurity Boundaryは[SECURITY.md](SECURITY.md)を参照してください。
 
 ## リリース成果物
 
-`v0.14.0`のようなVersion tagをpushすると、GitHub Actionsが次の成果物、SHA-256 checksum、SPDX JSON SBOMをGitHub Releaseへ公開します。ArchiveとSBOMにはGitHub Artifact Attestation、Docker imageにはBuildKitのSBOMとSLSA Provenanceを付与します。
+`v0.15.0`のようなVersion tagをpushすると、GitHub Actionsが次の成果物、SHA-256 checksum、SPDX JSON SBOMをGitHub Releaseへ公開します。ArchiveとSBOMにはGitHub Artifact Attestation、Docker imageにはBuildKitのSBOMとSLSA Provenanceを付与します。
 
 - Linux amd64
 - macOS Intel

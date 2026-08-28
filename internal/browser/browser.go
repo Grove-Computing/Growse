@@ -1555,7 +1555,9 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	if previousPage != nil && previousPage != page {
 		_ = closePageFrames(previousPage)
 	}
-	dispatchImageResourceEvents(b, page)
+	if engine == runtimemodel.EngineJavaScript {
+		dispatchImageResourceEvents(b, page)
+	}
 	dispatchFrameLoadEvents(b, page)
 	if dispatchPopState {
 		if dispatcher, ok := pageRuntime.(runtimemodel.NavigationEventDispatcher); ok {

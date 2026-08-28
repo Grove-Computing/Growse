@@ -1,6 +1,6 @@
 # Runtime worker / Web Platform設計
 
-本書はGrowse v0.14.0の実行・閲覧context設計を示す。v0.1.0時点の歴史的な詳細設計は[旧MVP詳細設計](details-design.md)に残すが、Runtime、JavaScript、Frame、Service Workerについては本書を現行仕様とする。
+本書はGrowse v0.15.0の実行・閲覧context設計を示す。v0.1.0時点の歴史的な詳細設計は[旧MVP詳細設計](details-design.md)に残すが、Runtime、JavaScript、Frame、Service Worker、dynamic resource、hydrationについては本書を現行仕様とする。
 
 ## 所有境界
 
@@ -19,13 +19,15 @@ Browser process
 
 ## worker protocol
 
-IPC messageはprotocol version、request ID、method、長さ制限付きJSON payloadを持つ。1 messageは1 MiB、pending requestは256件、Page全体の転送中payloadは8 MiBまでとする。DOM mutation、Event、Timer、Fetch、Storage、Navigation、Console、Module取得、Frame通信だけを登録済みmethodとして受理し、未知method、oversized payload、panic、transport切断をcontext単位のRuntime errorへ変換する。
+IPC messageはprotocol version、request ID、method、長さ制限付きJSON payloadを持つ。1 messageは1 MiB、pending requestは256件、Page全体の転送中payloadは8 MiBまでとする。DOM mutation、Event、Timer、Fetch、Storage、Navigation、Console、Module / dynamic resource取得、CSSOM snapshot、observer配送、Frame通信だけを登録済みmethodとして受理し、未知method、oversized payload、panic、transport切断をcontext単位のRuntime errorへ変換する。
 
 workerへ生のCookie、Authorization、Header集合、filesystem path、Browser environment、Go pointerを渡さない。Network requestはworker入力を信用せず、Browser側でURL、Origin、kind、CORS、credentials、mixed content、sizeを再構築・再検証する。
 
 ## lifecycleとgeneration
 
-Page、Frame、Service Workerの起動ごとにgenerationを増やす。Navigation、Frame navigation、Engine切り替え、close、timeout、crash後は旧generationのcallback、message、DOM snapshotを拒否する。通常停止はIPC stopと1秒の猶予を使い、応答しないprocessを終了する。Browser Session全体でworkerは32件までとし、上限超過は新しいRuntimeだけをfail closedする。
+Page、Frame、Service Workerの起動ごとにgenerationを増やす。Navigation、Frame navigation、Engine切り替え、close、timeout、crash後は旧generationのcallback、message、DOM snapshot、resource completion、observer recordを拒否する。通常停止はIPC stopと1秒の猶予を使い、応答しないprocessを終了する。Browser Session全体でworkerは32件までとし、上限超過は新しいRuntimeだけをfail closedする。
+
+Goは新規Tabの既定Engineであり、JavaScriptのinitial / dynamic script、Module、modulepreload、hydration callbackは利用者が`JS`を明示選択したgenerationだけへbrokerする。Goへ戻す場合はJavaScript worker、Frame、Module graph、dynamic resource、observer、Event listenerを停止して完全reloadし、Browser所有のDOM / Style / Layout / Paintへ両Engineのobjectを混在させない。
 
 Service Worker registrationとCache StorageはOrigin profile stateとして残すが、worker VMはidle 30秒で停止する。次のeventは保存済みscriptから新generationを起動し、Pageのcancelとは分離した期限付きevent contextで完了させる。
 
@@ -47,4 +49,4 @@ DevTools Runtime panelはPage / Frame / Service Workerのcontext ID、browsing /
 
 ## 非対象
 
-既存browser engineの埋め込み、Node.js互換、npm resolution、WASI、Web Worker / Shared Worker、Service Worker Push / Background Sync、完全なPermissions Policy、BFCache、全WPT適合はv0.14.0の対象外である。
+既存browser engineの埋め込み、Node.js互換、npm resolution、WASI、Web Worker / Shared Worker、Shadow DOM、custom elements、Service Worker Push / Background Sync、完全なPermissions Policy、BFCache、全WPTおよび任意frameworkへの完全適合はv0.15.0の対象外である。

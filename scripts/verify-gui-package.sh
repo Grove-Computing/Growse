@@ -35,6 +35,7 @@ resources=(
   dual-runtime
   external-web-platform
   flexbox
+  modern-web-compat
   multi-tab-workspace
   persistent-app
   todo
@@ -42,6 +43,19 @@ resources=(
 for resource in "${resources[@]}"; do
   if [[ ! -d "${package_dir}/examples/${resource}" ]]; then
     echo "GUI package resourceがありません: examples/${resource}" >&2
+    exit 1
+  fi
+done
+for fixture in \
+  "${package_dir}/examples/modern-web-compat/index.html" \
+  "${package_dir}/examples/modern-web-compat/server.go" \
+  "${package_dir}/examples/modern-web-compat/fixture-manifest.json" \
+  "${package_dir}/examples/modern-web-compat/fixtures/nextjs/index.html" \
+  "${package_dir}/examples/modern-web-compat/fixtures/sveltekit/index.html" \
+  "${package_dir}/examples/modern-web-compat/fixtures/tailwind/index.html"
+do
+  if [[ ! -s "$fixture" ]]; then
+    echo "Modern Web Compatibility resourceがありません: ${fixture}" >&2
     exit 1
   fi
 done
