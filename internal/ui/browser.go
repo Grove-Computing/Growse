@@ -393,6 +393,7 @@ func layoutRegion(gtx layout.Context, region image.Rectangle, widget layout.Widg
 		return layout.Dimensions{Size: region.Size()}
 	}
 	defer op.Offset(region.Min).Push(gtx.Ops).Pop()
+	defer clip.Rect{Max: region.Size()}.Push(gtx.Ops).Pop()
 	gtx.Constraints = layout.Exact(region.Size())
 	return widget(gtx)
 }

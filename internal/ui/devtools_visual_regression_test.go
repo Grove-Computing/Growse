@@ -67,7 +67,11 @@ func TestDevToolsPanelsVisualRegression(t *testing.T) {
 	networkRecords := networkStore.Network()
 
 	actual := devToolsVisualSnapshot{
-		Geometry: []string{"viewport=" + geometry.viewport.String(), "devtools=" + geometry.devTools.String()},
+		Geometry: []string{
+			"viewport=" + geometry.viewport.String(),
+			"devtools=" + geometry.devTools.String(),
+			fmt.Sprintf("issue-78-overlap=%t boundary=%d", geometry.viewport.Overlaps(geometry.devTools), geometry.devTools.Min.Y),
+		},
 		Runtime: []string{
 			"selector=go:" + engineButtonLabel(runtimemodel.EngineGo) + " javascript:" + engineButtonLabel(runtimemodel.EngineJavaScript),
 			"go=" + devToolsRuntimeLabel(&browser.Page{Engine: runtimemodel.EngineGo, RuntimeStarted: true}),

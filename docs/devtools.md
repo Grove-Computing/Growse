@@ -43,6 +43,8 @@ worker generationはPage reload、Frame navigation、Service Worker restartを�
 
 ## 再現と検証
 
+DevToolsはPage viewportから高さを差し引いた独立Browser chrome領域へ配置し、両領域を境界でclipする。狭いWindowやpanel高さがcontent高さを超える場合も領域は重ならず、Issue #78のPage上への重ね描画はgeometry testと`devtools-panels.golden.json`で回帰検出する。
+
 `go run ./examples/devtools`はlocalhostだけでConsole 4 level、DOM mutation、Computed Style、Layout、成功Fetch、redirect、cache hit、HTTP 503、timeoutを再現する。`go run ./examples/external-web-platform`はPage / Frame / Service Worker、classic / Module / WASM、複数worker generation、sandbox状態を再現する。fixtureには意図的なquery / Header / password credentialが含まれ、Integration TestはConsole、Inspector、Network、Runtime snapshotに値が残らないことを確認する。
 
 通常・空・error・truncated状態のsemantic visual snapshotは`internal/ui/testdata/devtools-panels.golden.json`で固定する。安全上限、並行access、Tab / Page lifecycleは`internal/devtools`と`internal/browser`のUnit / Integration Testで検証する。
