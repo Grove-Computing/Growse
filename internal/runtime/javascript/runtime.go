@@ -35,6 +35,7 @@ const (
 	maxDynamicInsertDepth     = 32
 	maxResourceReprepares     = 8
 	maxResourceFailureRetries = 3
+	maxDynamicImages          = 1024
 )
 
 var errRuntimeStopped = errors.New("javascript runtime is stopped")
@@ -89,6 +90,7 @@ type Runtime struct {
 	moduleEvaluations      map[string]*moduleEvaluation
 	stylesheetStates       map[uint64]string
 	preloadStates          map[uint64]string
+	imageStates            map[uint64]string
 	currentScript          *goja.Object
 	scriptCount            int
 	scriptBytes            int
@@ -230,6 +232,7 @@ func (runtime *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script,
 	runtime.moduleEvaluations = make(map[string]*moduleEvaluation)
 	runtime.stylesheetStates = make(map[uint64]string)
 	runtime.preloadStates = make(map[uint64]string)
+	runtime.imageStates = make(map[uint64]string)
 	runtime.currentScript = nil
 	runtime.scriptCount = len(scripts)
 	runtime.scriptBytes = initialScriptBytes
@@ -438,6 +441,7 @@ func (runtime *Runtime) Stop() error {
 	runtime.moduleRegistry = nil
 	runtime.moduleEvaluations = nil
 	runtime.stylesheetStates = nil
+	runtime.imageStates = nil
 	runtime.preloadStates = nil
 	runtime.currentScript = nil
 	runtime.scriptCount = 0

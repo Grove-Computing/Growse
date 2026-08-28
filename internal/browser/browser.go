@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
 	"mime"
 	"net/http"
 	"net/url"
@@ -263,6 +264,9 @@ func (b *Browser) SetEngine(ctx context.Context, engine runtimemodel.Engine) (*P
 	}
 	b.engine = engine
 	b.navigationID++
+	if b.page != nil {
+		b.page.cancelImageLoads()
+	}
 	if b.navigationCancel != nil {
 		b.navigationCancel()
 		b.navigationCancel = nil
@@ -734,9 +738,32 @@ func (b *Browser) UpdateViewport(width, height float32) bool {
 	recomputePageStyles(page, b.currentTime())
 	activeRuntime := b.activeRuntime
 	media := pageMediaEnvironment(page)
+	imageLoader := page.imageLoader
+	baseURL := cloneURL(page.BaseURL)
+	engine := page.Engine
+	onMutation := b.onMutation
 	b.mu.Unlock()
 	if runtime, ok := activeRuntime.(mediaEnvironmentRuntime); ok {
 		runtime.UpdateMediaEnvironment(media)
+	}
+	if engine == runtimemodel.EngineJavaScript && imageLoader != nil {
+		loadContext, generation := page.beginImageLoad(context.Background())
+		policy := imageViewportPolicy(page.Document, page.ComputedStyles, baseURL, width, height)
+		budget := newImageDecodeBudgetWithImages(page.BackgroundImages)
+		resources, images, failures := loadReplacedImagesWithPolicyAndBudget(loadContext, imageLoader, baseURL, page.Document, width, 1, policy, budget)
+		inlineResources, inlineImages, inlineFailures := loadInlineSVGImagesWithBudget(page.Document, budget)
+		mergeImageResources(resources, images, inlineResources, inlineImages)
+		failures = append(failures, inlineFailures...)
+		b.mu.RLock()
+		active := b.page == page && page.Engine == runtimemodel.EngineJavaScript
+		b.mu.RUnlock()
+		committed := active && loadContext.Err() == nil && page.commitImageLoad(generation, resources, images, failures)
+		if committed {
+			dispatchImageResourceEvents(b, page)
+		}
+		if committed && onMutation != nil {
+			onMutation()
+		}
 	}
 	return true
 }
@@ -773,6 +800,9 @@ func (b *Browser) SetReducedMotion(reduce bool) bool {
 func (b *Browser) SetPage(page *Page) {
 	b.mu.Lock()
 	b.navigationID++
+	if b.page != nil {
+		b.page.cancelImageLoads()
+	}
 	if b.navigationCancel != nil {
 		b.navigationCancel()
 		b.navigationCancel = nil
@@ -827,6 +857,9 @@ func (b *Browser) SetPage(page *Page) {
 func (b *Browser) Close() error {
 	b.mu.Lock()
 	b.navigationID++
+	if b.page != nil {
+		b.page.cancelImageLoads()
+	}
 	if b.navigationCancel != nil {
 		b.navigationCancel()
 		b.navigationCancel = nil
@@ -966,6 +999,9 @@ func (b *Browser) SubmitPOST(ctx context.Context, formID, submitterID dom.NodeID
 		return nil, errors.New("network client does not support POST")
 	}
 	b.navigationID++
+	if b.page != nil {
+		b.page.cancelImageLoads()
+	}
 	navigationID := b.navigationID
 	engineFactory := b.engineFactory
 	engine := runtimemodel.NormalizeEngine(b.engine)
@@ -1205,6 +1241,9 @@ func (b *Browser) loadWithClient(ctx context.Context, pageURL *url.URL, commit h
 	}
 	b.navigationCancel = cancel
 	b.navigationID++
+	if b.page != nil {
+		b.page.cancelImageLoads()
+	}
 	navigationID := b.navigationID
 	client := b.client
 	engineFactory := b.engineFactory
@@ -1334,11 +1373,13 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	baseURL := documentBaseURL(document, response.URL)
 	styleResources := resourceClient
 	imageResources := resourceClient
+	fontResources := resourceClient
 	scriptResources := resourceClient
 	engine = runtimemodel.NormalizeEngine(engine)
 	if loader, ok := resourceClient.(requestLoader); ok {
 		styleResources = pageResourceLoader{loader: loader, siteURL: response.URL, kind: network.RequestStylesheet, observer: pageStore.ObserveNetwork}
 		imageResources = pageResourceLoader{loader: loader, siteURL: response.URL, kind: network.RequestImage, observer: pageStore.ObserveNetwork}
+		fontResources = pageResourceLoader{loader: loader, siteURL: response.URL, kind: network.RequestFont, observer: pageStore.ObserveNetwork}
 		scriptResources = pageResourceLoader{loader: loader, siteURL: response.URL, kind: network.RequestScript, engine: string(engine), observer: pageStore.ObserveNetwork}
 	}
 	stylesheet, err := b.loadStylesWithBase(ctx, styleResources, response.URL, baseURL, document)
@@ -1346,7 +1387,21 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 		return nil, fmt.Errorf("load styles for %s: %w", network.RedactedURL(pageURL), err)
 	}
 	computedStyles := computeStableStyles(document, stylesheet, style.InteractionState{}, 1280, 720, reducedMotion)
-	backgroundImages, backgroundErrors := loadBackgroundImages(ctx, imageResources, computedStyles)
+	imageBudget := newImageDecodeBudget()
+	backgroundImages, backgroundErrors := loadBackgroundImagesWithBudget(ctx, imageResources, computedStyles, imageBudget)
+	var replacedImages map[dom.NodeID]layoutengine.ImageResource
+	var decodedImages map[string]image.Image
+	var imageErrors []string
+	var fonts []FontResource
+	var fontErrors []string
+	if engine == runtimemodel.EngineJavaScript {
+		imagePolicy := imageViewportPolicy(document, computedStyles, baseURL, 1280, 720)
+		replacedImages, decodedImages, imageErrors = loadReplacedImagesWithPolicyAndBudget(ctx, imageResources, baseURL, document, 1280, 1, imagePolicy, imageBudget)
+		inlineResources, inlineImages, inlineErrors := loadInlineSVGImagesWithBudget(document, imageBudget)
+		mergeImageResources(replacedImages, decodedImages, inlineResources, inlineImages)
+		imageErrors = append(imageErrors, inlineErrors...)
+		fonts, fontErrors = loadWebFonts(ctx, fontResources, response.URL, stylesheet)
+	}
 	scripts, scriptErrors := loadScriptsForEngineWithBase(ctx, scriptResources, response.URL, baseURL, document, engine)
 	var importMap map[string]string
 	if engine == runtimemodel.EngineJavaScript {
@@ -1373,12 +1428,19 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 		ViewportHeight:   720,
 		BackgroundImages: backgroundImages,
 		BackgroundErrors: backgroundErrors,
+		ImageResources:   replacedImages,
+		Images:           decodedImages,
+		ImageErrors:      imageErrors,
+		Fonts:            fonts,
+		FontErrors:       fontErrors,
+		WebFonts:         layoutWebFonts(fonts),
 		Engine:           engine,
 		Scripts:          scripts,
 		ImportMap:        importMap,
 		ScriptErrors:     scriptErrors,
 		DevTools:         pageStore,
 		serviceWorkers:   b.serviceWorkers,
+		imageLoader:      imageResources,
 	}
 	for _, scriptError := range scriptErrors {
 		page.DevTools.AddConsole(devtools.ConsoleError, "script", scriptError)
@@ -1493,6 +1555,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	if previousPage != nil && previousPage != page {
 		_ = closePageFrames(previousPage)
 	}
+	dispatchImageResourceEvents(b, page)
 	dispatchFrameLoadEvents(b, page)
 	if dispatchPopState {
 		if dispatcher, ok := pageRuntime.(runtimemodel.NavigationEventDispatcher); ok {
@@ -1755,7 +1818,25 @@ func startRuntime(ctx context.Context, factory runtimemodel.EngineFactory, engin
 		ReadRender: func(readContext context.Context, nodeID dom.NodeID) (runtimemodel.RenderSnapshot, error) {
 			return pageRenderSnapshot(readContext, page, nodeID)
 		},
-		Media: pageMediaEnvironment(page),
+		RefreshImage: func(loadContext context.Context, nodeID dom.NodeID) (runtimemodel.ImageState, error) {
+			generationContext, generation := page.beginImageLoad(loadContext)
+			policy := imageViewportPolicy(page.Document, page.ComputedStyles, pageBaseURL(page), page.ViewportWidth, page.ViewportHeight)
+			budget := newImageDecodeBudgetWithImages(page.BackgroundImages)
+			resources, images, failures := loadReplacedImagesWithPolicyAndBudget(generationContext, page.imageLoader, pageBaseURL(page), page.Document, page.ViewportWidth, 1, policy, budget)
+			inlineResources, inlineImages, inlineFailures := loadInlineSVGImagesWithBudget(page.Document, budget)
+			mergeImageResources(resources, images, inlineResources, inlineImages)
+			failures = append(failures, inlineFailures...)
+			if generationContext.Err() != nil || !page.commitImageLoad(generation, resources, images, failures) {
+				return runtimemodel.ImageState{}, context.Canceled
+			}
+			if onMutation != nil {
+				onMutation()
+			}
+			return page.imageState(nodeID), nil
+		},
+		ReadImage:           page.imageState,
+		ImageEventDelivered: page.markImageEventDelivered,
+		Media:               pageMediaEnvironment(page),
 		FrameScope: func(current time.Time, callback func()) {
 			frameMu.Lock()
 			frameTime = current

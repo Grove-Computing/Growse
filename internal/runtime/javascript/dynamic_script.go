@@ -108,6 +108,8 @@ func (runtime *Runtime) prepareConnectedScriptTree(vm *goja.Runtime, element *do
 		runtime.prepareDynamicStyle(vm, element)
 	} else if strings.EqualFold(element.TagName(), "link") {
 		runtime.prepareDynamicLink(vm, element)
+	} else if strings.EqualFold(element.TagName(), "img") {
+		runtime.prepareDynamicImage(element)
 	}
 	for _, child := range element.Children() {
 		runtime.prepareConnectedScriptTree(vm, child)

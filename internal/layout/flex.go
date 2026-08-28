@@ -438,6 +438,17 @@ func (e *engine) flexIntrinsicSizes(node *dom.Node, style blockStyle, axis flexA
 	} else if isSubmitButtonControl(node) {
 		textWidth, textHeight = buttonWidth, inputHeight
 		minTextWidth = buttonWidth
+	} else if isImageElement(node, e.images) {
+		resource := e.images[node.ID]
+		textWidth, textHeight = resource.IntrinsicWidth, resource.IntrinsicHeight
+		if attribute, ok := imageDimensionAttribute(node, "width"); ok {
+			textWidth = attribute
+		}
+		if attribute, ok := imageDimensionAttribute(node, "height"); ok {
+			textHeight = attribute
+		}
+		textWidth, textHeight = max(textWidth, float32(16)), max(textHeight, float32(16))
+		minTextWidth = textWidth
 	}
 	horizontalExtras := style.padding.Left + style.padding.Right + style.border.Left.Width + style.border.Right.Width
 	verticalExtras := style.padding.Top + style.padding.Bottom + style.border.Top.Width + style.border.Bottom.Width
@@ -516,6 +527,8 @@ func (e *engine) renderFlexItem(item *flexLayoutItem, axis flexAxis, x, y, mainS
 		e.addCheckable(item.node, style, 0, outerWidth, outerHeight, true)
 	} else if isSubmitButtonControl(item.node) {
 		e.addSubmitButton(item.node, style, 0, outerWidth, outerHeight, true)
+	} else if isImageElement(item.node, e.images) {
+		e.addImage(item.node, style, 0, outerWidth, outerHeight, true)
 	} else {
 		if style.display == stylemodel.DisplayInlineFlex {
 			style.display = stylemodel.DisplayFlex
@@ -614,6 +627,12 @@ func translateFlexGeometry(tree *Tree, boxStart, decorationStart int, x, y float
 		tree.Boxes[index].X += x
 		tree.Boxes[index].Y += y
 		tree.Boxes[index].Baseline += y
+		if tree.Boxes[index].Image {
+			tree.Boxes[index].ImageRect.X += x
+			tree.Boxes[index].ImageRect.Y += y
+			tree.Boxes[index].ImageClip.X += x
+			tree.Boxes[index].ImageClip.Y += y
+		}
 		for runIndex := range tree.Boxes[index].Runs {
 			tree.Boxes[index].Runs[runIndex].Baseline += y
 		}

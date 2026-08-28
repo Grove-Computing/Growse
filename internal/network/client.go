@@ -87,6 +87,7 @@ const (
 	RequestFetch
 	RequestStylesheet
 	RequestImage
+	RequestFont
 	RequestScript
 	RequestModule
 	RequestServiceWorker

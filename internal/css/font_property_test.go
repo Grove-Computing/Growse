@@ -1,6 +1,7 @@
 package css
 
 import (
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -38,5 +39,24 @@ func TestParseFontFaceAndRegisteredPropertyDescriptors(t *testing.T) {
 	}
 	if stylesheet.Properties[1].Valid {
 		t.Fatalf("unknown syntax was accepted: %#v", stylesheet.Properties[1])
+	}
+}
+
+func TestResolveResourceURLsResolvesFontFaceCandidates(t *testing.T) {
+	stylesheet, err := Parse(strings.NewReader(`@font-face {
+		font-family: Fixture;
+		src: local("Fixture"), url("../fonts/a.woff2") format("woff2"), url(a.woff) format("woff");
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseURL, err := url.Parse("https://example.com/css/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ResolveResourceURLs(stylesheet, baseURL)
+	want := `local("Fixture"),url("https://example.com/fonts/a.woff2") format("woff2"),url("https://example.com/css/a.woff") format("woff")`
+	if got := stylesheet.FontFaces[0].Source; got != want {
+		t.Fatalf("font src = %q, want %q", got, want)
 	}
 }

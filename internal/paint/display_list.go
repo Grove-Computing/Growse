@@ -179,6 +179,29 @@ type DrawBox struct {
 
 func (DrawBox) paintCommand() {}
 
+// DrawImage paints one decoded replaced image or its alt fallback.
+type DrawImage struct {
+	NodeID     dom.NodeID
+	URL, Alt   string
+	X, Y, Top  float32
+	Width      float32
+	Height     float32
+	ImageRect  layout.Rect
+	ImageClip  layout.Rect
+	Failed     bool
+	Color      uint32
+	Background uint32
+	Opacity    float32
+	Clip       *layout.Rect
+	Clips      []layout.ClipRegion
+	Border     stylemodel.Borders
+	Radius     layout.BorderRadii
+	Transform  stylemodel.Matrix
+	Cursor     stylemodel.Cursor
+}
+
+func (DrawImage) paintCommand() {}
+
 // TextRun is one styled fragment within a DrawText line.
 type TextRun struct {
 	NodeID dom.NodeID
@@ -265,6 +288,16 @@ func Build(tree *layout.Tree) *DisplayList {
 		top := box.Y - previousBottom
 		if top < 0 {
 			top = 0
+		}
+		if box.Image {
+			list.Commands = append(list.Commands, DrawImage{
+				NodeID: box.NodeID, URL: box.ImageURL, Alt: box.Alt, X: box.X, Y: box.Y, Top: top,
+				Width: box.Width, Height: box.Height, ImageRect: box.ImageRect, ImageClip: box.ImageClip, Failed: box.ImageFailed,
+				Color: box.Color, Background: box.Background, Opacity: box.Opacity, Clip: cloneLayoutRect(box.Clip), Clips: cloneClipRegions(box.Clips),
+				Border: box.ImageBorder, Radius: box.ImageRadius, Transform: box.Transform, Cursor: box.Cursor,
+			})
+			previousBottom = box.Y + box.Height
+			continue
 		}
 		if box.Input {
 			list.Commands = append(list.Commands, DrawInput{
@@ -399,6 +432,14 @@ func ApplyAnimatedStyles(list *DisplayList, styles stylemodel.Map) {
 					command.Runs[runIndex].Opacity = runStyle.Opacity
 				}
 			}
+			list.Commands[index] = command
+		case DrawImage:
+			computed, ok := styles[command.NodeID]
+			if !ok {
+				continue
+			}
+			command.Color, command.Background, command.Opacity = computed.Color, computed.BackgroundColor, computed.Opacity
+			command.Transform = resolvedPaintTransform(computed, command.X, command.Y, command.Width, command.Height)
 			list.Commands[index] = command
 		case DrawInput:
 			computed, ok := styles[command.NodeID]

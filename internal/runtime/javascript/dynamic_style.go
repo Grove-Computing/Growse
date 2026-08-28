@@ -47,6 +47,47 @@ func (runtime *Runtime) resourceElementChanged(vm *goja.Runtime, element *domapi
 		runtime.prepareDynamicStyle(vm, element)
 	case "link":
 		runtime.prepareDynamicLink(vm, element)
+	case "img":
+		runtime.prepareDynamicImage(element)
+	}
+}
+
+func (runtime *Runtime) prepareDynamicImage(element *domapi.Element) {
+	if element == nil {
+		return
+	}
+	signature := element.OuterHTML()
+	changed, err := runtime.updateResourceSignature(runtime.imageStates, uint64(element.ID()), signature, maxDynamicImages)
+	if err != nil {
+		runtime.recordError(err.Error())
+		return
+	}
+	if !changed {
+		return
+	}
+	runtime.mu.Lock()
+	environment, loadContext := runtime.environment, runtime.runtimeCtx
+	runtime.mu.Unlock()
+	if environment.RefreshImage == nil {
+		return
+	}
+	state, loadErr := environment.RefreshImage(loadContext, element.ID())
+	if loadErr != nil {
+		if !errors.Is(loadErr, context.Canceled) {
+			runtime.recordError(fmt.Sprintf("load image: %v", loadErr))
+		}
+		return
+	}
+	if state.Deferred || environment.Events == nil || environment.Document == nil {
+		return
+	}
+	eventType := events.Error
+	if state.Loaded {
+		eventType = events.Load
+	}
+	environment.Events.DispatchTree(environment.Document, events.New(eventType, element.ID(), false, false))
+	if environment.ImageEventDelivered != nil {
+		environment.ImageEventDelivered(element.ID())
 	}
 }
 

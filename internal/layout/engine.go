@@ -22,6 +22,7 @@ const (
 )
 
 type blockStyle struct {
+	fonts               *FontSet
 	fontSize            float32
 	bold                bool
 	fontFamilies        []string
@@ -132,7 +133,7 @@ type inlineRun struct {
 
 // Build creates a vertical block layout with a minimal inline text flow.
 func Build(document *dom.Document, computed stylemodel.Map, viewportWidth float32) *Tree {
-	return build(document, computed, viewportWidth, 0, 0, 0)
+	return build(document, computed, nil, nil, viewportWidth, 0, 0, 0)
 }
 
 // BuildAtRevision lays out one immutable DOM/style revision.
@@ -144,12 +145,22 @@ func BuildAtRevision(document *dom.Document, computed stylemodel.Map, viewportWi
 
 // BuildWithViewport lays out a document with definite viewport dimensions.
 func BuildWithViewport(document *dom.Document, computed stylemodel.Map, viewportWidth, viewportHeight float32) *Tree {
-	return build(document, computed, viewportWidth, viewportHeight, 0, 0)
+	return build(document, computed, nil, nil, viewportWidth, viewportHeight, 0, 0)
 }
 
 // BuildWithScroll lays out viewport-attached and sticky elements at a scroll offset.
 func BuildWithScroll(document *dom.Document, computed stylemodel.Map, viewportWidth, viewportHeight, scrollX, scrollY float32) *Tree {
-	return build(document, computed, viewportWidth, viewportHeight, max(scrollX, float32(0)), max(scrollY, float32(0)))
+	return build(document, computed, nil, nil, viewportWidth, viewportHeight, max(scrollX, float32(0)), max(scrollY, float32(0)))
+}
+
+// BuildWithScrollAndImages lays out browser-decoded replaced image metadata.
+func BuildWithScrollAndImages(document *dom.Document, computed stylemodel.Map, images map[dom.NodeID]ImageResource, viewportWidth, viewportHeight, scrollX, scrollY float32) *Tree {
+	return build(document, computed, images, nil, viewportWidth, viewportHeight, max(scrollX, float32(0)), max(scrollY, float32(0)))
+}
+
+// BuildWithScrollAndResources lays out decoded images and page-scoped web fonts.
+func BuildWithScrollAndResources(document *dom.Document, computed stylemodel.Map, images map[dom.NodeID]ImageResource, fonts *FontSet, viewportWidth, viewportHeight, scrollX, scrollY float32) *Tree {
+	return build(document, computed, images, fonts, viewportWidth, viewportHeight, max(scrollX, float32(0)), max(scrollY, float32(0)))
 }
 
 // BuildWithScrollAtRevision lays out one immutable DOM/style revision at a scroll offset.
@@ -159,7 +170,7 @@ func BuildWithScrollAtRevision(document *dom.Document, computed stylemodel.Map, 
 	return tree
 }
 
-func build(document *dom.Document, computed stylemodel.Map, viewportWidth, viewportHeight, scrollX, scrollY float32) *Tree {
+func build(document *dom.Document, computed stylemodel.Map, images map[dom.NodeID]ImageResource, fonts *FontSet, viewportWidth, viewportHeight, scrollX, scrollY float32) *Tree {
 	if viewportWidth < pagePadding*2+1 {
 		viewportWidth = pagePadding*2 + 1
 	}
@@ -172,6 +183,8 @@ func build(document *dom.Document, computed stylemodel.Map, viewportWidth, viewp
 	state := engine{
 		tree:           tree,
 		computed:       computed,
+		images:         images,
+		fonts:          fonts,
 		y:              pagePadding,
 		opacity:        1,
 		viewportWidth:  viewportWidth,
@@ -210,6 +223,8 @@ func build(document *dom.Document, computed stylemodel.Map, viewportWidth, viewp
 type engine struct {
 	tree                          *Tree
 	computed                      stylemodel.Map
+	images                        map[dom.NodeID]ImageResource
+	fonts                         *FontSet
 	y                             float32
 	clip                          *Rect
 	clips                         []ClipRegion
@@ -239,6 +254,7 @@ func (e *engine) walk(node *dom.Node, x, width, containingHeight float32, height
 			if computed, ok := e.computed.For(node); ok {
 				textStyle = applyComputed(textStyle, computed)
 			}
+			textStyle.fonts = e.fonts
 			e.addText(node.ID, "text", text, textStyle, x, width)
 		}
 		return
@@ -253,6 +269,10 @@ func (e *engine) walk(node *dom.Node, x, width, containingHeight float32, height
 		// instead of accidentally laying them out in normal flow.
 		if style.layoutPosition == stylemodel.PositionAbsolute || style.layoutPosition == stylemodel.PositionFixed {
 			e.renderPositionedChild(node, style)
+			return
+		}
+		if isImageElement(node, e.images) {
+			e.addImage(node, style, x, width, containingHeight, heightDefinite)
 			return
 		}
 		if isEditableTextControl(node) {
@@ -345,6 +365,120 @@ func (e *engine) addInput(node *dom.Node, style blockStyle, x, width, containing
 
 func isEditableTextControl(node *dom.Node) bool {
 	return forms.IsEditableTextControl(node)
+}
+
+func isImageElement(node *dom.Node, resources map[dom.NodeID]ImageResource) bool {
+	return node != nil && resources != nil && (node.TagName == "img" || node.TagName == "svg")
+}
+
+func (e *engine) addImage(node *dom.Node, style blockStyle, x, width, containingHeight float32, heightDefinite bool) {
+	resource, loaded := e.images[node.ID]
+	if !loaded {
+		alt, _ := node.Attribute("alt")
+		resource = ImageResource{Alt: alt, Error: "image resource is unavailable"}
+	}
+	e.y += style.margin.Top
+	x += style.margin.Left
+	availableWidth := max(width-style.margin.Left-style.margin.Right, float32(1))
+	attributeWidth, hasAttributeWidth := imageDimensionAttribute(node, "width")
+	attributeHeight, hasAttributeHeight := imageDimensionAttribute(node, "height")
+	intrinsicWidth, intrinsicHeight := resource.IntrinsicWidth, resource.IntrinsicHeight
+	if intrinsicWidth <= 0 || intrinsicHeight <= 0 {
+		textWidth, textHeight, _ := measureStyledText(resource.Alt, style)
+		intrinsicWidth, intrinsicHeight = max(textWidth+8, float32(16)), max(textHeight, style.lineHeight, float32(16))
+	}
+	ratio := style.aspectRatio
+	if ratio <= 0 && resource.IntrinsicWidth > 0 && resource.IntrinsicHeight > 0 {
+		ratio = resource.IntrinsicWidth / resource.IntrinsicHeight
+	}
+	contentWidth, widthSpecified := resolveSize(style.width, availableWidth, true)
+	contentHeight, heightSpecified := resolveSize(style.height, containingHeight, heightDefinite)
+	if !widthSpecified {
+		if hasAttributeWidth {
+			contentWidth = attributeWidth
+		} else {
+			contentWidth = intrinsicWidth
+		}
+	}
+	if !heightSpecified {
+		if hasAttributeHeight {
+			contentHeight = attributeHeight
+		} else {
+			contentHeight = intrinsicHeight
+		}
+	}
+	if ratio > 0 {
+		if widthSpecified || hasAttributeWidth {
+			if !heightSpecified && !hasAttributeHeight {
+				contentHeight = contentWidth / ratio
+			}
+		} else if heightSpecified || hasAttributeHeight {
+			contentWidth = contentHeight * ratio
+		}
+	}
+	contentWidth = constrainSize(contentWidth, style.minWidth, style.maxWidth, availableWidth, true)
+	contentHeight = constrainSize(contentHeight, style.minHeight, style.maxHeight, containingHeight, heightDefinite)
+	horizontal := style.padding.Left + style.padding.Right + style.border.Left.Width + style.border.Right.Width
+	vertical := style.padding.Top + style.padding.Bottom + style.border.Top.Width + style.border.Bottom.Width
+	outerWidth, outerHeight := contentWidth, contentHeight
+	if style.boxSizing == stylemodel.BoxSizingContentBox {
+		outerWidth += horizontal
+		outerHeight += vertical
+	} else {
+		contentWidth = max(outerWidth-horizontal, float32(0))
+		contentHeight = max(outerHeight-vertical, float32(0))
+	}
+	contentX := x + style.border.Left.Width + style.padding.Left
+	contentY := e.y + style.border.Top.Width + style.padding.Top
+	imageRect := fitImageRect(contentX, contentY, contentWidth, contentHeight, resource.IntrinsicWidth, resource.IntrinsicHeight, style.objectFit, style.objectPosition)
+	box := Box{
+		Order: e.nextOrder(), StackingID: e.stackingID, NodeID: node.ID, Tag: node.TagName,
+		Image: true, ImageURL: resource.URL, Alt: resource.Alt, ImageRect: imageRect,
+		ImageClip: Rect{X: contentX, Y: contentY, Width: contentWidth, Height: contentHeight}, ImageFailed: !resource.Loaded,
+		ObjectFit: style.objectFit, ObjectPos: style.objectPosition, ImageBorder: style.border, ImageRadius: resolveBorderRadii(style.radius, outerWidth, outerHeight),
+		X: x, Y: e.y, Width: max(outerWidth, float32(1)), Height: max(outerHeight, float32(1)),
+		FontSize: style.fontSize, FontFamilies: append([]string(nil), style.fontFamilies...), Bold: style.bold, Color: style.color, Background: style.background,
+		Clip: cloneRect(e.clip), Clips: cloneClipRegions(e.clips), Opacity: e.opacity * style.opacity, Cursor: style.cursor,
+		Transform: stylemodel.IdentityMatrix(), Hidden: style.hidden,
+	}
+	e.tree.Boxes = append(e.tree.Boxes, box)
+	e.tree.Bounds[node.ID] = Rect{X: x, Y: e.y, Width: box.Width, Height: box.Height}
+	e.y += box.Height + style.margin.Bottom
+}
+
+func imageDimensionAttribute(node *dom.Node, name string) (float32, bool) {
+	raw, ok := node.Attribute(name)
+	if !ok {
+		return 0, false
+	}
+	value, err := strconv.ParseFloat(strings.TrimSpace(raw), 32)
+	if err != nil || value <= 0 || value > 32768 {
+		return 0, false
+	}
+	return float32(value), true
+}
+
+func fitImageRect(x, y, width, height, intrinsicWidth, intrinsicHeight float32, fit stylemodel.ObjectFit, position stylemodel.BackgroundPosition) Rect {
+	if intrinsicWidth <= 0 || intrinsicHeight <= 0 || width <= 0 || height <= 0 {
+		return Rect{X: x, Y: y, Width: width, Height: height}
+	}
+	imageWidth, imageHeight := width, height
+	switch fit {
+	case stylemodel.ObjectFitContain, stylemodel.ObjectFitCover, stylemodel.ObjectFitScaleDown:
+		scale := min(width/intrinsicWidth, height/intrinsicHeight)
+		if fit == stylemodel.ObjectFitCover {
+			scale = max(width/intrinsicWidth, height/intrinsicHeight)
+		} else if fit == stylemodel.ObjectFitScaleDown {
+			scale = min(scale, float32(1))
+		}
+		imageWidth, imageHeight = intrinsicWidth*scale, intrinsicHeight*scale
+	case stylemodel.ObjectFitNone:
+		imageWidth, imageHeight = intrinsicWidth, intrinsicHeight
+	}
+	return Rect{
+		X: x + position.X.Resolve(width-imageWidth), Y: y + position.Y.Resolve(height-imageHeight),
+		Width: imageWidth, Height: imageHeight,
+	}
 }
 
 func isSelectControl(node *dom.Node) bool {
@@ -570,6 +704,13 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 				if childStyle.layoutPosition == stylemodel.PositionAbsolute || childStyle.layoutPosition == stylemodel.PositionFixed {
 					flushInline()
 					positionedChildren = append(positionedChildren, child)
+					continue
+				}
+				if isImageElement(child, e.images) {
+					flushInline()
+					e.addImage(child, childStyle, contentX, contentWidth, childContainingHeight, declaredHeightDefinite)
+					previousBlock = true
+					previousBottomMargin = childStyle.margin.Bottom
 					continue
 				}
 				if isEditableTextControl(child) {
@@ -936,7 +1077,7 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 		}
 		if final && container.textOverflow == stylemodel.TextOverflowEllipsis &&
 			container.whiteSpace == stylemodel.WhiteSpaceNowrap && container.overflowX != stylemodel.OverflowVisible && usedWidth > lineWidth {
-			lineRuns, usedWidth = truncateTextRuns(lineRuns, lineWidth)
+			lineRuns, usedWidth = truncateTextRuns(lineRuns, lineWidth, e.fonts)
 			lineText.Reset()
 			for _, run := range lineRuns {
 				if run.Tag != "::marker" {
@@ -1254,12 +1395,12 @@ func verticalAlignOffset(style blockStyle) float32 {
 	}
 }
 
-func truncateTextRuns(runs []TextRun, width float32) ([]TextRun, float32) {
+func truncateTextRuns(runs []TextRun, width float32, fonts *FontSet) ([]TextRun, float32) {
 	if len(runs) == 0 {
 		return runs, 0
 	}
 	last := runs[len(runs)-1]
-	ellipsisWidth := measureTextRun("…", last)
+	ellipsisWidth := measureTextRun("…", last, fonts)
 	limit := max(width-ellipsisWidth, float32(0))
 	result := make([]TextRun, 0, len(runs))
 	used := float32(0)
@@ -1268,7 +1409,7 @@ func truncateTextRuns(runs []TextRun, width float32) ([]TextRun, float32) {
 		kept.Text, kept.Width = "", 0
 		for _, character := range run.Text {
 			piece := string(character)
-			pieceWidth := measureTextRun(piece, run)
+			pieceWidth := measureTextRun(piece, run, fonts)
 			if kept.Text != "" {
 				pieceWidth += run.LetterSpacing
 			}
@@ -1297,8 +1438,8 @@ func truncateTextRuns(runs []TextRun, width float32) ([]TextRun, float32) {
 	return result, min(used+ellipsisWidth, width)
 }
 
-func measureTextRun(text string, run TextRun) float32 {
-	style := blockStyle{fontSize: run.FontSize, bold: run.Bold, fontStretch: run.FontStretch, letterSpacing: run.LetterSpacing, wordSpacing: run.WordSpacing}
+func measureTextRun(text string, run TextRun, fonts *FontSet) float32 {
+	style := blockStyle{fonts: fonts, fontSize: run.FontSize, bold: run.Bold, fontFamilies: run.FontFamilies, fontStyle: run.FontStyle, fontStretch: run.FontStretch, letterSpacing: run.LetterSpacing, wordSpacing: run.WordSpacing}
 	width, _, _ := measureStyledText(text, style)
 	return width
 }
@@ -1397,6 +1538,7 @@ func (e *engine) styleFor(node *dom.Node) blockStyle {
 	if computed, ok := e.computed.For(node); ok {
 		style = applyComputed(style, computed)
 	}
+	style.fonts = e.fonts
 	if style.cursor == stylemodel.CursorAuto {
 		switch node.TagName {
 		case "a", "button", "select":

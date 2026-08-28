@@ -233,6 +233,18 @@ func TestBuildCreatesInputCommand(t *testing.T) {
 	}
 }
 
+func TestBuildCreatesReplacedImageCommand(t *testing.T) {
+	tree := &layout.Tree{Boxes: []layout.Box{{
+		NodeID: 13, Image: true, ImageURL: "https://example.com/photo.webp", Alt: "Photo",
+		X: 12, Y: 24, Width: 200, Height: 100,
+		ImageRect: layout.Rect{X: 12, Y: -26, Width: 200, Height: 200}, ImageClip: layout.Rect{X: 12, Y: 24, Width: 200, Height: 100},
+	}}}
+	command, ok := Build(tree).Commands[0].(DrawImage)
+	if !ok || command.NodeID != 13 || command.URL != "https://example.com/photo.webp" || command.ImageRect.Height != 200 || command.ImageClip.Height != 100 {
+		t.Fatalf("image command = %#v", Build(tree).Commands[0])
+	}
+}
+
 func TestBuildPreservesMultilineTextareaCommand(t *testing.T) {
 	tree := &layout.Tree{Width: 400, Height: 120, Boxes: []layout.Box{{
 		NodeID: 8, Tag: "textarea", Text: "first\nsecond", Input: true, Multiline: true,

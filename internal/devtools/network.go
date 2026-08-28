@@ -109,6 +109,8 @@ func requestKindName(kind network.RequestKind) string {
 		return "stylesheet"
 	case network.RequestImage:
 		return "image"
+	case network.RequestFont:
+		return "font"
 	case network.RequestScript:
 		return "script"
 	case network.RequestModule:
