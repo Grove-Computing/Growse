@@ -306,7 +306,7 @@ func validateMaxpGlyphCount(table []byte) error {
 }
 
 func validateWOFF2(source []byte) error {
-	if len(source) < 48 || string(source[:4]) != "wOF2" || binary.BigEndian.Uint32(source[8:12]) != uint32(len(source)) {
+	if len(source) < 48 || string(source[:4]) != "wOF2" || uint64(binary.BigEndian.Uint32(source[8:12])) != uint64(len(source)) {
 		return errors.New("invalid WOFF2 header")
 	}
 	numTables := binary.BigEndian.Uint16(source[12:14])
