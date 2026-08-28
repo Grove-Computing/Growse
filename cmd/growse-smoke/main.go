@@ -142,13 +142,13 @@ func runModern(root string) error {
 	}
 	rootNode, ok := page.Document.GetElementByID("__next")
 	if !ok {
-		return errors.New("Next.js SSR root is missing")
+		return errors.New("next.js SSR root is missing")
 	}
 	if token, _ := rootNode.Attribute("data-ssr-token"); token != "next-ssr-root-v1" {
-		return fmt.Errorf("Next.js SSR token = %q", token)
+		return fmt.Errorf("next.js SSR token = %q", token)
 	}
 	if hydrated, _ := rootNode.Attribute("data-hydrated"); hydrated != "true" {
-		return fmt.Errorf("Next.js hydration marker = %q", hydrated)
+		return fmt.Errorf("next.js hydration marker = %q", hydrated)
 	}
 	if !page.Sandbox.Ready || !page.Sandbox.ProcessBoundary || !page.Sandbox.BrokeredHostIO {
 		return fmt.Errorf("modern fixture sandbox is not verified: %+v", page.Sandbox)
@@ -158,20 +158,20 @@ func runModern(root string) error {
 	}
 	counter, ok := page.Document.GetElementByID("next-counter")
 	if !ok || !engine.DispatchClick(counter.ID, 0, 0) {
-		return errors.New("Next.js counter Event was not handled")
+		return errors.New("next.js counter Event was not handled")
 	}
 	if err := waitForText(engine, mutations, "next-count", "1"); err != nil {
 		return err
 	}
 	navigation, ok := page.Document.GetElementByID("next-navigation")
 	if !ok || !engine.DispatchClick(navigation.ID, 0, 0) {
-		return errors.New("Next.js navigation Event was not handled")
+		return errors.New("next.js navigation Event was not handled")
 	}
 	if engine.Page().URL.Path != "/next/about" || text(engine.Page().Document, "next-route") != "/next/about" {
-		return fmt.Errorf("Next.js navigation state = %s / %q", engine.Page().URL.Path, text(engine.Page().Document, "next-route"))
+		return fmt.Errorf("next.js navigation state = %s / %q", engine.Page().URL.Path, text(engine.Page().Document, "next-route"))
 	}
 	if engine.Page().RuntimeError != "" || len(engine.Page().ScriptErrors) != 0 {
-		return fmt.Errorf("Next.js runtime errors = %q / %v", engine.Page().RuntimeError, engine.Page().ScriptErrors)
+		return fmt.Errorf("next.js runtime errors = %q / %v", engine.Page().RuntimeError, engine.Page().ScriptErrors)
 	}
 	return nil
 }
