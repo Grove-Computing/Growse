@@ -60,10 +60,18 @@ func renderNode(source *dom.Node) *xhtml.Node {
 		for _, name := range names {
 			target.Attr = append(target.Attr, xhtml.Attribute{Key: name, Val: source.Attributes[name]})
 		}
-	default:
+	case dom.NodeDocument, dom.NodeDocumentFragment:
 		target.Type = xhtml.DocumentNode
 	}
 	for _, child := range source.Children {
+		if source.Type == dom.NodeElement && source.TagName == "template" && child.Type == dom.NodeDocumentFragment {
+			for _, contentChild := range child.Children {
+				if converted := renderNode(contentChild); converted != nil {
+					target.AppendChild(converted)
+				}
+			}
+			continue
+		}
 		if converted := renderNode(child); converted != nil {
 			target.AppendChild(converted)
 		}

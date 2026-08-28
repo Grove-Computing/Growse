@@ -20,7 +20,7 @@ func documentBaseURL(document *dom.Document, documentURL *url.URL) *url.URL {
 	var result *url.URL
 	var walk func(*dom.Node)
 	walk = func(node *dom.Node) {
-		if node == nil || result != nil {
+		if node == nil || node.Type == dom.NodeDocumentFragment || result != nil {
 			return
 		}
 		if node.Type == dom.NodeElement && node.TagName == "base" {

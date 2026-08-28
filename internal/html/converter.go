@@ -41,6 +41,13 @@ func convertNode(document *dom.Document, parent *dom.Node, source *xhtml.Node) e
 	if err := document.AppendChild(parent, target); err != nil {
 		return fmt.Errorf("append %q node: %w", source.Data, err)
 	}
+	if target.Type == dom.NodeElement && target.TagName == "template" {
+		content := document.CreateDocumentFragment()
+		if err := document.AppendChild(target, content); err != nil {
+			return fmt.Errorf("append template content: %w", err)
+		}
+		return convertChildren(document, content, source)
+	}
 	return convertChildren(document, target, source)
 }
 

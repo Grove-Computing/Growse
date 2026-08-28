@@ -82,6 +82,9 @@ func ComputeWithEnvironment(document *dom.Document, stylesheet *css.Stylesheet, 
 }
 
 func computeNode(node *dom.Node, parent ComputedStyle, stylesheet *css.Stylesheet, state InteractionState, environment Environment, result Map) {
+	if node == nil || node.Type == dom.NodeDocumentFragment {
+		return
+	}
 	computed := inheritedStyle(parent)
 	if node.Type == dom.NodeDocument {
 		computed = initialStyle()

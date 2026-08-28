@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	dommodel "github.com/Grove-Computing/Growse/internal/dom"
 	domapi "github.com/Grove-Computing/Growse/internal/webapi/dom"
 	"github.com/dop251/goja"
 )
@@ -17,6 +18,16 @@ func (runtime *Runtime) installDOM(vm *goja.Runtime) error {
 	document := vm.NewObject()
 	if prototype := domInterfacePrototype(vm, "Document"); prototype != nil {
 		_ = document.SetPrototype(prototype)
+	}
+	for name, getter := range map[string]func() *domapi.Element{
+		"documentElement": runtime.domAPI.DocumentElement,
+		"head":            runtime.domAPI.Head,
+		"body":            runtime.domAPI.Body,
+	} {
+		accessor := vm.ToValue(func(goja.FunctionCall) goja.Value { return runtime.elementValue(vm, getter()) })
+		if err := document.DefineAccessorProperty(name, accessor, nil, goja.FLAG_FALSE, goja.FLAG_TRUE); err != nil {
+			return err
+		}
 	}
 	currentScriptGetter := vm.ToValue(func(goja.FunctionCall) goja.Value {
 		if runtime.currentScript == nil {
@@ -84,6 +95,29 @@ func (runtime *Runtime) installDOM(vm *goja.Runtime) error {
 	if err := document.Set("createElement", func(call goja.FunctionCall) goja.Value {
 		element := runtime.domAPI.CreateElement(call.Argument(0).String())
 		return runtime.elementValue(vm, element)
+	}); err != nil {
+		return err
+	}
+	if err := document.Set("createElementNS", func(call goja.FunctionCall) goja.Value {
+		namespace := ""
+		if !goja.IsNull(call.Argument(0)) && !goja.IsUndefined(call.Argument(0)) {
+			namespace = call.Argument(0).String()
+		}
+		return runtime.elementValue(vm, runtime.domAPI.CreateElementNS(namespace, call.Argument(1).String()))
+	}); err != nil {
+		return err
+	}
+	if err := document.Set("createDocumentFragment", func(goja.FunctionCall) goja.Value {
+		return runtime.elementValue(vm, runtime.domAPI.CreateDocumentFragment())
+	}); err != nil {
+		return err
+	}
+	if err := document.Set("importNode", func(call goja.FunctionCall) goja.Value {
+		object, ok := call.Argument(0).(*goja.Object)
+		if !ok || runtime.elements[object] == nil {
+			panic(vm.NewTypeError("importNode source is not a Node"))
+		}
+		return runtime.elementValue(vm, runtime.domAPI.ImportNode(runtime.elements[object], call.Argument(1).ToBoolean()))
 	}); err != nil {
 		return err
 	}
@@ -307,6 +341,12 @@ func (runtime *Runtime) elementValue(vm *goja.Runtime, element *domapi.Element) 
 	_ = object.DefineAccessorProperty("children", childrenGetter, nil, goja.FLAG_FALSE, goja.FLAG_TRUE)
 	parentGetter := vm.ToValue(func(goja.FunctionCall) goja.Value { return runtime.elementValue(vm, element.ParentElement()) })
 	_ = object.DefineAccessorProperty("parentElement", parentGetter, nil, goja.FLAG_FALSE, goja.FLAG_TRUE)
+	if strings.EqualFold(element.TagName(), "template") {
+		contentGetter := vm.ToValue(func(goja.FunctionCall) goja.Value {
+			return runtime.elementValue(vm, element.TemplateContent())
+		})
+		_ = object.DefineAccessorProperty("content", contentGetter, nil, goja.FLAG_FALSE, goja.FLAG_TRUE)
+	}
 	innerHTMLGetter := vm.ToValue(func(goja.FunctionCall) goja.Value { return vm.ToValue(element.InnerHTML()) })
 	innerHTMLSetter := vm.ToValue(func(call goja.FunctionCall) goja.Value {
 		if !element.SetInnerHTML(call.Argument(0).String()) {
@@ -401,7 +441,9 @@ func domInterfacePrototype(vm *goja.Runtime, name string) *goja.Object {
 
 func (runtime *Runtime) elementPrototype(vm *goja.Runtime, element *domapi.Element) *goja.Object {
 	name := "Node"
-	if tagName := element.TagName(); tagName != "" {
+	if element.NodeType() == dommodel.NodeDocumentFragment {
+		name = "DocumentFragment"
+	} else if tagName := element.TagName(); tagName != "" {
 		name = "HTMLElement"
 		switch strings.ToLower(tagName) {
 		case "script":

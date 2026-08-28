@@ -57,6 +57,15 @@ func (element *Element) ID() dommodel.NodeID {
 	return element.id
 }
 
+// NodeType returns the browser-owned node kind.
+func (element *Element) NodeType() dommodel.NodeType {
+	node, ok := element.node()
+	if !ok {
+		return dommodel.NodeDocument
+	}
+	return node.Type
+}
+
 // PreventDefault cancels a cancelable browser default action such as form submission.
 func (event Event) PreventDefault() {
 	if event.preventDefault != nil {
@@ -124,6 +133,26 @@ func (api *API) GetElementsByTagName(tagName string) []*Element {
 	return api.elements(api.document.GetElementsByTagName(tagName))
 }
 
+// DocumentElement returns the connected root HTML element.
+func (api *API) DocumentElement() *Element { return api.firstConnectedElement("html") }
+
+// Head returns the connected head element.
+func (api *API) Head() *Element { return api.firstConnectedElement("head") }
+
+// Body returns the connected body element.
+func (api *API) Body() *Element { return api.firstConnectedElement("body") }
+
+func (api *API) firstConnectedElement(tagName string) *Element {
+	if api == nil || api.document == nil {
+		return nil
+	}
+	nodes := api.document.GetElementsByTagName(tagName)
+	if len(nodes) == 0 {
+		return nil
+	}
+	return api.element(nodes[0])
+}
+
 // ElementByNodeID returns a connected node handle by its document-scoped identity.
 func (api *API) ElementByNodeID(id dommodel.NodeID) *Element {
 	if api == nil || api.document == nil || id == 0 {
@@ -145,7 +174,47 @@ func (api *API) CreateElement(tagName string) *Element {
 	if !validTagName(tagName) {
 		return nil
 	}
-	return api.element(api.document.CreateElement(tagName, nil))
+	node := api.document.CreateElement(tagName, nil)
+	if strings.EqualFold(tagName, "template") {
+		_ = api.document.AppendChild(node, api.document.CreateDocumentFragment())
+	}
+	return api.element(node)
+}
+
+// CreateElementNS supports the HTML and SVG namespaces used by hydration fixtures.
+func (api *API) CreateElementNS(namespace, tagName string) *Element {
+	namespace = strings.TrimSpace(namespace)
+	if namespace != "" && namespace != "http://www.w3.org/1999/xhtml" && namespace != "http://www.w3.org/2000/svg" {
+		return nil
+	}
+	return api.CreateElement(tagName)
+}
+
+// CreateDocumentFragment returns a detached fragment owned by this Document.
+func (api *API) CreateDocumentFragment() *Element {
+	if api == nil || api.document == nil || api.document.OwnedNodeCount() >= maxDOMOwnedNodes {
+		return nil
+	}
+	return api.element(api.document.CreateDocumentFragment())
+}
+
+// ImportNode clones a node into this Document without connecting it.
+func (api *API) ImportNode(source *Element, deep bool) *Element {
+	if api == nil || api.document == nil || source == nil || source.document != api.document {
+		return nil
+	}
+	node, ok := source.node()
+	if !ok || node.Type == dommodel.NodeDocument {
+		return nil
+	}
+	needed := 1
+	if deep {
+		needed = countSubtreeNodes(node)
+	}
+	if needed > maxDOMCollectionResults || api.document.OwnedNodeCount()+needed > maxDOMOwnedNodes {
+		return nil
+	}
+	return api.element(cloneNode(api.document, node, deep))
 }
 
 // CreateTextNode creates a bounded detached text node owned by the Document.
@@ -530,6 +599,20 @@ func (element *Element) Children() []*Element {
 	return api.elements(nodes)
 }
 
+// TemplateContent returns the detached DocumentFragment owned by a template.
+func (element *Element) TemplateContent() *Element {
+	node, ok := element.node()
+	if !ok || node.Type != dommodel.NodeElement || node.TagName != "template" {
+		return nil
+	}
+	for _, child := range node.Children {
+		if child.Type == dommodel.NodeDocumentFragment {
+			return (&API{document: element.document, events: element.events, onMutation: element.onMutation}).element(child)
+		}
+	}
+	return nil
+}
+
 // IDValue returns the id attribute.
 func (element *Element) IDValue() string { value, _ := element.GetAttribute("id"); return value }
 
@@ -557,6 +640,11 @@ func (element *Element) InnerHTML() string {
 	if !ok || node.Type != dommodel.NodeElement {
 		return ""
 	}
+	if node.TagName == "template" {
+		if content := element.TemplateContent(); content != nil {
+			node, _ = content.node()
+		}
+	}
 	value, _ := htmlparser.SerializeChildren(node)
 	return value
 }
@@ -567,13 +655,22 @@ func (element *Element) SetInnerHTML(value string) bool {
 	if !ok || parent.Type != dommodel.NodeElement || len(value) > maxDOMInnerHTMLBytes {
 		return false
 	}
-	fragment, err := htmlparser.ParseFragment(value, parent.TagName)
+	contextTag := parent.TagName
+	if parent.TagName == "template" {
+		content := element.TemplateContent()
+		if content == nil {
+			return false
+		}
+		parent, _ = content.node()
+		contextTag = "template"
+	}
+	fragment, err := htmlparser.ParseFragment(value, contextTag)
 	if err != nil || fragment.NodeCount()-1 > maxDOMCollectionResults || element.document.OwnedNodeCount()+fragment.NodeCount()-1 > maxDOMOwnedNodes {
 		return false
 	}
 	children := make([]*dommodel.Node, 0, len(fragment.Root.Children))
 	for _, child := range fragment.Root.Children {
-		children = append(children, cloneNode(element.document, child))
+		children = append(children, cloneNode(element.document, child, true))
 	}
 	if !element.document.ReplaceChildren(parent, children) {
 		return false
@@ -696,7 +793,7 @@ func (element *Element) relationship(child *Element) (*dommodel.Node, *dommodel.
 	}
 	parentNode, parentOK := element.node()
 	childNode, childOK := child.node()
-	return parentNode, childNode, parentOK && childOK && parentNode.Type == dommodel.NodeElement
+	return parentNode, childNode, parentOK && childOK && (parentNode.Type == dommodel.NodeElement || parentNode.Type == dommodel.NodeDocumentFragment)
 }
 
 func (element *Element) mutationNodes(children []*Element) (*dommodel.Node, []*dommodel.Node, bool) {
@@ -704,21 +801,30 @@ func (element *Element) mutationNodes(children []*Element) (*dommodel.Node, []*d
 		return nil, nil, false
 	}
 	parent, ok := element.node()
-	if !ok || parent.Type != dommodel.NodeElement {
+	if !ok || parent.Type != dommodel.NodeElement && parent.Type != dommodel.NodeDocumentFragment {
 		return nil, nil, false
 	}
-	nodes := make([]*dommodel.Node, len(children))
+	nodes := make([]*dommodel.Node, 0, len(children))
 	seen := make(map[dommodel.NodeID]bool, len(children))
-	for index, child := range children {
+	for _, child := range children {
 		if child == nil || child.document != element.document {
 			return nil, nil, false
 		}
 		node, ok := child.node()
-		if !ok || node == element.document.Root || seen[node.ID] {
+		if !ok || node == element.document.Root {
 			return nil, nil, false
 		}
-		seen[node.ID] = true
-		nodes[index] = node
+		candidates := []*dommodel.Node{node}
+		if node.Type == dommodel.NodeDocumentFragment {
+			candidates = append([]*dommodel.Node(nil), node.Children...)
+		}
+		for _, candidate := range candidates {
+			if seen[candidate.ID] {
+				return nil, nil, false
+			}
+			seen[candidate.ID] = true
+			nodes = append(nodes, candidate)
+		}
 	}
 	return parent, nodes, true
 }
@@ -757,15 +863,33 @@ func (element *Element) notifyMutation() {
 	}
 }
 
-func cloneNode(document *dommodel.Document, source *dommodel.Node) *dommodel.Node {
+func cloneNode(document *dommodel.Document, source *dommodel.Node, deep bool) *dommodel.Node {
 	if source.Type == dommodel.NodeText {
 		return document.CreateText(source.Text)
 	}
-	target := document.CreateElement(source.TagName, source.Attributes)
-	for _, child := range source.Children {
-		_ = document.AppendChild(target, cloneNode(document, child))
+	var target *dommodel.Node
+	if source.Type == dommodel.NodeDocumentFragment {
+		target = document.CreateDocumentFragment()
+	} else {
+		target = document.CreateElement(source.TagName, source.Attributes)
+	}
+	if deep {
+		for _, child := range source.Children {
+			_ = document.AppendChild(target, cloneNode(document, child, true))
+		}
 	}
 	return target
+}
+
+func countSubtreeNodes(node *dommodel.Node) int {
+	if node == nil {
+		return 0
+	}
+	count := 1
+	for _, child := range node.Children {
+		count += countSubtreeNodes(child)
+	}
+	return count
 }
 
 func (element *Element) textInputNode() (*dommodel.Node, bool) {

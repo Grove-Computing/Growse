@@ -140,7 +140,7 @@ func flattenSnapshot(node NodeSnapshot, flat map[NodeID]NodeSnapshot, depth int)
 	if node.ID == 0 {
 		return errors.New("DOM snapshot contains a zero node ID")
 	}
-	if node.Type > NodeText {
+	if node.Type > NodeDocumentFragment {
 		return fmt.Errorf("DOM snapshot node %d has invalid type %d", node.ID, node.Type)
 	}
 	if _, duplicate := flat[node.ID]; duplicate {

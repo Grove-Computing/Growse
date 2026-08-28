@@ -11,6 +11,7 @@ const (
 	NodeDocument NodeType = iota
 	NodeElement
 	NodeText
+	NodeDocumentFragment
 )
 
 // Node is one item in a Growse DOM tree.

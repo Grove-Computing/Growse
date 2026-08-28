@@ -61,3 +61,62 @@ func TestDOMInterfacesKeepStableWrappersAndPrototypeChains(t *testing.T) {
 		t.Fatalf("DOM interface result = %q, want %q", message, want)
 	}
 }
+
+func TestDocumentRootsFragmentsAndTemplateContentStayConnectedCorrectly(t *testing.T) {
+	document, err := htmlparser.Parse(strings.NewReader(`<html><head><style id="active">main { color: red }</style></head><body>
+		<template id="card"><article id="template-child">card</article><script id="template-script">throw new Error("must not run")</script><style id="template-style">body { color: blue }</style></template>
+		<main id="host"></main><script id="boot"></script></body></html>`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var message string
+	runtime := New()
+	t.Cleanup(func() { _ = runtime.Stop() })
+	source := `
+		var template = document.getElementById("card");
+		var content = template.content;
+		var contentChild = content.children[0];
+		var imported = document.importNode(content, true);
+		var fragment = document.createDocumentFragment();
+		var hydrated = document.createElementNS("http://www.w3.org/1999/xhtml", "section");
+		hydrated.id = "hydrated";
+		fragment.appendChild(hydrated);
+		var host = document.getElementById("host");
+		host.appendChild(fragment);
+		console.log([
+			document.documentElement.tagName,
+			document.head.tagName,
+			document.body.tagName,
+			document.currentScript.id,
+			document.scripts.length,
+			document.styleSheets.length,
+			content instanceof DocumentFragment,
+			content.isConnected,
+			contentChild.isConnected,
+			document.getElementById("template-child") === null,
+			imported instanceof DocumentFragment,
+			imported.children.length,
+			fragment.children.length,
+			hydrated.isConnected,
+			document.getElementById("hydrated") === hydrated,
+			template.innerHTML.indexOf("template-child") >= 0
+		].join("|"));`
+	environment := runtimemodel.Environment{
+		Document: document,
+		ConsoleRecord: func(_, value string) {
+			message = value
+		},
+	}
+	if err := runtime.Load(context.Background(), []runtimemodel.Script{{
+		Engine: runtimemodel.EngineJavaScript, Inline: true, DocumentOrder: 0, Source: source,
+	}}, environment); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	want := "HTML|HEAD|BODY|boot|1|1|true|false|false|true|true|3|0|true|true|true"
+	if message != want {
+		t.Fatalf("Document fragment result = %q, want %q", message, want)
+	}
+}
