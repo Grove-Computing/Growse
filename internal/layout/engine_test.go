@@ -59,6 +59,46 @@ func TestBuildCreatesMultilineTextareaFromTextContent(t *testing.T) {
 	}
 }
 
+func TestBuildLaysOutReplacedImageWithIntrinsicRatioAndObjectFit(t *testing.T) {
+	document := dom.NewDocument()
+	imageNode := document.CreateElement("img", map[string]string{"src": "photo.png", "alt": "Photo"})
+	appendNodes(t, document, [2]*dom.Node{document.Root, imageNode})
+	stylesheet, err := css.Parse(strings.NewReader(`img { width: 200px; height: 100px; object-fit: cover; object-position: right 25%; }`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resources := map[dom.NodeID]ImageResource{imageNode.ID: {
+		URL: "https://example.com/photo.png", IntrinsicWidth: 100, IntrinsicHeight: 100, Alt: "Photo", Loaded: true,
+	}}
+	tree := BuildWithScrollAndImages(document, style.Compute(document, stylesheet), resources, 800, 600, 0, 0)
+	if len(tree.Boxes) != 1 {
+		t.Fatalf("image box count = %d, want 1", len(tree.Boxes))
+	}
+	box := tree.Boxes[0]
+	if !box.Image || box.Width != 200 || box.Height != 100 || box.ImageRect.Width != 200 || box.ImageRect.Height != 200 || box.ImageRect.X != box.ImageClip.X || box.ImageRect.Y != box.ImageClip.Y-25 {
+		t.Fatalf("replaced image layout = %#v", box)
+	}
+}
+
+func TestBuildUsesIntrinsicRatioForCSSWidthAndAltFallback(t *testing.T) {
+	document := dom.NewDocument()
+	loaded := document.CreateElement("img", map[string]string{"src": "wide.png"})
+	failed := document.CreateElement("img", map[string]string{"src": "missing.png", "alt": "Missing image"})
+	appendNodes(t, document, [2]*dom.Node{document.Root, loaded}, [2]*dom.Node{document.Root, failed})
+	stylesheet, err := css.Parse(strings.NewReader(`img:first-child { width: 180px; }`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resources := map[dom.NodeID]ImageResource{
+		loaded.ID: {URL: "https://example.com/wide.png", IntrinsicWidth: 360, IntrinsicHeight: 180, Loaded: true},
+		failed.ID: {URL: "https://example.com/missing.png", Alt: "Missing image", Error: "decode failed"},
+	}
+	tree := BuildWithScrollAndImages(document, style.Compute(document, stylesheet), resources, 800, 600, 0, 0)
+	if len(tree.Boxes) != 2 || tree.Boxes[0].Width != 180 || tree.Boxes[0].Height != 90 || !tree.Boxes[1].ImageFailed || tree.Boxes[1].Alt != "Missing image" || tree.Boxes[1].Width <= 16 {
+		t.Fatalf("image layouts = %#v", tree.Boxes)
+	}
+}
+
 func TestBuildWrapsLongText(t *testing.T) {
 	document := dom.NewDocument()
 	p := document.CreateElement("p", nil)

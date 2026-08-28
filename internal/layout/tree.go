@@ -129,6 +129,16 @@ type Rect struct {
 	X, Y, Width, Height float32
 }
 
+// ImageResource is browser-decoded metadata for one replaced image element.
+// Layout never fetches or decodes network content.
+type ImageResource struct {
+	URL                             string
+	IntrinsicWidth, IntrinsicHeight float32
+	Alt                             string
+	Loaded                          bool
+	Error                           string
+}
+
 // Box is one line of visible page content.
 type Box struct {
 	Order       int
@@ -147,6 +157,16 @@ type Box struct {
 	Disabled    bool
 	ReadOnly    bool
 	Button      bool
+	Image       bool
+	ImageURL    string
+	Alt         string
+	ImageRect   Rect
+	ImageClip   Rect
+	ImageFailed bool
+	ObjectFit   stylemodel.ObjectFit
+	ObjectPos   stylemodel.BackgroundPosition
+	ImageBorder stylemodel.Borders
+	ImageRadius BorderRadii
 	Appearance  stylemodel.Appearance
 	AccentColor uint32
 	Cursor      stylemodel.Cursor

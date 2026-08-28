@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
 	"mime"
 	"net/http"
 	"net/url"
@@ -1347,6 +1348,12 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	}
 	computedStyles := computeStableStyles(document, stylesheet, style.InteractionState{}, 1280, 720, reducedMotion)
 	backgroundImages, backgroundErrors := loadBackgroundImages(ctx, imageResources, computedStyles)
+	var replacedImages map[dom.NodeID]layoutengine.ImageResource
+	var decodedImages map[string]image.Image
+	var imageErrors []string
+	if engine == runtimemodel.EngineJavaScript {
+		replacedImages, decodedImages, imageErrors = loadReplacedImages(ctx, imageResources, baseURL, document)
+	}
 	scripts, scriptErrors := loadScriptsForEngineWithBase(ctx, scriptResources, response.URL, baseURL, document, engine)
 	var importMap map[string]string
 	if engine == runtimemodel.EngineJavaScript {
@@ -1373,6 +1380,9 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 		ViewportHeight:   720,
 		BackgroundImages: backgroundImages,
 		BackgroundErrors: backgroundErrors,
+		ImageResources:   replacedImages,
+		Images:           decodedImages,
+		ImageErrors:      imageErrors,
 		Engine:           engine,
 		Scripts:          scripts,
 		ImportMap:        importMap,

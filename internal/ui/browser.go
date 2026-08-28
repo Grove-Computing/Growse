@@ -118,6 +118,7 @@ type BrowserUI struct {
 	checkableButtons  map[dom.NodeID]*widget.Clickable
 	formButtons       map[dom.NodeID]*widget.Clickable
 	layoutBuild       func(*dom.Document, stylemodel.Map, float32, float32, float32, float32) *layoutengine.Tree
+	layoutBuildImages func(*dom.Document, stylemodel.Map, map[dom.NodeID]layoutengine.ImageResource, float32, float32, float32, float32) *layoutengine.Tree
 	layoutCache       documentLayoutCache
 	scrollRevision    uint64
 	updater           ApplicationUpdater
@@ -285,37 +286,38 @@ func NewBrowserUIWithTabsAndUpdater(navigator Navigator, tabs TabController, inv
 	cursorImage, cursorErr := loadGopherCursor()
 	updateContext, cancelUpdate := context.WithCancel(context.Background())
 	ui := &BrowserUI{
-		theme:            material.NewTheme(),
-		navigator:        navigator,
-		tabs:             tabs,
-		invalidate:       invalidate,
-		results:          make(chan navigationResult, browser.DefaultSessionPolicy().MaxTabs),
-		navigations:      make(map[browser.TabID]tabNavigation),
-		tabRenderStates:  make(map[browser.TabID]tabRenderState),
-		gopher:           paint.NewImageOp(gopherImage),
-		backIcon:         mustIcon(widget.NewIcon(icons.NavigationArrowBack)),
-		forwardIcon:      mustIcon(widget.NewIcon(icons.NavigationArrowForward)),
-		reloadIcon:       mustIcon(widget.NewIcon(icons.NavigationRefresh)),
-		pageTitle:        "新しい Web を Go で開く",
-		status:           "URLを入力して Gopher ボタンを押してください",
-		pageStatus:       "URLを入力して Gopher ボタンを押してください",
-		inputEditors:     make(map[dom.NodeID]*widget.Editor),
-		inputFocused:     make(map[dom.NodeID]bool),
-		inputCommitted:   make(map[dom.NodeID]string),
-		selectButtons:    make(map[dom.NodeID]*widget.Clickable),
-		checkableButtons: make(map[dom.NodeID]*widget.Clickable),
-		formButtons:      make(map[dom.NodeID]*widget.Clickable),
-		tabRowButtons:    make(map[browser.TabID]*widget.Clickable),
-		tabCloseButtons:  make(map[browser.TabID]*widget.Clickable),
-		tabShortcutDown:  make(map[key.Name]bool),
-		devToolsStates:   make(map[browser.TabID]devToolsTabState),
-		inspectorButtons: make(map[browser.TabID]map[dom.NodeID]*widget.Clickable),
-		layoutBuild:      layoutengine.BuildWithScroll,
-		updater:          applicationUpdater,
-		updateResults:    make(chan applicationUpdateResult, 2),
-		updateContext:    updateContext,
-		cancelUpdate:     cancelUpdate,
-		onUpdateApplied:  onUpdateApplied,
+		theme:             material.NewTheme(),
+		navigator:         navigator,
+		tabs:              tabs,
+		invalidate:        invalidate,
+		results:           make(chan navigationResult, browser.DefaultSessionPolicy().MaxTabs),
+		navigations:       make(map[browser.TabID]tabNavigation),
+		tabRenderStates:   make(map[browser.TabID]tabRenderState),
+		gopher:            paint.NewImageOp(gopherImage),
+		backIcon:          mustIcon(widget.NewIcon(icons.NavigationArrowBack)),
+		forwardIcon:       mustIcon(widget.NewIcon(icons.NavigationArrowForward)),
+		reloadIcon:        mustIcon(widget.NewIcon(icons.NavigationRefresh)),
+		pageTitle:         "新しい Web を Go で開く",
+		status:            "URLを入力して Gopher ボタンを押してください",
+		pageStatus:        "URLを入力して Gopher ボタンを押してください",
+		inputEditors:      make(map[dom.NodeID]*widget.Editor),
+		inputFocused:      make(map[dom.NodeID]bool),
+		inputCommitted:    make(map[dom.NodeID]string),
+		selectButtons:     make(map[dom.NodeID]*widget.Clickable),
+		checkableButtons:  make(map[dom.NodeID]*widget.Clickable),
+		formButtons:       make(map[dom.NodeID]*widget.Clickable),
+		tabRowButtons:     make(map[browser.TabID]*widget.Clickable),
+		tabCloseButtons:   make(map[browser.TabID]*widget.Clickable),
+		tabShortcutDown:   make(map[key.Name]bool),
+		devToolsStates:    make(map[browser.TabID]devToolsTabState),
+		inspectorButtons:  make(map[browser.TabID]map[dom.NodeID]*widget.Clickable),
+		layoutBuild:       layoutengine.BuildWithScroll,
+		layoutBuildImages: layoutengine.BuildWithScrollAndImages,
+		updater:           applicationUpdater,
+		updateResults:     make(chan applicationUpdateResult, 2),
+		updateContext:     updateContext,
+		cancelUpdate:      cancelUpdate,
+		onUpdateApplied:   onUpdateApplied,
 	}
 	if cursorErr != nil {
 		slog.Error("Gopherカーソルを初期化できませんでした", "component", "ui", "error", cursorErr)
@@ -1784,6 +1786,8 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 			return ui.layoutDrawButton(gtx, command)
 		case paintmodel.DrawBox:
 			return layoutDrawBox(gtx, command, page.BackgroundImages)
+		case paintmodel.DrawImage:
+			return ui.layoutDrawImage(gtx, command, page.Images)
 		default:
 			return layout.Dimensions{}
 		}
@@ -1821,7 +1825,13 @@ func (ui *BrowserUI) cachedDocumentTree(page *browser.Page, viewportWidth, viewp
 	if build == nil {
 		build = layoutengine.BuildWithScroll
 	}
-	tree := build(page.Document, page.ComputedStyles, viewportWidth, viewportHeight, 0, 0)
+	buildTree := func(scrollY float32) *layoutengine.Tree {
+		if page.ImageResources != nil && ui.layoutBuildImages != nil {
+			return ui.layoutBuildImages(page.Document, page.ComputedStyles, page.ImageResources, viewportWidth, viewportHeight, 0, scrollY)
+		}
+		return build(page.Document, page.ComputedStyles, viewportWidth, viewportHeight, 0, scrollY)
+	}
+	tree := buildTree(0)
 	tree.Revision = page.StyleRevision
 	page.SyncFrameViewports(tree)
 	displayList := paintmodel.Build(tree)
@@ -1829,7 +1839,7 @@ func (ui *BrowserUI) cachedDocumentTree(page *browser.Page, viewportWidth, viewp
 		if firstY, ok := commandDocumentY(displayList.Commands[position.First]); ok {
 			scrollY := max(firstY+float32(position.Offset)/pxPerDp, float32(0))
 			if scrollY > 0 {
-				tree = build(page.Document, page.ComputedStyles, viewportWidth, viewportHeight, 0, scrollY)
+				tree = buildTree(scrollY)
 				tree.Revision = page.StyleRevision
 				page.SyncFrameViewports(tree)
 			}
@@ -2023,9 +2033,63 @@ func commandDocumentY(command paintmodel.Command) (float32, bool) {
 		return command.Y - command.Top, true
 	case paintmodel.DrawBox:
 		return command.Y - command.Top, true
+	case paintmodel.DrawImage:
+		return command.Y - command.Top, true
 	default:
 		return 0, false
 	}
+}
+
+func (ui *BrowserUI) layoutDrawImage(gtx layout.Context, command paintmodel.DrawImage, images map[string]image.Image) layout.Dimensions {
+	left := unit.Dp(command.X)
+	viewportWidth := float32(gtx.Constraints.Max.X) / gtx.Metric.PxPerDp
+	right := unit.Dp(max(viewportWidth-command.X-command.Width, float32(0)))
+	return layout.Inset{Top: unit.Dp(command.Top), Left: left, Right: right}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		width, height := gtx.Dp(unit.Dp(command.Width)), gtx.Dp(unit.Dp(command.Height))
+		gtx.Constraints = layout.Exact(image.Pt(width, height))
+		if command.Transform != (stylemodel.Matrix{}) && command.Transform != stylemodel.IdentityMatrix() {
+			defer pushCSSMatrix(gtx, command.Transform, command.X, command.Y).Pop()
+		}
+		if command.Clip != nil {
+			defer commandClip(gtx, command.Clip, command.X, command.Y).Push(gtx.Ops).Pop()
+		}
+		for _, region := range command.Clips {
+			defer commandRoundedClip(gtx, region, command.X, command.Y).Push(gtx.Ops).Pop()
+		}
+		cursorArea := clip.Rect{Max: image.Pt(width, height)}.Push(gtx.Ops)
+		cssCursor(command.Cursor).Add(gtx.Ops)
+		defer cursorArea.Pop()
+		if command.Opacity < 1 {
+			defer paint.PushOpacity(gtx.Ops, max(command.Opacity, 0)).Pop()
+		}
+		if command.Background != 0 {
+			paint.FillShape(gtx.Ops, rgba(command.Background), roundedClip(gtx, command.Radius, width, height))
+		}
+		if source := images[command.URL]; source != nil && !command.Failed {
+			targetWidth := max(gtx.Dp(unit.Dp(command.ImageRect.Width)), 1)
+			targetHeight := max(gtx.Dp(unit.Dp(command.ImageRect.Height)), 1)
+			raster := image.NewNRGBA(image.Rect(0, 0, targetWidth, targetHeight))
+			xdraw.CatmullRom.Scale(raster, raster.Bounds(), source, source.Bounds(), imagedraw.Src, nil)
+			clipMin := image.Pt(gtx.Dp(unit.Dp(command.ImageClip.X-command.X)), gtx.Dp(unit.Dp(command.ImageClip.Y-command.Y)))
+			clipMax := clipMin.Add(image.Pt(gtx.Dp(unit.Dp(command.ImageClip.Width)), gtx.Dp(unit.Dp(command.ImageClip.Height))))
+			area := clip.Rect{Min: clipMin, Max: clipMax}.Push(gtx.Ops)
+			offset := op.Offset(image.Pt(gtx.Dp(unit.Dp(command.ImageRect.X-command.X)), gtx.Dp(unit.Dp(command.ImageRect.Y-command.Y)))).Push(gtx.Ops)
+			imageGTX := gtx
+			imageGTX.Constraints = layout.Exact(raster.Bounds().Size())
+			widget.Image{Src: paint.NewImageOp(raster), Fit: widget.Unscaled, Scale: 1 / gtx.Metric.PxPerDp}.Layout(imageGTX)
+			offset.Pop()
+			area.Pop()
+		} else if command.Alt != "" {
+			inset := layout.UniformInset(unit.Dp(4))
+			inset.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				label := material.Label(ui.theme, unit.Sp(14), command.Alt)
+				label.Color = rgba(command.Color)
+				return label.Layout(gtx)
+			})
+		}
+		paintBoxBorder(gtx, command.Border, width, height)
+		return layout.Dimensions{Size: image.Pt(width, height)}
+	})
 }
 
 func layoutDrawBox(gtx layout.Context, command paintmodel.DrawBox, backgroundImages map[string]image.Image) layout.Dimensions {

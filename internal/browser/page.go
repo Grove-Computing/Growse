@@ -41,6 +41,9 @@ type Page struct {
 	Transitions      *style.TransitionRegistry
 	BackgroundImages map[string]image.Image
 	BackgroundErrors []string
+	ImageResources   map[dom.NodeID]layoutmodel.ImageResource
+	Images           map[string]image.Image
+	ImageErrors      []string
 	Engine           runtimemodel.Engine
 	Scripts          []Script
 	ImportMap        map[string]string
