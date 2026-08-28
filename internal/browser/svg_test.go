@@ -86,3 +86,63 @@ func TestInlineSVGRasterParticipatesInLayout(t *testing.T) {
 		t.Fatalf("inline SVG layout = %#v", tree.Boxes)
 	}
 }
+
+func TestValidateSVGRejectsExecutableAndExternalContent(t *testing.T) {
+	tests := map[string]string{
+		"script":          `<svg width="10" height="10"><script>alert(1)</script></svg>`,
+		"event":           `<svg width="10" height="10"><rect width="10" height="10" onclick="alert(1)"/></svg>`,
+		"foreign object":  `<svg width="10" height="10"><foreignObject><div>HTML</div></foreignObject></svg>`,
+		"external image":  `<svg width="10" height="10"><image href="https://example.com/x.png"/></svg>`,
+		"animation":       `<svg width="10" height="10"><rect width="10" height="10"><animate attributeName="x"/></rect></svg>`,
+		"external paint":  `<svg width="10" height="10"><rect width="10" height="10" fill="url(https://example.com/p.svg#x)"/></svg>`,
+		"entity":          `<!DOCTYPE svg [<!ENTITY xxe SYSTEM "file:///etc/passwd">]><svg width="10" height="10"><text>&xxe;</text></svg>`,
+		"surface":         `<svg width="32768" height="32768"><rect width="1" height="1"/></svg>`,
+		"unsupported tag": `<svg width="10" height="10"><filter id="blur"/></svg>`,
+	}
+	for name, source := range tests {
+		t.Run(name, func(t *testing.T) {
+			if _, _, _, err := rasterizeSVG([]byte(source)); err == nil {
+				t.Fatal("unsafe SVG was accepted")
+			}
+		})
+	}
+}
+
+func TestValidateSVGAppliesEncodedTreeAndPathLimits(t *testing.T) {
+	if err := validateSVG(make([]byte, maxSVGBytes+1)); err == nil {
+		t.Fatal("oversized SVG was accepted")
+	}
+	overNodes := `<svg width="10" height="10">` + strings.Repeat(`<g></g>`, maxSVGNodes) + `</svg>`
+	if err := validateSVG([]byte(overNodes)); err == nil {
+		t.Fatal("SVG node bomb was accepted")
+	}
+	overPath := `<svg width="10" height="10"><path d="` + strings.Repeat(`M0 0 `, maxSVGPathCommands+1) + `"/></svg>`
+	if err := validateSVG([]byte(overPath)); err == nil {
+		t.Fatal("SVG path bomb was accepted")
+	}
+	deep := `<svg width="10" height="10">` + strings.Repeat(`<g>`, maxSVGDepth) + strings.Repeat(`</g>`, maxSVGDepth) + `</svg>`
+	if err := validateSVG([]byte(deep)); err == nil {
+		t.Fatal("deep SVG was accepted")
+	}
+}
+
+func TestExternalSVGFailureIsLocalizedToRejectedResource(t *testing.T) {
+	baseURL := mustParseURL(t, "https://example.com/")
+	document := dom.NewDocument()
+	good := document.CreateElement("img", map[string]string{"src": "good.svg"})
+	bad := document.CreateElement("img", map[string]string{"src": "bad.svg", "alt": "Rejected"})
+	if err := document.AppendChild(document.Root, good); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(document.Root, bad); err != nil {
+		t.Fatal(err)
+	}
+	loader := &routeLoader{responses: map[string]*network.Response{
+		"https://example.com/good.svg": {URL: mustParseURL(t, "https://example.com/good.svg"), ContentType: "image/svg+xml", Body: []byte(`<svg width="8" height="8"><circle cx="4" cy="4" r="4"/></svg>`)},
+		"https://example.com/bad.svg":  {URL: mustParseURL(t, "https://example.com/bad.svg"), ContentType: "image/svg+xml", Body: []byte(`<svg width="8" height="8"><script>bad()</script></svg>`)},
+	}}
+	resources, images, failures := loadReplacedImages(context.Background(), loader, baseURL, document, 800, 1)
+	if !resources[good.ID].Loaded || images[resources[good.ID].URL] == nil || resources[bad.ID].Loaded || resources[bad.ID].Error == "" || len(failures) != 1 {
+		t.Fatalf("localized resources/images/failures = %#v / %#v / %#v", resources, images, failures)
+	}
+}

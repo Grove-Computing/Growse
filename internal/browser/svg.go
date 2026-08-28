@@ -42,7 +42,24 @@ type svgMetadata struct {
 	clipID  string
 }
 
+const (
+	maxSVGBytes        = 4 << 20
+	maxSVGNodes        = 20_000
+	maxSVGDepth        = 256
+	maxSVGPathCommands = 200_000
+	maxSVGSurfaceBytes = 64 << 20
+)
+
+var allowedSVGElements = map[string]bool{
+	"svg": true, "g": true, "defs": true, "path": true, "rect": true, "circle": true,
+	"ellipse": true, "line": true, "polyline": true, "polygon": true, "text": true, "tspan": true,
+	"clipPath": true, "linearGradient": true, "radialGradient": true, "stop": true, "title": true, "desc": true,
+}
+
 func rasterizeSVG(source []byte) (image.Image, int, int, error) {
+	if err := validateSVG(source); err != nil {
+		return nil, 0, 0, err
+	}
 	sanitized, metadata, err := prepareSVG(source)
 	if err != nil {
 		return nil, 0, 0, err
@@ -66,7 +83,7 @@ func rasterizeSVG(source []byte) (image.Image, int, int, error) {
 		return nil, 0, 0, errors.New("SVG has invalid dimensions")
 	}
 	pixelWidth, pixelHeight := int(math.Ceil(width)), int(math.Ceil(height))
-	if pixelWidth <= 0 || pixelHeight <= 0 || pixelWidth > maxImagePixels/pixelHeight {
+	if pixelWidth <= 0 || pixelHeight <= 0 || pixelWidth > maxSVGSurfaceBytes/4/pixelHeight {
 		return nil, 0, 0, errors.New("SVG raster surface is too large")
 	}
 	icon.ViewBox.X, icon.ViewBox.Y, icon.ViewBox.W, icon.ViewBox.H = viewBox[0], viewBox[1], viewBox[2], viewBox[3]
@@ -77,6 +94,98 @@ func rasterizeSVG(source []byte) (image.Image, int, int, error) {
 	paintSVGText(result, metadata)
 	applySVGClip(result, metadata)
 	return result, pixelWidth, pixelHeight, nil
+}
+
+func validateSVG(source []byte) error {
+	if len(source) == 0 || len(source) > maxSVGBytes {
+		return errors.New("SVG encoded size is invalid")
+	}
+	decoder := xml.NewDecoder(bytes.NewReader(source))
+	decoder.Strict = true
+	nodes, depth, pathCommands := 0, 0, 0
+	rootSeen := false
+	for {
+		token, err := decoder.Token()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("parse SVG XML: %w", err)
+		}
+		switch value := token.(type) {
+		case xml.Directive:
+			return errors.New("SVG directives and entities are not allowed")
+		case xml.ProcInst:
+			if !strings.EqualFold(value.Target, "xml") {
+				return errors.New("SVG processing instructions are not allowed")
+			}
+		case xml.StartElement:
+			depth++
+			nodes++
+			if depth > maxSVGDepth || nodes > maxSVGNodes {
+				return errors.New("SVG tree limit exceeded")
+			}
+			name := canonicalSVGName(value.Name.Local)
+			if !rootSeen {
+				if name != "svg" {
+					return errors.New("SVG root element is invalid")
+				}
+				rootSeen = true
+			}
+			if !allowedSVGElements[name] {
+				return fmt.Errorf("SVG element %q is not allowed", name)
+			}
+			for _, attribute := range value.Attr {
+				attributeName := strings.ToLower(attribute.Name.Local)
+				attributeValue := strings.TrimSpace(attribute.Value)
+				if strings.HasPrefix(attributeName, "on") {
+					return errors.New("SVG event handlers are not allowed")
+				}
+				if attributeName == "href" && attributeValue != "" && !strings.HasPrefix(attributeValue, "#") {
+					return errors.New("SVG external references are not allowed")
+				}
+				lowerValue := strings.ToLower(attributeValue)
+				for offset := 0; ; {
+					index := strings.Index(lowerValue[offset:], "url(")
+					if index < 0 {
+						break
+					}
+					index += offset
+					end := strings.IndexByte(lowerValue[index:], ')')
+					if end < 0 || !strings.HasPrefix(strings.TrimSpace(lowerValue[index+4:index+end]), "#") {
+						return errors.New("SVG external URL is not allowed")
+					}
+					offset = index + end + 1
+				}
+				if name == "path" && attributeName == "d" {
+					pathCommands += countSVGPathCommands(attributeValue)
+					if pathCommands > maxSVGPathCommands {
+						return errors.New("SVG path command limit exceeded")
+					}
+				}
+			}
+		case xml.EndElement:
+			depth--
+			if depth < 0 {
+				return errors.New("SVG tree is unbalanced")
+			}
+		}
+	}
+	if !rootSeen || depth != 0 {
+		return errors.New("SVG root element is missing")
+	}
+	return nil
+}
+
+func countSVGPathCommands(path string) int {
+	count := 0
+	for _, character := range path {
+		switch character {
+		case 'M', 'm', 'Z', 'z', 'L', 'l', 'H', 'h', 'V', 'v', 'C', 'c', 'S', 's', 'Q', 'q', 'T', 't', 'A', 'a':
+			count++
+		}
+	}
+	return count
 }
 
 func prepareSVG(source []byte) ([]byte, svgMetadata, error) {
