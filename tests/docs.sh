@@ -51,7 +51,7 @@ require SECURITY.md "brokered host I/O"
 require SECURITY.md "未知"
 require SECURITY.md "Service Worker registrationとCache Storage"
 require SECURITY.md "IPC payload"
-require docs/devtools.md "Page 500件"
+require docs/devtools.md "Page 2,000件"
 require docs/devtools.md "Browser Session: 4,000件"
 require docs/devtools.md '`[REDACTED]`'
 require docs/devtools.md "EngineとRuntimeのidle / running / stopped / error状態"

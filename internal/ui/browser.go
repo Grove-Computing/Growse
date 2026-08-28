@@ -393,6 +393,7 @@ func layoutRegion(gtx layout.Context, region image.Rectangle, widget layout.Widg
 		return layout.Dimensions{Size: region.Size()}
 	}
 	defer op.Offset(region.Min).Push(gtx.Ops).Pop()
+	defer clip.Rect{Max: region.Size()}.Push(gtx.Ops).Pop()
 	gtx.Constraints = layout.Exact(region.Size())
 	return widget(gtx)
 }
@@ -1341,9 +1342,26 @@ func runtimeContextLabel(context devtoolsmodel.RuntimeContext) string {
 	if len(scripts) == 0 {
 		scripts = append(scripts, "-")
 	}
-	return fmt.Sprintf("%s#%d parent=%d browsing=%d engine=%s state=%s worker=%d sandbox=%s constraints=%d errors=%s\n%s\nscripts: %s",
+	diagnosticLabels := make([]string, 0, min(len(context.Diagnostics), 6))
+	for index, diagnostic := range context.Diagnostics {
+		if index == 6 {
+			break
+		}
+		label := fmt.Sprintf("%s:%s/%s %s", diagnostic.Category, diagnostic.State, diagnostic.Reason, diagnostic.Subject)
+		if diagnostic.Initiator != "" || diagnostic.Schedule != "" {
+			label += fmt.Sprintf(" [%s/%s]", diagnostic.Initiator, diagnostic.Schedule)
+		}
+		diagnosticLabels = append(diagnosticLabels, label)
+	}
+	if len(diagnosticLabels) == 0 {
+		diagnosticLabels = append(diagnosticLabels, "-")
+	} else if len(context.Diagnostics) > len(diagnosticLabels) {
+		diagnosticLabels = append(diagnosticLabels, fmt.Sprintf("… +%d", len(context.Diagnostics)-len(diagnosticLabels)))
+	}
+	return fmt.Sprintf("%s#%d parent=%d browsing=%d engine=%s state=%s worker=%d sandbox=%s constraints=%d errors=%s\n%s\nscripts: %s\ndiagnostics(%d): %s",
 		context.Kind, context.ID, context.ParentID, context.BrowsingGeneration, context.Engine, context.State,
-		context.Sandbox.Generation, sandbox, context.Sandbox.ConstraintCount, errors, context.URL, strings.Join(scripts, "; "))
+		context.Sandbox.Generation, sandbox, context.Sandbox.ConstraintCount, errors, context.URL, strings.Join(scripts, "; "),
+		len(context.Diagnostics), strings.Join(diagnosticLabels, "; "))
 }
 
 func (ui *BrowserUI) layoutDevToolsNetwork(gtx layout.Context) layout.Dimensions {
@@ -1386,8 +1404,26 @@ func networkRecordLabel(record devtoolsmodel.NetworkRecord, status, flags string
 	if record.Kind == "script" && record.Engine != "" {
 		kind += "/" + record.Engine
 	}
-	return fmt.Sprintf("%04d  %-10s %-5s %-15s %8s %7d B  %-18s  %s",
-		record.Sequence, kind, record.Method, status, record.Duration.Round(time.Microsecond), record.ResponseBytes, flags, record.URL)
+	resourceURL := record.URL
+	if record.FinalURL != "" && record.FinalURL != "unknown" && record.FinalURL != record.URL {
+		resourceURL += " -> " + record.FinalURL
+	}
+	trigger := record.Initiator
+	if record.Schedule != "" {
+		if trigger != "" {
+			trigger += "/"
+		}
+		trigger += record.Schedule
+	}
+	if trigger == "" {
+		trigger = "-"
+	}
+	if trigger == "-" && resourceURL == record.URL {
+		return fmt.Sprintf("%04d  %-10s %-5s %-15s %8s %7d B  %-18s  %s",
+			record.Sequence, kind, record.Method, status, record.Duration.Round(time.Microsecond), record.ResponseBytes, flags, record.URL)
+	}
+	return fmt.Sprintf("%04d  %-10s %-5s %-15s %8s %7d B  %-18s %-20s %s",
+		record.Sequence, kind, record.Method, status, record.Duration.Round(time.Microsecond), record.ResponseBytes, flags, trigger, resourceURL)
 }
 
 func devToolsRuntimeLabel(page *browser.Page) string {

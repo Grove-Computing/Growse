@@ -416,6 +416,7 @@ func (runtime *Runtime) fetchDynamicClassicScript(snapshot dynamicScriptSnapshot
 	request := &network.Request{
 		Method: http.MethodGet, URL: snapshot.sourceURL, SiteURL: environment.BaseURL,
 		Kind: network.RequestScript, Engine: "javascript", CORS: hasCORS, Credentials: credentials,
+		Initiator: "dom-insertion", Schedule: "dynamic",
 	}
 	key := snapshot.sourceURL.String()
 	if !runtime.allowResourceAttempt(key) {

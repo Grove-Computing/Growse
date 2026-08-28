@@ -289,6 +289,7 @@ func (registry *moduleRegistry) fetchUncached(ctx context.Context, target *url.U
 		Method: http.MethodGet, URL: target, SiteURL: registry.environment.BaseURL,
 		Kind: network.RequestModule, Engine: string(runtimemodel.EngineJavaScript),
 		Credentials: credentials, CORS: true,
+		Initiator: "module-graph", Schedule: "module",
 	})
 	if err != nil {
 		return nil, fmt.Errorf("fetch module %s: %w", network.RedactedURL(target), err)

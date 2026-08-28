@@ -40,10 +40,13 @@ func TestRuntimeContextLabelShowsMetadataWithoutSecret(t *testing.T) {
 		URL: "https://example.test/frame", Engine: "javascript", State: "error",
 		Scripts:         []devtools.RuntimeScript{{Kind: "module", Schedule: "defer", Location: "https://cdn.test/app.mjs"}},
 		ErrorCategories: []string{"module", "wasm"},
-		Sandbox:         devtools.RuntimeSandbox{Ready: true, ProcessBoundary: true, BrokeredHostIO: true, Generation: 12, ConstraintCount: 5},
+		Diagnostics: []devtools.CompatibilityDiagnostic{{
+			Category: "resource/module", Subject: "https://cdn.test/chunk.mjs", State: "error", Reason: "http", Initiator: "module-graph", Schedule: "module",
+		}},
+		Sandbox: devtools.RuntimeSandbox{Ready: true, ProcessBoundary: true, BrokeredHostIO: true, Generation: 12, ConstraintCount: 5},
 	}
 	got := runtimeContextLabel(context)
-	for _, want := range []string{"frame#4", "parent=2", "browsing=8", "worker=12", "sandbox=ready", "errors=module,wasm", "module/defer", "https://cdn.test/app.mjs"} {
+	for _, want := range []string{"frame#4", "parent=2", "browsing=8", "worker=12", "sandbox=ready", "errors=module,wasm", "module/defer", "https://cdn.test/app.mjs", "diagnostics(1)", "resource/module:error/http", "module-graph/module"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("runtimeContextLabel() = %q, want %q", got, want)
 		}

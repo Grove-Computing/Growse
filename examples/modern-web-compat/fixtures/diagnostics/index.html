@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <title>Modern compatibility failure diagnostics</title>
+  <style>
+    @font-face { font-family: BrokenFixture; src: url("/diagnostics/bad.woff2") format("woff2"); }
+    body { font-family: BrokenFixture, sans-serif; }
+    .unsupported-target { unknown-modern-property: impossible(1); }
+  </style>
+</head>
+<body>
+  <main id="diagnostic-root" class="unsupported-target">
+    <h1>Finite failure diagnostics</h1>
+    <img id="broken-image" src="/diagnostics/bad.png" alt="image fallback remains visible">
+    <p id="chunk-state">chunk pending</p>
+    <button id="hydration-error" type="button">Trigger hydration error</button>
+    <button id="observer-error" type="button">Trigger observer error</button>
+  </main>
+  <script type="module" src="/diagnostics/failures.mjs"></script>
+</body>
+</html>

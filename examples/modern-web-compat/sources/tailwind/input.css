@@ -1,0 +1,11 @@
+@import "tailwindcss";
+
+@theme {
+  --color-brand: #2563eb;
+  --spacing-fixture: 12px;
+}
+
+@utility container-shell {
+  container: fixture / inline-size;
+  width: 400px;
+}

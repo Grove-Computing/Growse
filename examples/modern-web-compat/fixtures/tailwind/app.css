@@ -1,0 +1,44 @@
+@layer theme, base, components, utilities;
+
+@layer theme {
+  :root {
+    --tw-brand: #2563eb;
+    --tw-dark: #111827;
+    --tw-space: 12px;
+  }
+}
+
+@layer base {
+  *, ::before, ::after { box-sizing: border-box; }
+  body { margin: 0; line-height: 1.5; }
+  button { margin: 0; padding: 0; color: inherit; font: inherit; }
+}
+
+@layer components {
+  .container-shell {
+    container-name: fixture;
+    container-type: inline-size;
+    width: 400px;
+  }
+}
+
+@layer utilities {
+  .tw-card {
+    width: 160px;
+    padding: var(--tw-space);
+    color: #ffffff;
+    background-color: var(--tw-brand);
+  }
+  .md-grid { display: block; }
+  @media (min-width: 768px) {
+    .md-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+  }
+  @container fixture (min-width: 300px) {
+    .cq-wide { width: 50cqw; }
+  }
+  .dark .dark-card { background-color: var(--tw-dark); }
+}
