@@ -17,6 +17,7 @@ type atRuleFrame struct {
 	media          []MediaQuery
 	keyframesIndex int
 	layer          string
+	supports       *SupportsCondition
 }
 
 // Parse reads a stylesheet. Unsupported selectors and at-rules are ignored.
@@ -69,6 +70,7 @@ func Parse(reader io.Reader) (*Stylesheet, error) {
 			}
 			active := true
 			var mediaGroups [][]MediaQuery
+			var supports []SupportsCondition
 			layer := ""
 			for _, frame := range atRules {
 				if !frame.active {
@@ -80,6 +82,9 @@ func Parse(reader io.Reader) (*Stylesheet, error) {
 				}
 				if frame.layer != "" {
 					layer = frame.layer
+				}
+				if frame.supports != nil {
+					supports = append(supports, *frame.supports)
 				}
 			}
 			if !active {
@@ -93,7 +98,7 @@ func Parse(reader io.Reader) (*Stylesheet, error) {
 				continue
 			}
 			stylesheet.Rules = append(stylesheet.Rules, Rule{
-				Kind: RuleStyle, Selectors: selectors, Order: len(stylesheet.Rules), Media: mediaGroups, Layer: layer,
+				Kind: RuleStyle, Selectors: selectors, Order: len(stylesheet.Rules), Media: mediaGroups, Supports: supports, Layer: layer,
 			})
 			current = &stylesheet.Rules[len(stylesheet.Rules)-1]
 		case parser.DeclarationGrammar, parser.CustomPropertyGrammar:
@@ -153,6 +158,13 @@ func Parse(reader io.Reader) (*Stylesheet, error) {
 			if name == "@media" {
 				frame.active, frame.isMedia = true, true
 				frame.media = parseMediaQueryList(tokenText(p.Values()))
+			} else if name == "@supports" {
+				condition, valid := parseSupportsCondition(tokenText(p.Values()))
+				if !valid {
+					condition = SupportsCondition{Kind: SupportsUnknown}
+				}
+				frame.active = true
+				frame.supports = &condition
 			} else if name == "@layer" {
 				parent := currentLayer(atRules)
 				layerName := strings.TrimSpace(tokenText(p.Values()))

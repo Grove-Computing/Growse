@@ -407,7 +407,7 @@ func TestParseMediaQueriesAndNestedRules(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := len(stylesheet.Rules), 2; got != want {
+	if got, want := len(stylesheet.Rules), 3; got != want {
 		t.Fatalf("rule count = %d, want %d", got, want)
 	}
 	first := stylesheet.Rules[0]
@@ -422,6 +422,9 @@ func TestParseMediaQueriesAndNestedRules(t *testing.T) {
 	}
 	if got, want := len(stylesheet.Rules[1].Media), 2; got != want {
 		t.Fatalf("nested media group count = %d, want %d", got, want)
+	}
+	if got := stylesheet.Rules[2].Supports; len(got) != 1 || got[0].Kind != SupportsDeclaration {
+		t.Fatalf("supports condition = %#v", got)
 	}
 }
 

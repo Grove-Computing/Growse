@@ -66,8 +66,31 @@ type Rule struct {
 	Declarations []Declaration
 	Order        int
 	Media        [][]MediaQuery
+	Supports     []SupportsCondition
 	// Layer is empty for unlayered author rules.
 	Layer string
+}
+
+// SupportsKind identifies the boolean grammar of an @supports condition.
+type SupportsKind uint8
+
+const (
+	SupportsUnknown SupportsKind = iota
+	SupportsDeclaration
+	SupportsSelector
+	SupportsNot
+	SupportsAnd
+	SupportsOr
+)
+
+// SupportsCondition retains a parsed feature query for evaluation against the
+// style engine's actual declaration and selector capabilities.
+type SupportsCondition struct {
+	Kind      SupportsKind
+	Property  string
+	Value     string
+	Selectors []Selector
+	Children  []SupportsCondition
 }
 
 // MediaModifier changes how one media query is interpreted.

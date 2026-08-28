@@ -214,7 +214,7 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 	}
 	candidates := make(map[string][]winner)
 	for _, rule := range stylesheet.Rules {
-		if !matchesMediaGroups(rule.Media, environment) {
+		if !matchesMediaGroups(rule.Media, environment) || !matchesSupportsGroups(rule.Supports) {
 			continue
 		}
 		for _, selector := range rule.Selectors {
@@ -874,7 +874,7 @@ func applyGeneratedContent(node *dom.Node, computed ComputedStyle, stylesheet *c
 		}
 		var candidates []winner
 		for _, rule := range stylesheet.Rules {
-			if !matchesMediaGroups(rule.Media, environment) {
+			if !matchesMediaGroups(rule.Media, environment) || !matchesSupportsGroups(rule.Supports) {
 				continue
 			}
 			for _, selector := range rule.Selectors {
