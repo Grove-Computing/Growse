@@ -633,10 +633,6 @@ func parseSelectorDepth(value string, depth int) (Selector, bool) {
 	return selector, true
 }
 
-func parseCompoundSelector(value string) (CompoundSelector, bool) {
-	return parseCompoundSelectorDepth(value, 0)
-}
-
 func parseCompoundSelectorDepth(value string, depth int) (CompoundSelector, bool) {
 	if value == "" {
 		return CompoundSelector{}, false
@@ -853,10 +849,6 @@ func selectorNameEnd(value string, start int) int {
 	return position
 }
 
-func parsePseudoClass(value string, start int) (*PseudoClass, int, bool) {
-	return parsePseudoClassDepth(value, start, 0)
-}
-
 func parsePseudoClassDepth(value string, start, depth int) (*PseudoClass, int, bool) {
 	if start+1 >= len(value) || value[start+1] == ':' {
 		return nil, 0, false
@@ -1003,10 +995,6 @@ func parsePseudoClassDepth(value string, start, depth int) (*PseudoClass, int, b
 	return pseudo, next, true
 }
 
-func parseFunctionalSelectorList(value string, forgiving, relative bool) ([]Selector, bool) {
-	return parseFunctionalSelectorListDepth(value, forgiving, relative, 1)
-}
-
 func parseFunctionalSelectorListDepth(value string, forgiving, relative bool, depth int) ([]Selector, bool) {
 	if depth > MaxFunctionalSelectorDepth {
 		return nil, false
@@ -1132,29 +1120,6 @@ func parseNth(value string) (int, int, bool) {
 	}
 	b, err := strconv.Atoi(value)
 	return 0, b, err == nil
-}
-
-func simpleSelectorCount(compound CompoundSelector) int {
-	count := len(compound.IDs) + len(compound.Classes) + len(compound.Attributes) + len(compound.Pseudos)
-	if compound.Type != "" || compound.Universal {
-		count++
-	}
-	if compound.Hover {
-		count++
-	}
-	if compound.PseudoElement != PseudoElementNone {
-		count++
-	}
-	return count
-}
-
-func containsNegation(compound CompoundSelector) bool {
-	for _, pseudo := range compound.Pseudos {
-		if pseudo.Kind == PseudoNot {
-			return true
-		}
-	}
-	return false
 }
 
 func splitSelectorList(value string) ([]string, bool) {
