@@ -55,10 +55,13 @@ func nextJSFixtureHandler() http.Handler {
 			request.URL.Path = "/"
 		case "/_next/static/css/app.css":
 			request.URL.Path = "/app.css"
+			response.Header().Set("Content-Type", "text/css; charset=utf-8")
 		case "/_next/static/chunks/app.mjs":
 			request.URL.Path = "/app.mjs"
+			response.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 		case "/_next/static/chunks/counter.chunk.mjs":
 			request.URL.Path = "/counter.chunk.mjs"
+			response.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 		default:
 			http.NotFound(response, request)
 			return
@@ -79,10 +82,13 @@ func svelteKitFixtureHandler() http.Handler {
 			request.URL.Path = "/"
 		case "/_app/immutable/assets/app.css":
 			request.URL.Path = "/app.css"
+			response.Header().Set("Content-Type", "text/css; charset=utf-8")
 		case "/_app/immutable/entry/start.mjs":
 			request.URL.Path = "/start.mjs"
+			response.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 		case "/_app/immutable/nodes/app.mjs":
 			request.URL.Path = "/app.mjs"
+			response.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 		default:
 			http.NotFound(response, request)
 			return
@@ -103,6 +109,7 @@ func tailwindFixtureHandler() http.Handler {
 			request.URL.Path = "/"
 		case "/tailwind/app.css":
 			request.URL.Path = "/app.css"
+			response.Header().Set("Content-Type", "text/css; charset=utf-8")
 		default:
 			http.NotFound(response, request)
 			return
@@ -123,6 +130,7 @@ func diagnosticsFixtureHandler() http.Handler {
 			request.URL.Path = "/"
 		case "/diagnostics/failures.mjs":
 			request.URL.Path = "/failures.mjs"
+			response.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 		case "/diagnostics/bad.woff2":
 			response.Header().Set("Content-Type", "font/woff2")
 			_, _ = response.Write([]byte("malformed local font"))

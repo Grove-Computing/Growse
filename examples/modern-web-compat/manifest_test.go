@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -37,6 +38,10 @@ type fixtureArtifact struct {
 var semanticVersion = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
 
 func TestFixtureManifestIsCompleteAndUntampered(t *testing.T) {
+	attributes, err := os.ReadFile("../../.gitattributes")
+	if err != nil || !strings.Contains(string(attributes), "examples/modern-web-compat/** text eol=lf") {
+		t.Fatalf("fixture checkout is not LF-pinned: %v", err)
+	}
 	encoded, err := os.ReadFile("fixture-manifest.json")
 	if err != nil {
 		t.Fatal(err)
@@ -93,6 +98,27 @@ func TestFixtureManifestIsCompleteAndUntampered(t *testing.T) {
 	for _, name := range []string{"nextjs", "sveltekit", "tailwind"} {
 		if !seen[name] {
 			t.Fatalf("fixture manifest is missing %s", name)
+		}
+	}
+}
+
+func TestFixtureServerUsesPlatformIndependentContentTypes(t *testing.T) {
+	server := httptest.NewServer(modernWebCompatibilityHandler())
+	defer server.Close()
+	for path, want := range map[string]string{
+		"/_next/static/chunks/app.mjs":    "text/javascript; charset=utf-8",
+		"/_app/immutable/entry/start.mjs": "text/javascript; charset=utf-8",
+		"/diagnostics/failures.mjs":       "text/javascript; charset=utf-8",
+		"/_next/static/css/app.css":       "text/css; charset=utf-8",
+		"/_app/immutable/assets/app.css":  "text/css; charset=utf-8",
+	} {
+		response, err := server.Client().Get(server.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = response.Body.Close()
+		if got := response.Header.Get("Content-Type"); got != want {
+			t.Errorf("%s Content-Type = %q, want %q", path, got, want)
 		}
 	}
 }
