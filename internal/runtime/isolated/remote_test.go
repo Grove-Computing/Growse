@@ -126,6 +126,7 @@ func TestIsolatedJavaScriptBrokersRenderSnapshotsAndMediaChanges(t *testing.T) {
 		var target = document.getElementById("target");
 		var media = matchMedia("(max-width: 500px)");
 		media.addEventListener("change", function (event) { console.log("media:" + event.matches + ":" + innerWidth); });
+		new ResizeObserver(function (entries) { console.log("resize:" + entries[0].contentRect.width); }).observe(target);
 		console.log([getComputedStyle(target).display, target.getBoundingClientRect().right, target.clientWidth, target.scrollWidth, media.matches].join("|"));`
 	if err := runtime.Load(context.Background(), []runtimemodel.Script{{Engine: runtimemodel.EngineJavaScript, SourceURL: environment.BaseURL, Source: source, Inline: true}}, environment); err != nil {
 		t.Fatal(err)
@@ -135,6 +136,12 @@ func TestIsolatedJavaScriptBrokersRenderSnapshotsAndMediaChanges(t *testing.T) {
 	}
 	if got := <-records; got != "grid|205|196|220|false" {
 		t.Fatalf("isolated CSSOM = %q", got)
+	}
+	if !runtime.HasAnimationFrameCallbacks() || !runtime.RunAnimationFrame(time.Now()) {
+		t.Fatal("isolated ResizeObserver frame was not delivered")
+	}
+	if got := <-records; got != "resize:200" {
+		t.Fatalf("isolated ResizeObserver = %q", got)
 	}
 	runtime.UpdateMediaEnvironment(runtimemodel.MediaEnvironment{ViewportWidth: 400, ViewportHeight: 600, ColorScheme: "light", Hover: true, Pointer: "fine"})
 	select {

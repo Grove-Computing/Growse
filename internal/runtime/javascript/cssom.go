@@ -245,6 +245,9 @@ func matchesMedia(query string, media runtimemodel.MediaEnvironment) bool {
 func (runtime *Runtime) UpdateMediaEnvironment(media runtimemodel.MediaEnvironment) {
 	_ = runtime.runSync(context.Background(), func(vm *goja.Runtime) error {
 		runtime.media = media
+		if len(runtime.intersectionObservers) != 0 {
+			runtime.requestObserverFrame()
+		}
 		for _, record := range runtime.mediaQueries {
 			matched := matchesMedia(record.query, media)
 			if matched == record.matches {
