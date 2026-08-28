@@ -112,19 +112,19 @@ func (runtime *Runtime) fetchDynamicStylesheet(snapshot dynamicStyleSnapshot) {
 		err = fmt.Errorf("unsupported Content-Type %q", response.ContentType)
 	}
 	if err == nil {
-		err = runtime.refreshStylesSerialized()
+		err = runtime.refreshStylesSerialized(false)
 	}
 	runtime.finishDynamicStyle(snapshot, err)
 }
 
 func (runtime *Runtime) refreshInlineStyles(snapshot dynamicStyleSnapshot) {
 	_ = snapshot
-	if err := runtime.refreshStylesSerialized(); err != nil {
+	if err := runtime.refreshStylesSerialized(true); err != nil {
 		runtime.recordError(fmt.Sprintf("refresh dynamic style: %v", err))
 	}
 }
 
-func (runtime *Runtime) refreshStylesSerialized() error {
+func (runtime *Runtime) refreshStylesSerialized(onRuntimeQueue bool) error {
 	runtime.mu.Lock()
 	refresh, ctx := runtime.environment.RefreshStyles, runtime.runtimeCtx
 	runtime.mu.Unlock()
@@ -134,7 +134,7 @@ func (runtime *Runtime) refreshStylesSerialized() error {
 	if ctx == nil {
 		return context.Canceled
 	}
-	if runtime.executing.Load() {
+	if onRuntimeQueue {
 		return refresh(ctx)
 	}
 	return runtime.runSync(ctx, func(*goja.Runtime) error { return refresh(ctx) })

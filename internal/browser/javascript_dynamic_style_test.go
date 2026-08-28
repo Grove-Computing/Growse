@@ -9,9 +9,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/network"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 	runtimejavascript "github.com/Grove-Computing/Growse/internal/runtime/javascript"
+	"github.com/Grove-Computing/Growse/internal/style"
 )
 
 type cachedDynamicResourceLoader struct {
@@ -115,27 +117,51 @@ func TestJavaScriptDynamicStylesheetAndPreloadUpdateBrowserStyleRevision(t *test
 	if _, err := browserState.SetEngine(context.Background(), runtimemodel.EngineJavaScript); err != nil {
 		t.Fatal(err)
 	}
-	page, err := browserState.Navigate(context.Background(), pageURL.String())
+	_, err := browserState.Navigate(context.Background(), pageURL.String())
 	if err != nil {
 		t.Fatal(err)
 	}
-	target, _ := page.Document.GetElementByID("target")
-	initialRevision := page.StyleRevision
-	waitForDynamicStylePhase(t, target, "loaded")
-	loadedStyle := page.ComputedStyles[target.ID]
+	targetID := dom.NodeID(0)
+	initialRevision := uint64(0)
+	browserState.InspectPage(func(page *Page) bool {
+		if target, ok := page.Document.GetElementByID("target"); ok {
+			targetID = target.ID
+		}
+		initialRevision = page.StyleRevision
+		return true
+	})
+	if targetID == 0 {
+		t.Fatal("missing dynamic style target")
+	}
+	waitForDynamicStylePhase(t, browserState, targetID, "loaded")
+	loadedStyle := style.ComputedStyle{}
+	browserState.InspectPage(func(page *Page) bool {
+		loadedStyle = page.ComputedStyles[targetID]
+		return true
+	})
 	if loadedStyle.Color != 0xff0000ff || loadedStyle.FontSize != 31 || loadedStyle.BackgroundColor != 0x0000ffff {
 		t.Fatalf("loaded dynamic style = %#v", loadedStyle)
 	}
 
-	waitForDynamicStylePhase(t, target, "removed")
-	removedStyle := page.ComputedStyles[target.ID]
+	waitForDynamicStylePhase(t, browserState, targetID, "removed")
+	removedStyle := style.ComputedStyle{}
+	styleRevision := uint64(0)
+	preloadExecuted := false
+	browserState.InspectPage(func(page *Page) bool {
+		removedStyle = page.ComputedStyles[targetID]
+		styleRevision = page.StyleRevision
+		if target, ok := page.Document.NodeByID(targetID); ok {
+			_, preloadExecuted = target.Attribute("preload-executed")
+		}
+		return true
+	})
 	if removedStyle.Color != 0x008000ff || removedStyle.FontSize != 26 || removedStyle.BackgroundColor != 0x00000000 {
 		t.Fatalf("changed/removed dynamic style = %#v", removedStyle)
 	}
-	if page.StyleRevision <= initialRevision {
-		t.Fatalf("style revision = %d, want greater than %d", page.StyleRevision, initialRevision)
+	if styleRevision <= initialRevision {
+		t.Fatalf("style revision = %d, want greater than %d", styleRevision, initialRevision)
 	}
-	if _, executed := target.Attribute("preload-executed"); executed {
+	if preloadExecuted {
 		t.Fatal("script preload executed its body")
 	}
 	loader.mu.Lock()
@@ -145,15 +171,28 @@ func TestJavaScriptDynamicStylesheetAndPreloadUpdateBrowserStyleRevision(t *test
 	}
 }
 
-func waitForDynamicStylePhase(t *testing.T, target interface{ Attribute(string) (string, bool) }, phase string) {
+func waitForDynamicStylePhase(t *testing.T, browserState *Browser, targetID dom.NodeID, phase string) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if value, _ := target.Attribute("phase"); value == phase {
+		value := ""
+		if browserState.InspectPage(func(page *Page) bool {
+			target, ok := page.Document.NodeByID(targetID)
+			if ok {
+				value, _ = target.Attribute("phase")
+			}
+			return true
+		}) && value == phase {
 			return
 		}
 		time.Sleep(time.Millisecond)
 	}
-	value, _ := target.Attribute("phase")
+	value := ""
+	browserState.InspectPage(func(page *Page) bool {
+		if target, ok := page.Document.NodeByID(targetID); ok {
+			value, _ = target.Attribute("phase")
+		}
+		return true
+	})
 	t.Fatalf("dynamic style phase = %q, want %q", value, phase)
 }
