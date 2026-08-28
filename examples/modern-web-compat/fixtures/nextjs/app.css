@@ -1,10 +1,13 @@
 @layer base, components;
 
+@font-face { font-family: GrowseFixture; src: url("/assets/growse-regular.woff2") format("woff2"); font-display: swap; }
+
 @layer base {
-  body { margin: 0; font-family: sans-serif; }
+  body { margin: 0; font-family: GrowseFixture, sans-serif; }
 }
 
 @layer components {
   #__next { padding: 24px; }
   #next-counter { color: #ffffff; background: #2563eb; }
+  #next-image { object-fit: cover; border-radius: 8px; }
 }

@@ -19,10 +19,10 @@
       "licenses": ["MIT:Next.js", "MIT:React"],
       "sources": ["sources/nextjs/app/page.jsx"],
       "artifacts": [
-        {"path": "fixtures/nextjs/app.css", "sha256": "998cf88c3c514e3b150779d8e8b1e43192f89dc3999670982d2a898bc091945f"},
+        {"path": "fixtures/nextjs/app.css", "sha256": "e561e437caa1677fe2436c9a1c838b20e00dccd29456e659f7294c0dbf97e4b1"},
         {"path": "fixtures/nextjs/app.mjs", "sha256": "4ec741197a8b19e662a0b9b0c84f6c19b04021779b3b8046501550c9e1311ca6"},
         {"path": "fixtures/nextjs/counter.chunk.mjs", "sha256": "45917193109f7ce57a63c568f042ff3d282b075bb926ddc7b97af1d83fc18e1f"},
-        {"path": "fixtures/nextjs/index.html", "sha256": "2851cbe42ecec65abec79e2a61f9dc17807c542cfad4f280637c70ac3d09bed2"}
+        {"path": "fixtures/nextjs/index.html", "sha256": "e15e2c14eafea834be797f2a26d6846e7d599fa10aada5b78bacc9426c12bbf7"}
       ]
     },
     {

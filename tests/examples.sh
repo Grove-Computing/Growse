@@ -11,6 +11,7 @@ examples=(
   dual-runtime
   external-web-platform
   flexbox
+  modern-web-compat
   persistent-app
   todo
 )
@@ -33,6 +34,7 @@ go test \
   ./examples/dual-runtime \
   ./examples/external-web-platform \
   ./examples/flexbox \
+  ./examples/modern-web-compat \
   ./examples/persistent-app \
   ./examples/todo
 

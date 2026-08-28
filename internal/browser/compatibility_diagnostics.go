@@ -63,7 +63,32 @@ func compatibilityDiagnostics(page *Page) []devtools.CompatibilityDiagnostic {
 	if page.RuntimeError != "" {
 		appendDiagnostic(devtools.CompatibilityDiagnostic{Category: "runtime", Subject: "page", State: "error", Reason: runtimeErrorCategory(page.RuntimeError)})
 	}
+	if page.DevTools != nil {
+		for _, record := range page.DevTools.Console() {
+			if record.Level != devtools.ConsoleError {
+				continue
+			}
+			reason := runtimeErrorCategory(record.Message)
+			if reason == "" || reason == "runtime" {
+				continue
+			}
+			appendDiagnostic(devtools.CompatibilityDiagnostic{
+				Category: "runtime", Subject: "console/" + boundedDiagnosticLabel(record.Source), State: "error", Reason: reason,
+			})
+		}
+	}
 	return diagnostics
+}
+
+func boundedDiagnosticLabel(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "unknown"
+	}
+	if len(value) > 64 {
+		return value[:64]
+	}
+	return value
 }
 
 func compatibilityResourceKind(kind string) bool {
@@ -159,7 +184,7 @@ func fallbackCategory(message string) string {
 		return "mime"
 	case strings.Contains(value, "timeout"):
 		return "timeout"
-	case strings.Contains(value, "decode") || strings.Contains(value, "malformed"):
+	case strings.Contains(value, "decode") || strings.Contains(value, "malformed") || strings.Contains(value, "invalid format") || strings.Contains(value, "dimensions were rejected"):
 		return "decode"
 	case strings.Contains(value, "limit") || strings.Contains(value, "large") || strings.Contains(value, "exceed"):
 		return "limit"
