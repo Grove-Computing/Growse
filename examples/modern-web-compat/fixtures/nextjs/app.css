@@ -1,0 +1,10 @@
+@layer base, components;
+
+@layer base {
+  body { margin: 0; font-family: sans-serif; }
+}
+
+@layer components {
+  #__next { padding: 24px; }
+  #next-counter { color: #ffffff; background: #2563eb; }
+}
