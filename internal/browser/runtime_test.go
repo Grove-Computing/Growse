@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/url"
 	"reflect"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -208,6 +209,63 @@ func TestEngineSelectionReloadsSelectedScriptsAndRemainsTabScoped(t *testing.T) 
 	}
 	if page, err := browserState.Forward(context.Background()); err != nil || page.Engine != runtimemodel.EngineJavaScript || page.URL.String() != secondURL.String() {
 		t.Fatalf("Forward() = (page=%v, error=%v), want JavaScript second Page", page, err)
+	}
+}
+
+func TestJavaScriptResourcesRemainGatedUntilExplicitEngineSwitch(t *testing.T) {
+	pageURL := mustParseURL(t, "http://localhost/engine-gate.html")
+	goURL := mustParseURL(t, "http://localhost/app.go")
+	classicURL := mustParseURL(t, "http://localhost/app.js")
+	moduleURL := mustParseURL(t, "http://localhost/app.mjs")
+	preloadURL := mustParseURL(t, "http://localhost/preloaded.mjs")
+	body := []byte(`<script type="importmap">{"imports":{"fixture":"/dependency.mjs"}}</script>
+<link rel="modulepreload" href="/preloaded.mjs">
+<script type="text/go" src="/app.go"></script>
+<script src="/app.js"></script>
+<script type="module" src="/app.mjs"></script>`)
+	loader := &routeLoader{responses: map[string]*network.Response{
+		pageURL.String():    {URL: pageURL, StatusCode: 200, ContentType: "text/html", Body: body},
+		goURL.String():      {URL: goURL, StatusCode: 200, ContentType: "text/go", Body: []byte(`package main; func main() {}`)},
+		classicURL.String(): {URL: classicURL, StatusCode: 200, ContentType: "text/javascript", Body: []byte(`globalThis.classic = true`)},
+		moduleURL.String():  {URL: moduleURL, StatusCode: 200, ContentType: "text/javascript", Body: []byte(`export const loaded = true`)},
+		preloadURL.String(): {URL: preloadURL, StatusCode: 200, ContentType: "text/javascript", Body: []byte(`export const preloaded = true`)},
+	}}
+	browserState := NewWithEngineFactory(loader, func(runtimemodel.Engine) runtimemodel.Runtime { return &runtimeStub{} })
+	t.Cleanup(func() { _ = browserState.Close() })
+
+	goPage, err := browserState.Navigate(context.Background(), pageURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if goPage.Engine != runtimemodel.EngineGo || len(goPage.Scripts) != 1 || goPage.Scripts[0].Engine != runtimemodel.EngineGo {
+		t.Fatalf("Go Page engine/scripts = %q / %#v", goPage.Engine, goPage.Scripts)
+	}
+	if goPage.ImportMap != nil {
+		t.Fatalf("Go Page parsed JavaScript import map: %#v", goPage.ImportMap)
+	}
+	for _, forbidden := range []string{classicURL.String(), moduleURL.String(), preloadURL.String()} {
+		if slices.Contains(loader.requested, forbidden) {
+			t.Fatalf("Go Engine fetched JavaScript resource %s: %v", forbidden, loader.requested)
+		}
+	}
+
+	javaScriptPage, err := browserState.SetEngine(context.Background(), runtimemodel.EngineJavaScript)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if javaScriptPage == goPage || javaScriptPage.Engine != runtimemodel.EngineJavaScript || len(javaScriptPage.Scripts) != 2 {
+		t.Fatalf("explicit JavaScript reload Page/scripts = %p / %q / %#v", javaScriptPage, javaScriptPage.Engine, javaScriptPage.Scripts)
+	}
+	if got := javaScriptPage.ImportMap["fixture"]; got != "http://localhost/dependency.mjs" {
+		t.Fatalf("JavaScript import map fixture = %q", got)
+	}
+	for _, requested := range []string{classicURL.String(), moduleURL.String()} {
+		if !slices.Contains(loader.requested, requested) {
+			t.Fatalf("explicit JavaScript Engine did not fetch %s: %v", requested, loader.requested)
+		}
+	}
+	if slices.Contains(loader.requested[:2], classicURL.String()) || slices.Contains(loader.requested[:2], moduleURL.String()) {
+		t.Fatalf("JavaScript resource was requested before explicit Engine reload: %v", loader.requested)
 	}
 }
 
