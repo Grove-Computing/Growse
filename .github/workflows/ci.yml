@@ -89,6 +89,9 @@ jobs:
       - name: Run v0.14.0 deterministic conformance tests
         run: bash tests/v014-conformance.sh
 
+      - name: Run v0.15.0 framework compatibility tests
+        run: bash tests/v015-framework.sh
+
       - name: Run race tests with coverage
         run: go test -race -covermode=atomic -coverprofile=coverage.out ./...
 
