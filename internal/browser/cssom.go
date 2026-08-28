@@ -90,7 +90,8 @@ func numberCSS(value float32) string {
 }
 
 func cssColor(value uint32) string {
-	red, green, blue, alpha := byte(value>>24), byte(value>>16), byte(value>>8), byte(value)
+	red, green := value>>24, (value>>16)&0xff
+	blue, alpha := (value>>8)&0xff, value&0xff
 	if alpha == 255 {
 		return fmt.Sprintf("rgb(%d, %d, %d)", red, green, blue)
 	}
