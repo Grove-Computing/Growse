@@ -25,6 +25,29 @@ type Stylesheet struct {
 	Keyframes []KeyframesRule
 	// LayerOrder contains author cascade layers in first-declaration order.
 	LayerOrder []string
+	FontFaces  []FontFaceRule
+	Properties []PropertyRule
+}
+
+// FontFaceRule retains descriptors needed for bounded font selection/loading.
+type FontFaceRule struct {
+	Family       string
+	Source       string
+	Style        string
+	Weight       string
+	Stretch      string
+	UnicodeRange string
+	Display      string
+}
+
+// PropertyRule is a registered custom property definition.
+type PropertyRule struct {
+	Name         string
+	Syntax       string
+	InitialValue string
+	Inherits     bool
+	InheritsSet  bool
+	Valid        bool
 }
 
 var anonymousLayerSequence atomic.Uint64

@@ -125,7 +125,14 @@ func supportsDeclaration(property, value string) bool {
 		_, ok := parseBackgroundImage(value, defaultTextColor)
 		return ok
 	case "font-style":
-		return value == "normal" || value == "italic" || value == "oblique"
+		_, ok := parseFontStyle(value)
+		return ok
+	case "font-family":
+		_, ok := parseFontFamilies(value)
+		return ok
+	case "font-stretch":
+		_, ok := parseFontStretch(value)
+		return ok
 	case "text-align":
 		return value == "start" || value == "end" || value == "left" || value == "right" || value == "center" || value == "justify"
 	case "container-type":
@@ -139,7 +146,7 @@ func supportsDeclaration(property, value string) bool {
 
 func supportsProperty(property string) bool {
 	switch property {
-	case "display", "color", "background-color", "background-image", "font-size", "font-weight", "font-style", "line-height", "letter-spacing", "word-spacing", "text-indent", "text-align",
+	case "display", "color", "background-color", "background-image", "font-size", "font-weight", "font-family", "font-style", "font-stretch", "line-height", "letter-spacing", "word-spacing", "text-indent", "text-align",
 		"width", "height", "min-width", "min-height", "max-width", "max-height", "box-sizing", "position", "top", "right", "bottom", "left", "z-index",
 		"margin", "margin-top", "margin-right", "margin-bottom", "margin-left", "padding", "padding-top", "padding-right", "padding-bottom", "padding-left",
 		"border", "border-width", "border-style", "border-color", "border-top", "border-right", "border-bottom", "border-left", "border-radius", "outline",

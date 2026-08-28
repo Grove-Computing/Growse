@@ -19,6 +19,8 @@ type atRuleFrame struct {
 	layer          string
 	supports       *SupportsCondition
 	container      *ContainerQuery
+	fontFaceIndex  int
+	propertyIndex  int
 }
 
 // Parse reads a stylesheet. Unsupported selectors and at-rules are ignored.
@@ -27,6 +29,7 @@ func Parse(reader io.Reader) (*Stylesheet, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read CSS: %w", err)
 	}
+	input = rewritePropertyAtRules(input)
 	input = rewriteContainerAtRules(input)
 
 	p := parser.NewParser(parse.NewInputBytes(input), false)
@@ -49,6 +52,7 @@ func Parse(reader io.Reader) (*Stylesheet, error) {
 			if err := p.Err(); err != nil && !errors.Is(err, io.EOF) {
 				return nil, fmt.Errorf("parse CSS: %w", err)
 			}
+			finalizeStylesheetMetadata(stylesheet)
 			return stylesheet, nil
 		case parser.BeginRulesetGrammar:
 			if len(atRules) == 0 {
@@ -108,6 +112,26 @@ func Parse(reader io.Reader) (*Stylesheet, error) {
 			})
 			current = &stylesheet.Rules[len(stylesheet.Rules)-1]
 		case parser.DeclarationGrammar, parser.CustomPropertyGrammar:
+			if len(atRules) != 0 {
+				frame := &atRules[len(atRules)-1]
+				property := strings.ToLower(strings.TrimSpace(string(data)))
+				value := strings.TrimSpace(tokenText(p.Values()))
+				if frame.fontFaceIndex >= 0 {
+					if property == "growse-property-name" && strings.HasPrefix(value, "--") && validName(strings.TrimPrefix(value, "--")) {
+						stylesheet.FontFaces = stylesheet.FontFaces[:frame.fontFaceIndex]
+						stylesheet.Properties = append(stylesheet.Properties, PropertyRule{Name: value})
+						frame.fontFaceIndex = -1
+						frame.propertyIndex = len(stylesheet.Properties) - 1
+						continue
+					}
+					applyFontFaceDescriptor(&stylesheet.FontFaces[frame.fontFaceIndex], property, value)
+					continue
+				}
+				if frame.propertyIndex >= 0 {
+					applyPropertyDescriptor(&stylesheet.Properties[frame.propertyIndex], property, value)
+					continue
+				}
+			}
 			if current == nil && currentKeyframe == nil {
 				continue
 			}
@@ -160,7 +184,7 @@ func Parse(reader io.Reader) (*Stylesheet, error) {
 			if len(atRules) == 0 {
 				importsAllowed = false
 			}
-			frame := atRuleFrame{active: false, keyframesIndex: -1}
+			frame := atRuleFrame{active: false, keyframesIndex: -1, fontFaceIndex: -1, propertyIndex: -1}
 			if name == "@media" {
 				frame.active, frame.isMedia = true, true
 				frame.media = parseMediaQueryList(tokenText(p.Values()))
@@ -194,6 +218,15 @@ func Parse(reader io.Reader) (*Stylesheet, error) {
 					stylesheet.Keyframes = append(stylesheet.Keyframes, KeyframesRule{Name: keyframesName})
 					frame.active = true
 					frame.keyframesIndex = len(stylesheet.Keyframes) - 1
+				}
+			} else if len(atRules) == 0 && name == "@font-face" && strings.TrimSpace(tokenText(p.Values())) == "" {
+				stylesheet.FontFaces = append(stylesheet.FontFaces, FontFaceRule{})
+				frame.fontFaceIndex = len(stylesheet.FontFaces) - 1
+			} else if len(atRules) == 0 && name == "@property" {
+				propertyName := strings.TrimSpace(tokenText(p.Values()))
+				if strings.HasPrefix(propertyName, "--") && validName(strings.TrimPrefix(propertyName, "--")) {
+					stylesheet.Properties = append(stylesheet.Properties, PropertyRule{Name: propertyName})
+					frame.propertyIndex = len(stylesheet.Properties) - 1
 				}
 			}
 			atRules = append(atRules, frame)
@@ -323,6 +356,19 @@ func (s *Stylesheet) Append(other *Stylesheet) {
 	}
 	for _, layer := range other.LayerOrder {
 		s.ensureLayer(layer)
+	}
+	s.FontFaces = append(s.FontFaces, other.FontFaces...)
+	for _, registered := range other.Properties {
+		replaced := false
+		for index := range s.Properties {
+			if s.Properties[index].Name == registered.Name {
+				s.Properties[index], replaced = registered, true
+				break
+			}
+		}
+		if !replaced {
+			s.Properties = append(s.Properties, registered)
+		}
 	}
 	for _, rule := range other.Rules {
 		rule.Order = len(s.Rules)

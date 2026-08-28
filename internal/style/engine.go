@@ -140,6 +140,7 @@ func applyPresentationalHints(node *dom.Node, computed ComputedStyle) ComputedSt
 func initialStyle() ComputedStyle {
 	return ComputedStyle{
 		Color: defaultTextColor, BackgroundColor: transparent, FontSize: 16, FontWeight: 400,
+		FontFamilies: []string{"Growse Sans", "sans-serif"}, FontStyle: "normal", FontStretch: "normal", FontFaceIndex: -1,
 		BackgroundRepeat: BackgroundRepeat{X: true, Y: true},
 		DecorationColor:  defaultTextColor, Opacity: 1, FlexShrink: 1,
 		ZIndexAuto: true,
@@ -155,6 +156,7 @@ func initialStyle() ComputedStyle {
 func inheritedStyle(parent ComputedStyle) ComputedStyle {
 	computed := ComputedStyle{
 		Color: parent.Color, FontSize: parent.FontSize, FontWeight: parent.FontWeight,
+		FontFamilies: append([]string(nil), parent.FontFamilies...), FontStyle: parent.FontStyle, FontStretch: parent.FontStretch, FontFaceIndex: parent.FontFaceIndex,
 		LineHeight: parent.LineHeight, WhiteSpace: parent.WhiteSpace, Visibility: parent.Visibility,
 		BackgroundColor: transparent, Display: DisplayInline,
 		BackgroundRepeat: BackgroundRepeat{X: true, Y: true},
@@ -276,7 +278,9 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 		}
 		computed.ImportantProperties[property] = true
 	}
-	computed.CustomProperties = applyCustomProperties(computed.CustomProperties, winners)
+	propertyContext := LengthContext{FontSize: parent.FontSize, RootFontSize: environment.RootFontSize, ViewportWidth: environment.ViewportWidth, ViewportHeight: environment.ViewportHeight, ContainerWidth: environment.ContainerWidth, ContainerHeight: environment.ContainerHeight}
+	computed.CustomProperties = registeredPropertyBase(parent.CustomProperties, stylesheet, propertyContext)
+	computed.CustomProperties = applyCustomProperties(computed.CustomProperties, winners, stylesheet, propertyContext, parent.CustomProperties)
 	fontContext := LengthContext{
 		FontSize: parent.FontSize, RootFontSize: environment.RootFontSize,
 		ViewportWidth: environment.ViewportWidth, ViewportHeight: environment.ViewportHeight,
@@ -397,6 +401,27 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 			}
 		}
 	}
+	if value, ok := winners["font-family"]; ok {
+		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
+			if parsed, valid := parseFontFamilies(resolved); valid {
+				computed.FontFamilies = parsed
+			}
+		}
+	}
+	if value, ok := winners["font-style"]; ok {
+		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
+			if parsed, valid := parseFontStyle(resolved); valid {
+				computed.FontStyle = parsed
+			}
+		}
+	}
+	if value, ok := winners["font-stretch"]; ok {
+		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
+			if parsed, valid := parseFontStretch(resolved); valid {
+				computed.FontStretch = parsed
+			}
+		}
+	}
 	if value, ok := winners["font-weight"]; ok {
 		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
 			if parsed, valid := resolveInt(resolved, parent.FontWeight, 400, true, parseFontWeight); valid {
@@ -404,6 +429,7 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 			}
 		}
 	}
+	computed.FontFaceIndex = selectFontFace(stylesheet, computed.FontFamilies, computed.FontStyle, computed.FontWeight, computed.FontStretch)
 	if value, ok := winners["line-height"]; ok {
 		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
 			if parsed, valid := resolveLineHeight(resolved, parent.LineHeight, computed.FontSize, fontContext); valid {
@@ -710,7 +736,7 @@ func resolveOverflow(value string, parent Overflow) (Overflow, bool) {
 	}
 }
 
-func applyCustomProperties(inherited map[string]string, winners map[string]winner) map[string]string {
+func applyCustomProperties(inherited map[string]string, winners map[string]winner, stylesheet *css.Stylesheet, context LengthContext, parentValues map[string]string) map[string]string {
 	result := inherited
 	for property, candidate := range winners {
 		if !strings.HasPrefix(property, "--") {
@@ -718,19 +744,69 @@ func applyCustomProperties(inherited map[string]string, winners map[string]winne
 		}
 		switch parseGlobalKeyword(candidate.value) {
 		case globalInitial:
-			if result != nil {
+			if _, registered := registeredProperty(stylesheet, property); !registered && result != nil {
 				delete(result, property)
 			}
-		case globalInherit, globalUnset:
-			// Custom properties inherit, so the inherited value is retained.
+		case globalInherit:
+			if parentValue, ok := parentValues[property]; ok {
+				result[property] = parentValue
+			}
+		case globalUnset:
+			if registration, registered := registeredProperty(stylesheet, property); !registered || registration.Inherits {
+				if parentValue, ok := parentValues[property]; ok {
+					result[property] = parentValue
+				}
+			}
 		default:
+			value := candidate.value
+			if registration, ok := registeredProperty(stylesheet, property); ok {
+				resolved, valid := resolveVariables(value, result)
+				if !valid || !validRegisteredValue(registration.Syntax, resolved, context) {
+					continue
+				}
+				value = resolved
+			}
 			if result == nil {
 				result = make(map[string]string)
 			}
-			result[property] = candidate.value
+			result[property] = value
 		}
 	}
 	return result
+}
+
+func registeredPropertyBase(inherited map[string]string, stylesheet *css.Stylesheet, context LengthContext) map[string]string {
+	result := make(map[string]string, len(inherited))
+	for name, value := range inherited {
+		result[name] = value
+	}
+	if stylesheet == nil {
+		return result
+	}
+	for _, registration := range stylesheet.Properties {
+		if !registration.Valid || !validRegisteredValue(registration.Syntax, registration.InitialValue, context) {
+			continue
+		}
+		if registration.Inherits {
+			if _, ok := result[registration.Name]; ok {
+				continue
+			}
+		}
+		result[registration.Name] = registration.InitialValue
+	}
+	return result
+}
+
+func registeredProperty(stylesheet *css.Stylesheet, name string) (css.PropertyRule, bool) {
+	if stylesheet == nil {
+		return css.PropertyRule{}, false
+	}
+	for index := len(stylesheet.Properties) - 1; index >= 0; index-- {
+		if stylesheet.Properties[index].Name == name && stylesheet.Properties[index].Valid {
+			return stylesheet.Properties[index], true
+		}
+	}
+	return css.PropertyRule{}, false
 }
 
 func resolveVariables(value string, customProperties map[string]string) (string, bool) {

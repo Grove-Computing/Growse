@@ -376,6 +376,10 @@ type ComputedStyle struct {
 	BackgroundLayers    []BackgroundLayer
 	FontSize            float32
 	FontWeight          int
+	FontFamilies        []string
+	FontStyle           string
+	FontStretch         string
+	FontFaceIndex       int
 	LineHeight          float32
 	WhiteSpace          WhiteSpace
 	OverflowX           Overflow
