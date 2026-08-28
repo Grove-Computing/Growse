@@ -74,6 +74,10 @@ func (runtime *Runtime) installElementGeometry(vm *goja.Runtime, object *goja.Ob
 }
 
 func (runtime *Runtime) mustReadRender(vm *goja.Runtime, element *domapi.Element) runtimemodel.RenderSnapshot {
+	runtime.forcedReadCount++
+	if runtime.forcedReadCount > runtime.maxForcedReadsPerTask {
+		panic(vm.NewTypeError("forced layout read limit exceeded"))
+	}
 	if element == nil || runtime.environment.ReadRender == nil {
 		panic(vm.NewTypeError("render snapshot is unavailable"))
 	}

@@ -93,6 +93,9 @@ func (d *Document) InsertChild(parent, child *Node, index int) error {
 	if parent.Type != NodeDocument && parent.Type != NodeElement && parent.Type != NodeDocumentFragment || child == d.Root || index < 0 || index > len(parent.Children) {
 		return errors.New("invalid child insertion")
 	}
+	if !attachmentWithinDepth(parent, child) {
+		return errors.New("child insertion exceeds DOM tree depth limit")
+	}
 	for current := parent; current != nil; current = current.Parent {
 		if current == child {
 			return errors.New("child insertion would create a cycle")
@@ -139,7 +142,7 @@ func (d *Document) ReplaceChildren(parent *Node, children []*Node) bool {
 	}
 	seen := make(map[NodeID]bool, len(children))
 	for _, child := range children {
-		if child == nil || child.document != d || child == d.Root || seen[child.ID] {
+		if child == nil || child.document != d || child == d.Root || seen[child.ID] || !attachmentWithinDepth(parent, child) {
 			return false
 		}
 		seen[child.ID] = true
@@ -275,7 +278,7 @@ func (d *Document) GetElementsByTagName(value string) []*Node {
 
 // SetAttribute は要素の属性を設定し、値が変化した場合にtrueを返す。
 func (d *Document) SetAttribute(id NodeID, name, value string) bool {
-	if d == nil || name == "" {
+	if d == nil || name == "" || len(name) > MaxDOMStringBytes || len(value) > MaxDOMStringBytes {
 		return false
 	}
 	node, ok := d.nodes[id]
@@ -283,6 +286,9 @@ func (d *Document) SetAttribute(id NodeID, name, value string) bool {
 		return false
 	}
 	if current, exists := node.Attribute(name); exists && current == value {
+		return false
+	}
+	if _, exists := node.Attribute(name); !exists && len(node.Attributes) >= MaxAttributesPerNode {
 		return false
 	}
 	if node.Attributes == nil {

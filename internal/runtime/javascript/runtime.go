@@ -24,7 +24,7 @@ import (
 )
 
 const (
-	MaxEventListeners         = 10_000
+	MaxEventListeners         = 20_000
 	maxModuleBytes            = 2 << 20
 	maxCallStackSize          = 1_000
 	callbackQueueSize         = 64
@@ -110,6 +110,10 @@ type Runtime struct {
 	maxObserverRecords     int
 	maxObserverCallbacks   int
 	maxObserverLoops       int
+	mutationCount          int
+	forcedReadCount        int
+	maxMutationsPerTask    int
+	maxForcedReadsPerTask  int
 
 	loaded    bool
 	started   bool
@@ -133,6 +137,7 @@ func New() *Runtime {
 		maxListeners: MaxEventListeners, maxMicrotasks: maxMicrotaskQueue, moduleTimeout: defaultModuleTimeout,
 		maxObservers: maxObserversPerPage, maxObserverRecords: maxPendingObserverRecords,
 		maxObserverCallbacks: maxObserverCallbacks, maxObserverLoops: maxResizeObserverLoops,
+		maxMutationsPerTask: 100_000, maxForcedReadsPerTask: 1_024,
 	}
 }
 
@@ -241,6 +246,8 @@ func (runtime *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script,
 	runtime.pendingMutationRecords = 0
 	runtime.observerCount = 0
 	runtime.frameObserversDirty.Store(false)
+	runtime.mutationCount = 0
+	runtime.forcedReadCount = 0
 	runtime.windowListeners = nil
 	runtime.documentListeners = nil
 	runtime.microtasks = nil
@@ -449,6 +456,8 @@ func (runtime *Runtime) Stop() error {
 	runtime.pendingMutationRecords = 0
 	runtime.observerCount = 0
 	runtime.frameObserversDirty.Store(false)
+	runtime.mutationCount = 0
+	runtime.forcedReadCount = 0
 	runtime.windowListeners = nil
 	runtime.documentListeners = nil
 	runtime.microtasks = nil
@@ -718,6 +727,8 @@ func (runtime *Runtime) run(ctx context.Context, vm *goja.Runtime, queue <-chan 
 			default:
 			}
 			runtime.executing.Store(true)
+			runtime.mutationCount = 0
+			runtime.forcedReadCount = 0
 			err := executeTask(vm, queued.run)
 			if ctx.Err() == nil {
 				runtime.drainMicrotasks(vm)

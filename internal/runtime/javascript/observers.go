@@ -219,6 +219,10 @@ func intersectionThresholds(vm *goja.Runtime, value goja.Value) ([]float32, erro
 }
 
 func (runtime *Runtime) handleDOMMutation() {
+	runtime.mutationCount++
+	if runtime.mutationCount > runtime.maxMutationsPerTask {
+		panic(runtime.vm.NewTypeError("DOM mutation limit exceeded"))
+	}
 	if runtime.environment.Document != nil {
 		current := runtime.environment.Document.Snapshot()
 		runtime.queueMutationDiff(runtime.mutationSnapshot, current)

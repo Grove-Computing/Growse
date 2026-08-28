@@ -16,8 +16,8 @@ import (
 const (
 	maxDOMCollectionResults = 4_096
 	maxDOMInnerHTMLBytes    = 256 << 10
-	maxDOMOwnedNodes        = 100_000
-	maxDOMTextBytes         = 1 << 20
+	maxDOMOwnedNodes        = dommodel.MaxNodesPerDocument
+	maxDOMTextBytes         = dommodel.MaxDOMStringBytes
 )
 
 // API は1ページのDocumentへアクセスする。
@@ -218,6 +218,9 @@ func (api *API) CreateElement(tagName string) *Element {
 	}
 	tagName = strings.TrimSpace(tagName)
 	if !validTagName(tagName) {
+		return nil
+	}
+	if strings.EqualFold(tagName, "template") && api.document.OwnedNodeCount()+2 > maxDOMOwnedNodes {
 		return nil
 	}
 	node := api.document.CreateElement(tagName, nil)
@@ -1284,25 +1287,39 @@ func (element *Element) Text() string {
 }
 
 // SetText は要素の内容を指定したテキストへ置き換える。
-func (element *Element) SetText(value string) {
+func (element *Element) SetText(value string) bool {
 	if element == nil || element.document == nil {
-		return
+		return false
 	}
 	node, ok := element.node()
 	if !ok {
-		return
+		return false
+	}
+	parentTag := node.TagName
+	if node.Type == dommodel.NodeText && node.Parent != nil {
+		parentTag = node.Parent.TagName
+	}
+	if len(value) > dommodel.TextLimitForParent(parentTag) {
+		return false
 	}
 	if node.Type == dommodel.NodeText {
 		if node.Text == value {
-			return
+			return true
 		}
 		node.Text = value
-	} else if !element.document.SetTextContent(element.id, value) {
-		return
+	} else {
+		removed := 0
+		for _, child := range node.Children {
+			removed += countSubtreeNodes(child)
+		}
+		if element.document.OwnedNodeCount()-removed+1 > maxDOMOwnedNodes || !element.document.SetTextContent(element.id, value) {
+			return false
+		}
 	}
 	if element.onMutation != nil {
 		element.onMutation()
 	}
+	return true
 }
 
 func (api *API) element(node *dommodel.Node) *Element {

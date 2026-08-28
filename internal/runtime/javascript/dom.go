@@ -142,7 +142,7 @@ func (runtime *Runtime) installDOM(vm *goja.Runtime) error {
 	}
 	if err := document.Set("createElement", func(call goja.FunctionCall) goja.Value {
 		element := runtime.domAPI.CreateElement(call.Argument(0).String())
-		return runtime.elementValue(vm, element)
+		return runtime.mustCreateNodeValue(vm, element, "createElement")
 	}); err != nil {
 		return err
 	}
@@ -151,12 +151,12 @@ func (runtime *Runtime) installDOM(vm *goja.Runtime) error {
 		if !goja.IsNull(call.Argument(0)) && !goja.IsUndefined(call.Argument(0)) {
 			namespace = call.Argument(0).String()
 		}
-		return runtime.elementValue(vm, runtime.domAPI.CreateElementNS(namespace, call.Argument(1).String()))
+		return runtime.mustCreateNodeValue(vm, runtime.domAPI.CreateElementNS(namespace, call.Argument(1).String()), "createElementNS")
 	}); err != nil {
 		return err
 	}
 	if err := document.Set("createDocumentFragment", func(goja.FunctionCall) goja.Value {
-		return runtime.elementValue(vm, runtime.domAPI.CreateDocumentFragment())
+		return runtime.mustCreateNodeValue(vm, runtime.domAPI.CreateDocumentFragment(), "createDocumentFragment")
 	}); err != nil {
 		return err
 	}
@@ -165,16 +165,23 @@ func (runtime *Runtime) installDOM(vm *goja.Runtime) error {
 		if !ok || runtime.elements[object] == nil {
 			panic(vm.NewTypeError("importNode source is not a Node"))
 		}
-		return runtime.elementValue(vm, runtime.domAPI.ImportNode(runtime.elements[object], call.Argument(1).ToBoolean()))
+		return runtime.mustCreateNodeValue(vm, runtime.domAPI.ImportNode(runtime.elements[object], call.Argument(1).ToBoolean()), "importNode")
 	}); err != nil {
 		return err
 	}
 	if err := document.Set("createTextNode", func(call goja.FunctionCall) goja.Value {
-		return runtime.elementValue(vm, runtime.domAPI.CreateTextNode(call.Argument(0).String()))
+		return runtime.mustCreateNodeValue(vm, runtime.domAPI.CreateTextNode(call.Argument(0).String()), "createTextNode")
 	}); err != nil {
 		return err
 	}
 	return vm.Set("document", document)
+}
+
+func (runtime *Runtime) mustCreateNodeValue(vm *goja.Runtime, element *domapi.Element, operation string) goja.Value {
+	if element == nil {
+		panic(vm.NewTypeError(operation + " exceeds a DOM safety limit or has invalid input"))
+	}
+	return runtime.elementValue(vm, element)
 }
 
 func (runtime *Runtime) addDocumentEventListener(vm *goja.Runtime, eventType string, value goja.Value) {
@@ -461,7 +468,7 @@ func (runtime *Runtime) elementValue(vm *goja.Runtime, element *domapi.Element) 
 		return goja.Undefined()
 	})
 	_ = object.Set("cloneNode", func(call goja.FunctionCall) goja.Value {
-		return runtime.nodeValue(vm, element.CloneNode(call.Argument(0).ToBoolean()))
+		return runtime.mustCreateNodeValue(vm, element.CloneNode(call.Argument(0).ToBoolean()), "cloneNode")
 	})
 	_ = object.Set("contains", func(call goja.FunctionCall) goja.Value {
 		candidateObject, ok := call.Argument(0).(*goja.Object)
@@ -546,7 +553,9 @@ func (runtime *Runtime) elementValue(vm *goja.Runtime, element *domapi.Element) 
 
 	textGetter := vm.ToValue(func(goja.FunctionCall) goja.Value { return vm.ToValue(element.Text()) })
 	textSetter := vm.ToValue(func(call goja.FunctionCall) goja.Value {
-		element.SetText(call.Argument(0).String())
+		if !element.SetText(call.Argument(0).String()) {
+			panic(vm.NewTypeError("textContent exceeds a DOM safety limit"))
+		}
 		runtime.resourceElementChanged(vm, element)
 		return goja.Undefined()
 	})

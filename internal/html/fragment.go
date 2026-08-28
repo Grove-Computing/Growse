@@ -21,7 +21,7 @@ func ParseFragment(source, contextTag string) (*dom.Document, error) {
 	}
 	document := dom.NewDocument()
 	for _, node := range nodes {
-		if err := convertNode(document, document.Root, node); err != nil {
+		if err := convertNode(document, document.Root, node, 1); err != nil {
 			return nil, err
 		}
 	}

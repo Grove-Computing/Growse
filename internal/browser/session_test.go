@@ -15,6 +15,8 @@ import (
 	"github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/events"
 	"github.com/Grove-Computing/Growse/internal/network"
+	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
+	runtimejavascript "github.com/Grove-Computing/Growse/internal/runtime/javascript"
 	storagecore "github.com/Grove-Computing/Growse/internal/storage"
 )
 
@@ -22,6 +24,50 @@ type frameRuntimeStub struct {
 	runtimeStub
 	frames     int
 	timestamps []time.Time
+}
+
+func TestDOMLimitFailureInOneTabDoesNotStopAnotherJavaScriptTab(t *testing.T) {
+	limitURL := mustParseURL(t, "https://limits.example/oversized")
+	healthyURL := mustParseURL(t, "https://limits.example/healthy")
+	loader := &routeLoader{responses: map[string]*network.Response{
+		limitURL.String():   {URL: limitURL, StatusCode: 200, ContentType: "text/html", Body: []byte("<p>" + strings.Repeat("x", dom.MaxDOMStringBytes+1) + "</p>")},
+		healthyURL.String(): {URL: healthyURL, StatusCode: 200, ContentType: "text/html", Body: []byte(`<html><body id="result"><script>document.body.setAttribute("data-runtime", "running")</script></body></html>`)},
+	}}
+	var browsers []*Browser
+	session := NewSession(func() *Browser {
+		state := NewWithEngineFactory(loader, func(engine runtimemodel.Engine) runtimemodel.Runtime {
+			if engine == runtimemodel.EngineJavaScript {
+				return runtimejavascript.New()
+			}
+			return nil
+		})
+		_, _ = state.SetEngine(context.Background(), runtimemodel.EngineJavaScript)
+		browsers = append(browsers, state)
+		return state
+	})
+	t.Cleanup(func() { _ = session.Close() })
+	first, err := session.NewTab(limitURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := session.NewTab(healthyURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := browsers[0].Navigate(context.Background(), limitURL.String()); err == nil || !strings.Contains(err.Error(), "DOM limit") {
+		t.Fatalf("oversized Tab navigation error = %v", err)
+	}
+	if _, err := session.SelectTab(second.ID); err != nil {
+		t.Fatal(err)
+	}
+	page, err := browsers[1].Navigate(context.Background(), healthyURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, ok := page.Document.GetElementByID("result")
+	if !ok || result.Attributes["data-runtime"] != "running" || page.RuntimeError != "" {
+		t.Fatalf("healthy JavaScript Tab = result:%v runtime error:%q first:%d", result, page.RuntimeError, first.ID)
+	}
 }
 
 type closeCancelLoader struct {
