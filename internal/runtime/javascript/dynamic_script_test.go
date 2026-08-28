@@ -124,3 +124,83 @@ func TestDynamicClassicScriptsSnapshotFetchAndExecuteExactlyOnce(t *testing.T) {
 		t.Fatalf("snapshotted request paths = %v", seen)
 	}
 }
+
+func TestDynamicModuleAndModulePreloadShareGraphAndEvaluateOnce(t *testing.T) {
+	document, err := htmlparser.Parse(strings.NewReader(`<link rel="modulepreload" href="/shared.js"><main id="host"><output id="result"></output></main>`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseURL, _ := url.Parse("https://app.example/page")
+	sources := map[string]string{
+		"/root.js":    `import { value } from "./shared.js"; globalThis.moduleOrder.push("root:" + value); const dynamic = await import("./dynamic.js"); document.getElementById("result").setAttribute("module", moduleOrder.join(",") + ":" + dynamic.value);`,
+		"/shared.js":  `globalThis.moduleOrder = ["shared"]; export const value = "static";`,
+		"/dynamic.js": `globalThis.moduleOrder.push("dynamic"); export const value = "loaded";`,
+	}
+	var fetchMu sync.Mutex
+	fetches := make(map[string]int)
+	environment := runtimemodel.Environment{
+		Document: document, Events: events.NewDispatcher(), BaseURL: baseURL,
+		Fetch: func(_ context.Context, request *network.Request) (*network.Response, error) {
+			if request.Kind != network.RequestModule || !request.CORS || request.Credentials != network.CredentialsSameOrigin {
+				t.Fatalf("module request policy = %#v", request)
+			}
+			fetchMu.Lock()
+			fetches[request.URL.Path]++
+			fetchMu.Unlock()
+			return &network.Response{
+				URL: request.URL, StatusCode: http.StatusOK, Status: "OK", ContentType: "text/javascript",
+				Body: []byte(sources[request.URL.Path]),
+			}, nil
+		},
+	}
+	runtime := New()
+	t.Cleanup(func() { _ = runtime.Stop() })
+	loader := `
+		var host = document.getElementById("host");
+		var result = document.getElementById("result");
+		function moduleScript() {
+			var script = document.createElement("script");
+			script.type = "module";
+			script.src = "/root.js";
+			script.crossOrigin = "anonymous";
+			script.addEventListener("load", function () { result.setAttribute("module-loads", String(Number(result.getAttribute("module-loads") || "0") + 1)); });
+			script.addEventListener("error", function () { result.setAttribute("module-error", "yes"); });
+			return script;
+		}
+		host.appendChild(moduleScript());
+		host.appendChild(moduleScript());`
+	startJavaScriptRuntime(t, runtime, loader, environment)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		var module, loads string
+		var failed bool
+		if err := runtime.runSync(context.Background(), func(_ *goja.Runtime) error {
+			result, _ := document.GetElementByID("result")
+			module, _ = result.Attribute("module")
+			loads, _ = result.Attribute("module-loads")
+			_, failed = result.Attribute("module-error")
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if failed {
+			t.Fatal("dynamic module dispatched error")
+		}
+		if module == "shared,root:static,dynamic:loaded" && loads == "2" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("dynamic module = %q, loads = %q", module, loads)
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	fetchMu.Lock()
+	defer fetchMu.Unlock()
+	for _, path := range []string{"/root.js", "/shared.js", "/dynamic.js"} {
+		if fetches[path] != 1 {
+			t.Fatalf("module fetches = %v; %s count = %d, want 1", fetches, path, fetches[path])
+		}
+	}
+}

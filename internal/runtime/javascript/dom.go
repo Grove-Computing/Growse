@@ -278,6 +278,7 @@ func (runtime *Runtime) elementValue(vm *goja.Runtime, element *domapi.Element) 
 	})
 	_ = object.DefineAccessorProperty("value", valueGetter, valueSetter, goja.FLAG_FALSE, goja.FLAG_TRUE)
 	runtime.installScriptElement(vm, object, element)
+	runtime.installLinkElement(vm, object, element)
 	runtime.installFrameElement(vm, object, id)
 	return object
 }

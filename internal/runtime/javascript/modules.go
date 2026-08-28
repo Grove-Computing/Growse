@@ -2,6 +2,7 @@ package javascript
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"mime"
@@ -35,6 +36,7 @@ type moduleGraph struct {
 	rootURL     string
 	rootSource  string
 	importMap   map[string]string
+	registry    *moduleRegistry
 
 	mu         sync.Mutex
 	sources    map[string]string
@@ -43,7 +45,33 @@ type moduleGraph struct {
 	totalBytes int
 }
 
-func bundleModule(ctx context.Context, script runtimemodel.Script, environment runtimemodel.Environment) (string, error) {
+type moduleCacheKey struct {
+	url         string
+	credentials network.CredentialsMode
+}
+
+type moduleCacheEntry struct {
+	ready    chan struct{}
+	response *network.Response
+	err      error
+}
+
+type moduleRegistry struct {
+	environment runtimemodel.Environment
+	mu          sync.Mutex
+	entries     map[moduleCacheKey]*moduleCacheEntry
+}
+
+type moduleEvaluation struct {
+	ready chan struct{}
+	err   error
+}
+
+func newModuleRegistry(environment runtimemodel.Environment) *moduleRegistry {
+	return &moduleRegistry{environment: environment, entries: make(map[moduleCacheKey]*moduleCacheEntry)}
+}
+
+func bundleModule(ctx context.Context, script runtimemodel.Script, environment runtimemodel.Environment, registry *moduleRegistry) (string, error) {
 	if script.SourceURL == nil {
 		return "", errors.New("module requires a source URL")
 	}
@@ -61,7 +89,8 @@ func bundleModule(ctx context.Context, script runtimemodel.Script, environment r
 	graph := &moduleGraph{
 		ctx: ctx, environment: environment, credentials: credentials,
 		rootURL: rootURL, rootSource: script.Source, importMap: cloneStringMap(environment.ImportMap),
-		sources: make(map[string]string), referrers: make(map[string]string), depths: map[string]int{rootURL: 0}, totalBytes: len(script.Source),
+		registry: registry,
+		sources:  make(map[string]string), referrers: make(map[string]string), depths: map[string]int{rootURL: 0}, totalBytes: len(script.Source),
 	}
 	result := api.Build(api.BuildOptions{
 		EntryPoints: []string{moduleEntryPath}, Bundle: true, Write: false,
@@ -168,14 +197,11 @@ func (graph *moduleGraph) load(moduleURL string) (string, string, error) {
 	if err != nil {
 		return "", "", fmt.Errorf("parse module URL: %w", err)
 	}
-	if graph.environment.Fetch == nil {
-		return "", "", errors.New("module fetch broker is unavailable")
+	registry := graph.registry
+	if registry == nil {
+		registry = newModuleRegistry(graph.environment)
 	}
-	response, err := graph.environment.Fetch(graph.ctx, &network.Request{
-		Method: http.MethodGet, URL: target, SiteURL: graph.environment.BaseURL,
-		Kind: network.RequestModule, Engine: string(runtimemodel.EngineJavaScript),
-		Credentials: graph.credentials, CORS: true,
-	})
+	response, err := registry.fetch(graph.ctx, target, graph.credentials)
 	if err != nil {
 		return "", "", fmt.Errorf("fetch module %s: %w", network.RedactedURL(target), err)
 	}
@@ -217,6 +243,105 @@ func (graph *moduleGraph) load(moduleURL string) (string, string, error) {
 	}
 	graph.mu.Unlock()
 	return source, final, nil
+}
+
+func (registry *moduleRegistry) fetch(ctx context.Context, target *url.URL, credentials network.CredentialsMode) (*network.Response, error) {
+	if registry == nil || target == nil {
+		return nil, errors.New("module registry is unavailable")
+	}
+	normalized, err := normalizeModuleURL(target)
+	if err != nil {
+		return nil, err
+	}
+	key := moduleCacheKey{url: normalized, credentials: credentials}
+	registry.mu.Lock()
+	entry := registry.entries[key]
+	if entry == nil {
+		entry = &moduleCacheEntry{ready: make(chan struct{})}
+		registry.entries[key] = entry
+		registry.mu.Unlock()
+		entry.response, entry.err = registry.fetchUncached(ctx, target, credentials)
+		close(entry.ready)
+	} else {
+		registry.mu.Unlock()
+		select {
+		case <-entry.ready:
+		case <-ctx.Done():
+			return nil, context.Cause(ctx)
+		}
+	}
+	if entry.err != nil {
+		return nil, entry.err
+	}
+	return cloneModuleResponse(entry.response), nil
+}
+
+func (registry *moduleRegistry) fetchUncached(ctx context.Context, target *url.URL, credentials network.CredentialsMode) (*network.Response, error) {
+	if registry.environment.Fetch == nil {
+		return nil, errors.New("module fetch broker is unavailable")
+	}
+	response, err := registry.environment.Fetch(ctx, &network.Request{
+		Method: http.MethodGet, URL: target, SiteURL: registry.environment.BaseURL,
+		Kind: network.RequestModule, Engine: string(runtimemodel.EngineJavaScript),
+		Credentials: credentials, CORS: true,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("fetch module %s: %w", network.RedactedURL(target), err)
+	}
+	if response == nil {
+		return nil, fmt.Errorf("fetch module %s: empty response", network.RedactedURL(target))
+	}
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return nil, fmt.Errorf("module %s returned HTTP status %d", network.RedactedURL(target), response.StatusCode)
+	}
+	if len(response.Body) > maxModuleBytes {
+		return nil, fmt.Errorf("module %s exceeds %d bytes", network.RedactedURL(target), maxModuleBytes)
+	}
+	if !isModuleContentType(response.ContentType) {
+		return nil, fmt.Errorf("module %s has unsupported Content-Type %q", network.RedactedURL(target), response.ContentType)
+	}
+	finalURL := response.URL
+	if finalURL == nil {
+		finalURL = target
+	}
+	if _, err := normalizeModuleURL(finalURL); err != nil {
+		return nil, fmt.Errorf("redirected module URL: %w", err)
+	}
+	if mixedModuleContent(registry.environment.BaseURL, finalURL) {
+		return nil, fmt.Errorf("block mixed-content module %s", network.RedactedURL(finalURL))
+	}
+	return cloneModuleResponse(response), nil
+}
+
+func cloneModuleResponse(response *network.Response) *network.Response {
+	if response == nil {
+		return nil
+	}
+	copy := *response
+	copy.Body = append([]byte(nil), response.Body...)
+	if response.Header != nil {
+		copy.Header = response.Header.Clone()
+	}
+	if response.URL != nil {
+		urlCopy := *response.URL
+		copy.URL = &urlCopy
+	}
+	return &copy
+}
+
+func moduleEvaluationKey(script runtimemodel.Script) (string, error) {
+	if script.SourceURL == nil {
+		return "", errors.New("module requires a source URL")
+	}
+	normalized, err := normalizeModuleURL(script.SourceURL)
+	if err != nil {
+		return "", err
+	}
+	if !script.Inline {
+		return normalized, nil
+	}
+	digest := sha256.Sum256([]byte(script.Source))
+	return fmt.Sprintf("%s#inline-%d-%x", normalized, script.DocumentOrder, digest), nil
 }
 
 func resolveModuleSpecifier(referrer, specifier string, importMap map[string]string) (string, error) {

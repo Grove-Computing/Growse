@@ -14,6 +14,7 @@ import (
 	dommodel "github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/events"
 	"github.com/Grove-Computing/Growse/internal/network"
+	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 	domapi "github.com/Grove-Computing/Growse/internal/webapi/dom"
 	"github.com/dop251/goja"
 )
@@ -60,6 +61,17 @@ func (runtime *Runtime) installScriptElement(vm *goja.Runtime, object *goja.Obje
 	_ = object.DefineAccessorProperty("text", textGetter, textSetter, goja.FLAG_FALSE, goja.FLAG_TRUE)
 }
 
+func (runtime *Runtime) installLinkElement(vm *goja.Runtime, object *goja.Object, element *domapi.Element) {
+	if element == nil || !strings.EqualFold(element.TagName(), "link") {
+		return
+	}
+	reflectStringAttribute(vm, object, element, "href", "href")
+	reflectStringAttribute(vm, object, element, "rel", "rel")
+	reflectStringAttribute(vm, object, element, "as", "as")
+	reflectStringAttribute(vm, object, element, "integrity", "integrity")
+	reflectStringAttribute(vm, object, element, "crossOrigin", "crossorigin")
+}
+
 func reflectStringAttribute(vm *goja.Runtime, object *goja.Object, element *domapi.Element, property, attribute string) {
 	getter := vm.ToValue(func(goja.FunctionCall) goja.Value {
 		value, _ := element.GetAttribute(attribute)
@@ -83,11 +95,208 @@ func (runtime *Runtime) prepareConnectedScripts(vm *goja.Runtime, roots ...*doma
 
 func (runtime *Runtime) prepareConnectedScriptTree(vm *goja.Runtime, element *domapi.Element) {
 	if strings.EqualFold(element.TagName(), "script") {
-		runtime.prepareDynamicClassicScript(vm, element)
+		typeValue, _ := element.GetAttribute("type")
+		if strings.EqualFold(strings.TrimSpace(typeValue), "module") {
+			runtime.prepareDynamicModuleScript(vm, element)
+		} else {
+			runtime.prepareDynamicClassicScript(vm, element)
+		}
+	} else if strings.EqualFold(element.TagName(), "link") && linkRelIncludes(element, "modulepreload") {
+		runtime.prepareModulePreload(vm, element)
 	}
 	for _, child := range element.Children() {
 		runtime.prepareConnectedScriptTree(vm, child)
 	}
+}
+
+func (runtime *Runtime) prepareInitialModulePreloads(vm *goja.Runtime) {
+	runtime.mu.Lock()
+	domAPI := runtime.domAPI
+	runtime.mu.Unlock()
+	if domAPI == nil {
+		return
+	}
+	for _, link := range domAPI.GetElementsByTagName("link") {
+		if linkRelIncludes(link, "modulepreload") {
+			runtime.prepareModulePreload(vm, link)
+		}
+	}
+}
+
+func linkRelIncludes(element *domapi.Element, wanted string) bool {
+	value, _ := element.GetAttribute("rel")
+	for _, token := range strings.Fields(strings.ToLower(value)) {
+		if token == wanted {
+			return true
+		}
+	}
+	return false
+}
+
+func (runtime *Runtime) prepareDynamicModuleScript(vm *goja.Runtime, element *domapi.Element) {
+	id := uint64(element.ID())
+	runtime.mu.Lock()
+	if _, prepared := runtime.dynamicScripts[id]; prepared {
+		runtime.mu.Unlock()
+		return
+	}
+	runtime.dynamicScripts[id] = struct{}{}
+	environment := runtime.environment
+	runtime.mu.Unlock()
+
+	snapshot := dynamicScriptSnapshot{element: element, id: element.ID(), source: element.Text()}
+	source, hasSource := element.GetAttribute("src")
+	snapshot.integrity, _ = element.GetAttribute("integrity")
+	snapshot.crossOrigin, _ = element.GetAttribute("crossorigin")
+	baseURL := environment.ResourceBaseURL
+	if baseURL == nil {
+		baseURL = environment.BaseURL
+	}
+	if !hasSource || strings.TrimSpace(source) == "" {
+		if baseURL == nil {
+			runtime.recordError("load dynamic module: document base URL is unavailable")
+			runtime.dispatchDynamicScriptEvent(vm, snapshot, events.Error)
+			return
+		}
+		inlineURL := *baseURL
+		query := inlineURL.Query()
+		query.Set("__growse_inline_module", fmt.Sprint(id))
+		inlineURL.RawQuery = query.Encode()
+		snapshot.sourceURL = &inlineURL
+		script := runtimemodel.Script{
+			Engine: runtimemodel.EngineJavaScript, Kind: runtimemodel.ScriptModule, Inline: true,
+			SourceURL: snapshot.sourceURL, Source: snapshot.source, DocumentOrder: int(id),
+		}
+		go runtime.evaluateDynamicModule(snapshot, script)
+		return
+	}
+	target, err := resolveDynamicScriptURL(baseURL, source)
+	if err != nil {
+		runtime.recordError(fmt.Sprintf("load dynamic module: %v", err))
+		runtime.dispatchDynamicScriptEvent(vm, snapshot, events.Error)
+		return
+	}
+	snapshot.sourceURL = target
+	go runtime.fetchAndEvaluateDynamicModule(snapshot)
+}
+
+func (runtime *Runtime) fetchAndEvaluateDynamicModule(snapshot dynamicScriptSnapshot) {
+	runtime.mu.Lock()
+	registry, runtimeContext := runtime.moduleRegistry, runtime.runtimeCtx
+	runtime.mu.Unlock()
+	if registry == nil || runtimeContext == nil {
+		runtime.finishDynamicModule(snapshot, errors.New("module registry is unavailable"))
+		return
+	}
+	credentials := network.CredentialsSameOrigin
+	if strings.EqualFold(strings.TrimSpace(snapshot.crossOrigin), "use-credentials") {
+		credentials = network.CredentialsInclude
+	}
+	response, err := registry.fetch(runtimeContext, snapshot.sourceURL, credentials)
+	if err == nil {
+		err = verifyDynamicScriptIntegrity(response.Body, snapshot.integrity)
+	}
+	if err != nil {
+		runtime.finishDynamicModule(snapshot, err)
+		return
+	}
+	finalURL := snapshot.sourceURL
+	if response.URL != nil {
+		finalURL = response.URL
+	}
+	script := runtimemodel.Script{
+		Engine: runtimemodel.EngineJavaScript, Kind: runtimemodel.ScriptModule,
+		SourceURL: finalURL, Source: string(response.Body), CrossOrigin: strings.ToLower(strings.TrimSpace(snapshot.crossOrigin)),
+	}
+	runtime.evaluateDynamicModule(snapshot, script)
+}
+
+func (runtime *Runtime) evaluateDynamicModule(snapshot dynamicScriptSnapshot, script runtimemodel.Script) {
+	runtime.mu.Lock()
+	ctx := runtime.runtimeCtx
+	runtime.mu.Unlock()
+	if ctx == nil {
+		return
+	}
+	name := network.RedactedURL(script.SourceURL)
+	err := runtime.evaluateModuleScript(ctx, name, script)
+	runtime.finishDynamicModule(snapshot, err)
+}
+
+func (runtime *Runtime) finishDynamicModule(snapshot dynamicScriptSnapshot, moduleErr error) {
+	runtime.mu.Lock()
+	ctx := runtime.runtimeCtx
+	runtime.mu.Unlock()
+	if ctx == nil {
+		return
+	}
+	_ = runtime.runSync(ctx, func(vm *goja.Runtime) error {
+		if moduleErr != nil {
+			runtime.recordError(fmt.Sprintf("load dynamic module %s: %v", network.RedactedURL(snapshot.sourceURL), moduleErr))
+			runtime.dispatchDynamicScriptEvent(vm, snapshot, events.Error)
+		} else {
+			runtime.dispatchDynamicScriptEvent(vm, snapshot, events.Load)
+		}
+		return nil
+	})
+}
+
+func (runtime *Runtime) prepareModulePreload(vm *goja.Runtime, element *domapi.Element) {
+	id := uint64(element.ID())
+	runtime.mu.Lock()
+	if _, prepared := runtime.modulePreloads[id]; prepared {
+		runtime.mu.Unlock()
+		return
+	}
+	runtime.modulePreloads[id] = struct{}{}
+	environment, registry, runtimeContext := runtime.environment, runtime.moduleRegistry, runtime.runtimeCtx
+	runtime.mu.Unlock()
+	href, _ := element.GetAttribute("href")
+	integrity, _ := element.GetAttribute("integrity")
+	crossOrigin, _ := element.GetAttribute("crossorigin")
+	baseURL := environment.ResourceBaseURL
+	if baseURL == nil {
+		baseURL = environment.BaseURL
+	}
+	target, err := resolveDynamicScriptURL(baseURL, href)
+	snapshot := dynamicScriptSnapshot{element: element, id: element.ID(), sourceURL: target, integrity: integrity, crossOrigin: crossOrigin}
+	if err != nil || registry == nil || runtimeContext == nil {
+		if err == nil {
+			err = errors.New("module registry is unavailable")
+		}
+		runtime.recordError(fmt.Sprintf("modulepreload: %v", err))
+		runtime.dispatchDynamicScriptEvent(vm, snapshot, events.Error)
+		return
+	}
+	go func() {
+		credentials := network.CredentialsSameOrigin
+		if strings.EqualFold(strings.TrimSpace(crossOrigin), "use-credentials") {
+			credentials = network.CredentialsInclude
+		}
+		response, preloadErr := registry.fetch(runtimeContext, target, credentials)
+		if preloadErr == nil {
+			preloadErr = verifyDynamicScriptIntegrity(response.Body, integrity)
+		}
+		runtime.finishModulePreload(snapshot, preloadErr)
+	}()
+}
+
+func (runtime *Runtime) finishModulePreload(snapshot dynamicScriptSnapshot, preloadErr error) {
+	runtime.mu.Lock()
+	ctx := runtime.runtimeCtx
+	runtime.mu.Unlock()
+	if ctx == nil {
+		return
+	}
+	_ = runtime.runSync(ctx, func(vm *goja.Runtime) error {
+		if preloadErr != nil {
+			runtime.recordError(fmt.Sprintf("modulepreload %s: %v", network.RedactedURL(snapshot.sourceURL), preloadErr))
+			runtime.dispatchDynamicScriptEvent(vm, snapshot, events.Error)
+		} else {
+			runtime.dispatchDynamicScriptEvent(vm, snapshot, events.Load)
+		}
+		return nil
+	})
 }
 
 func (runtime *Runtime) prepareDynamicClassicScript(vm *goja.Runtime, element *domapi.Element) {
