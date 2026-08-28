@@ -696,7 +696,7 @@ func (runtime *Runtime) installDOMInterfaces(vm *goja.Runtime) error {
 	}
 	elementPrototype := domInterfacePrototype(vm, "Element")
 	if elementPrototype == nil {
-		return errors.New("Element prototype is unavailable")
+		return errors.New("element prototype is unavailable")
 	}
 	return elementPrototype.Set("getAttribute", func(call goja.FunctionCall) goja.Value {
 		element := runtime.domElementForThis(vm, call.This)
