@@ -156,15 +156,12 @@ func (parser *calculationParser) parsePrimary() (calculationValue, bool) {
 		parser.pos++
 		return value, true
 	}
-	if parser.pos+5 <= len(parser.input) && strings.EqualFold(parser.input[parser.pos:parser.pos+5], "calc(") {
-		parser.pos += 5
-		value, ok := parser.parseExpression()
-		parser.skipWhitespace()
-		if !ok || parser.pos >= len(parser.input) || parser.input[parser.pos] != ')' {
-			return calculationValue{}, false
+	for _, name := range []string{"calc", "min", "max", "clamp"} {
+		prefix := name + "("
+		if parser.pos+len(prefix) <= len(parser.input) && strings.EqualFold(parser.input[parser.pos:parser.pos+len(prefix)], prefix) {
+			parser.pos += len(prefix)
+			return parser.parseMathFunction(name)
 		}
-		parser.pos++
-		return value, true
 	}
 	number, unit, next, ok := scanCalculationDimension(parser.input, parser.pos)
 	if !ok {
@@ -176,6 +173,72 @@ func (parser *calculationParser) parsePrimary() (calculationValue, bool) {
 	}
 	length, ok := resolveSimpleLength(strconv.FormatFloat(float64(number), 'g', -1, 32)+unit, parser.context)
 	return calculationValue{kind: calculationLength, length: length}, ok
+}
+
+func (parser *calculationParser) parseMathFunction(name string) (calculationValue, bool) {
+	values := make([]calculationValue, 0, 3)
+	for {
+		value, ok := parser.parseExpression()
+		if !ok || !finiteCalculation(value) {
+			return calculationValue{}, false
+		}
+		values = append(values, value)
+		parser.skipWhitespace()
+		if parser.pos >= len(parser.input) {
+			return calculationValue{}, false
+		}
+		if parser.input[parser.pos] == ')' {
+			parser.pos++
+			break
+		}
+		if parser.input[parser.pos] != ',' {
+			return calculationValue{}, false
+		}
+		parser.pos++
+	}
+	if name == "calc" {
+		return values[0], len(values) == 1
+	}
+	if len(values) == 0 || name == "clamp" && len(values) != 3 || name != "clamp" && len(values) < 1 {
+		return calculationValue{}, false
+	}
+	for _, value := range values[1:] {
+		if value.kind != values[0].kind {
+			return calculationValue{}, false
+		}
+	}
+	compare := func(value calculationValue) float32 {
+		if value.kind == calculationNumber {
+			return value.number
+		}
+		return value.length.Resolve(parser.context.PercentageBase)
+	}
+	selected := values[0]
+	switch name {
+	case "min":
+		for _, value := range values[1:] {
+			if compare(value) < compare(selected) {
+				selected = value
+			}
+		}
+	case "max":
+		for _, value := range values[1:] {
+			if compare(value) > compare(selected) {
+				selected = value
+			}
+		}
+	case "clamp":
+		selected = values[1]
+		if compare(selected) < compare(values[0]) {
+			selected = values[0]
+		}
+		if compare(selected) > compare(values[2]) {
+			selected = values[2]
+		}
+	default:
+		return calculationValue{}, false
+	}
+	return selected, finiteCalculation(selected)
 }
 
 func scanCalculationDimension(value string, start int) (float32, string, int, bool) {

@@ -31,7 +31,7 @@ func (value LengthPercentage) Resolve(percentageBase float32) float32 {
 // ResolveLength parses and resolves a CSS3 length or percentage.
 func ResolveLength(value string, context LengthContext) (LengthPercentage, bool) {
 	value = strings.ToLower(strings.TrimSpace(value))
-	if strings.HasPrefix(value, "calc(") {
+	if strings.HasPrefix(value, "calc(") || strings.HasPrefix(value, "min(") || strings.HasPrefix(value, "max(") || strings.HasPrefix(value, "clamp(") {
 		return resolveCalculation(value, context)
 	}
 	return resolveSimpleLength(value, context)
@@ -70,9 +70,9 @@ func resolveSimpleLength(value string, context LengthContext) (LengthPercentage,
 		// Until font-specific metrics are introduced, use the CSS fallback of
 		// half an em for both x-height and zero advance.
 		result.Pixels = number * context.FontSize * 0.5
-	case "vw":
+	case "vw", "svw", "lvw", "dvw":
 		result.Pixels = number * context.ViewportWidth / 100
-	case "vh":
+	case "vh", "svh", "lvh", "dvh":
 		result.Pixels = number * context.ViewportHeight / 100
 	case "vmin":
 		result.Pixels = number * min(context.ViewportWidth, context.ViewportHeight) / 100
