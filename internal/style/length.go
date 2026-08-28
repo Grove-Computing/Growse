@@ -8,11 +8,13 @@ import (
 
 // LengthContext contains the bases needed to resolve CSS length units.
 type LengthContext struct {
-	FontSize       float32
-	RootFontSize   float32
-	ViewportWidth  float32
-	ViewportHeight float32
-	PercentageBase float32
+	FontSize        float32
+	RootFontSize    float32
+	ViewportWidth   float32
+	ViewportHeight  float32
+	PercentageBase  float32
+	ContainerWidth  float32
+	ContainerHeight float32
 }
 
 // LengthPercentage preserves the percentage component until a basis is known.
@@ -76,6 +78,31 @@ func resolveSimpleLength(value string, context LengthContext) (LengthPercentage,
 		result.Pixels = number * min(context.ViewportWidth, context.ViewportHeight) / 100
 	case "vmax":
 		result.Pixels = number * max(context.ViewportWidth, context.ViewportHeight) / 100
+	case "cqw", "cqi":
+		basis := context.ContainerWidth
+		if basis <= 0 {
+			basis = context.ViewportWidth
+		}
+		result.Pixels = number * basis / 100
+	case "cqh", "cqb":
+		basis := context.ContainerHeight
+		if basis <= 0 {
+			basis = context.ViewportHeight
+		}
+		result.Pixels = number * basis / 100
+	case "cqmin", "cqmax":
+		width, height := context.ContainerWidth, context.ContainerHeight
+		if width <= 0 {
+			width = context.ViewportWidth
+		}
+		if height <= 0 {
+			height = context.ViewportHeight
+		}
+		basis := min(width, height)
+		if unit == "cqmax" {
+			basis = max(width, height)
+		}
+		result.Pixels = number * basis / 100
 	case "%":
 		result.Percentage = number
 	default:

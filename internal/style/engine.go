@@ -32,15 +32,21 @@ func Compute(document *dom.Document, stylesheet *css.Stylesheet) Map {
 
 // Environment contains rendering metrics needed during value computation.
 type Environment struct {
-	ViewportWidth  float32
-	ViewportHeight float32
-	RootFontSize   float32
-	ResolutionDPI  float32
-	ColorScheme    string
-	Hover          bool
-	Pointer        string
-	ReducedMotion  bool
+	ViewportWidth   float32
+	ViewportHeight  float32
+	RootFontSize    float32
+	ResolutionDPI   float32
+	ColorScheme     string
+	Hover           bool
+	Pointer         string
+	ReducedMotion   bool
+	ContainerSizes  map[dom.NodeID]ContainerSize
+	ContainerWidth  float32
+	ContainerHeight float32
 }
+
+// ContainerSize is the previous layout iteration's content-box size.
+type ContainerSize struct{ Width, Height float32 }
 
 func defaultEnvironment() Environment {
 	return Environment{
@@ -93,8 +99,8 @@ func computeNode(node *dom.Node, parent ComputedStyle, stylesheet *css.Styleshee
 	} else if node.Type == dom.NodeElement {
 		computed = applyUADefaults(node.TagName, computed)
 		computed = applyPresentationalHints(node, computed)
-		computed = applyAuthorRules(node, computed, parent, stylesheet, state, environment)
-		computed = applyGeneratedContent(node, computed, stylesheet, state, environment)
+		computed = applyAuthorRules(node, computed, parent, stylesheet, state, environment, result)
+		computed = applyGeneratedContent(node, computed, stylesheet, state, environment, result)
 		result[node.ID] = computed
 	} else if node.Type == dom.NodeText {
 		result[node.ID] = computed
@@ -103,6 +109,11 @@ func computeNode(node *dom.Node, parent ComputedStyle, stylesheet *css.Styleshee
 	childEnvironment := environment
 	if node.Type == dom.NodeElement && node.TagName == "html" {
 		childEnvironment.RootFontSize = computed.FontSize
+	}
+	if node.Type == dom.NodeElement && computed.ContainerType == ContainerTypeInlineSize {
+		if size, ok := environment.ContainerSizes[node.ID]; ok {
+			childEnvironment.ContainerWidth, childEnvironment.ContainerHeight = size.Width, size.Height
+		}
 	}
 	for _, child := range node.Children {
 		computeNode(child, computed, stylesheet, state, childEnvironment, result)
@@ -204,7 +215,7 @@ func applyUADefaults(tag string, computed ComputedStyle) ComputedStyle {
 	return computed
 }
 
-func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet *css.Stylesheet, state InteractionState, environment Environment) ComputedStyle {
+func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet *css.Stylesheet, state InteractionState, environment Environment, computedAncestors Map) ComputedStyle {
 	if stylesheet == nil {
 		stylesheet = &css.Stylesheet{}
 	}
@@ -214,7 +225,7 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 	}
 	candidates := make(map[string][]winner)
 	for _, rule := range stylesheet.Rules {
-		if !matchesMediaGroups(rule.Media, environment) || !matchesSupportsGroups(rule.Supports) {
+		if !matchesMediaGroups(rule.Media, environment) || !matchesSupportsGroups(rule.Supports) || !matchesContainerGroups(node, rule.Containers, computedAncestors, environment) {
 			continue
 		}
 		for _, selector := range rule.Selectors {
@@ -270,6 +281,7 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 		FontSize: parent.FontSize, RootFontSize: environment.RootFontSize,
 		ViewportWidth: environment.ViewportWidth, ViewportHeight: environment.ViewportHeight,
 		PercentageBase: parent.FontSize,
+		ContainerWidth: environment.ContainerWidth, ContainerHeight: environment.ContainerHeight,
 	}
 
 	if value, ok := winners["color"]; ok {
@@ -451,10 +463,31 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 			}
 		}
 	}
+	if value, ok := winners["container-type"]; ok {
+		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
+			switch strings.ToLower(strings.TrimSpace(resolved)) {
+			case "inline-size":
+				computed.ContainerType = ContainerTypeInlineSize
+			case "normal", "initial", "unset":
+				computed.ContainerType = ContainerTypeNormal
+			}
+		}
+	}
+	if value, ok := winners["container-name"]; ok {
+		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
+			name := strings.TrimSpace(resolved)
+			if name == "none" || name == "initial" || name == "unset" {
+				computed.ContainerName = ""
+			} else if !strings.ContainsAny(name, " \t\r\n/()") {
+				computed.ContainerName = name
+			}
+		}
+	}
 	lengthContext := LengthContext{
 		FontSize: computed.FontSize, RootFontSize: environment.RootFontSize,
 		ViewportWidth: environment.ViewportWidth, ViewportHeight: environment.ViewportHeight,
 		PercentageBase: environment.ViewportWidth,
+		ContainerWidth: environment.ContainerWidth, ContainerHeight: environment.ContainerHeight,
 	}
 	computed.Width = resolveSizeWinner("width", computed.Width, parent.Width, winners, computed.CustomProperties, lengthContext)
 	computed.Height = resolveSizeWinner("height", computed.Height, parent.Height, winners, computed.CustomProperties, lengthContext)
@@ -857,7 +890,7 @@ func isCSSNameByte(value byte) bool {
 		value >= 'A' && value <= 'Z' || value >= '0' && value <= '9' || value >= 0x80
 }
 
-func applyGeneratedContent(node *dom.Node, computed ComputedStyle, stylesheet *css.Stylesheet, state InteractionState, environment Environment) ComputedStyle {
+func applyGeneratedContent(node *dom.Node, computed ComputedStyle, stylesheet *css.Stylesheet, state InteractionState, environment Environment, computedAncestors Map) ComputedStyle {
 	if stylesheet == nil {
 		return computed
 	}
@@ -874,7 +907,7 @@ func applyGeneratedContent(node *dom.Node, computed ComputedStyle, stylesheet *c
 		}
 		var candidates []winner
 		for _, rule := range stylesheet.Rules {
-			if !matchesMediaGroups(rule.Media, environment) || !matchesSupportsGroups(rule.Supports) {
+			if !matchesMediaGroups(rule.Media, environment) || !matchesSupportsGroups(rule.Supports) || !matchesContainerGroups(node, rule.Containers, computedAncestors, environment) {
 				continue
 			}
 			for _, selector := range rule.Selectors {

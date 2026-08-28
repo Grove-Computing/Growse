@@ -381,6 +381,8 @@ type ComputedStyle struct {
 	OverflowX           Overflow
 	OverflowY           Overflow
 	Display             Display
+	ContainerType       ContainerType
+	ContainerName       string
 	Visibility          Visibility
 	FlexDirection       FlexDirection
 	FlexWrap            FlexWrap
@@ -440,6 +442,14 @@ type ComputedStyle struct {
 	AfterContent        string
 	CustomProperties    map[string]string
 }
+
+// ContainerType identifies size containment exposed to @container queries.
+type ContainerType uint8
+
+const (
+	ContainerTypeNormal ContainerType = iota
+	ContainerTypeInlineSize
+)
 
 // AnimationDirection controls iteration playback direction.
 type AnimationDirection uint8

@@ -128,6 +128,10 @@ func supportsDeclaration(property, value string) bool {
 		return value == "normal" || value == "italic" || value == "oblique"
 	case "text-align":
 		return value == "start" || value == "end" || value == "left" || value == "right" || value == "center" || value == "justify"
+	case "container-type":
+		return value == "normal" || value == "inline-size"
+	case "container-name":
+		return value == "none" || !strings.ContainsAny(value, " \t\r\n/()")
 	default:
 		return false
 	}
@@ -141,7 +145,7 @@ func supportsProperty(property string) bool {
 		"border", "border-width", "border-style", "border-color", "border-top", "border-right", "border-bottom", "border-left", "border-radius", "outline",
 		"overflow", "overflow-x", "overflow-y", "visibility", "opacity", "white-space", "transform",
 		"flex", "flex-flow", "flex-basis", "flex-grow", "flex-shrink", "order", "gap", "row-gap", "column-gap",
-		"grid-template-columns", "grid-template-rows", "grid-auto-flow", "grid-column", "grid-row", "grid-area", "place-content", "place-items", "place-self":
+		"grid-template-columns", "grid-template-rows", "grid-auto-flow", "grid-column", "grid-row", "grid-area", "place-content", "place-items", "place-self", "container-type", "container-name":
 		return true
 	default:
 		return false

@@ -67,8 +67,16 @@ type Rule struct {
 	Order        int
 	Media        [][]MediaQuery
 	Supports     []SupportsCondition
+	Containers   []ContainerQuery
 	// Layer is empty for unlayered author rules.
 	Layer string
+}
+
+// ContainerQuery is the supported named inline-size query subset.
+type ContainerQuery struct {
+	Name     string
+	Features []MediaFeature
+	Valid    bool
 }
 
 // SupportsKind identifies the boolean grammar of an @supports condition.

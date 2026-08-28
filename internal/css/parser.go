@@ -18,6 +18,7 @@ type atRuleFrame struct {
 	keyframesIndex int
 	layer          string
 	supports       *SupportsCondition
+	container      *ContainerQuery
 }
 
 // Parse reads a stylesheet. Unsupported selectors and at-rules are ignored.
@@ -26,6 +27,7 @@ func Parse(reader io.Reader) (*Stylesheet, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read CSS: %w", err)
 	}
+	input = rewriteContainerAtRules(input)
 
 	p := parser.NewParser(parse.NewInputBytes(input), false)
 	stylesheet := &Stylesheet{}
@@ -71,6 +73,7 @@ func Parse(reader io.Reader) (*Stylesheet, error) {
 			active := true
 			var mediaGroups [][]MediaQuery
 			var supports []SupportsCondition
+			var containers []ContainerQuery
 			layer := ""
 			for _, frame := range atRules {
 				if !frame.active {
@@ -86,6 +89,9 @@ func Parse(reader io.Reader) (*Stylesheet, error) {
 				if frame.supports != nil {
 					supports = append(supports, *frame.supports)
 				}
+				if frame.container != nil {
+					containers = append(containers, *frame.container)
+				}
 			}
 			if !active {
 				current = nil
@@ -98,7 +104,7 @@ func Parse(reader io.Reader) (*Stylesheet, error) {
 				continue
 			}
 			stylesheet.Rules = append(stylesheet.Rules, Rule{
-				Kind: RuleStyle, Selectors: selectors, Order: len(stylesheet.Rules), Media: mediaGroups, Supports: supports, Layer: layer,
+				Kind: RuleStyle, Selectors: selectors, Order: len(stylesheet.Rules), Media: mediaGroups, Supports: supports, Containers: containers, Layer: layer,
 			})
 			current = &stylesheet.Rules[len(stylesheet.Rules)-1]
 		case parser.DeclarationGrammar, parser.CustomPropertyGrammar:
@@ -159,12 +165,19 @@ func Parse(reader io.Reader) (*Stylesheet, error) {
 				frame.active, frame.isMedia = true, true
 				frame.media = parseMediaQueryList(tokenText(p.Values()))
 			} else if name == "@supports" {
-				condition, valid := parseSupportsCondition(tokenText(p.Values()))
-				if !valid {
-					condition = SupportsCondition{Kind: SupportsUnknown}
+				prelude := strings.TrimSpace(tokenText(p.Values()))
+				if containerPrelude, ok := unwrapContainerPrelude(prelude); ok {
+					query := parseContainerQuery(containerPrelude)
+					frame.active = true
+					frame.container = &query
+				} else {
+					condition, valid := parseSupportsCondition(prelude)
+					if !valid {
+						condition = SupportsCondition{Kind: SupportsUnknown}
+					}
+					frame.active = true
+					frame.supports = &condition
 				}
-				frame.active = true
-				frame.supports = &condition
 			} else if name == "@layer" {
 				parent := currentLayer(atRules)
 				layerName := strings.TrimSpace(tokenText(p.Values()))
