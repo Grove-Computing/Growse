@@ -188,6 +188,72 @@ func TestEventPropagationMetadataRemovalAndCancellation(t *testing.T) {
 	}
 }
 
+func TestJavaScriptEventConstructorsDispatchOncePassiveAndImmediateStop(t *testing.T) {
+	document, err := htmlparser.Parse(strings.NewReader(`<main id="parent"><button id="target">Run</button></main>`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var message string
+	runtime := New()
+	t.Cleanup(func() { _ = runtime.Stop() })
+	source := `
+		var parentElement = document.getElementById("parent");
+		var target = document.getElementById("target");
+		var calls = [];
+		parentElement.addEventListener("hydrate", function (event) {
+			calls.push("capture:" + event.eventPhase + ":" + (event.target === target) + ":" + (event.currentTarget === parentElement));
+		}, { capture: true, once: true });
+		target.addEventListener("hydrate", function (event) {
+			event.preventDefault();
+			calls.push("passive:" + event.defaultPrevented);
+		}, { passive: true });
+		target.addEventListener("hydrate", function (event) {
+			calls.push("immediate:" + event.detail.step);
+			event.stopImmediatePropagation();
+		});
+		target.addEventListener("hydrate", function () { calls.push("late"); });
+		parentElement.addEventListener("hydrate", function () { calls.push("bubble"); });
+		var first = new CustomEvent("hydrate", { bubbles: true, cancelable: true, detail: { step: 1 } });
+		var firstResult = target.dispatchEvent(first);
+		var secondResult = target.dispatchEvent(new CustomEvent("hydrate", { bubbles: true, cancelable: true, detail: { step: 2 } }));
+		var cancel = function (event) { event.preventDefault(); };
+		target.addEventListener("cancel-me", cancel);
+		var canceled = new Event("cancel-me", { cancelable: true });
+		var cancelResult = target.dispatchEvent(canceled);
+		target.removeEventListener("cancel-me", cancel);
+		var removedResult = target.dispatchEvent(new Event("cancel-me"));
+		var documentCalls = 0;
+		document.addEventListener("document-event", function () { documentCalls++; }, { once: true });
+		document.dispatchEvent(new Event("document-event"));
+		document.dispatchEvent(new Event("document-event"));
+		var detached = document.createElement("button");
+		var detachedCalls = 0;
+		detached.addEventListener("detached-event", function () { detachedCalls++; });
+		detached.dispatchEvent(new Event("detached-event"));
+		var mouse = new MouseEvent("click", { clientX: 12, clientY: 34, bubbles: true });
+		var keyboard = new KeyboardEvent("keydown", { key: "Enter", code: "Enter", repeat: true });
+		console.log([
+			calls.join(","), firstResult, secondResult, !cancelResult, canceled.defaultPrevented,
+			removedResult, documentCalls, detachedCalls, first instanceof CustomEvent, first instanceof Event,
+			mouse instanceof MouseEvent, mouse.clientX, mouse.clientY,
+			keyboard instanceof KeyboardEvent, keyboard.key, keyboard.code, keyboard.repeat,
+			first.eventPhase, first.currentTarget === null, first.target === target
+		].join("|"));`
+	environment := runtimemodel.Environment{
+		Document: document, Events: events.NewDispatcher(), ConsoleRecord: func(_, value string) { message = value },
+	}
+	if err := runtime.Load(context.Background(), []runtimemodel.Script{javaScript(source)}, environment); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	want := "capture:1:true:true,passive:false,immediate:1,passive:false,immediate:2|true|true|true|true|true|1|1|true|true|true|12|34|true|Enter|Enter|true|0|true|true"
+	if message != want {
+		t.Fatalf("JavaScript Event result = %q, want %q", message, want)
+	}
+}
+
 func startJavaScriptRuntime(t *testing.T, runtime *Runtime, source string, environment runtimemodel.Environment) {
 	t.Helper()
 	if err := runtime.Load(context.Background(), []runtimemodel.Script{javaScript(source)}, environment); err != nil {

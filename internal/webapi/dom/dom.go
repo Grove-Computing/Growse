@@ -48,8 +48,10 @@ type Event struct {
 	Cancelable       bool
 	DefaultPrevented func() bool
 	Phase            events.Phase
+	RuntimeID        uint64
 	preventDefault   func()
 	stopPropagation  func()
+	stopImmediate    func()
 }
 
 // ID はElementが参照するPage内Node IDを返す。
@@ -100,6 +102,13 @@ func (event Event) PreventDefault() {
 func (event Event) StopPropagation() {
 	if event.stopPropagation != nil {
 		event.stopPropagation()
+	}
+}
+
+// StopImmediatePropagation prevents later listeners and further propagation.
+func (event Event) StopImmediatePropagation() {
+	if event.stopImmediate != nil {
+		event.stopImmediate()
 	}
 }
 
@@ -375,10 +384,19 @@ func (element *Element) AddEventListenerWithCapture(eventType string, capture bo
 // AddEventListenerForJavaScript registers EventTarget listeners on Document-owned
 // detached nodes so JavaScript can attach handlers before connecting an element.
 func (element *Element) AddEventListenerForJavaScript(eventType string, capture bool, handler func(Event)) events.ListenerID {
-	return element.addPublicEventListener(eventType, capture, handler, false)
+	return element.AddEventListenerForJavaScriptWithOptions(eventType, capture, false, false, handler)
+}
+
+// AddEventListenerForJavaScriptWithOptions registers a detached-capable JS listener.
+func (element *Element) AddEventListenerForJavaScriptWithOptions(eventType string, capture, once, passive bool, handler func(Event)) events.ListenerID {
+	return element.addPublicEventListenerWithOptions(eventType, capture, once, passive, handler, false)
 }
 
 func (element *Element) addPublicEventListener(eventType string, capture bool, handler func(Event), requireConnected bool) events.ListenerID {
+	return element.addPublicEventListenerWithOptions(eventType, capture, false, false, handler, requireConnected)
+}
+
+func (element *Element) addPublicEventListenerWithOptions(eventType string, capture, once, passive bool, handler func(Event), requireConnected bool) events.ListenerID {
 	if handler == nil {
 		return 0
 	}
@@ -386,7 +404,7 @@ func (element *Element) addPublicEventListener(eventType string, capture bool, h
 	if !ok {
 		return 0
 	}
-	return element.addEventListenerWithConnectionPolicy(internal, capture, requireConnected, func(event events.Event) {
+	return element.addEventListenerWithConnectionPolicy(internal, capture, once, passive, requireConnected, func(event events.Event) {
 		handler(element.publicEvent(event))
 	})
 }
@@ -425,7 +443,15 @@ func supportedEventType(eventType string) (events.Type, bool) {
 	case string(events.Error):
 		return events.Error, true
 	default:
-		return "", false
+		if eventType == "" || len(eventType) > 128 {
+			return "", false
+		}
+		for _, character := range eventType {
+			if character <= ' ' || character == 0x7f {
+				return "", false
+			}
+		}
+		return events.Type(eventType), true
 	}
 }
 
@@ -1548,10 +1574,10 @@ func (element *Element) addEventListener(eventType events.Type, listener events.
 }
 
 func (element *Element) addEventListenerWithCapture(eventType events.Type, capture bool, listener events.Listener) events.ListenerID {
-	return element.addEventListenerWithConnectionPolicy(eventType, capture, true, listener)
+	return element.addEventListenerWithConnectionPolicy(eventType, capture, false, false, true, listener)
 }
 
-func (element *Element) addEventListenerWithConnectionPolicy(eventType events.Type, capture, requireConnected bool, listener events.Listener) events.ListenerID {
+func (element *Element) addEventListenerWithConnectionPolicy(eventType events.Type, capture, once, passive, requireConnected bool, listener events.Listener) events.ListenerID {
 	if element == nil || element.document == nil || element.events == nil || listener == nil {
 		return 0
 	}
@@ -1559,7 +1585,7 @@ func (element *Element) addEventListenerWithConnectionPolicy(eventType events.Ty
 	if !ok || requireConnected && !element.document.IsConnected(node) {
 		return 0
 	}
-	return element.events.AddEventListenerWithCapture(element.id, eventType, capture, listener)
+	return element.events.AddEventListenerWithOptions(element.id, eventType, capture, once, passive, listener)
 }
 
 func (element *Element) publicEvent(event events.Event) Event {
@@ -1567,6 +1593,8 @@ func (element *Element) publicEvent(event events.Event) Event {
 		Type: string(event.Type), TargetNodeID: event.Target, CurrentTargetID: event.CurrentTarget(), Value: event.Value, X: event.X, Y: event.Y,
 		Bubbles: event.Bubbles(), Cancelable: event.IsCancelable(), DefaultPrevented: event.DefaultPrevented, Phase: event.EventPhase(),
 		stopPropagation: event.StopPropagation,
+		stopImmediate:   event.StopImmediatePropagation,
+		RuntimeID:       event.RuntimeID,
 	}
 	if event.IsCancelable() {
 		result.preventDefault = event.PreventDefault

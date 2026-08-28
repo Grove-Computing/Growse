@@ -143,3 +143,40 @@ func TestDispatchTreeStopPropagationAndNonBubblingEvent(t *testing.T) {
 		t.Fatalf("non-bubbling focus calls = %v", calls)
 	}
 }
+
+func TestDispatchTreeSupportsOncePassiveAndImmediateStop(t *testing.T) {
+	document := dom.NewDocument()
+	parent := document.CreateElement("main", nil)
+	target := document.CreateElement("button", nil)
+	_ = document.AppendChild(document.Root, parent)
+	_ = document.AppendChild(parent, target)
+	dispatcher := NewDispatcher()
+	var calls []string
+	dispatcher.AddEventListenerWithOptions(parent.ID, Type("hydrate"), true, true, false, func(Event) { calls = append(calls, "capture-once") })
+	dispatcher.AddEventListenerWithOptions(target.ID, Type("hydrate"), false, false, true, func(event Event) {
+		event.PreventDefault()
+		if event.DefaultPrevented() {
+			t.Fatal("passive listener prevented default")
+		}
+		calls = append(calls, "passive")
+	})
+	dispatcher.AddEventListenerWithOptions(target.ID, Type("hydrate"), false, false, false, func(event Event) {
+		calls = append(calls, "immediate")
+		event.StopImmediatePropagation()
+	})
+	dispatcher.AddEventListener(target.ID, Type("hydrate"), func(Event) { calls = append(calls, "late") })
+	dispatcher.AddEventListener(parent.ID, Type("hydrate"), func(Event) { calls = append(calls, "bubble") })
+	for range 2 {
+		event := New(Type("hydrate"), target.ID, true, true)
+		if !dispatcher.DispatchTree(document, event) {
+			t.Fatal("custom event was not handled")
+		}
+		if event.DefaultPrevented() {
+			t.Fatal("passive custom event became default-prevented")
+		}
+	}
+	want := []string{"capture-once", "passive", "immediate", "passive", "immediate"}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("option calls = %v, want %v", calls, want)
+	}
+}

@@ -39,6 +39,10 @@ type Event struct {
 	X             float32
 	Y             float32
 	Value         string
+	RuntimeID     uint64
+	BubblesValue  bool
+	BubblesSet    bool
+	CancelableSet bool
 	defaultAction *defaultAction
 	dispatch      *dispatchState
 }
@@ -53,14 +57,25 @@ type dispatchState struct {
 	currentTarget      dom.NodeID
 	phase              Phase
 	propagationStopped bool
+	immediateStopped   bool
+	passive            bool
 }
 
 func Cancelable(eventType Type, target dom.NodeID) Event {
 	return Event{Type: eventType, Target: target, defaultAction: new(defaultAction)}
 }
 
+// New constructs an Event with explicit bubbles and cancelable flags.
+func New(eventType Type, target dom.NodeID, bubbles, cancelable bool) Event {
+	event := Event{Type: eventType, Target: target, BubblesValue: bubbles, BubblesSet: true, CancelableSet: true}
+	if cancelable {
+		event.defaultAction = new(defaultAction)
+	}
+	return event
+}
+
 func (event Event) PreventDefault() {
-	if event.defaultAction == nil {
+	if event.defaultAction == nil || event.PassiveListener() {
 		return
 	}
 	event.defaultAction.mu.Lock()
@@ -80,12 +95,46 @@ func (event Event) DefaultPrevented() bool {
 }
 
 func (event Event) Bubbles() bool {
+	if event.BubblesSet {
+		return event.BubblesValue
+	}
 	switch event.Type {
 	case Click, Input, Change, Submit, Reset:
 		return true
 	default:
 		return false
 	}
+}
+
+// StopImmediatePropagation stops remaining listeners on the current target and propagation.
+func (event Event) StopImmediatePropagation() {
+	if event.dispatch == nil {
+		return
+	}
+	event.dispatch.mu.Lock()
+	event.dispatch.immediateStopped = true
+	event.dispatch.propagationStopped = true
+	event.dispatch.mu.Unlock()
+}
+
+// ImmediatePropagationStopped reports whether the current dispatch was stopped immediately.
+func (event Event) ImmediatePropagationStopped() bool {
+	if event.dispatch == nil {
+		return false
+	}
+	event.dispatch.mu.Lock()
+	defer event.dispatch.mu.Unlock()
+	return event.dispatch.immediateStopped
+}
+
+// PassiveListener reports whether the currently invoked listener is passive.
+func (event Event) PassiveListener() bool {
+	if event.dispatch == nil {
+		return false
+	}
+	event.dispatch.mu.Lock()
+	defer event.dispatch.mu.Unlock()
+	return event.dispatch.passive
 }
 
 func (event Event) StopPropagation() {
@@ -134,6 +183,15 @@ func (event *Event) setDispatch(currentTarget dom.NodeID, phase Phase) {
 	event.dispatch.mu.Unlock()
 }
 
+func (event Event) setPassive(passive bool) {
+	if event.dispatch == nil {
+		return
+	}
+	event.dispatch.mu.Lock()
+	event.dispatch.passive = passive
+	event.dispatch.mu.Unlock()
+}
+
 type Listener func(Event)
 type ListenerID uint64
 
@@ -141,6 +199,8 @@ type listenerEntry struct {
 	id       ListenerID
 	listener Listener
 	capture  bool
+	once     bool
+	passive  bool
 }
 
 type Dispatcher struct {
@@ -158,6 +218,11 @@ func (dispatcher *Dispatcher) AddEventListener(nodeID dom.NodeID, eventType Type
 }
 
 func (dispatcher *Dispatcher) AddEventListenerWithCapture(nodeID dom.NodeID, eventType Type, capture bool, listener Listener) ListenerID {
+	return dispatcher.AddEventListenerWithOptions(nodeID, eventType, capture, false, false, listener)
+}
+
+// AddEventListenerWithOptions registers propagation and lifecycle options.
+func (dispatcher *Dispatcher) AddEventListenerWithOptions(nodeID dom.NodeID, eventType Type, capture, once, passive bool, listener Listener) ListenerID {
 	if dispatcher == nil || listener == nil {
 		return 0
 	}
@@ -169,7 +234,7 @@ func (dispatcher *Dispatcher) AddEventListenerWithCapture(nodeID dom.NodeID, eve
 		byType = make(map[Type][]listenerEntry)
 		dispatcher.listeners[nodeID] = byType
 	}
-	byType[eventType] = append(byType[eventType], listenerEntry{id: dispatcher.nextID, listener: listener, capture: capture})
+	byType[eventType] = append(byType[eventType], listenerEntry{id: dispatcher.nextID, listener: listener, capture: capture, once: once, passive: passive})
 	return dispatcher.nextID
 }
 
@@ -225,7 +290,7 @@ func (dispatcher *Dispatcher) DispatchTree(document *dom.Document, event Event) 
 		return false
 	}
 	target, ok := document.NodeByID(event.Target)
-	if !ok || !document.IsConnected(target) {
+	if !ok {
 		return false
 	}
 	event.dispatch = new(dispatchState)
@@ -269,8 +334,16 @@ func (dispatcher *Dispatcher) invokeNode(event Event, nodeID dom.NodeID, capture
 		if entry.capture != capture {
 			continue
 		}
+		if event.ImmediatePropagationStopped() {
+			break
+		}
 		handled = true
+		if entry.once {
+			dispatcher.RemoveEventListener(nodeID, event.Type, entry.id)
+		}
+		event.setPassive(entry.passive)
 		invoke(entry.listener, event)
+		event.setPassive(false)
 	}
 	return handled
 }

@@ -95,6 +95,8 @@ type Runtime struct {
 	dynamicInsertDepth    int
 	resourcePrepareCounts map[uint64]int
 	resourceFailures      map[string]int
+	jsEventObjects        map[uint64]*goja.Object
+	nextJSEventID         uint64
 
 	loaded    bool
 	started   bool
@@ -107,6 +109,8 @@ type listenerRecord struct {
 	eventType string
 	function  goja.Value
 	capture   bool
+	once      bool
+	passive   bool
 	token     events.ListenerID
 }
 
@@ -206,6 +210,8 @@ func (runtime *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script,
 	runtime.dynamicInsertDepth = 0
 	runtime.resourcePrepareCounts = make(map[uint64]int)
 	runtime.resourceFailures = make(map[string]int)
+	runtime.jsEventObjects = make(map[uint64]*goja.Object)
+	runtime.nextJSEventID = 0
 	runtime.windowListeners = nil
 	runtime.documentListeners = nil
 	runtime.microtasks = nil
@@ -394,6 +400,8 @@ func (runtime *Runtime) Stop() error {
 	runtime.dynamicInsertDepth = 0
 	runtime.resourcePrepareCounts = nil
 	runtime.resourceFailures = nil
+	runtime.jsEventObjects = nil
+	runtime.nextJSEventID = 0
 	runtime.windowListeners = nil
 	runtime.documentListeners = nil
 	runtime.microtasks = nil

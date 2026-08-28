@@ -7,12 +7,16 @@ import (
 	"strings"
 
 	dommodel "github.com/Grove-Computing/Growse/internal/dom"
+	"github.com/Grove-Computing/Growse/internal/events"
 	domapi "github.com/Grove-Computing/Growse/internal/webapi/dom"
 	"github.com/dop251/goja"
 )
 
 func (runtime *Runtime) installDOM(vm *goja.Runtime) error {
 	if err := runtime.installDOMInterfaces(vm); err != nil {
+		return err
+	}
+	if err := runtime.installEventConstructors(vm); err != nil {
 		return err
 	}
 	document := vm.NewObject()
@@ -32,6 +36,10 @@ func (runtime *Runtime) installDOM(vm *goja.Runtime) error {
 	var documentRoot *domapi.Element
 	if runtime.environment.Document != nil && runtime.environment.Document.Root != nil {
 		documentRoot = runtime.domAPI.NodeByID(runtime.environment.Document.Root.ID)
+		if documentRoot != nil {
+			runtime.elements[document] = documentRoot
+			runtime.elementByID[uint64(documentRoot.ID())] = document
+		}
 	}
 	_ = document.DefineDataProperty("nodeType", vm.ToValue(9), goja.FLAG_FALSE, goja.FLAG_FALSE, goja.FLAG_TRUE)
 	_ = document.DefineDataProperty("nodeName", vm.ToValue("#document"), goja.FLAG_FALSE, goja.FLAG_FALSE, goja.FLAG_TRUE)
@@ -79,8 +87,29 @@ func (runtime *Runtime) installDOM(vm *goja.Runtime) error {
 		return err
 	}
 	if err := document.Set("addEventListener", func(call goja.FunctionCall) goja.Value {
-		runtime.addDocumentEventListener(vm, call.Argument(0).String(), call.Argument(1))
+		eventType := strings.ToLower(strings.TrimSpace(call.Argument(0).String()))
+		if eventType == "readystatechange" || eventType == "domcontentloaded" {
+			runtime.addDocumentEventListener(vm, eventType, call.Argument(1))
+		} else if documentRoot != nil {
+			runtime.addEventListener(vm, document, documentRoot, eventType, call.Argument(1), call.Argument(2))
+		}
 		return goja.Undefined()
+	}); err != nil {
+		return err
+	}
+	if err := document.Set("removeEventListener", func(call goja.FunctionCall) goja.Value {
+		if documentRoot != nil {
+			runtime.removeEventListener(documentRoot, call.Argument(0).String(), call.Argument(1), call.Argument(2))
+		}
+		return goja.Undefined()
+	}); err != nil {
+		return err
+	}
+	if err := document.Set("dispatchEvent", func(call goja.FunctionCall) goja.Value {
+		if documentRoot == nil {
+			return vm.ToValue(true)
+		}
+		return vm.ToValue(runtime.dispatchJSEvent(vm, documentRoot, call.Argument(0)))
 	}); err != nil {
 		return err
 	}
@@ -449,6 +478,9 @@ func (runtime *Runtime) elementValue(vm *goja.Runtime, element *domapi.Element) 
 		runtime.removeEventListener(element, call.Argument(0).String(), call.Argument(1), call.Argument(2))
 		return goja.Undefined()
 	})
+	_ = object.Set("dispatchEvent", func(call goja.FunctionCall) goja.Value {
+		return vm.ToValue(runtime.dispatchJSEvent(vm, element, call.Argument(0)))
+	})
 
 	classList := vm.NewObject()
 	_ = classList.Set("add", func(call goja.FunctionCall) goja.Value {
@@ -808,7 +840,8 @@ func (runtime *Runtime) addEventListener(vm *goja.Runtime, object *goja.Object, 
 		panic(vm.NewTypeError("event listener must be a function"))
 	}
 	eventType = strings.ToLower(strings.TrimSpace(eventType))
-	capture := eventCaptureOption(options)
+	listenerOptions := parseEventListenerOptions(options)
+	capture := listenerOptions.capture
 	id := uint64(element.ID())
 	runtime.mu.Lock()
 	for _, listener := range runtime.listeners {
@@ -823,7 +856,8 @@ func (runtime *Runtime) addEventListener(vm *goja.Runtime, object *goja.Object, 
 	}
 	runtime.mu.Unlock()
 
-	token := element.AddEventListenerForJavaScript(eventType, capture, func(event domapi.Event) {
+	var token events.ListenerID
+	token = element.AddEventListenerForJavaScriptWithOptions(eventType, capture, listenerOptions.once, listenerOptions.passive, func(event domapi.Event) {
 		invoke := func(vm *goja.Runtime) error {
 			eventObject := runtime.eventValue(vm, object, event)
 			_, err := callable(object, eventObject)
@@ -844,12 +878,18 @@ func (runtime *Runtime) addEventListener(vm *goja.Runtime, object *goja.Object, 
 		if err != nil && !errorsIsRuntimeStop(err) {
 			runtime.recordError(fmt.Sprintf("JavaScript %s event handler: %v", eventType, err))
 		}
+		if listenerOptions.once {
+			runtime.removeListenerRecord(uint64(element.ID()), eventType, token)
+		}
 	})
 	if token == 0 {
 		panic(vm.NewTypeError("event target is disconnected or event type is unsupported"))
 	}
 	runtime.mu.Lock()
-	runtime.listeners = append(runtime.listeners, listenerRecord{elementID: id, eventType: eventType, function: value, capture: capture, token: token})
+	runtime.listeners = append(runtime.listeners, listenerRecord{
+		elementID: id, eventType: eventType, function: value, capture: capture,
+		once: listenerOptions.once, passive: listenerOptions.passive, token: token,
+	})
 	runtime.listenerCount++
 	runtime.mu.Unlock()
 }
@@ -881,17 +921,56 @@ func (runtime *Runtime) removeEventListener(element *domapi.Element, eventType s
 }
 
 func eventCaptureOption(value goja.Value) bool {
+	return parseEventListenerOptions(value).capture
+}
+
+type eventListenerOptions struct {
+	capture bool
+	once    bool
+	passive bool
+}
+
+func parseEventListenerOptions(value goja.Value) eventListenerOptions {
 	if value == nil || goja.IsUndefined(value) || goja.IsNull(value) {
-		return false
+		return eventListenerOptions{}
 	}
 	if object, ok := value.(*goja.Object); ok {
-		return object.Get("capture").ToBoolean()
+		return eventListenerOptions{
+			capture: jsBoolean(object.Get("capture")),
+			once:    jsBoolean(object.Get("once")),
+			passive: jsBoolean(object.Get("passive")),
+		}
 	}
-	return value.ToBoolean()
+	return eventListenerOptions{capture: value.ToBoolean()}
+}
+
+func jsBoolean(value goja.Value) bool { return value != nil && value.ToBoolean() }
+
+func (runtime *Runtime) removeListenerRecord(elementID uint64, eventType string, token events.ListenerID) {
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	for index, listener := range runtime.listeners {
+		if listener.elementID == elementID && listener.eventType == eventType && listener.token == token {
+			runtime.listeners = append(runtime.listeners[:index], runtime.listeners[index+1:]...)
+			runtime.listenerCount--
+			return
+		}
+	}
 }
 
 func (runtime *Runtime) eventValue(vm *goja.Runtime, currentTarget *goja.Object, event domapi.Event) goja.Value {
-	object := vm.NewObject()
+	runtime.mu.Lock()
+	object := runtime.jsEventObjects[event.RuntimeID]
+	runtime.mu.Unlock()
+	if object == nil {
+		constructor, _ := vm.Get("Event").(*goja.Object)
+		if constructor != nil {
+			object, _ = vm.New(constructor, vm.ToValue(event.Type), eventInitValue(vm, event))
+		}
+	}
+	if object == nil {
+		object = vm.NewObject()
+	}
 	target := currentTarget
 	if targetElement := runtime.domAPI.ElementByNodeID(event.TargetNodeID); targetElement != nil {
 		if targetObject, ok := runtime.elementValue(vm, targetElement).(*goja.Object); ok {
@@ -909,17 +988,26 @@ func (runtime *Runtime) eventValue(vm *goja.Runtime, currentTarget *goja.Object,
 	_ = object.Set("clientY", event.Y)
 	_ = object.Set("preventDefault", func(goja.FunctionCall) goja.Value {
 		event.PreventDefault()
+		_ = object.Set("defaultPrevented", event.DefaultPrevented != nil && event.DefaultPrevented())
 		return goja.Undefined()
 	})
 	_ = object.Set("stopPropagation", func(goja.FunctionCall) goja.Value {
 		event.StopPropagation()
 		return goja.Undefined()
 	})
-	defaultPreventedGetter := vm.ToValue(func(goja.FunctionCall) goja.Value {
-		return vm.ToValue(event.DefaultPrevented != nil && event.DefaultPrevented())
+	_ = object.Set("stopImmediatePropagation", func(goja.FunctionCall) goja.Value {
+		event.StopImmediatePropagation()
+		return goja.Undefined()
 	})
-	_ = object.DefineAccessorProperty("defaultPrevented", defaultPreventedGetter, nil, goja.FLAG_FALSE, goja.FLAG_TRUE)
+	_ = object.Set("defaultPrevented", event.DefaultPrevented != nil && event.DefaultPrevented())
 	return object
+}
+
+func eventInitValue(vm *goja.Runtime, event domapi.Event) goja.Value {
+	init := vm.NewObject()
+	_ = init.Set("bubbles", event.Bubbles)
+	_ = init.Set("cancelable", event.Cancelable)
+	return init
 }
 
 func errorsIsRuntimeStop(err error) bool {
