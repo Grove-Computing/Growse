@@ -59,6 +59,8 @@ type Request struct {
 	Engine      string
 	Credentials CredentialsMode
 	CORS        bool
+	Initiator   string
+	Schedule    string
 	Observer    func(Observation)
 }
 
@@ -66,8 +68,11 @@ type Request struct {
 type Observation struct {
 	Method        string
 	URL           *url.URL
+	FinalURL      *url.URL
 	Kind          RequestKind
 	Engine        string
+	Initiator     string
+	Schedule      string
 	StartedAt     time.Time
 	Duration      time.Duration
 	StatusCode    int
@@ -87,6 +92,7 @@ const (
 	RequestFetch
 	RequestStylesheet
 	RequestImage
+	RequestFont
 	RequestScript
 	RequestModule
 	RequestServiceWorker
@@ -216,9 +222,11 @@ func (c *Client) Do(ctx context.Context, requestData *Request) (result *Response
 			}
 			observation := Observation{
 				Method: requestMethod(requestData), URL: cloneURL(requestData.URL), Kind: requestData.Kind, Engine: requestData.Engine,
+				Initiator: requestData.Initiator, Schedule: requestData.Schedule,
 				StartedAt: startedAt, Duration: c.now().Sub(startedAt), ErrorCategory: observationErrorCategory(categoryError),
 			}
 			if result != nil {
+				observation.FinalURL = cloneURL(result.URL)
 				observation.StatusCode = result.StatusCode
 				observation.Redirected = result.Redirected
 				observation.CacheStatus = result.CacheStatus

@@ -426,6 +426,8 @@ func (e *engine) renderGridItem(node *dom.Node, style blockStyle, x, y, width, h
 		e.addCheckable(node, style, 0, width, height, true)
 	} else if isSubmitButtonControl(node) {
 		e.addSubmitButton(node, style, 0, width, height, true)
+	} else if isImageElement(node, e.images) {
+		e.addImage(node, style, 0, width, height, true)
 	} else {
 		e.addBlock(node, style, 0, width, height, true, nil)
 	}

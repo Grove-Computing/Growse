@@ -1,12 +1,15 @@
 package layout
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 
 	"github.com/Grove-Computing/Growse/internal/css"
 	"github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/style"
+	textfont "github.com/go-text/typesetting/font"
+	"golang.org/x/image/font/gofont/gomono"
 )
 
 func TestBuildCreatesVisibleVerticalBoxes(t *testing.T) {
@@ -59,6 +62,46 @@ func TestBuildCreatesMultilineTextareaFromTextContent(t *testing.T) {
 	}
 }
 
+func TestBuildLaysOutReplacedImageWithIntrinsicRatioAndObjectFit(t *testing.T) {
+	document := dom.NewDocument()
+	imageNode := document.CreateElement("img", map[string]string{"src": "photo.png", "alt": "Photo"})
+	appendNodes(t, document, [2]*dom.Node{document.Root, imageNode})
+	stylesheet, err := css.Parse(strings.NewReader(`img { width: 200px; height: 100px; object-fit: cover; object-position: right 25%; }`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resources := map[dom.NodeID]ImageResource{imageNode.ID: {
+		URL: "https://example.com/photo.png", IntrinsicWidth: 100, IntrinsicHeight: 100, Alt: "Photo", Loaded: true,
+	}}
+	tree := BuildWithScrollAndImages(document, style.Compute(document, stylesheet), resources, 800, 600, 0, 0)
+	if len(tree.Boxes) != 1 {
+		t.Fatalf("image box count = %d, want 1", len(tree.Boxes))
+	}
+	box := tree.Boxes[0]
+	if !box.Image || box.Width != 200 || box.Height != 100 || box.ImageRect.Width != 200 || box.ImageRect.Height != 200 || box.ImageRect.X != box.ImageClip.X || box.ImageRect.Y != box.ImageClip.Y-25 {
+		t.Fatalf("replaced image layout = %#v", box)
+	}
+}
+
+func TestBuildUsesIntrinsicRatioForCSSWidthAndAltFallback(t *testing.T) {
+	document := dom.NewDocument()
+	loaded := document.CreateElement("img", map[string]string{"src": "wide.png"})
+	failed := document.CreateElement("img", map[string]string{"src": "missing.png", "alt": "Missing image"})
+	appendNodes(t, document, [2]*dom.Node{document.Root, loaded}, [2]*dom.Node{document.Root, failed})
+	stylesheet, err := css.Parse(strings.NewReader(`img:first-child { width: 180px; }`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resources := map[dom.NodeID]ImageResource{
+		loaded.ID: {URL: "https://example.com/wide.png", IntrinsicWidth: 360, IntrinsicHeight: 180, Loaded: true},
+		failed.ID: {URL: "https://example.com/missing.png", Alt: "Missing image", Error: "decode failed"},
+	}
+	tree := BuildWithScrollAndImages(document, style.Compute(document, stylesheet), resources, 800, 600, 0, 0)
+	if len(tree.Boxes) != 2 || tree.Boxes[0].Width != 180 || tree.Boxes[0].Height != 90 || !tree.Boxes[1].ImageFailed || tree.Boxes[1].Alt != "Missing image" || tree.Boxes[1].Width <= 16 {
+		t.Fatalf("image layouts = %#v", tree.Boxes)
+	}
+}
+
 func TestBuildWrapsLongText(t *testing.T) {
 	document := dom.NewDocument()
 	p := document.CreateElement("p", nil)
@@ -93,6 +136,56 @@ func TestBuildUsesComputedTextStyle(t *testing.T) {
 	if box.Color != 0xabcdefff || box.FontSize != 24 || !box.Bold {
 		t.Fatalf("box style = %#v, want CSS color, size and weight", box)
 	}
+}
+
+func TestBuildWithWebFontsRemeasuresMatchingTextAndKeepsUnicodeFallback(t *testing.T) {
+	document := dom.NewDocument()
+	paragraph := document.CreateElement("p", nil)
+	appendNodes(t, document, [2]*dom.Node{document.Root, paragraph}, [2]*dom.Node{paragraph, document.CreateText("iiiiiiiiiiii")})
+	stylesheet, err := css.Parse(strings.NewReader(`p { font-family: Fixture, sans-serif; font-size: 24px; }`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	computed := style.Compute(document, stylesheet)
+	face, err := textfont.ParseTTF(bytes.NewReader(gomono.TTF))
+	if err != nil {
+		t.Fatal(err)
+	}
+	webFonts := NewFontSet([]WebFontFace{{
+		Family: "Fixture", Style: "normal", Weight: "normal",
+		UnicodeRanges: []FontRange{{Start: 0x20, End: 0x7f}}, Face: face,
+	}})
+	fallback := BuildWithScroll(document, computed, 800, 600, 0, 0)
+	loaded := BuildWithScrollAndResources(document, computed, nil, webFonts, 800, 600, 0, 0)
+	fallbackWidth, loadedWidth := layoutTextWidth(fallback), layoutTextWidth(loaded)
+	if fallbackWidth == loadedWidth || fallbackWidth <= 0 || loadedWidth <= 0 {
+		t.Fatalf("text widths fallback=%v loaded=%v", fallbackWidth, loadedWidth)
+	}
+
+	excluded := NewFontSet([]WebFontFace{{
+		Family: "Fixture", Style: "normal", Weight: "normal",
+		UnicodeRanges: []FontRange{{Start: 0x400, End: 0x4ff}}, Face: face,
+	}})
+	unicodeFallback := BuildWithScrollAndResources(document, computed, nil, excluded, 800, 600, 0, 0)
+	if got := layoutTextWidth(unicodeFallback); got != fallbackWidth {
+		t.Fatalf("unicode-range fallback width=%v, want %v", got, fallbackWidth)
+	}
+}
+
+func layoutTextWidth(tree *Tree) float32 {
+	var width float32
+	for _, box := range tree.Boxes {
+		if len(box.Runs) == 0 {
+			if box.Text != "" {
+				width += box.Width
+			}
+			continue
+		}
+		for _, run := range box.Runs {
+			width += run.Width
+		}
+	}
+	return width
 }
 
 func TestBuildAppliesBoxModelAndDisplay(t *testing.T) {

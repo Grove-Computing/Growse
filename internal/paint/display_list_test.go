@@ -134,6 +134,33 @@ func TestBuildPreservesBorderRadiusDecorationAndOpacity(t *testing.T) {
 	}
 }
 
+func TestBuildPreservesTypographyForThePainter(t *testing.T) {
+	tree := &layout.Tree{Boxes: []layout.Box{{Order: 1, FontFamilies: []string{"Fixture", "sans-serif"}, FontStyle: "italic", FontStretch: "expanded", LetterSpacing: 2, WordSpacing: 3, Runs: []layout.TextRun{{
+		Text: "copy", FontFamilies: []string{"Fixture"}, FontStyle: "italic", FontStretch: "condensed", LetterSpacing: 1, WordSpacing: 4, VerticalOffset: 5,
+	}}}}}
+	command := Build(tree).Commands[0].(DrawText)
+	if command.FontFamilies[0] != "Fixture" || command.FontStyle != "italic" || command.FontStretch != "expanded" || command.LetterSpacing != 2 || command.WordSpacing != 3 {
+		t.Fatalf("line typography = %#v", command)
+	}
+	if command.Runs[0].FontStretch != "condensed" || command.Runs[0].VerticalOffset != 5 || command.Runs[0].LetterSpacing != 1 || command.Runs[0].WordSpacing != 4 {
+		t.Fatalf("run typography = %#v", command.Runs[0])
+	}
+}
+
+func TestBuildAppliesAndPreservesBoundedVisualEffects(t *testing.T) {
+	filters := []style.Filter{{Kind: style.FilterBrightness, Amount: 2}, {Kind: style.FilterBlur, Radius: 4}}
+	tree := &layout.Tree{Background: 0xffffffff, Decorations: []layout.Decoration{{Background: 0x402010ff, Filters: filters, BackdropFilters: []style.Filter{{Kind: style.FilterContrast, Amount: .8}}, BlendMode: style.BlendMultiply, Cursor: style.CursorPointer}}}
+	command := Build(tree).Commands[0].(DrawBox)
+	expected := style.BlendColors(style.ApplyColorFilters(0x402010ff, filters), style.ApplyColorFilters(tree.Background, tree.Decorations[0].BackdropFilters), style.BlendMultiply)
+	if command.Color != expected || len(command.Filters) != 2 || len(command.BackdropFilters) != 1 || command.BlendMode != style.BlendMultiply || command.Cursor != style.CursorPointer {
+		t.Fatalf("visual command = %#v", command)
+	}
+	tree.Decorations[0].Filters[0].Amount = 9
+	if command.Filters[0].Amount != 2 {
+		t.Fatal("display list shares mutable filter storage")
+	}
+}
+
 func TestBuildPreservesShadowsAndOutline(t *testing.T) {
 	shadow := style.Shadow{OffsetX: 2, OffsetY: 3, Blur: 4, Spread: 1, Color: 0x123456ff}
 	tree := &layout.Tree{
@@ -203,6 +230,18 @@ func TestBuildCreatesInputCommand(t *testing.T) {
 	input, ok := list.Commands[0].(DrawInput)
 	if !ok || input.NodeID != 7 || input.Value != "hello" || input.InputType != "email" || input.Width != 280 || input.Height != 40 {
 		t.Fatalf("input command = %#v, want node 7 with value and geometry", list.Commands[0])
+	}
+}
+
+func TestBuildCreatesReplacedImageCommand(t *testing.T) {
+	tree := &layout.Tree{Boxes: []layout.Box{{
+		NodeID: 13, Image: true, ImageURL: "https://example.com/photo.webp", Alt: "Photo",
+		X: 12, Y: 24, Width: 200, Height: 100,
+		ImageRect: layout.Rect{X: 12, Y: -26, Width: 200, Height: 200}, ImageClip: layout.Rect{X: 12, Y: 24, Width: 200, Height: 100},
+	}}}
+	command, ok := Build(tree).Commands[0].(DrawImage)
+	if !ok || command.NodeID != 13 || command.URL != "https://example.com/photo.webp" || command.ImageRect.Height != 200 || command.ImageClip.Height != 100 {
+		t.Fatalf("image command = %#v", Build(tree).Commands[0])
 	}
 }
 

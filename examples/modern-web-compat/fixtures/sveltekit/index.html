@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SvelteKit SSR compatibility fixture</title>
+  <link rel="stylesheet" href="/_app/immutable/assets/app.css">
+</head>
+<body>
+  <div id="svelte" data-sveltekit-preload-data="hover" data-ssr-token="svelte-ssr-root-v1">
+    <p id="svelte-ssr-marker">SSR rendered</p>
+    <p id="svelte-hydration-marker">not hydrated</p>
+    <button id="svelte-reactive" type="button">Update</button>
+    <output id="svelte-state">idle</output>
+    <form id="svelte-form" method="post" action="/svelte/action">
+      <label>Name <input id="svelte-name" name="name" value="SSR"></label>
+      <button id="svelte-submit" type="submit">Save</button>
+    </form>
+    <output id="svelte-form-result">not submitted</output>
+    <a id="svelte-navigation" href="/svelte/about">About</a>
+    <p id="svelte-route">/svelte/</p>
+  </div>
+  <script type="module" src="/_app/immutable/entry/start.mjs"></script>
+</body>
+</html>

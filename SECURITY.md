@@ -6,7 +6,8 @@
 
 | Version | Supported |
 | --- | --- |
-| 0.14.x | Yes |
+| 0.15.x | Yes |
+| 0.14.x | No |
 | 0.13.x | No |
 | 0.12.x | No |
 | 0.11.x | No |
@@ -42,7 +43,7 @@ GitHub Releaseの各Archiveには、同名の`.sha256`と、`growse_<version>_<p
 たとえばLinux amd64のArchiveを検証する場合は、次を実行します。
 
 ```sh
-VERSION=v0.14.0
+VERSION=v0.15.0
 ASSET="growse_${VERSION}_linux_amd64.tar.gz"
 gh release download "$VERSION" --repo Grove-Computing/Growse \
   --pattern "$ASSET" --pattern "$ASSET.sha256" \
@@ -71,13 +72,13 @@ Developer workstationからのCredential窃取、不可視Unicode、未承認Bin
 
 ## Go / JavaScript Runtime Security Boundary
 
-Growse v0.14.0はPage / FrameのYaegi・goja・WASMとService WorkerをBrowser UIとは別の専用worker processで実行します。workerはversion / length制限付きの型付きIPCを通して、BrowserがbrokerするDOM、Event、Timer、Frame、Fetch、Storage、Navigation、Console、Module、WASM操作だけを要求できます。Browser credential、任意filesystem、直接socket / DNS、subprocess、dynamic library、OS shell、Go reflection、Node.js APIをhost surfaceとして公開しません。
+Growse v0.15.0はPage / FrameのYaegi・goja・WASMとService WorkerをBrowser UIとは別の専用worker processで実行します。workerはversion / length制限付きの型付きIPCを通して、BrowserがbrokerするDOM、Event、Timer、Frame、Fetch、Storage、Navigation、Console、Module、dynamic resource、CSSOM、observer、WASM操作だけを要求できます。Browser credential、任意filesystem、直接socket / DNS、subprocess、dynamic library、OS shell、Go reflection、Node.js APIをhost surfaceとして公開しません。
 
 Browserはcodeを渡す前に、別PID、worker executable / protocol、brokered host I/O、最小environment、parent lifecycle、memory上限を検証します。Linuxでは`no-new-privileges`とparent-death signal、macOS / Windowsでは専用process group、全platformではparent IPC EOFによる終了を適用します。必須条件が欠ける、workerがtimeout / crashする、protocolに違反する場合は対象contextだけをfail closedし、停止済みgenerationのcallbackを拒否します。
 
 ここでいうsandboxはGrowseが公開する実行機能とhost作用のdefault-deny境界です。seccomp、container、VMと同等の全system call隔離や、OS kernel、Go runtime、Yaegi、goja、wazero、decoder、Growse自身の未知の脆弱性が存在しないことまでは保証しません。Growseを権限の高いユーザーや機密profileで実行しないでください。
 
-JavaScriptは通常のHTTP(S) Pageのinline / external classic、CORSを通過したECMAScript Module、WebAssemblyを実行できます。redirect、status、MIME、mixed content、credentials、CORS、integrity、sizeをBrowser側で再検証します。Go sourceは明示的な`text/go`かつtrusted loopback / same-originに限定し、外部Internet Originから暗黙実行しません。選択していないEngineのScriptは取得しません。FetchはSame-Origin PolicyとCORSを適用し、`omit`、`same-origin`、`include`のCredentials Modeに従います。
+JavaScriptは通常のHTTP(S) Pageのinline / external classic、CORSを通過したECMAScript Module、dynamic script / stylesheet、WebAssemblyを実行できます。redirect、status、MIME、mixed content、credentials、CORS、integrity、sizeをBrowser側で再検証します。これらの取得・実行とhydration callbackは利用者がTabの`JS` selectorを明示選択した場合だけ有効です。Go sourceは明示的な`text/go`かつtrusted loopback / same-originに限定し、外部Internet Originから暗黙実行しません。選択していないEngineのScriptは取得せず、停止したJavaScript generationのresource completion、observer、DOM mutationをGo Pageへcommitしません。FetchはSame-Origin PolicyとCORSを適用し、`omit`、`same-origin`、`include`のCredentials Modeに従います。
 
 Browser Sessionあたりworker 32件、IPC message 1 MiB、pending message 256件、転送中payload 8 MiB、既定task 5秒を上限とします。Page close、Navigation、Engine切替でlistener、Timer、Fetch、Frame / WASM callbackをcancelし、通常停止に応答しないworkerは終了します。
 
@@ -95,7 +96,7 @@ Service Worker registrationとCache StorageはOrigin profileへ保存します�
 
 DevToolsはPageごとのread-only診断境界です。Consoleは1件4 KiB・Page 1,000件、DOM snapshotは2,000 node・深さ128・attribute 64件・文字列4 KiB、NetworkはPage 500件・Browser Session 4,000件を上限とします。Runtime panelはPage / Frame / Service WorkerのID、generation、Engine、state、script種別、有限error category、sandbox capabilityだけを表示します。Request / Response body、Header、Cookie、Authorization、Service Worker Cache body、IPC payload、raw error本文を保持せず、diagnostic URLからuserinfo、query、fragmentを除去します。Inspectorはpassword inputのvalue、WebGo callback、Runtime objectを公開しません。
 
-外部Go sourceを信頼しないでください。外部JavaScriptはv0.14.0 sandbox boundary内で扱いますが、未知の実装脆弱性を想定し、機密情報を持つ高権限環境では実行しないでください。
+外部Go sourceを信頼しないでください。外部JavaScriptはv0.15.0 sandbox boundary内で扱いますが、未知の実装脆弱性を想定し、機密情報を持つ高権限環境では実行しないでください。
 
 ## Hoverとカーソル表示
 
@@ -105,7 +106,9 @@ Gopherカーソルには`internal/ui/assets/blue.svg`から生成してビルド
 
 ## CSS Resource
 
-外部Stylesheetと`@import`はsame-origin / cross-origin HTTP(S)を扱い、redirect後URL、CSS MIME、mixed content、循環を検証した上で最大深度8、最大32 Stylesheet、合計8 MiBに制限します。各Background ImageはHTTP(S)のPNG、JPEG、GIFだけを受け入れ、応答を4 MiB、Decode後の画像を1600万画素までに制限します。複数Backgroundでも各URLへ同じ検証を適用し、MIME TypeやDecodeの検証に失敗したLayerは描画せず、ページ本体の表示は継続します。
+外部Stylesheet、dynamic stylesheet、`@import`はsame-origin / cross-origin HTTP(S)を扱い、redirect後URL、CSS MIME、mixed content、integrity、循環を検証した上で`@import`最大深度8、1件4 MiB、Page合計16 MiB、dynamic stylesheet 128件に制限します。ImageはPNG、JPEG、GIFの静止Frame、WebP、安全な静的SVG subsetを受け入れ、1 resource 16 MiB、1辺16,384 pixel、100 megapixel、Page decode surface 256 MiBへ制限します。Web FontはCORSとMIMEを通過したWOFF / WOFF2だけをdecodeし、1件8 MiB、Page 64件・合計64 MiB、table 128件、glyph 50,000件を上限とします。MIME、decode、上限検証に失敗したresourceはplaceholderまたは同梱fontへfallbackし、ページ本体の表示を継続します。
+
+inline / external SVGはpath、basic shape、text、gradient、clip、2D transformの静的subsetだけをrasterizeします。SVG内script、event handler、external resource、`foreignObject`、animation、filter、font load、Navigationは実行しません。XML entity、node 20,000件、path command 200,000件、4 MiB source、64 MiB raster surfaceを上限とします。
 
 Gradient、Shadow、Transform、Clip、Opacityは取得したコードを実行せず、型付きのStyle値からLayout TreeとDisplay Listを生成します。極端に大きいGridや深いStacking Contextを含む信頼できないページはCPU・メモリを消費し得るため、WebGoと同様に高い権限で実行しないでください。
 

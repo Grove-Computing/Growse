@@ -1,6 +1,6 @@
 # CSS対応表
 
-この表はGrowse v0.14.0の実装を基準とする。「部分対応」は一般的な値を扱えるが、仕様全体を実装していない機能を表す。document、stylesheet、`@import`、background resourceは最初の有効な`<base href>`から解決する。
+この表はGrowse v0.15.0の実装を基準とする。「部分対応」は一般的な値を扱えるが、仕様全体を実装していない機能を表す。document、initial / dynamic stylesheet、`@import`、image、font resourceは最初の有効な`<base href>`から解決する。
 
 ## SelectorとCascade
 
@@ -10,24 +10,30 @@
 | Attribute Selector | 対応 | `i`、`s`などのModifierは未対応 |
 | Descendant、Child、Adjacent、General Sibling | 対応 | Column Combinatorは未対応 |
 | Structural Pseudo-class | 対応 | `:root`、`:empty`、child/of-type系、`an+b` |
-| `:not()` | 部分対応 | Selectors Level 3のSimple Selector引数だけ |
-| Link、Form State、`:hover`、`:focus` | 対応 | `:visited`は意図的に未対応 |
+| `:is()`、`:where()`、`:not()` | 対応 | forgiving list、complex selector、`:where()`のゼロ詳細度を扱う |
+| `:has()`、`:scope` | 部分対応 | relative selectorのfixture範囲。Shadow DOMとpseudo-elementは未対応 |
+| Link、Form State、`:hover`、`:focus` | 対応 | `:defined`、`:placeholder-shown`、read / write、required / optional、focus visible / withinを含む。`:visited`は意図的に未対応 |
 | `::before`、`::after` | 部分対応 | 引用文字列の`content`だけ |
 | Cascade | 対応 | UA、Author、Inline、`!important`、詳細度、ソース順 |
 | CSS-wide Keyword | 対応 | 実装済みPropertyの`inherit`、`initial`、`unset` |
 | Custom Propertyと`var()` | 対応 | Fallbackと循環検出を含む |
+| Cascade Layer | 対応 | `@layer`、nested / anonymous layer、`@import layer()`、important反転、`revert-layer` |
+| CSS Nesting | 部分対応 | `&`とnested group rule。深さ32、展開後selector 1,024件まで |
 
 ## ValueとQuery
 
 | 機能 | 状態 | 制限 |
 |---|---|---|
 | Absolute Length | 対応 | `px`、`in`、`cm`、`mm`、`q`、`pt`、`pc` |
-| Relative Length | 対応 | `em`、`rem`、`ex`、`ch`、`vw`、`vh`、`vmin`、`vmax`、percentage |
-| `calc()` | 対応 | Length/Percentageの四則演算。非互換Dimension、ゼロ除算、非有限値は無効 |
-| CSS Color Level 3 | 対応 | Named Color、hex、rgb(a)、hsl(a)、`transparent`、`currentColor` |
+| Relative Length | 対応 | `em`、`rem`、`ex`、`ch`、`vw` / `vh` / `vmin` / `vmax`、small / large / dynamic viewport、container query unit、percentage |
+| `calc()`、`min()`、`max()`、`clamp()` | 対応 | Length/Percentageの四則演算とnest。非互換Dimension、ゼロ除算、非有限値は無効 |
+| CSS Color Level 4 subset | 対応 | Named / hex alpha、space区切りrgb / hsl、`hwb()`、Lab / LCH / OKLab / OKLCH、`color-mix()`をsRGBへ変換 |
 | Media Query | 部分対応 | `all`、`screen`、width/height、orientation、resolution、color scheme、hover、pointer、`prefers-reduced-motion` |
 | `@import` | 部分対応 | Stylesheet先頭のsame / cross-origin HTTP(S)。redirect、CSS MIME、mixed content、循環、深度8、32件、合計8 MiBを検証 |
 | `@keyframes` | 対応 | from/to、percentage、複数selector、同一offsetのCascade。1 Stylesheetあたり256 rule |
+| `@supports` | 部分対応 | property / value、`selector()`、not / and / or。未実装Featureはfalse |
+| `@container` | 部分対応 | inline-size、named container、`container-type` / `container-name`。style / scroll-state queryは未対応 |
+| `@property` | 部分対応 | syntax、initial value、inheritsと登録Custom Property |
 
 ## Property
 
@@ -42,9 +48,9 @@
 | `background-color` | 対応 | alpha合成を含む |
 | `background-image` | 部分対応 | 複数HTTP(S) PNG/JPEG/GIF、`linear-gradient()`、`radial-gradient()`。`data:`、conic gradientは未対応 |
 | `background-repeat/position/size` | 部分対応 | 複数Layer、主要Keyword、1〜2値、length/percentage、cover/contain。origin/clipの独立指定は未対応 |
-| `font-size`、`font-weight`、`line-height` | 対応 | 同梱Go FontのRegular/Boldを使用 |
+| `font`、family / size / style / weight / stretch、`line-height` | 対応 | CORSを通過したWOFF / WOFF2と同梱Go Font fallback。可変font axisは未対応 |
 | `white-space` | 対応 | normal、nowrap、pre、pre-wrap、pre-line |
-| `color` | 対応 | CSS Color Level 3の対応範囲 |
+| `color` | 対応 | 上記CSS Color Level 4 subset |
 | `text-decoration-line/color` | 対応 | underline、overline、line-through |
 | `opacity` | 対応 | 0〜1。1未満はStacking Contextとoffscreen groupを生成 |
 | `flex-direction`、`flex-wrap`、`flex-flow` | 対応 | horizontal writing modeのrow/column、reverse、wrap |
@@ -65,8 +71,12 @@
 | `transition-*`、`transition` | 部分対応 | opacity、transform、主要Color。複数Transition、list matching、delay、Easing、中断・反転 |
 | `animation-*`、`animation` | 部分対応 | 複数Keyframes Animation、delay、iteration、direction、fill、play-state。加算・累積合成は未対応 |
 | `visibility` | 対応 | `visible`、`hidden`。`display:none`とは別にLayout geometryを保持 |
-| `font-family/style`、`text-align` | 未対応 | Declarationを描画へ反映しない |
-| `word-break`、`overflow-wrap`、letter/word spacing、`vertical-align` | 未対応 | Declarationを描画へ反映しない |
+| `text-align/transform/indent`、letter / word spacing | 対応 | horizontal writing modeのText layout / paintへ反映 |
+| `word-break`、`overflow-wrap`、`vertical-align`、`text-overflow` | 部分対応 | fixtureで使う主要値。Vertical Writing Modeとfull Unicode line breakingは未対応 |
+| logical property | 部分対応 | margin / padding / border / inset / sizeをhorizontal writing modeへ変換 |
+| `object-fit`、`object-position` | 対応 | replaced imageのcontain / cover / fill / none / scale-downと主要position |
+| `list-style`、`appearance`、`accent-color`、`cursor` | 部分対応 | fixtureで使うmarker、form state、標準cursor subset |
+| `filter`、`backdrop-filter`、`mix-blend-mode` | 部分対応 | bounded offscreen / kernelの主要functionとblend。未対応functionは局所無効 |
 
 ## LayoutとPaint
 
@@ -90,4 +100,6 @@ top-level documentとiframeはsame / cross-origin stylesheetを取得できる�
 
 JavaScriptによるattribute、class、tree、`innerHTML` mutation後はStyle revisionを増やし、Computed Style、Layout Tree、Display List、Hit Test、Inspector snapshotを同じrevisionから再生成する。iframeは親Layoutの置換要素としてborder box、clip、scrollを持ち、子DocumentのPaintを親のclip内へ合成する。
 
-v0.14.0の「通常サイト描画」は[External Web Platform Showcase](../examples/external-web-platform)と選定WPTで固定した範囲を指す。未知の公開サイトとのpixel完全一致、Web Font、SVG、Canvas、video、全CSS仕様への適合は保証しない。
+Imageは`picture` / `source` / `srcset` / `sizes`、PNG / JPEG / GIF静止Frame / WebP、安全な静的SVG subset、load / error、alt fallback、late relayoutを扱う。Web FontはCORSを通過したWOFF / WOFF2をdecodeし、完了時に影響Textを再計測する。SVG内script、event handler、external resource、`foreignObject`、animation、filter、font load、Navigationは実行しない。
+
+v0.15.0の「Modern Web Compatibility」は[Modern Web Compatibility Showcase](../examples/modern-web-compat)、Next.js / SvelteKit / Tailwindのoffline artifact、Visual Regression、選定WPTで固定した範囲を指す。未知の公開サイトとのpixel完全一致、framework / React全API、Shadow DOM、Canvas、video、Vertical Writing Mode、全CSS仕様への適合は保証しない。CSSとimage / fontの静的resource改善はGo Pageにも適用するが、dynamic resourceとhydrationは`JS`を明示選択したTabだけで実行する。

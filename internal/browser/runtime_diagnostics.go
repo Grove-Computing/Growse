@@ -50,6 +50,7 @@ func runtimeContextForPage(kind string, id, parentID, browsingGeneration uint64,
 			Generation: page.Sandbox.Generation, ConstraintCount: len(page.Sandbox.Constraints), Failure: page.Sandbox.Failure != "",
 		},
 	}
+	context.Diagnostics = compatibilityDiagnostics(page)
 	for _, script := range page.Scripts {
 		location := "inline"
 		if !script.Inline {
@@ -97,6 +98,16 @@ func runtimeDiagnosticState(page *Page) string {
 func runtimeErrorCategory(message string) string {
 	value := strings.ToLower(message)
 	switch {
+	case strings.Contains(value, "hydration") || strings.Contains(value, "hydrate"):
+		return "hydration"
+	case strings.Contains(value, "observer") || strings.Contains(value, "loop limit"):
+		return "observer"
+	case strings.Contains(value, "chunk"):
+		return "chunk"
+	case strings.Contains(value, "stale") || strings.Contains(value, "generation"):
+		return "stale-generation"
+	case strings.Contains(value, "host api") || strings.Contains(value, "host function"):
+		return "host-api"
 	case strings.Contains(value, "webassembly") || strings.Contains(value, "wasm"):
 		return "wasm"
 	case strings.Contains(value, "module") || strings.Contains(value, "import"):

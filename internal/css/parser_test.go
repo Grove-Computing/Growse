@@ -262,7 +262,7 @@ p:nth-of-type(-n + 3), p:nth-last-of-type(2), p:not(.hidden) { color: red }
 	}
 }
 
-func TestParseRejectsInvalidStructuralPseudoClasses(t *testing.T) {
+func TestParseRejectsInvalidNthAndAcceptsLevel4NotCompounds(t *testing.T) {
 	stylesheet, err := Parse(strings.NewReader(`
 p:nth-child(wat) { color: red }
 p:not(.one.two) { color: red }
@@ -271,8 +271,8 @@ p:not(:not(.one)) { color: red }
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := len(stylesheet.Rules); got != 0 {
-		t.Fatalf("rule count = %d, want 0", got)
+	if got := len(stylesheet.Rules); got != 2 {
+		t.Fatalf("rule count = %d, want 2", got)
 	}
 }
 
@@ -407,7 +407,7 @@ func TestParseMediaQueriesAndNestedRules(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := len(stylesheet.Rules), 2; got != want {
+	if got, want := len(stylesheet.Rules), 3; got != want {
 		t.Fatalf("rule count = %d, want %d", got, want)
 	}
 	first := stylesheet.Rules[0]
@@ -422,6 +422,9 @@ func TestParseMediaQueriesAndNestedRules(t *testing.T) {
 	}
 	if got, want := len(stylesheet.Rules[1].Media), 2; got != want {
 		t.Fatalf("nested media group count = %d, want %d", got, want)
+	}
+	if got := stylesheet.Rules[2].Supports; len(got) != 1 || got[0].Kind != SupportsDeclaration {
+		t.Fatalf("supports condition = %#v", got)
 	}
 }
 

@@ -1,6 +1,6 @@
 # Growse DevTools
 
-Growse v0.14.0は、active TabのPageを観測するread-only DevToolsを提供する。ツールバーの`DevTools`または`F12`で開閉し、Console、Inspector、Network、Runtimeを切り替える。panel、Console filter、Inspector選択はTabごとに分離する。Headerには選択中のGo / JavaScript EngineとRuntimeのidle / running / stopped / error状態を表示する。
+Growse v0.15.0は、active TabのPageを観測するread-only DevToolsを提供する。ツールバーの`DevTools`または`F12`で開閉し、Console、Inspector、Network、Runtimeを切り替える。panel、Console filter、Inspector選択はTabごとに分離する。Headerには選択中のGo / JavaScript EngineとRuntimeのidle / running / stopped / error状態を表示する。
 
 ## Console
 
@@ -22,11 +22,11 @@ InspectorはBrowser RuntimeのPage event queue上でDOMからsnapshotを生成�
 
 ## Network
 
-Network recordはNavigation、stylesheet、image、external Go / JavaScript Script、Form submission、Fetchをresource kind付きで記録する。外部Scriptは`script/go`と`script/javascript`を区別し、method、開始時刻、duration、status、redirect、cache status、response byte数、error categoryを表示する。
+Network recordはNavigation、stylesheet、image、font、external Go / JavaScript Script、Module、Form submission、Fetchをresource kind付きで記録する。外部Scriptは`script/go`と`script/javascript`を区別し、requested / final URL、initiator、initial / dynamic schedule、method、開始時刻、duration、status、redirect、cache status、response byte数、error categoryを表示する。
 
 Request / Response bodyとHeaderはObservation型にもNetworkRecord型にも存在しない。Cookie、Authorization、API key、raw error本文を保存しない。URL userinfoを除去し、queryはkeyだけを残して全valueを`[REDACTED]`へ置換する。CORS、timeout、cancel、redirect loop / limit、request / response limit、network failureを限定されたcategoryへ変換する。
 
-- retention: Page 500件
+- retention: Page 2,000件
 - Browser Session: 4,000件
 - lifecycle: Page close後の追加を拒否
 - clear: 表示中Pageのrecordだけを削除し、sequenceとSession budgetは巻き戻さない
@@ -35,11 +35,19 @@ Request / Response bodyとHeaderはObservation型にもNetworkRecord型にも存
 
 Runtime panelはtop-level Page、再帰的なFrame、same-originのService Worker registrationをcontextごとに表示する。各rowはcontext kind / ID / parent ID、browsing generation、Engine、state、worker generation、sandbox ready / process / failure、適用constraint数、script kind / schedule / location、有限error categoryを持つ。
 
-Module / WASM / sandbox / runtime / frame errorはcategoryだけを表示し、raw messageやsourceを保持しない。URLはuserinfo、query、fragmentを除去する。inline source、module namespace、WASM binary / memory、Service Worker Cache body、IPC payload、environment、filesystem pathは診断modelへ入れない。
+Module / chunk / hydration / observer / stale generation / host API / WASM / sandbox / runtime / frame errorはcategoryだけを表示し、raw messageやsourceを保持しない。URLはuserinfoとquery value、fragmentを除去する。inline source、module namespace、WASM binary / memory、Service Worker Cache body、IPC payload、environment、filesystem pathは診断modelへ入れない。
+
+Runtime contextのcompatibility diagnosticsはdynamic resourceのinitiator / schedule、Styles ruleのlayerと適用状態、selector / media / supports / containerによる無視理由、font / image fallbackの有限categoryを表示する。診断はrule番号やresource metadataだけを参照し、CSS source body、font bytes、decoded image、raw exceptionを複製しない。
+
+- compatibility diagnostics: Page 2,000種類、同一category / subject / state / reason / initiator / scheduleは`count`へ集約
+- diagnostic string: 各field 4 KiB、invalid UTF-8を置換して切り詰め
+- aggregate count: 1,000,000で飽和
 
 worker generationはPage reload、Frame navigation、Service Worker restartを識別するための単調増加IDであり、process IDや秘密値ではない。sandbox constraintはworkerが適用・報告しBrowserが検証した件数とready状態を示し、適用できなかったOS機能を成功として表示しない。
 
 ## 再現と検証
+
+DevToolsはPage viewportから高さを差し引いた独立Browser chrome領域へ配置し、両領域を境界でclipする。狭いWindowやpanel高さがcontent高さを超える場合も領域は重ならず、Issue #78のPage上への重ね描画はgeometry testと`devtools-panels.golden.json`で回帰検出する。
 
 `go run ./examples/devtools`はlocalhostだけでConsole 4 level、DOM mutation、Computed Style、Layout、成功Fetch、redirect、cache hit、HTTP 503、timeoutを再現する。`go run ./examples/external-web-platform`はPage / Frame / Service Worker、classic / Module / WASM、複数worker generation、sandbox状態を再現する。fixtureには意図的なquery / Header / password credentialが含まれ、Integration TestはConsole、Inspector、Network、Runtime snapshotに値が残らないことを確認する。
 

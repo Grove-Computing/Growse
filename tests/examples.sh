@@ -11,6 +11,7 @@ examples=(
   dual-runtime
   external-web-platform
   flexbox
+  modern-web-compat
   persistent-app
   todo
 )
@@ -33,7 +34,9 @@ go test \
   ./examples/dual-runtime \
   ./examples/external-web-platform \
   ./examples/flexbox \
+  ./examples/modern-web-compat \
+  ./examples/multi-tab-workspace \
   ./examples/persistent-app \
   ./examples/todo
 
-echo "v0.14.0 Demo回帰検証成功: ${examples[*]}"
+echo "v0.15.0 Demo回帰検証成功: ${examples[*]} multi-tab-workspace"

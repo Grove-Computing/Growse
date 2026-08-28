@@ -68,6 +68,11 @@ func (d *Document) CreateText(text string) *Node {
 	return node
 }
 
+// CreateDocumentFragment creates an unattached fragment owned by the document.
+func (d *Document) CreateDocumentFragment() *Node {
+	return d.newNode(NodeDocumentFragment)
+}
+
 // AppendChild attaches child beneath parent.
 func (d *Document) AppendChild(parent, child *Node) error {
 	index := 0
@@ -85,8 +90,11 @@ func (d *Document) InsertChild(parent, child *Node, index int) error {
 	if parent.document != d || child.document != d {
 		return errors.New("parent and child must belong to the document")
 	}
-	if parent.Type != NodeDocument && parent.Type != NodeElement || child == d.Root || index < 0 || index > len(parent.Children) {
+	if parent.Type != NodeDocument && parent.Type != NodeElement && parent.Type != NodeDocumentFragment || child == d.Root || index < 0 || index > len(parent.Children) {
 		return errors.New("invalid child insertion")
+	}
+	if !attachmentWithinDepth(parent, child) {
+		return errors.New("child insertion exceeds DOM tree depth limit")
 	}
 	for current := parent; current != nil; current = current.Parent {
 		if current == child {
@@ -129,12 +137,12 @@ func (d *Document) DetachChild(parent, child *Node) bool {
 
 // ReplaceChildren atomically moves children beneath parent and detaches the old list.
 func (d *Document) ReplaceChildren(parent *Node, children []*Node) bool {
-	if d == nil || parent == nil || parent.document != d || parent.Type != NodeElement {
+	if d == nil || parent == nil || parent.document != d || parent.Type != NodeElement && parent.Type != NodeDocumentFragment {
 		return false
 	}
 	seen := make(map[NodeID]bool, len(children))
 	for _, child := range children {
-		if child == nil || child.document != d || child == d.Root || seen[child.ID] {
+		if child == nil || child.document != d || child == d.Root || seen[child.ID] || !attachmentWithinDepth(parent, child) {
 			return false
 		}
 		seen[child.ID] = true
@@ -171,6 +179,9 @@ func (d *Document) IsConnected(node *Node) bool {
 		return false
 	}
 	for current := node; current != nil; current = current.Parent {
+		if current.Type == NodeDocumentFragment {
+			return false
+		}
 		if current == d.Root {
 			return true
 		}
@@ -267,7 +278,7 @@ func (d *Document) GetElementsByTagName(value string) []*Node {
 
 // SetAttribute は要素の属性を設定し、値が変化した場合にtrueを返す。
 func (d *Document) SetAttribute(id NodeID, name, value string) bool {
-	if d == nil || name == "" {
+	if d == nil || name == "" || len(name) > MaxDOMStringBytes || len(value) > MaxDOMStringBytes {
 		return false
 	}
 	node, ok := d.nodes[id]
@@ -275,6 +286,9 @@ func (d *Document) SetAttribute(id NodeID, name, value string) bool {
 		return false
 	}
 	if current, exists := node.Attribute(name); exists && current == value {
+		return false
+	}
+	if _, exists := node.Attribute(name); !exists && len(node.Attributes) >= MaxAttributesPerNode {
 		return false
 	}
 	if node.Attributes == nil {
@@ -312,7 +326,7 @@ func (d *Document) SetTextContent(id NodeID, value string) bool {
 		return false
 	}
 	node, ok := d.nodes[id]
-	if !ok || node.Type != NodeElement {
+	if !ok || node.Type != NodeElement && node.Type != NodeDocumentFragment {
 		return false
 	}
 	for _, child := range node.Children {
@@ -377,6 +391,9 @@ func (d *Document) rebuildIDIndex() {
 	var walk func(*Node)
 	walk = func(node *Node) {
 		if node == nil {
+			return
+		}
+		if node.Type == NodeDocumentFragment {
 			return
 		}
 		if id, ok := node.Attribute("id"); ok && id != "" {
@@ -498,6 +515,9 @@ func validSelectorName(value string) bool {
 }
 
 func querySelector(node *Node, selector simpleSelector) (*Node, bool) {
+	if node == nil || node.Type == NodeDocumentFragment {
+		return nil, false
+	}
 	if matchesSimpleSelector(node, selector) {
 		return node, true
 	}
@@ -510,6 +530,9 @@ func querySelector(node *Node, selector simpleSelector) (*Node, bool) {
 }
 
 func querySelectorAll(node *Node, selector simpleSelector, result []*Node) []*Node {
+	if node == nil || node.Type == NodeDocumentFragment {
+		return result
+	}
 	if matchesSimpleSelector(node, selector) {
 		result = append(result, node)
 	}
@@ -520,7 +543,7 @@ func querySelectorAll(node *Node, selector simpleSelector, result []*Node) []*No
 }
 
 func collectElements(node *Node, result []*Node, matches func(*Node) bool) []*Node {
-	if node == nil {
+	if node == nil || node.Type == NodeDocumentFragment {
 		return result
 	}
 	if node.Type == NodeElement && matches(node) {

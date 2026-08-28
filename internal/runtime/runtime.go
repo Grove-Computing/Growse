@@ -85,33 +85,78 @@ type SandboxStatus struct {
 
 // Environment はRuntimeへ公開するページの状態を保持する。
 type Environment struct {
-	Document        *dom.Document
-	Events          *events.Dispatcher
-	BaseURL         *url.URL
-	ResourceBaseURL *url.URL
-	ImportMap       map[string]string
-	Fetch           func(context.Context, *network.Request) (*network.Response, error)
-	FetchLimiter    *fetchapi.Limiter
-	Navigate        func(*url.URL) error
-	HistoryPush     func(string, *url.URL) error
-	HistoryReplace  func(string, *url.URL) error
-	HistoryTraverse func(int) error
-	HistoryInfo     func() (int, string)
-	LocalStorage    *storagecore.Area
-	SessionStorage  *storagecore.Area
-	StorageSource   storagecore.MutationSource
-	OnMutation      func()
-	RequestFrame    func()
-	FrameScope      func(time.Time, func())
-	ConsoleLog      func(message string)
-	ConsoleRecord   func(level, message string)
-	RuntimeFailure  func(error)
-	Frames          []FrameAccess
-	FrameMutation   func(frameID, generation uint64, document dom.DocumentSnapshot) error
-	FramePolicy     FramePolicy
-	Window          WindowContext
-	PostMessage     func(target WindowReference, targetOrigin string, payload []byte) error
-	ServiceWorker   *ServiceWorkerHost
+	Document            *dom.Document
+	Events              *events.Dispatcher
+	BaseURL             *url.URL
+	ResourceBaseURL     *url.URL
+	ImportMap           map[string]string
+	Fetch               func(context.Context, *network.Request) (*network.Response, error)
+	FetchLimiter        *fetchapi.Limiter
+	Navigate            func(*url.URL) error
+	HistoryPush         func(string, *url.URL) error
+	HistoryReplace      func(string, *url.URL) error
+	HistoryTraverse     func(int) error
+	HistoryInfo         func() (int, string)
+	LocalStorage        *storagecore.Area
+	SessionStorage      *storagecore.Area
+	StorageSource       storagecore.MutationSource
+	OnMutation          func()
+	RefreshStyles       func(context.Context) error
+	ReadRender          func(context.Context, dom.NodeID) (RenderSnapshot, error)
+	RefreshImage        func(context.Context, dom.NodeID) (ImageState, error)
+	ReadImage           func(dom.NodeID) ImageState
+	ImageEventDelivered func(dom.NodeID)
+	Media               MediaEnvironment
+	RequestFrame        func()
+	FrameScope          func(time.Time, func())
+	ConsoleLog          func(message string)
+	ConsoleRecord       func(level, message string)
+	RuntimeFailure      func(error)
+	Frames              []FrameAccess
+	FrameMutation       func(frameID, generation uint64, document dom.DocumentSnapshot) error
+	FramePolicy         FramePolicy
+	Window              WindowContext
+	PostMessage         func(target WindowReference, targetOrigin string, payload []byte) error
+	ServiceWorker       *ServiceWorkerHost
+}
+
+// ImageState is the browser-owned lifecycle snapshot exposed by HTMLImageElement.
+type ImageState struct {
+	URL                         string
+	NaturalWidth, NaturalHeight float32
+	Complete, Loaded, Deferred  bool
+	Error                       string
+}
+
+// RenderSnapshot is one browser-produced CSSOM and geometry read tied to one
+// immutable Style/Layout revision.
+type RenderSnapshot struct {
+	Revision     uint64            `json:"revision"`
+	Style        map[string]string `json:"style,omitempty"`
+	Rect         DOMRect           `json:"rect"`
+	ClientWidth  float32           `json:"clientWidth"`
+	ClientHeight float32           `json:"clientHeight"`
+	ScrollWidth  float32           `json:"scrollWidth"`
+	ScrollHeight float32           `json:"scrollHeight"`
+}
+
+// DOMRect is the bounded CSS-pixel rectangle exposed to JavaScript.
+type DOMRect struct {
+	X, Y, Width, Height float32
+}
+
+// MediaEnvironment is the browser-owned input used by matchMedia.
+type MediaEnvironment struct {
+	ViewportWidth, ViewportHeight float32
+	ColorScheme                   string
+	Hover                         bool
+	Pointer                       string
+	ReducedMotion                 bool
+}
+
+// MediaEnvironmentUpdater receives browser preference and viewport changes.
+type MediaEnvironmentUpdater interface {
+	UpdateMediaEnvironment(MediaEnvironment)
 }
 
 // FramePolicy contains the capabilities granted by an iframe sandbox.

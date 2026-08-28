@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
 	"mime"
 	"net/http"
 	"net/url"
@@ -18,11 +19,13 @@ import (
 	"unicode/utf8"
 
 	animationmodel "github.com/Grove-Computing/Growse/internal/animation"
+	"github.com/Grove-Computing/Growse/internal/css"
 	"github.com/Grove-Computing/Growse/internal/devtools"
 	"github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/events"
 	"github.com/Grove-Computing/Growse/internal/forms"
 	htmlparser "github.com/Grove-Computing/Growse/internal/html"
+	layoutengine "github.com/Grove-Computing/Growse/internal/layout"
 	"github.com/Grove-Computing/Growse/internal/network"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 	"github.com/Grove-Computing/Growse/internal/serviceworker"
@@ -62,6 +65,10 @@ type pageEventRuntime interface {
 
 type isolatedDOMEventRuntime interface {
 	DispatchDOMEvent(events.Event) bool
+}
+
+type mediaEnvironmentRuntime interface {
+	UpdateMediaEnvironment(runtimemodel.MediaEnvironment)
 }
 
 // Browser owns the state for one browser window.
@@ -257,6 +264,9 @@ func (b *Browser) SetEngine(ctx context.Context, engine runtimemodel.Engine) (*P
 	}
 	b.engine = engine
 	b.navigationID++
+	if b.page != nil {
+		b.page.cancelImageLoads()
+	}
 	if b.navigationCancel != nil {
 		b.navigationCancel()
 		b.navigationCancel = nil
@@ -662,6 +672,10 @@ func (b *Browser) ClearHover() bool {
 
 // UpdateFocus updates the element which matches the :focus pseudo-class.
 func (b *Browser) UpdateFocus(nodeID dom.NodeID) bool {
+	return b.updateFocus(nodeID, false)
+}
+
+func (b *Browser) updateFocus(nodeID dom.NodeID, visible bool) bool {
 	b.mu.Lock()
 	page := b.page
 	onMutation := b.onMutation
@@ -670,12 +684,14 @@ func (b *Browser) UpdateFocus(nodeID dom.NodeID) bool {
 		return false
 	}
 	target := validFocusTarget(page.Document, nodeID)
-	if page.FocusTarget == target {
+	visible = target != 0 && visible
+	if page.FocusTarget == target && page.FocusVisible == visible {
 		b.mu.Unlock()
 		return false
 	}
 	previous := page.FocusTarget
 	page.FocusTarget = target
+	page.FocusVisible = visible
 	recomputePageStyles(page, b.currentTime())
 	dispatcher := page.Events
 	b.mu.Unlock()
@@ -703,7 +719,7 @@ func (b *Browser) MoveFormFocus(reverse bool) bool {
 	}
 	target := forms.NextFocusable(page.Document, page.FocusTarget, reverse)
 	b.mu.RUnlock()
-	return b.UpdateFocus(target)
+	return b.updateFocus(target, true)
 }
 
 // UpdateViewport recomputes viewport-relative values when the content area changes.
@@ -720,7 +736,35 @@ func (b *Browser) UpdateViewport(width, height float32) bool {
 	}
 	page.ViewportWidth, page.ViewportHeight = width, height
 	recomputePageStyles(page, b.currentTime())
+	activeRuntime := b.activeRuntime
+	media := pageMediaEnvironment(page)
+	imageLoader := page.imageLoader
+	baseURL := cloneURL(page.BaseURL)
+	engine := page.Engine
+	onMutation := b.onMutation
 	b.mu.Unlock()
+	if runtime, ok := activeRuntime.(mediaEnvironmentRuntime); ok {
+		runtime.UpdateMediaEnvironment(media)
+	}
+	if engine == runtimemodel.EngineJavaScript && imageLoader != nil {
+		loadContext, generation := page.beginImageLoad(context.Background())
+		policy := imageViewportPolicy(page.Document, page.ComputedStyles, baseURL, width, height)
+		budget := newImageDecodeBudgetWithImages(page.BackgroundImages)
+		resources, images, failures := loadReplacedImagesWithPolicyAndBudget(loadContext, imageLoader, baseURL, page.Document, width, 1, policy, budget)
+		inlineResources, inlineImages, inlineFailures := loadInlineSVGImagesWithBudget(page.Document, budget)
+		mergeImageResources(resources, images, inlineResources, inlineImages)
+		failures = append(failures, inlineFailures...)
+		b.mu.RLock()
+		active := b.page == page && page.Engine == runtimemodel.EngineJavaScript
+		b.mu.RUnlock()
+		committed := active && loadContext.Err() == nil && page.commitImageLoad(generation, resources, images, failures)
+		if committed {
+			dispatchImageResourceEvents(b, page)
+		}
+		if committed && onMutation != nil {
+			onMutation()
+		}
+	}
 	return true
 }
 
@@ -735,11 +779,17 @@ func (b *Browser) SetReducedMotion(reduce bool) bool {
 	b.reducedMotion = reduce
 	page := b.page
 	onMutation := b.onMutation
+	activeRuntime := b.activeRuntime
+	media := runtimemodel.MediaEnvironment{}
 	if page != nil {
 		page.ReducedMotion = reduce
 		recomputePageStyles(page, b.currentTime())
+		media = pageMediaEnvironment(page)
 	}
 	b.mu.Unlock()
+	if runtime, ok := activeRuntime.(mediaEnvironmentRuntime); ok && page != nil {
+		runtime.UpdateMediaEnvironment(media)
+	}
 	if page != nil && onMutation != nil {
 		onMutation()
 	}
@@ -750,6 +800,9 @@ func (b *Browser) SetReducedMotion(reduce bool) bool {
 func (b *Browser) SetPage(page *Page) {
 	b.mu.Lock()
 	b.navigationID++
+	if b.page != nil {
+		b.page.cancelImageLoads()
+	}
 	if b.navigationCancel != nil {
 		b.navigationCancel()
 		b.navigationCancel = nil
@@ -804,6 +857,9 @@ func (b *Browser) SetPage(page *Page) {
 func (b *Browser) Close() error {
 	b.mu.Lock()
 	b.navigationID++
+	if b.page != nil {
+		b.page.cancelImageLoads()
+	}
 	if b.navigationCancel != nil {
 		b.navigationCancel()
 		b.navigationCancel = nil
@@ -943,6 +999,9 @@ func (b *Browser) SubmitPOST(ctx context.Context, formID, submitterID dom.NodeID
 		return nil, errors.New("network client does not support POST")
 	}
 	b.navigationID++
+	if b.page != nil {
+		b.page.cancelImageLoads()
+	}
 	navigationID := b.navigationID
 	engineFactory := b.engineFactory
 	engine := runtimemodel.NormalizeEngine(b.engine)
@@ -1182,6 +1241,9 @@ func (b *Browser) loadWithClient(ctx context.Context, pageURL *url.URL, commit h
 	}
 	b.navigationCancel = cancel
 	b.navigationID++
+	if b.page != nil {
+		b.page.cancelImageLoads()
+	}
 	navigationID := b.navigationID
 	client := b.client
 	engineFactory := b.engineFactory
@@ -1311,22 +1373,35 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	baseURL := documentBaseURL(document, response.URL)
 	styleResources := resourceClient
 	imageResources := resourceClient
+	fontResources := resourceClient
 	scriptResources := resourceClient
 	engine = runtimemodel.NormalizeEngine(engine)
 	if loader, ok := resourceClient.(requestLoader); ok {
 		styleResources = pageResourceLoader{loader: loader, siteURL: response.URL, kind: network.RequestStylesheet, observer: pageStore.ObserveNetwork}
 		imageResources = pageResourceLoader{loader: loader, siteURL: response.URL, kind: network.RequestImage, observer: pageStore.ObserveNetwork}
+		fontResources = pageResourceLoader{loader: loader, siteURL: response.URL, kind: network.RequestFont, observer: pageStore.ObserveNetwork}
 		scriptResources = pageResourceLoader{loader: loader, siteURL: response.URL, kind: network.RequestScript, engine: string(engine), observer: pageStore.ObserveNetwork}
 	}
 	stylesheet, err := b.loadStylesWithBase(ctx, styleResources, response.URL, baseURL, document)
 	if err != nil {
 		return nil, fmt.Errorf("load styles for %s: %w", network.RedactedURL(pageURL), err)
 	}
-	computedStyles := style.ComputeWithEnvironment(document, stylesheet, style.InteractionState{}, style.Environment{
-		ViewportWidth: 1280, ViewportHeight: 720, RootFontSize: 16, ResolutionDPI: 96,
-		ColorScheme: "light", Hover: true, Pointer: "fine", ReducedMotion: reducedMotion,
-	})
-	backgroundImages, backgroundErrors := loadBackgroundImages(ctx, imageResources, computedStyles)
+	computedStyles := computeStableStyles(document, stylesheet, style.InteractionState{}, 1280, 720, reducedMotion)
+	imageBudget := newImageDecodeBudget()
+	backgroundImages, backgroundErrors := loadBackgroundImagesWithBudget(ctx, imageResources, computedStyles, imageBudget)
+	var replacedImages map[dom.NodeID]layoutengine.ImageResource
+	var decodedImages map[string]image.Image
+	var imageErrors []string
+	var fonts []FontResource
+	var fontErrors []string
+	if engine == runtimemodel.EngineJavaScript {
+		imagePolicy := imageViewportPolicy(document, computedStyles, baseURL, 1280, 720)
+		replacedImages, decodedImages, imageErrors = loadReplacedImagesWithPolicyAndBudget(ctx, imageResources, baseURL, document, 1280, 1, imagePolicy, imageBudget)
+		inlineResources, inlineImages, inlineErrors := loadInlineSVGImagesWithBudget(document, imageBudget)
+		mergeImageResources(replacedImages, decodedImages, inlineResources, inlineImages)
+		imageErrors = append(imageErrors, inlineErrors...)
+		fonts, fontErrors = loadWebFonts(ctx, fontResources, response.URL, stylesheet)
+	}
 	scripts, scriptErrors := loadScriptsForEngineWithBase(ctx, scriptResources, response.URL, baseURL, document, engine)
 	var importMap map[string]string
 	if engine == runtimemodel.EngineJavaScript {
@@ -1349,14 +1424,23 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 		Transitions:      style.NewTransitionRegistry(),
 		StyleRevision:    1,
 		ReducedMotion:    reducedMotion,
+		ViewportWidth:    1280,
+		ViewportHeight:   720,
 		BackgroundImages: backgroundImages,
 		BackgroundErrors: backgroundErrors,
+		ImageResources:   replacedImages,
+		Images:           decodedImages,
+		ImageErrors:      imageErrors,
+		Fonts:            fonts,
+		FontErrors:       fontErrors,
+		WebFonts:         layoutWebFonts(fonts),
 		Engine:           engine,
 		Scripts:          scripts,
 		ImportMap:        importMap,
 		ScriptErrors:     scriptErrors,
 		DevTools:         pageStore,
 		serviceWorkers:   b.serviceWorkers,
+		imageLoader:      imageResources,
 	}
 	for _, scriptError := range scriptErrors {
 		page.DevTools.AddConsole(devtools.ConsoleError, "script", scriptError)
@@ -1470,6 +1554,9 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	}
 	if previousPage != nil && previousPage != page {
 		_ = closePageFrames(previousPage)
+	}
+	if engine == runtimemodel.EngineJavaScript {
+		dispatchImageResourceEvents(b, page)
 	}
 	dispatchFrameLoadEvents(b, page)
 	if dispatchPopState {
@@ -1730,6 +1817,28 @@ func startRuntime(ctx context.Context, factory runtimemodel.EngineFactory, engin
 			}
 		},
 		RequestFrame: onMutation,
+		ReadRender: func(readContext context.Context, nodeID dom.NodeID) (runtimemodel.RenderSnapshot, error) {
+			return pageRenderSnapshot(readContext, page, nodeID)
+		},
+		RefreshImage: func(loadContext context.Context, nodeID dom.NodeID) (runtimemodel.ImageState, error) {
+			generationContext, generation := page.beginImageLoad(loadContext)
+			policy := imageViewportPolicy(page.Document, page.ComputedStyles, pageBaseURL(page), page.ViewportWidth, page.ViewportHeight)
+			budget := newImageDecodeBudgetWithImages(page.BackgroundImages)
+			resources, images, failures := loadReplacedImagesWithPolicyAndBudget(generationContext, page.imageLoader, pageBaseURL(page), page.Document, page.ViewportWidth, 1, policy, budget)
+			inlineResources, inlineImages, inlineFailures := loadInlineSVGImagesWithBudget(page.Document, budget)
+			mergeImageResources(resources, images, inlineResources, inlineImages)
+			failures = append(failures, inlineFailures...)
+			if generationContext.Err() != nil || !page.commitImageLoad(generation, resources, images, failures) {
+				return runtimemodel.ImageState{}, context.Canceled
+			}
+			if onMutation != nil {
+				onMutation()
+			}
+			return page.imageState(nodeID), nil
+		},
+		ReadImage:           page.imageState,
+		ImageEventDelivered: page.markImageEventDelivered,
+		Media:               pageMediaEnvironment(page),
 		FrameScope: func(current time.Time, callback func()) {
 			frameMu.Lock()
 			frameTime = current
@@ -1762,6 +1871,27 @@ func startRuntime(ctx context.Context, factory runtimemodel.EngineFactory, engin
 		FramePolicy:   page.FramePolicy,
 		Window:        page.window,
 		ServiceWorker: serviceWorkerHost(ctx, page, client),
+	}
+	if engine == runtimemodel.EngineJavaScript {
+		environment.RefreshStyles = func(refreshContext context.Context) error {
+			styleClient := client
+			if loader, ok := client.(requestLoader); ok {
+				styleClient = pageResourceLoader{
+					loader: loader, siteURL: page.URL, kind: network.RequestStylesheet,
+					engine: string(engine), observer: page.ensureDevTools().ObserveNetwork,
+				}
+			}
+			stylesheet, err := loadStylesWithBase(refreshContext, styleClient, page.URL, pageBaseURL(page), page.Document)
+			if err != nil {
+				return err
+			}
+			page.Stylesheet = stylesheet
+			recomputePageStyles(page, runtimeNow())
+			if onMutation != nil {
+				onMutation()
+			}
+			return nil
+		}
 	}
 	if page.windows != nil {
 		environment.PostMessage = func(target runtimemodel.WindowReference, targetOrigin string, payload []byte) error {
@@ -1838,7 +1968,7 @@ func hoverPath(document *dom.Document, nodeID dom.NodeID) []dom.NodeID {
 
 func interactionState(page *Page) style.InteractionState {
 	state := style.InteractionState{
-		Hovered: make(map[dom.NodeID]bool, len(page.HoverPath)), Focused: page.FocusTarget,
+		Hovered: make(map[dom.NodeID]bool, len(page.HoverPath)), Focused: page.FocusTarget, FocusVisible: page.FocusVisible,
 	}
 	for _, nodeID := range page.HoverPath {
 		state.Hovered[nodeID] = true
@@ -1850,11 +1980,53 @@ func computePageStyles(page *Page) style.Map {
 	if page == nil {
 		return nil
 	}
-	return style.ComputeWithEnvironment(page.Document, page.Stylesheet, interactionState(page), style.Environment{
-		ViewportWidth: page.ViewportWidth, ViewportHeight: page.ViewportHeight, RootFontSize: 16,
-		ResolutionDPI: 96, ColorScheme: "light", Hover: true, Pointer: "fine",
-		ReducedMotion: page.ReducedMotion,
-	})
+	return computeStableStyles(page.Document, page.Stylesheet, interactionState(page), page.ViewportWidth, page.ViewportHeight, page.ReducedMotion)
+}
+
+const maxContainerQueryIterations = 16
+
+func computeStableStyles(document *dom.Document, stylesheet *css.Stylesheet, state style.InteractionState, width, height float32, reducedMotion bool) style.Map {
+	var computed style.Map
+	sizes := make(map[dom.NodeID]style.ContainerSize)
+	for iteration := 0; iteration < maxContainerQueryIterations; iteration++ {
+		computed = style.ComputeWithEnvironment(document, stylesheet, state, style.Environment{
+			ViewportWidth: width, ViewportHeight: height, RootFontSize: 16, ResolutionDPI: 96,
+			ColorScheme: "light", Hover: true, Pointer: "fine", ReducedMotion: reducedMotion,
+			ContainerSizes: sizes,
+		})
+		tree := layoutengine.BuildWithViewport(document, computed, width, height)
+		next := make(map[dom.NodeID]style.ContainerSize)
+		for nodeID, computedStyle := range computed {
+			if computedStyle.ContainerType != style.ContainerTypeInlineSize {
+				continue
+			}
+			bounds, ok := tree.Bounds[nodeID]
+			if !ok {
+				continue
+			}
+			contentWidth := max(bounds.Width-computedStyle.Padding.Left-computedStyle.Padding.Right-computedStyle.Border.Left.Width-computedStyle.Border.Right.Width, float32(0))
+			contentHeight := max(bounds.Height-computedStyle.Padding.Top-computedStyle.Padding.Bottom-computedStyle.Border.Top.Width-computedStyle.Border.Bottom.Width, float32(0))
+			next[nodeID] = style.ContainerSize{Width: contentWidth, Height: contentHeight}
+		}
+		if sameContainerSizes(sizes, next) {
+			return computed
+		}
+		sizes = next
+	}
+	return computed
+}
+
+func sameContainerSizes(left, right map[dom.NodeID]style.ContainerSize) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for nodeID, size := range left {
+		other, ok := right[nodeID]
+		if !ok || size.Width != other.Width || size.Height != other.Height {
+			return false
+		}
+	}
+	return true
 }
 
 func recomputePageStyles(page *Page, current time.Time) {

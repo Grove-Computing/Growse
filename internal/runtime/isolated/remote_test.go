@@ -2,6 +2,7 @@ package isolated
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"strings"
 	"testing"
@@ -95,6 +96,61 @@ func TestIsolatedJavaScriptPreservesDOMEventStorageAndConsoleBehavior(t *testing
 	}
 	if len(mutations) < 2 {
 		t.Fatalf("worker mutation notifications = %d, want at least 2", len(mutations))
+	}
+}
+
+func TestIsolatedJavaScriptBrokersRenderSnapshotsAndMediaChanges(t *testing.T) {
+	document, err := htmlparser.Parse(strings.NewReader(`<main id="target">content</main>`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, _ := document.GetElementByID("target")
+	records := make(chan string, 4)
+	runtime := New(runtimemodel.EngineJavaScript)
+	t.Cleanup(func() { _ = runtime.Stop() })
+	environment := runtimemodel.Environment{
+		Document: document, Events: events.NewDispatcher(), BaseURL: mustURL(t, "https://example.test/page"),
+		Media: runtimemodel.MediaEnvironment{ViewportWidth: 800, ViewportHeight: 600, ColorScheme: "light", Hover: true, Pointer: "fine"},
+		ReadRender: func(_ context.Context, nodeID dom.NodeID) (runtimemodel.RenderSnapshot, error) {
+			if nodeID != target.ID {
+				return runtimemodel.RenderSnapshot{}, fmt.Errorf("render node = %d, want %d", nodeID, target.ID)
+			}
+			return runtimemodel.RenderSnapshot{
+				Revision: 9, Style: map[string]string{"display": "grid", "width": "200px"},
+				Rect: runtimemodel.DOMRect{X: 5, Y: 6, Width: 200, Height: 40}, ClientWidth: 196, ScrollWidth: 220,
+			}, nil
+		},
+		ConsoleRecord: func(_, message string) { records <- message },
+	}
+	source := `
+		var target = document.getElementById("target");
+		var media = matchMedia("(max-width: 500px)");
+		media.addEventListener("change", function (event) { console.log("media:" + event.matches + ":" + innerWidth); });
+		new ResizeObserver(function (entries) { console.log("resize:" + entries[0].contentRect.width); }).observe(target);
+		console.log([getComputedStyle(target).display, target.getBoundingClientRect().right, target.clientWidth, target.scrollWidth, media.matches].join("|"));`
+	if err := runtime.Load(context.Background(), []runtimemodel.Script{{Engine: runtimemodel.EngineJavaScript, SourceURL: environment.BaseURL, Source: source, Inline: true}}, environment); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := <-records; got != "grid|205|196|220|false" {
+		t.Fatalf("isolated CSSOM = %q", got)
+	}
+	if !runtime.HasAnimationFrameCallbacks() || !runtime.RunAnimationFrame(time.Now()) {
+		t.Fatal("isolated ResizeObserver frame was not delivered")
+	}
+	if got := <-records; got != "resize:200" {
+		t.Fatalf("isolated ResizeObserver = %q", got)
+	}
+	runtime.UpdateMediaEnvironment(runtimemodel.MediaEnvironment{ViewportWidth: 400, ViewportHeight: 600, ColorScheme: "light", Hover: true, Pointer: "fine"})
+	select {
+	case got := <-records:
+		if got != "media:true:400" {
+			t.Fatalf("isolated media change = %q", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("isolated media change was not delivered")
 	}
 }
 

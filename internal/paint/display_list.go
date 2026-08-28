@@ -41,6 +41,12 @@ type DrawText struct {
 
 	FontSize        float32
 	Bold            bool
+	FontFamilies    []string
+	FontStyle       string
+	FontStretch     string
+	LetterSpacing   float32
+	WordSpacing     float32
+	VerticalOffset  float32
 	Color           uint32
 	Background      uint32
 	Decoration      stylemodel.TextDecorationLine
@@ -49,80 +55,93 @@ type DrawText struct {
 	Runs            []TextRun
 	TextShadows     []stylemodel.Shadow
 	Transform       stylemodel.Matrix
+	Cursor          stylemodel.Cursor
 }
 
 func (DrawText) paintCommand() {}
 
 // DrawInput は編集可能な単一行または複数行のテキスト入力を描画する。
 type DrawInput struct {
-	NodeID    dom.NodeID
-	Value     string
-	InputType string
-	Multiline bool
-	Disabled  bool
-	ReadOnly  bool
-	X         float32
-	Y         float32
-	Top       float32
-	Width     float32
-	Height    float32
-	Color     uint32
-	Opacity   float32
-	Clip      *layout.Rect
+	NodeID      dom.NodeID
+	Value       string
+	InputType   string
+	Multiline   bool
+	Disabled    bool
+	ReadOnly    bool
+	X           float32
+	Y           float32
+	Top         float32
+	Width       float32
+	Height      float32
+	Color       uint32
+	Opacity     float32
+	Clip        *layout.Rect
+	Appearance  stylemodel.Appearance
+	AccentColor uint32
+	Cursor      stylemodel.Cursor
 }
 
 func (DrawInput) paintCommand() {}
 
 // DrawSelect paints one single-selection control.
 type DrawSelect struct {
-	NodeID   dom.NodeID
-	Options  []forms.Option
-	Selected int
-	Label    string
-	X        float32
-	Y        float32
-	Top      float32
-	Width    float32
-	Height   float32
-	Color    uint32
-	Opacity  float32
-	Clip     *layout.Rect
-	Disabled bool
+	NodeID      dom.NodeID
+	Options     []forms.Option
+	Selected    int
+	Label       string
+	X           float32
+	Y           float32
+	Top         float32
+	Width       float32
+	Height      float32
+	Color       uint32
+	Opacity     float32
+	Clip        *layout.Rect
+	Disabled    bool
+	Appearance  stylemodel.Appearance
+	AccentColor uint32
+	Cursor      stylemodel.Cursor
 }
 
 func (DrawSelect) paintCommand() {}
 
 // DrawCheckable paints a checkbox or radio control.
 type DrawCheckable struct {
-	NodeID    dom.NodeID
-	InputType string
-	Checked   bool
-	X         float32
-	Y         float32
-	Top       float32
-	Width     float32
-	Height    float32
-	Color     uint32
-	Opacity   float32
-	Clip      *layout.Rect
-	Disabled  bool
+	NodeID      dom.NodeID
+	InputType   string
+	Checked     bool
+	X           float32
+	Y           float32
+	Top         float32
+	Width       float32
+	Height      float32
+	Color       uint32
+	Opacity     float32
+	Clip        *layout.Rect
+	Disabled    bool
+	Appearance  stylemodel.Appearance
+	AccentColor uint32
+	Cursor      stylemodel.Cursor
 }
 
 func (DrawCheckable) paintCommand() {}
 
 // DrawButton paints a submit button.
 type DrawButton struct {
-	NodeID   dom.NodeID
-	Label    string
-	X        float32
-	Y        float32
-	Top      float32
-	Width    float32
-	Height   float32
-	Color    uint32
-	Opacity  float32
-	Clip     *layout.Rect
-	Disabled bool
+	NodeID      dom.NodeID
+	Label       string
+	X           float32
+	Y           float32
+	Top         float32
+	Width       float32
+	Height      float32
+	Color       uint32
+	Opacity     float32
+	Clip        *layout.Rect
+	Disabled    bool
+	Appearance  stylemodel.Appearance
+	AccentColor uint32
+	Cursor      stylemodel.Cursor
 }
 
 func (DrawButton) paintCommand() {}
@@ -130,30 +149,58 @@ func (DrawButton) paintCommand() {}
 // DrawBox paints an element background without advancing by its painted height.
 // Its Top value only moves the list cursor to the element's document position.
 type DrawBox struct {
-	NodeID        dom.NodeID
-	X             float32
-	Y             float32
-	Top           float32
-	Width         float32
-	Height        float32
-	Color         uint32
-	Image         stylemodel.BackgroundImage
-	Layers        []stylemodel.BackgroundLayer
-	Repeat        stylemodel.BackgroundRepeat
-	Position      stylemodel.BackgroundPosition
-	Size          stylemodel.BackgroundSize
-	Border        stylemodel.Borders
-	Radius        layout.BorderRadii
-	Opacity       float32
-	Clip          *layout.Rect
-	Clips         []layout.ClipRegion
-	BoxShadows    []stylemodel.Shadow
-	Outline       stylemodel.BorderSide
-	OutlineOffset float32
-	Transform     stylemodel.Matrix
+	NodeID          dom.NodeID
+	X               float32
+	Y               float32
+	Top             float32
+	Width           float32
+	Height          float32
+	Color           uint32
+	BackdropColor   uint32
+	Image           stylemodel.BackgroundImage
+	Layers          []stylemodel.BackgroundLayer
+	Repeat          stylemodel.BackgroundRepeat
+	Position        stylemodel.BackgroundPosition
+	Size            stylemodel.BackgroundSize
+	Border          stylemodel.Borders
+	Radius          layout.BorderRadii
+	Opacity         float32
+	Clip            *layout.Rect
+	Clips           []layout.ClipRegion
+	BoxShadows      []stylemodel.Shadow
+	Outline         stylemodel.BorderSide
+	OutlineOffset   float32
+	Filters         []stylemodel.Filter
+	BackdropFilters []stylemodel.Filter
+	BlendMode       stylemodel.BlendMode
+	Cursor          stylemodel.Cursor
+	Transform       stylemodel.Matrix
 }
 
 func (DrawBox) paintCommand() {}
+
+// DrawImage paints one decoded replaced image or its alt fallback.
+type DrawImage struct {
+	NodeID     dom.NodeID
+	URL, Alt   string
+	X, Y, Top  float32
+	Width      float32
+	Height     float32
+	ImageRect  layout.Rect
+	ImageClip  layout.Rect
+	Failed     bool
+	Color      uint32
+	Background uint32
+	Opacity    float32
+	Clip       *layout.Rect
+	Clips      []layout.ClipRegion
+	Border     stylemodel.Borders
+	Radius     layout.BorderRadii
+	Transform  stylemodel.Matrix
+	Cursor     stylemodel.Cursor
+}
+
+func (DrawImage) paintCommand() {}
 
 // TextRun is one styled fragment within a DrawText line.
 type TextRun struct {
@@ -164,6 +211,12 @@ type TextRun struct {
 
 	FontSize        float32
 	Bold            bool
+	FontFamilies    []string
+	FontStyle       string
+	FontStretch     string
+	LetterSpacing   float32
+	WordSpacing     float32
+	VerticalOffset  float32
 	Color           uint32
 	Background      uint32
 	Baseline        float32
@@ -212,13 +265,19 @@ func Build(tree *layout.Tree) *DisplayList {
 		if item.decoration != nil {
 			decoration := item.decoration
 			top := max(decoration.Y-previousBottom, float32(0))
+			backdrop := stylemodel.ApplyColorFilters(tree.Background, decoration.BackdropFilters)
+			filteredColor := stylemodel.ApplyColorFilters(decoration.Background, decoration.Filters)
+			if decoration.BlendMode != stylemodel.BlendNormal {
+				filteredColor = stylemodel.BlendColors(filteredColor, backdrop, decoration.BlendMode)
+			}
 			list.Commands = append(list.Commands, DrawBox{
 				NodeID: decoration.NodeID, X: decoration.X, Y: decoration.Y, Top: top,
-				Width: decoration.Width, Height: decoration.Height, Color: decoration.Background,
+				Width: decoration.Width, Height: decoration.Height, Color: filteredColor, BackdropColor: backdrop,
 				Image: cloneBackgroundImage(decoration.Image), Layers: cloneBackgroundLayers(decoration.Layers), Repeat: decoration.Repeat,
 				Position: decoration.Position, Size: decoration.Size, Clip: cloneLayoutRect(decoration.Clip),
 				Border: decoration.Border, Radius: decoration.Radius, Opacity: decoration.Opacity,
 				BoxShadows: append([]stylemodel.Shadow(nil), decoration.BoxShadows...), Outline: decoration.Outline, OutlineOffset: decoration.OutlineOffset,
+				Filters: append([]stylemodel.Filter(nil), decoration.Filters...), BackdropFilters: append([]stylemodel.Filter(nil), decoration.BackdropFilters...), BlendMode: decoration.BlendMode, Cursor: decoration.Cursor,
 				Transform: decoration.Transform,
 				Clips:     cloneClipRegions(decoration.Clips),
 			})
@@ -230,22 +289,33 @@ func Build(tree *layout.Tree) *DisplayList {
 		if top < 0 {
 			top = 0
 		}
+		if box.Image {
+			list.Commands = append(list.Commands, DrawImage{
+				NodeID: box.NodeID, URL: box.ImageURL, Alt: box.Alt, X: box.X, Y: box.Y, Top: top,
+				Width: box.Width, Height: box.Height, ImageRect: box.ImageRect, ImageClip: box.ImageClip, Failed: box.ImageFailed,
+				Color: box.Color, Background: box.Background, Opacity: box.Opacity, Clip: cloneLayoutRect(box.Clip), Clips: cloneClipRegions(box.Clips),
+				Border: box.ImageBorder, Radius: box.ImageRadius, Transform: box.Transform, Cursor: box.Cursor,
+			})
+			previousBottom = box.Y + box.Height
+			continue
+		}
 		if box.Input {
 			list.Commands = append(list.Commands, DrawInput{
-				NodeID:    box.NodeID,
-				Value:     box.Text,
-				InputType: box.InputType,
-				Multiline: box.Multiline,
-				Disabled:  box.Disabled,
-				ReadOnly:  box.ReadOnly,
-				X:         box.X,
-				Y:         box.Y,
-				Top:       top,
-				Width:     box.Width,
-				Height:    box.Height,
-				Color:     box.Color,
-				Opacity:   box.Opacity,
-				Clip:      cloneLayoutRect(box.Clip),
+				NodeID:     box.NodeID,
+				Value:      box.Text,
+				InputType:  box.InputType,
+				Multiline:  box.Multiline,
+				Disabled:   box.Disabled,
+				ReadOnly:   box.ReadOnly,
+				X:          box.X,
+				Y:          box.Y,
+				Top:        top,
+				Width:      box.Width,
+				Height:     box.Height,
+				Color:      box.Color,
+				Opacity:    box.Opacity,
+				Clip:       cloneLayoutRect(box.Clip),
+				Appearance: box.Appearance, AccentColor: box.AccentColor, Cursor: box.Cursor,
 			})
 			previousBottom = box.Y + box.Height
 			continue
@@ -255,7 +325,8 @@ func Build(tree *layout.Tree) *DisplayList {
 				NodeID: box.NodeID, Options: append([]forms.Option(nil), box.Options...), Selected: box.Selected, Label: box.Text,
 				X: box.X, Y: box.Y, Top: top, Width: box.Width, Height: box.Height,
 				Color: box.Color, Opacity: box.Opacity, Clip: cloneLayoutRect(box.Clip),
-				Disabled: box.Disabled,
+				Disabled:   box.Disabled,
+				Appearance: box.Appearance, AccentColor: box.AccentColor, Cursor: box.Cursor,
 			})
 			previousBottom = box.Y + box.Height
 			continue
@@ -265,7 +336,8 @@ func Build(tree *layout.Tree) *DisplayList {
 				NodeID: box.NodeID, InputType: box.InputType, Checked: box.Checked,
 				X: box.X, Y: box.Y, Top: top, Width: box.Width, Height: box.Height,
 				Color: box.Color, Opacity: box.Opacity, Clip: cloneLayoutRect(box.Clip),
-				Disabled: box.Disabled,
+				Disabled:   box.Disabled,
+				Appearance: box.Appearance, AccentColor: box.AccentColor, Cursor: box.Cursor,
 			})
 			previousBottom = box.Y + box.Height
 			continue
@@ -275,20 +347,23 @@ func Build(tree *layout.Tree) *DisplayList {
 				NodeID: box.NodeID, Label: box.Text, X: box.X, Y: box.Y, Top: top,
 				Width: box.Width, Height: box.Height, Color: box.Color, Opacity: box.Opacity,
 				Clip: cloneLayoutRect(box.Clip), Disabled: box.Disabled,
+				Appearance: box.Appearance, AccentColor: box.AccentColor, Cursor: box.Cursor,
 			})
 			previousBottom = box.Y + box.Height
 			continue
 		}
 		command := DrawText{
-			NodeID:     box.NodeID,
-			Text:       box.Text,
-			X:          box.X,
-			Y:          box.Y,
-			Top:        top,
-			Width:      box.Width,
-			Height:     box.Height,
-			FontSize:   box.FontSize,
-			Bold:       box.Bold,
+			NodeID:       box.NodeID,
+			Text:         box.Text,
+			X:            box.X,
+			Y:            box.Y,
+			Top:          top,
+			Width:        box.Width,
+			Height:       box.Height,
+			FontSize:     box.FontSize,
+			Bold:         box.Bold,
+			FontFamilies: append([]string(nil), box.FontFamilies...), FontStyle: box.FontStyle, FontStretch: box.FontStretch,
+			LetterSpacing: box.LetterSpacing, WordSpacing: box.WordSpacing, VerticalOffset: box.VerticalOffset,
 			Color:      box.Color,
 			Background: box.Background,
 			Decoration: box.Decoration, DecorationColor: box.DecorationColor, Opacity: box.Opacity,
@@ -296,6 +371,7 @@ func Build(tree *layout.Tree) *DisplayList {
 			Clip:        cloneLayoutRect(box.Clip),
 			TextShadows: append([]stylemodel.Shadow(nil), box.TextShadows...),
 			Transform:   box.Transform,
+			Cursor:      box.Cursor,
 			Clips:       cloneClipRegions(box.Clips),
 		}
 		command.Runs = make([]TextRun, 0, len(box.Runs))
@@ -303,6 +379,8 @@ func Build(tree *layout.Tree) *DisplayList {
 			command.Runs = append(command.Runs, TextRun{
 				NodeID: run.NodeID, Tag: run.Tag, Text: run.Text, Width: run.Width,
 				FontSize: run.FontSize, Bold: run.Bold, Color: run.Color, Background: run.Background,
+				FontFamilies: append([]string(nil), run.FontFamilies...), FontStyle: run.FontStyle, FontStretch: run.FontStretch,
+				LetterSpacing: run.LetterSpacing, WordSpacing: run.WordSpacing, VerticalOffset: run.VerticalOffset,
 				Baseline: run.Baseline - box.Y, Decoration: run.Decoration,
 				DecorationColor: run.DecorationColor, Opacity: run.Opacity,
 				TextShadows: append([]stylemodel.Shadow(nil), run.TextShadows...),
@@ -354,6 +432,14 @@ func ApplyAnimatedStyles(list *DisplayList, styles stylemodel.Map) {
 					command.Runs[runIndex].Opacity = runStyle.Opacity
 				}
 			}
+			list.Commands[index] = command
+		case DrawImage:
+			computed, ok := styles[command.NodeID]
+			if !ok {
+				continue
+			}
+			command.Color, command.Background, command.Opacity = computed.Color, computed.BackgroundColor, computed.Opacity
+			command.Transform = resolvedPaintTransform(computed, command.X, command.Y, command.Width, command.Height)
 			list.Commands[index] = command
 		case DrawInput:
 			computed, ok := styles[command.NodeID]

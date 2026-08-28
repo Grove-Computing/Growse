@@ -65,7 +65,7 @@ func TestQuerySelectorReadsFirstMatchingElement(t *testing.T) {
 
 func TestQuerySelectorReturnsNilForUnsupportedSelector(t *testing.T) {
 	api := New(dommodel.NewDocument(), events.NewDispatcher(), nil)
-	if element := api.QuerySelector("main p"); element != nil {
+	if element := api.QuerySelector("main >> p"); element != nil {
 		t.Fatalf("QuerySelector() = %#v, want nil", element)
 	}
 }
@@ -295,7 +295,7 @@ func TestGetAndSetAttribute(t *testing.T) {
 	}
 }
 
-func TestAttributeRejectsInvalidNameAndRemovedElement(t *testing.T) {
+func TestAttributeRejectsInvalidNameAndKeepsDetachedElementIdentity(t *testing.T) {
 	document := dommodel.NewDocument()
 	node := document.CreateElement("div", map[string]string{"id": "item"})
 	if err := document.AppendChild(document.Root, node); err != nil {
@@ -313,11 +313,11 @@ func TestAttributeRejectsInvalidNameAndRemovedElement(t *testing.T) {
 	if !element.Remove() {
 		t.Fatal("Remove() = false, want true")
 	}
-	if element.SetAttribute("id", "new") {
-		t.Fatal("SetAttribute() = true for removed element")
+	if !element.SetAttribute("id", "new") {
+		t.Fatal("SetAttribute() = false for detached element")
 	}
-	if value, ok := element.GetAttribute("id"); ok || value != "" {
-		t.Fatalf("GetAttribute() = (%q, %v) for removed element", value, ok)
+	if value, ok := element.GetAttribute("id"); !ok || value != "new" {
+		t.Fatalf("GetAttribute() = (%q, %v) for detached element", value, ok)
 	}
 }
 

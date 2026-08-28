@@ -30,3 +30,15 @@ go test ./internal/paint ./examples/persistent-app -run 'PersistentApp'
 ```sh
 go test ./internal/ui ./examples/devtools -run DevTools
 ```
+
+## v0.15.0 Modern Web Compatibility
+
+`examples/modern-web-compat/TestFrameworkVisualRegression`は`viewport=1024x720 scale=1 font=goregular clock=fixed`を環境identityとして、Next.jsのSSR初期、hydration後、操作後、Tailwindのresponsive / narrow、resource failureとDevTools診断をsemantic Layout / Paint snapshotへ固定する。Node text、display、color、background、root geometry、box / paint / font / image件数、Style revision、有限diagnostic categoryを`examples/modern-web-compat/testdata/framework-visual.golden.json`と比較する。
+
+既存の`internal/ui/TestDevToolsPanelsVisualRegression`と合わせ、次のrelease gateで実行する。
+
+```sh
+bash tests/v015-visual.sh
+```
+
+差分が出た場合はSSR Node identity、hydration state、responsive query、fallback resource、DevTools categoryのどれが変化したかを先に確認する。環境identityまたはgoldenだけを先に更新せず、意図したStyle / Layout / Paint変更を対応するUnit / Framework Testでも固定する。

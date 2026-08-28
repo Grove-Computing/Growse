@@ -15,9 +15,11 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode"
 
 	"gioui.org/f32"
 	"gioui.org/font"
+	"gioui.org/font/gofont"
 	"gioui.org/gesture"
 	"gioui.org/io/key"
 	"gioui.org/io/pointer"
@@ -25,9 +27,11 @@ import (
 	"gioui.org/op"
 	"gioui.org/op/clip"
 	"gioui.org/op/paint"
+	"gioui.org/text"
 	"gioui.org/unit"
 	"gioui.org/widget"
 	"gioui.org/widget/material"
+	textfont "github.com/go-text/typesetting/font"
 	"golang.org/x/exp/shiny/materialdesign/icons"
 	xdraw "golang.org/x/image/draw"
 
@@ -117,7 +121,11 @@ type BrowserUI struct {
 	checkableButtons  map[dom.NodeID]*widget.Clickable
 	formButtons       map[dom.NodeID]*widget.Clickable
 	layoutBuild       func(*dom.Document, stylemodel.Map, float32, float32, float32, float32) *layoutengine.Tree
+	layoutBuildImages func(*dom.Document, stylemodel.Map, map[dom.NodeID]layoutengine.ImageResource, float32, float32, float32, float32) *layoutengine.Tree
+	layoutBuildFonts  func(*dom.Document, stylemodel.Map, map[dom.NodeID]layoutengine.ImageResource, *layoutengine.FontSet, float32, float32, float32, float32) *layoutengine.Tree
 	layoutCache       documentLayoutCache
+	fontPage          *browser.Page
+	fontRevision      uint64
 	scrollRevision    uint64
 	updater           ApplicationUpdater
 	updateResults     chan applicationUpdateResult
@@ -284,37 +292,39 @@ func NewBrowserUIWithTabsAndUpdater(navigator Navigator, tabs TabController, inv
 	cursorImage, cursorErr := loadGopherCursor()
 	updateContext, cancelUpdate := context.WithCancel(context.Background())
 	ui := &BrowserUI{
-		theme:            material.NewTheme(),
-		navigator:        navigator,
-		tabs:             tabs,
-		invalidate:       invalidate,
-		results:          make(chan navigationResult, browser.DefaultSessionPolicy().MaxTabs),
-		navigations:      make(map[browser.TabID]tabNavigation),
-		tabRenderStates:  make(map[browser.TabID]tabRenderState),
-		gopher:           paint.NewImageOp(gopherImage),
-		backIcon:         mustIcon(widget.NewIcon(icons.NavigationArrowBack)),
-		forwardIcon:      mustIcon(widget.NewIcon(icons.NavigationArrowForward)),
-		reloadIcon:       mustIcon(widget.NewIcon(icons.NavigationRefresh)),
-		pageTitle:        "新しい Web を Go で開く",
-		status:           "URLを入力して Gopher ボタンを押してください",
-		pageStatus:       "URLを入力して Gopher ボタンを押してください",
-		inputEditors:     make(map[dom.NodeID]*widget.Editor),
-		inputFocused:     make(map[dom.NodeID]bool),
-		inputCommitted:   make(map[dom.NodeID]string),
-		selectButtons:    make(map[dom.NodeID]*widget.Clickable),
-		checkableButtons: make(map[dom.NodeID]*widget.Clickable),
-		formButtons:      make(map[dom.NodeID]*widget.Clickable),
-		tabRowButtons:    make(map[browser.TabID]*widget.Clickable),
-		tabCloseButtons:  make(map[browser.TabID]*widget.Clickable),
-		tabShortcutDown:  make(map[key.Name]bool),
-		devToolsStates:   make(map[browser.TabID]devToolsTabState),
-		inspectorButtons: make(map[browser.TabID]map[dom.NodeID]*widget.Clickable),
-		layoutBuild:      layoutengine.BuildWithScroll,
-		updater:          applicationUpdater,
-		updateResults:    make(chan applicationUpdateResult, 2),
-		updateContext:    updateContext,
-		cancelUpdate:     cancelUpdate,
-		onUpdateApplied:  onUpdateApplied,
+		theme:             material.NewTheme(),
+		navigator:         navigator,
+		tabs:              tabs,
+		invalidate:        invalidate,
+		results:           make(chan navigationResult, browser.DefaultSessionPolicy().MaxTabs),
+		navigations:       make(map[browser.TabID]tabNavigation),
+		tabRenderStates:   make(map[browser.TabID]tabRenderState),
+		gopher:            paint.NewImageOp(gopherImage),
+		backIcon:          mustIcon(widget.NewIcon(icons.NavigationArrowBack)),
+		forwardIcon:       mustIcon(widget.NewIcon(icons.NavigationArrowForward)),
+		reloadIcon:        mustIcon(widget.NewIcon(icons.NavigationRefresh)),
+		pageTitle:         "新しい Web を Go で開く",
+		status:            "URLを入力して Gopher ボタンを押してください",
+		pageStatus:        "URLを入力して Gopher ボタンを押してください",
+		inputEditors:      make(map[dom.NodeID]*widget.Editor),
+		inputFocused:      make(map[dom.NodeID]bool),
+		inputCommitted:    make(map[dom.NodeID]string),
+		selectButtons:     make(map[dom.NodeID]*widget.Clickable),
+		checkableButtons:  make(map[dom.NodeID]*widget.Clickable),
+		formButtons:       make(map[dom.NodeID]*widget.Clickable),
+		tabRowButtons:     make(map[browser.TabID]*widget.Clickable),
+		tabCloseButtons:   make(map[browser.TabID]*widget.Clickable),
+		tabShortcutDown:   make(map[key.Name]bool),
+		devToolsStates:    make(map[browser.TabID]devToolsTabState),
+		inspectorButtons:  make(map[browser.TabID]map[dom.NodeID]*widget.Clickable),
+		layoutBuild:       layoutengine.BuildWithScroll,
+		layoutBuildImages: layoutengine.BuildWithScrollAndImages,
+		layoutBuildFonts:  layoutengine.BuildWithScrollAndResources,
+		updater:           applicationUpdater,
+		updateResults:     make(chan applicationUpdateResult, 2),
+		updateContext:     updateContext,
+		cancelUpdate:      cancelUpdate,
+		onUpdateApplied:   onUpdateApplied,
 	}
 	if cursorErr != nil {
 		slog.Error("Gopherカーソルを初期化できませんでした", "component", "ui", "error", cursorErr)
@@ -383,6 +393,7 @@ func layoutRegion(gtx layout.Context, region image.Rectangle, widget layout.Widg
 		return layout.Dimensions{Size: region.Size()}
 	}
 	defer op.Offset(region.Min).Push(gtx.Ops).Pop()
+	defer clip.Rect{Max: region.Size()}.Push(gtx.Ops).Pop()
 	gtx.Constraints = layout.Exact(region.Size())
 	return widget(gtx)
 }
@@ -1331,9 +1342,26 @@ func runtimeContextLabel(context devtoolsmodel.RuntimeContext) string {
 	if len(scripts) == 0 {
 		scripts = append(scripts, "-")
 	}
-	return fmt.Sprintf("%s#%d parent=%d browsing=%d engine=%s state=%s worker=%d sandbox=%s constraints=%d errors=%s\n%s\nscripts: %s",
+	diagnosticLabels := make([]string, 0, min(len(context.Diagnostics), 6))
+	for index, diagnostic := range context.Diagnostics {
+		if index == 6 {
+			break
+		}
+		label := fmt.Sprintf("%s:%s/%s %s", diagnostic.Category, diagnostic.State, diagnostic.Reason, diagnostic.Subject)
+		if diagnostic.Initiator != "" || diagnostic.Schedule != "" {
+			label += fmt.Sprintf(" [%s/%s]", diagnostic.Initiator, diagnostic.Schedule)
+		}
+		diagnosticLabels = append(diagnosticLabels, label)
+	}
+	if len(diagnosticLabels) == 0 {
+		diagnosticLabels = append(diagnosticLabels, "-")
+	} else if len(context.Diagnostics) > len(diagnosticLabels) {
+		diagnosticLabels = append(diagnosticLabels, fmt.Sprintf("… +%d", len(context.Diagnostics)-len(diagnosticLabels)))
+	}
+	return fmt.Sprintf("%s#%d parent=%d browsing=%d engine=%s state=%s worker=%d sandbox=%s constraints=%d errors=%s\n%s\nscripts: %s\ndiagnostics(%d): %s",
 		context.Kind, context.ID, context.ParentID, context.BrowsingGeneration, context.Engine, context.State,
-		context.Sandbox.Generation, sandbox, context.Sandbox.ConstraintCount, errors, context.URL, strings.Join(scripts, "; "))
+		context.Sandbox.Generation, sandbox, context.Sandbox.ConstraintCount, errors, context.URL, strings.Join(scripts, "; "),
+		len(context.Diagnostics), strings.Join(diagnosticLabels, "; "))
 }
 
 func (ui *BrowserUI) layoutDevToolsNetwork(gtx layout.Context) layout.Dimensions {
@@ -1376,8 +1404,26 @@ func networkRecordLabel(record devtoolsmodel.NetworkRecord, status, flags string
 	if record.Kind == "script" && record.Engine != "" {
 		kind += "/" + record.Engine
 	}
-	return fmt.Sprintf("%04d  %-10s %-5s %-15s %8s %7d B  %-18s  %s",
-		record.Sequence, kind, record.Method, status, record.Duration.Round(time.Microsecond), record.ResponseBytes, flags, record.URL)
+	resourceURL := record.URL
+	if record.FinalURL != "" && record.FinalURL != "unknown" && record.FinalURL != record.URL {
+		resourceURL += " -> " + record.FinalURL
+	}
+	trigger := record.Initiator
+	if record.Schedule != "" {
+		if trigger != "" {
+			trigger += "/"
+		}
+		trigger += record.Schedule
+	}
+	if trigger == "" {
+		trigger = "-"
+	}
+	if trigger == "-" && resourceURL == record.URL {
+		return fmt.Sprintf("%04d  %-10s %-5s %-15s %8s %7d B  %-18s  %s",
+			record.Sequence, kind, record.Method, status, record.Duration.Round(time.Microsecond), record.ResponseBytes, flags, record.URL)
+	}
+	return fmt.Sprintf("%04d  %-10s %-5s %-15s %8s %7d B  %-18s %-20s %s",
+		record.Sequence, kind, record.Method, status, record.Duration.Round(time.Microsecond), record.ResponseBytes, flags, trigger, resourceURL)
 }
 
 func devToolsRuntimeLabel(page *browser.Page) string {
@@ -1744,6 +1790,7 @@ func (ui *BrowserUI) layoutViewport(gtx layout.Context) layout.Dimensions {
 
 func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layout.Dimensions {
 	paint.Fill(gtx.Ops, color.NRGBA{R: 255, G: 255, B: 255, A: 255})
+	ui.installPageFonts(page)
 	if ui.scrollRevision != page.ScrollRevision {
 		ui.pageList.Position = layout.Position{First: page.ScrollFirst, Offset: page.ScrollOffset}
 		ui.scrollRevision = page.ScrollRevision
@@ -1783,6 +1830,8 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 			return ui.layoutDrawButton(gtx, command)
 		case paintmodel.DrawBox:
 			return layoutDrawBox(gtx, command, page.BackgroundImages)
+		case paintmodel.DrawImage:
+			return ui.layoutDrawImage(gtx, command, page.Images)
 		default:
 			return layout.Dimensions{}
 		}
@@ -1820,7 +1869,16 @@ func (ui *BrowserUI) cachedDocumentTree(page *browser.Page, viewportWidth, viewp
 	if build == nil {
 		build = layoutengine.BuildWithScroll
 	}
-	tree := build(page.Document, page.ComputedStyles, viewportWidth, viewportHeight, 0, 0)
+	buildTree := func(scrollY float32) *layoutengine.Tree {
+		if ui.layoutBuildFonts != nil && (page.ImageResources != nil || page.WebFonts != nil) {
+			return ui.layoutBuildFonts(page.Document, page.ComputedStyles, page.ImageResources, page.WebFonts, viewportWidth, viewportHeight, 0, scrollY)
+		}
+		if page.ImageResources != nil && ui.layoutBuildImages != nil {
+			return ui.layoutBuildImages(page.Document, page.ComputedStyles, page.ImageResources, viewportWidth, viewportHeight, 0, scrollY)
+		}
+		return build(page.Document, page.ComputedStyles, viewportWidth, viewportHeight, 0, scrollY)
+	}
+	tree := buildTree(0)
 	tree.Revision = page.StyleRevision
 	page.SyncFrameViewports(tree)
 	displayList := paintmodel.Build(tree)
@@ -1828,7 +1886,7 @@ func (ui *BrowserUI) cachedDocumentTree(page *browser.Page, viewportWidth, viewp
 		if firstY, ok := commandDocumentY(displayList.Commands[position.First]); ok {
 			scrollY := max(firstY+float32(position.Offset)/pxPerDp, float32(0))
 			if scrollY > 0 {
-				tree = build(page.Document, page.ComputedStyles, viewportWidth, viewportHeight, 0, scrollY)
+				tree = buildTree(scrollY)
 				tree.Revision = page.StyleRevision
 				page.SyncFrameViewports(tree)
 			}
@@ -1839,6 +1897,58 @@ func (ui *BrowserUI) cachedDocumentTree(page *browser.Page, viewportWidth, viewp
 		listFirst: position.First, listOffset: position.Offset, tree: tree,
 	}
 	return layoutengine.Clone(tree)
+}
+
+type pageFontFace struct{ face *textfont.Face }
+
+func (face pageFontFace) Face() *textfont.Face { return face.face }
+
+func (ui *BrowserUI) installPageFonts(page *browser.Page) {
+	if page == nil || ui.fontPage == page && ui.fontRevision == page.StyleRevision {
+		return
+	}
+	if page.Engine != runtimemodel.EngineJavaScript {
+		ui.theme.Shaper = &text.Shaper{}
+		ui.fontPage, ui.fontRevision = page, page.StyleRevision
+		return
+	}
+	collection := make([]font.FontFace, 0, len(page.Fonts)+len(gofont.Collection()))
+	for _, resource := range page.Fonts {
+		if !resource.Decoded || resource.Face == nil {
+			continue
+		}
+		description := font.Font{Typeface: font.Typeface(resource.Family), Weight: pageFontWeight(resource.Weight)}
+		if resource.Style == "italic" || strings.HasPrefix(resource.Style, "oblique") {
+			description.Style = font.Italic
+		}
+		collection = append(collection, font.FontFace{Font: description, Face: pageFontFace{face: resource.Face}})
+	}
+	collection = append(collection, gofont.Collection()...)
+	ui.theme.Shaper = text.NewShaper(text.NoSystemFonts(), text.WithCollection(collection))
+	ui.fontPage, ui.fontRevision = page, page.StyleRevision
+}
+
+func pageFontWeight(value string) font.Weight {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "bold", "700":
+		return font.Bold
+	case "100":
+		return font.Thin
+	case "200":
+		return font.ExtraLight
+	case "300":
+		return font.Light
+	case "500":
+		return font.Medium
+	case "600":
+		return font.SemiBold
+	case "800":
+		return font.ExtraBold
+	case "900", "1000":
+		return font.Black
+	default:
+		return font.Normal
+	}
 }
 
 func (ui *BrowserUI) updateViewportHover(gtx layout.Context, page *browser.Page, tree *layoutengine.Tree, displayList *paintmodel.DisplayList) {
@@ -2022,9 +2132,63 @@ func commandDocumentY(command paintmodel.Command) (float32, bool) {
 		return command.Y - command.Top, true
 	case paintmodel.DrawBox:
 		return command.Y - command.Top, true
+	case paintmodel.DrawImage:
+		return command.Y - command.Top, true
 	default:
 		return 0, false
 	}
+}
+
+func (ui *BrowserUI) layoutDrawImage(gtx layout.Context, command paintmodel.DrawImage, images map[string]image.Image) layout.Dimensions {
+	left := unit.Dp(command.X)
+	viewportWidth := float32(gtx.Constraints.Max.X) / gtx.Metric.PxPerDp
+	right := unit.Dp(max(viewportWidth-command.X-command.Width, float32(0)))
+	return layout.Inset{Top: unit.Dp(command.Top), Left: left, Right: right}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		width, height := gtx.Dp(unit.Dp(command.Width)), gtx.Dp(unit.Dp(command.Height))
+		gtx.Constraints = layout.Exact(image.Pt(width, height))
+		if command.Transform != (stylemodel.Matrix{}) && command.Transform != stylemodel.IdentityMatrix() {
+			defer pushCSSMatrix(gtx, command.Transform, command.X, command.Y).Pop()
+		}
+		if command.Clip != nil {
+			defer commandClip(gtx, command.Clip, command.X, command.Y).Push(gtx.Ops).Pop()
+		}
+		for _, region := range command.Clips {
+			defer commandRoundedClip(gtx, region, command.X, command.Y).Push(gtx.Ops).Pop()
+		}
+		cursorArea := clip.Rect{Max: image.Pt(width, height)}.Push(gtx.Ops)
+		cssCursor(command.Cursor).Add(gtx.Ops)
+		defer cursorArea.Pop()
+		if command.Opacity < 1 {
+			defer paint.PushOpacity(gtx.Ops, max(command.Opacity, 0)).Pop()
+		}
+		if command.Background != 0 {
+			paint.FillShape(gtx.Ops, rgba(command.Background), roundedClip(gtx, command.Radius, width, height))
+		}
+		if source := images[command.URL]; source != nil && !command.Failed {
+			targetWidth := max(gtx.Dp(unit.Dp(command.ImageRect.Width)), 1)
+			targetHeight := max(gtx.Dp(unit.Dp(command.ImageRect.Height)), 1)
+			raster := image.NewNRGBA(image.Rect(0, 0, targetWidth, targetHeight))
+			xdraw.CatmullRom.Scale(raster, raster.Bounds(), source, source.Bounds(), imagedraw.Src, nil)
+			clipMin := image.Pt(gtx.Dp(unit.Dp(command.ImageClip.X-command.X)), gtx.Dp(unit.Dp(command.ImageClip.Y-command.Y)))
+			clipMax := clipMin.Add(image.Pt(gtx.Dp(unit.Dp(command.ImageClip.Width)), gtx.Dp(unit.Dp(command.ImageClip.Height))))
+			area := clip.Rect{Min: clipMin, Max: clipMax}.Push(gtx.Ops)
+			offset := op.Offset(image.Pt(gtx.Dp(unit.Dp(command.ImageRect.X-command.X)), gtx.Dp(unit.Dp(command.ImageRect.Y-command.Y)))).Push(gtx.Ops)
+			imageGTX := gtx
+			imageGTX.Constraints = layout.Exact(raster.Bounds().Size())
+			widget.Image{Src: paint.NewImageOp(raster), Fit: widget.Unscaled, Scale: 1 / gtx.Metric.PxPerDp}.Layout(imageGTX)
+			offset.Pop()
+			area.Pop()
+		} else if command.Alt != "" {
+			inset := layout.UniformInset(unit.Dp(4))
+			inset.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				label := material.Label(ui.theme, unit.Sp(14), command.Alt)
+				label.Color = rgba(command.Color)
+				return label.Layout(gtx)
+			})
+		}
+		paintBoxBorder(gtx, command.Border, width, height)
+		return layout.Dimensions{Size: image.Pt(width, height)}
+	})
 }
 
 func layoutDrawBox(gtx layout.Context, command paintmodel.DrawBox, backgroundImages map[string]image.Image) layout.Dimensions {
@@ -2041,6 +2205,9 @@ func layoutDrawBox(gtx layout.Context, command paintmodel.DrawBox, backgroundIma
 		width := min(gtx.Dp(unit.Dp(command.Width)), gtx.Constraints.Max.X)
 		height := min(gtx.Dp(unit.Dp(command.Height)), gtx.Constraints.Max.Y)
 		bounds := clip.Rect{Max: image.Pt(width, height)}
+		cursorArea := bounds.Push(gtx.Ops)
+		cssCursor(command.Cursor).Add(gtx.Ops)
+		defer cursorArea.Pop()
 		if command.Opacity < 1 {
 			defer paint.PushOpacity(gtx.Ops, max(command.Opacity, 0)).Pop()
 		}
@@ -2052,8 +2219,27 @@ func layoutDrawBox(gtx layout.Context, command paintmodel.DrawBox, backgroundIma
 			offsetX, offsetY := gtx.Dp(unit.Dp(shadow.OffsetX)), gtx.Dp(unit.Dp(shadow.OffsetY))
 			paint.FillShape(gtx.Ops, rgba(shadow.Color), clip.Rect{Min: image.Pt(offsetX-spread, offsetY-spread), Max: image.Pt(width+offsetX+spread, height+offsetY+spread)}.Op())
 		}
+		for _, filter := range command.Filters {
+			switch filter.Kind {
+			case stylemodel.FilterDropShadow:
+				shadow := filter.Shadow
+				spread := gtx.Dp(unit.Dp(shadow.Blur / 2))
+				offsetX, offsetY := gtx.Dp(unit.Dp(shadow.OffsetX)), gtx.Dp(unit.Dp(shadow.OffsetY))
+				paint.FillShape(gtx.Ops, rgba(shadow.Color), clip.Rect{Min: image.Pt(offsetX-spread, offsetY-spread), Max: image.Pt(width+offsetX+spread, height+offsetY+spread)}.Op())
+			case stylemodel.FilterBlur:
+				radius := gtx.Dp(unit.Dp(filter.Radius))
+				if radius > 0 && command.Color != 0 {
+					blurColor := rgba(command.Color)
+					blurColor.A /= 4
+					paint.FillShape(gtx.Ops, blurColor, clip.Rect{Min: image.Pt(-radius, -radius), Max: image.Pt(width+radius, height+radius)}.Op())
+				}
+			}
+		}
 		rounded := roundedClip(gtx, command.Radius, width, height).Push(gtx.Ops)
 		defer rounded.Pop()
+		if len(command.BackdropFilters) != 0 && command.BackdropColor != 0 {
+			paint.FillShape(gtx.Ops, rgba(command.BackdropColor), bounds.Op())
+		}
 		if command.Color != 0 {
 			paint.FillShape(gtx.Ops, rgba(command.Color), bounds.Op())
 		}
@@ -2074,6 +2260,7 @@ func layoutDrawBox(gtx layout.Context, command paintmodel.DrawBox, backgroundIma
 				raster = rasterBackgroundImage(width, height, backgroundImages[layer.Image.URL], layerCommand, gtx.Metric.PxPerDp)
 			}
 			if raster != nil {
+				raster = rasterFilterImage(raster, command.Filters)
 				area := bounds.Push(gtx.Ops)
 				widget.Image{Src: paint.NewImageOp(raster), Fit: widget.Unscaled, Scale: 1 / gtx.Metric.PxPerDp}.Layout(gtx)
 				area.Pop()
@@ -2083,6 +2270,26 @@ func layoutDrawBox(gtx layout.Context, command paintmodel.DrawBox, backgroundIma
 		paintOutline(gtx, command.Outline, command.OutlineOffset, width, height)
 		return layout.Dimensions{}
 	})
+}
+
+func rasterFilterImage(source image.Image, filters []stylemodel.Filter) image.Image {
+	if source == nil || len(filters) == 0 {
+		return source
+	}
+	bounds := source.Bounds()
+	if !stylemodel.FilterSurfaceAllowed(float32(bounds.Dx()), float32(bounds.Dy())) {
+		return source
+	}
+	result := image.NewNRGBA(image.Rect(0, 0, bounds.Dx(), bounds.Dy()))
+	for y := 0; y < bounds.Dy(); y++ {
+		for x := 0; x < bounds.Dx(); x++ {
+			color := color.NRGBAModel.Convert(source.At(bounds.Min.X+x, bounds.Min.Y+y)).(color.NRGBA)
+			packed := uint32(color.R)<<24 | uint32(color.G)<<16 | uint32(color.B)<<8 | uint32(color.A)
+			filtered := stylemodel.ApplyColorFilters(packed, filters)
+			result.SetNRGBA(x, y, rgba(filtered))
+		}
+	}
+	return result
 }
 
 func paintOutline(gtx layout.Context, outline stylemodel.BorderSide, offset float32, width, height int) {
@@ -2348,6 +2555,9 @@ func (ui *BrowserUI) layoutDrawInput(gtx layout.Context, command paintmodel.Draw
 	}
 	right := unit.Dp(rightValue)
 	return layout.Inset{Top: unit.Dp(command.Top), Left: left, Right: right}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		cursorArea := clip.Rect{Max: image.Pt(gtx.Dp(unit.Dp(command.Width)), gtx.Dp(unit.Dp(command.Height)))}.Push(gtx.Ops)
+		cssCursor(command.Cursor).Add(gtx.Ops)
+		defer cursorArea.Pop()
 		if command.Clip != nil {
 			defer commandClip(gtx, command.Clip, command.X, command.Y).Push(gtx.Ops).Pop()
 		}
@@ -2412,15 +2622,21 @@ func (ui *BrowserUI) layoutDrawInput(gtx layout.Context, command paintmodel.Draw
 			ui.commitInput(command.NodeID, editor.Text())
 		}
 		ui.inputFocused[command.NodeID] = focused
+		content := func(gtx layout.Context) layout.Dimensions {
+			style := material.Editor(ui.theme, editor, "")
+			style.Color = rgba(command.Color)
+			return layout.UniformInset(unit.Dp(8)).Layout(gtx, style.Layout)
+		}
+		if command.Appearance == stylemodel.AppearanceNone {
+			return content(gtx)
+		}
 		return widget.Border{
 			Color:        color.NRGBA{R: 150, G: 160, B: 175, A: 255},
 			CornerRadius: unit.Dp(6),
 			Width:        unit.Dp(1),
 		}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 			paint.FillShape(gtx.Ops, color.NRGBA{R: 255, G: 255, B: 255, A: 255}, clip.Rect{Max: gtx.Constraints.Min}.Op())
-			style := material.Editor(ui.theme, editor, "")
-			style.Color = rgba(command.Color)
-			return layout.UniformInset(unit.Dp(8)).Layout(gtx, style.Layout)
+			return content(gtx)
 		})
 	})
 }
@@ -2430,6 +2646,9 @@ func (ui *BrowserUI) layoutDrawSelect(gtx layout.Context, command paintmodel.Dra
 	viewportWidth := float32(gtx.Constraints.Max.X) / gtx.Metric.PxPerDp
 	right := unit.Dp(max(viewportWidth-command.X-command.Width, float32(0)))
 	return layout.Inset{Top: unit.Dp(command.Top), Left: left, Right: right}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		cursorArea := clip.Rect{Max: image.Pt(gtx.Dp(unit.Dp(command.Width)), gtx.Dp(unit.Dp(command.Height)))}.Push(gtx.Ops)
+		cssCursor(command.Cursor).Add(gtx.Ops)
+		defer cursorArea.Pop()
 		if command.Clip != nil {
 			defer commandClip(gtx, command.Clip, command.X, command.Y).Push(gtx.Ops).Pop()
 		}
@@ -2458,6 +2677,10 @@ func (ui *BrowserUI) layoutDrawSelect(gtx layout.Context, command paintmodel.Dra
 		}
 		style := material.Button(ui.theme, button, label+" ▾")
 		style.Color = rgba(command.Color)
+		style.Background = rgba(command.AccentColor)
+		if command.Appearance == stylemodel.AppearanceNone {
+			style.Background = color.NRGBA{}
+		}
 		return style.Layout(gtx)
 	})
 }
@@ -2467,6 +2690,9 @@ func (ui *BrowserUI) layoutDrawCheckable(gtx layout.Context, command paintmodel.
 	viewportWidth := float32(gtx.Constraints.Max.X) / gtx.Metric.PxPerDp
 	right := unit.Dp(max(viewportWidth-command.X-command.Width, float32(0)))
 	return layout.Inset{Top: unit.Dp(command.Top), Left: left, Right: right}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		cursorArea := clip.Rect{Max: image.Pt(gtx.Dp(unit.Dp(command.Width)), gtx.Dp(unit.Dp(command.Height)))}.Push(gtx.Ops)
+		cssCursor(command.Cursor).Add(gtx.Ops)
+		defer cursorArea.Pop()
 		if command.Clip != nil {
 			defer commandClip(gtx, command.Clip, command.X, command.Y).Push(gtx.Ops).Pop()
 		}
@@ -2501,6 +2727,12 @@ func (ui *BrowserUI) layoutDrawCheckable(gtx layout.Context, command paintmodel.
 		}
 		style := material.Button(ui.theme, button, label)
 		style.Color = rgba(command.Color)
+		if command.Checked {
+			style.Background = rgba(command.AccentColor)
+		}
+		if command.Appearance == stylemodel.AppearanceNone {
+			style.Background = color.NRGBA{}
+		}
 		return style.Layout(gtx)
 	})
 }
@@ -2510,6 +2742,9 @@ func (ui *BrowserUI) layoutDrawButton(gtx layout.Context, command paintmodel.Dra
 	viewportWidth := float32(gtx.Constraints.Max.X) / gtx.Metric.PxPerDp
 	right := unit.Dp(max(viewportWidth-command.X-command.Width, float32(0)))
 	return layout.Inset{Top: unit.Dp(command.Top), Left: left, Right: right}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		cursorArea := clip.Rect{Max: image.Pt(gtx.Dp(unit.Dp(command.Width)), gtx.Dp(unit.Dp(command.Height)))}.Push(gtx.Ops)
+		cssCursor(command.Cursor).Add(gtx.Ops)
+		defer cursorArea.Pop()
 		if command.Clip != nil {
 			defer commandClip(gtx, command.Clip, command.X, command.Y).Push(gtx.Ops).Pop()
 		}
@@ -2534,6 +2769,10 @@ func (ui *BrowserUI) layoutDrawButton(gtx layout.Context, command paintmodel.Dra
 		gtx.Constraints.Max.Y = gtx.Constraints.Min.Y
 		style := material.Button(ui.theme, button, command.Label)
 		style.Color = rgba(command.Color)
+		style.Background = rgba(command.AccentColor)
+		if command.Appearance == stylemodel.AppearanceNone {
+			style.Background = color.NRGBA{}
+		}
 		return style.Layout(gtx)
 	})
 }
@@ -2602,6 +2841,9 @@ func (ui *BrowserUI) layoutDrawText(gtx layout.Context, command paintmodel.DrawT
 		}
 		gtx.Constraints.Min.Y = height
 		gtx.Constraints.Max.Y = height
+		cursorArea := clip.Rect{Max: image.Pt(gtx.Dp(unit.Dp(command.Width)), height)}.Push(gtx.Ops)
+		cssCursor(command.Cursor).Add(gtx.Ops)
+		defer cursorArea.Pop()
 		if command.Background != 0 {
 			paint.FillShape(gtx.Ops, rgba(command.Background), clip.Rect{Max: gtx.Constraints.Min}.Op())
 		}
@@ -2619,7 +2861,7 @@ func (ui *BrowserUI) layoutDrawText(gtx layout.Context, command paintmodel.DrawT
 			defer paint.PushOpacity(gtx.Ops, max(command.Opacity, 0)).Pop()
 		}
 
-		return ui.layoutShadowedText(gtx, command.Text, command.FontSize, command.Bold, command.Color, command.Decoration, command.DecorationColor, command.Baseline, command.TextShadows)
+		return ui.layoutShadowedText(gtx, command.Text, command.FontSize, command.Bold, command.FontFamilies, command.FontStyle, command.LetterSpacing, command.WordSpacing, command.Color, command.Decoration, command.DecorationColor, command.Baseline, command.TextShadows)
 	})
 }
 
@@ -2659,8 +2901,11 @@ func (ui *BrowserUI) layoutTextRun(gtx layout.Context, run paintmodel.TextRun, h
 	if run.Opacity < 1 {
 		defer paint.PushOpacity(gtx.Ops, max(run.Opacity, 0)).Pop()
 	}
+	if run.VerticalOffset != 0 {
+		defer op.Offset(image.Pt(0, -gtx.Dp(unit.Dp(run.VerticalOffset)))).Push(gtx.Ops).Pop()
+	}
 	text := func(gtx layout.Context) layout.Dimensions {
-		return ui.layoutShadowedText(gtx, run.Text, run.FontSize, run.Bold, run.Color, run.Decoration, run.DecorationColor, run.Baseline, run.TextShadows)
+		return ui.layoutShadowedText(gtx, run.Text, run.FontSize, run.Bold, run.FontFamilies, run.FontStyle, run.LetterSpacing, run.WordSpacing, run.Color, run.Decoration, run.DecorationColor, run.Baseline, run.TextShadows)
 	}
 	if run.Background == 0 {
 		return text(gtx)
@@ -2674,11 +2919,38 @@ func (ui *BrowserUI) layoutTextRun(gtx layout.Context, run paintmodel.TextRun, h
 	)
 }
 
-func (ui *BrowserUI) layoutShadowedText(gtx layout.Context, text string, size float32, bold bool, color uint32, decoration stylemodel.TextDecorationLine, decorationColor uint32, baseline float32, shadows []stylemodel.Shadow) layout.Dimensions {
+func (ui *BrowserUI) layoutShadowedText(gtx layout.Context, text string, size float32, bold bool, families []string, fontStyle string, letterSpacing, wordSpacing float32, color uint32, decoration stylemodel.TextDecorationLine, decorationColor uint32, baseline float32, shadows []stylemodel.Shadow) layout.Dimensions {
+	if (letterSpacing != 0 || wordSpacing != 0) && len([]rune(text)) > 1 {
+		children := make([]layout.FlexChild, 0, len([]rune(text))*2)
+		runes := []rune(text)
+		for index, character := range runes {
+			character := character
+			children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return ui.layoutShadowedText(gtx, string(character), size, bold, families, fontStyle, 0, 0, color, decoration, decorationColor, baseline, shadows)
+			}))
+			spacing := letterSpacing
+			if unicode.IsSpace(character) {
+				spacing += wordSpacing
+			}
+			if index < len(runes)-1 && spacing != 0 {
+				spacing := spacing
+				children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					return layout.Spacer{Width: unit.Dp(spacing)}.Layout(gtx)
+				}))
+			}
+		}
+		return layout.Flex{Alignment: layout.Baseline}.Layout(gtx, children...)
+	}
 	labelLayout := func(color uint32) layout.Widget {
 		return func(gtx layout.Context) layout.Dimensions {
 			label := material.Label(ui.theme, unit.Sp(size), text)
 			label.Color, label.MaxLines = rgba(color), 1
+			if len(families) != 0 {
+				label.Font.Typeface = font.Typeface(families[0])
+			}
+			if fontStyle == "italic" || strings.HasPrefix(fontStyle, "oblique") {
+				label.Font.Style = font.Italic
+			}
 			if bold {
 				label.Font.Weight = font.Bold
 			}
@@ -2731,5 +3003,34 @@ func rgba(value uint32) color.NRGBA {
 		G: uint8(value >> 16),
 		B: uint8(value >> 8),
 		A: uint8(value),
+	}
+}
+
+func cssCursor(value stylemodel.Cursor) pointer.Cursor {
+	switch value {
+	case stylemodel.CursorPointer:
+		return pointer.CursorPointer
+	case stylemodel.CursorText:
+		return pointer.CursorText
+	case stylemodel.CursorCrosshair:
+		return pointer.CursorCrosshair
+	case stylemodel.CursorMove:
+		return pointer.CursorAllScroll
+	case stylemodel.CursorGrab:
+		return pointer.CursorGrab
+	case stylemodel.CursorGrabbing:
+		return pointer.CursorGrabbing
+	case stylemodel.CursorNotAllowed:
+		return pointer.CursorNotAllowed
+	case stylemodel.CursorWait:
+		return pointer.CursorWait
+	case stylemodel.CursorProgress:
+		return pointer.CursorProgress
+	case stylemodel.CursorColResize:
+		return pointer.CursorColResize
+	case stylemodel.CursorRowResize:
+		return pointer.CursorRowResize
+	default:
+		return pointer.CursorDefault
 	}
 }

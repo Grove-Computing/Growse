@@ -5,7 +5,7 @@ require() {
     local file=$1
     local value=$2
     if ! grep -Fq -- "$value" "$file"; then
-        echo "${file}にv0.14.0文書の必須記述がありません: ${value}" >&2
+        echo "${file}にv0.15.0文書の必須記述がありません: ${value}" >&2
         exit 1
     fi
 }
@@ -18,8 +18,9 @@ require README.md "examples/multi-tab-workspace"
 require README.md "examples/devtools"
 require README.md "examples/dual-runtime"
 require README.md "examples/external-web-platform"
-require README.md "GROWSE_VERSION=v0.14.0"
-require README.md "growse:v0.14.0"
+require README.md "examples/modern-web-compat"
+require README.md "GROWSE_VERSION=v0.15.0"
+require README.md "growse:v0.15.0"
 require README.md "Desktop Entry"
 require README.md "GROWSE_DATA_HOME"
 require README.md "GROWSE_APPLICATIONS_DIR"
@@ -40,18 +41,21 @@ require README.md "v0.10.0リリース定義"
 require README.md "v0.12.0リリース定義"
 require README.md "v0.13.0リリース定義"
 require README.md "v0.14.0リリース定義"
+require README.md "v0.15.0リリース定義"
 require README.md "External JavaScript"
 require README.md "WebAssembly"
 require README.md "Service Worker"
 require README.md "Runtime / Web API対応表"
 require README.md "Runtime worker / Web Platform設計"
-require SECURITY.md "| 0.14.x | Yes |"
-require SECURITY.md "| 0.13.x | No |"
+require README.md "Modern Web Compatibility"
+require README.md "明示選択"
+require SECURITY.md "| 0.15.x | Yes |"
+require SECURITY.md "| 0.14.x | No |"
 require SECURITY.md "brokered host I/O"
 require SECURITY.md "未知"
 require SECURITY.md "Service Worker registrationとCache Storage"
 require SECURITY.md "IPC payload"
-require docs/devtools.md "Page 500件"
+require docs/devtools.md "Page 2,000件"
 require docs/devtools.md "Browser Session: 4,000件"
 require docs/devtools.md '`[REDACTED]`'
 require docs/devtools.md "EngineとRuntimeのidle / running / stopped / error状態"
@@ -67,7 +71,7 @@ require SECURITY.md "Timer 10,000件"
 require SECURITY.md "Historyは1,024 entry"
 require SECURITY.md "Originごと5 MiB"
 require SECURITY.md "diskは1 entry 4 MiB"
-require docs/css-support.md "Growse v0.14.0"
+require docs/css-support.md "Growse v0.15.0"
 require docs/css-support.md '`grid`、`inline-grid`'
 require docs/css-support.md '`transform`、`transform-origin`'
 require docs/css-support.md '`transition-*`、`transition`'
@@ -75,6 +79,10 @@ require docs/css-support.md '`animation-*`、`animation`'
 require docs/css-support.md '`prefers-reduced-motion`'
 require docs/css-support.md "Subgrid、masonry"
 require docs/css-support.md "same / cross-origin HTTP(S)"
+require docs/css-support.md "Cascade Layer"
+require docs/css-support.md "has()"
+require docs/css-support.md "CSS Color Level 4 subset"
+require docs/css-support.md "Modern Web Compatibility Showcase"
 require SECURITY.md "TabはDOM、Runtime worker、History、Session Storageを分離"
 require docs/form-fetch-cookie-support.md "Growse v0.13.0"
 require docs/form-fetch-cookie-support.md "AbortController"
@@ -89,6 +97,7 @@ require docs/wpt.md "## v0.10.0の選定範囲"
 require docs/wpt.md "## v0.11.0の選定範囲"
 require docs/wpt.md "## v0.13.0の選定範囲"
 require docs/wpt.md "## v0.14.0の選定範囲"
+require docs/wpt.md "## v0.15.0の選定範囲"
 require docs/wpt.md "CSS Transitions Level 2"
 require docs/wpt.md "HTML Forms"
 require docs/wpt.md "RFC 9111"
@@ -97,6 +106,11 @@ require docs/wpt.md "TestWPTModuleSharedDependencyEvaluatesOnce"
 require docs/wpt.md "TestWPTWebAssemblyModuleConstructorValidatesBytes"
 require docs/wpt.md "TestWPTIframeEmptySandboxBlocksScriptExecution"
 require docs/wpt.md "TestWPTServiceWorkerDefaultScopeIsScriptDirectory"
+require docs/wpt.md "TestDynamicClassicScriptsSnapshotFetchAndExecuteExactlyOnce"
+require docs/wpt.md "TestLevel4SelectorMatchingHasScopeIsWhereAndComplexNot"
+require docs/wpt.md "TestResizeAndIntersectionObserversRunAfterFrame"
+require docs/wpt.md "TestImageCandidatesSelectPictureSourceByTypeMediaSizesAndScale"
+require docs/wpt.md "TestLoadWebFontsValidatesDescriptorsAndDecodesWOFF"
 require docs/storage-cache-support.md "Growse v0.13.0"
 require docs/storage-cache-support.md 'growse/storage'
 require docs/storage-cache-support.md 'localStorage'
@@ -106,17 +120,23 @@ require docs/storage-cache-support.md "Body SHA-256"
 require docs/storage-cache-support.md "RFC 9111"
 require docs/storage-cache-support.md "Tab終了時に破棄"
 require docs/storage-cache-support.md "same-origin Tab"
-require docs/runtime-support.md "Growse v0.14.0"
+require docs/runtime-support.md "Growse v0.15.0"
 require docs/runtime-support.md "Yaegi"
 require docs/runtime-support.md "goja"
 require docs/runtime-support.md "ECMAScript Modules"
 require docs/runtime-support.md "WebAssembly"
 require docs/runtime-support.md "iframeとService Worker"
 require docs/runtime-support.md "fail closed"
+require docs/runtime-support.md "Dynamic resource"
+require docs/runtime-support.md "CSSOM / media"
+require docs/runtime-support.md "Observer"
 require docs/runtime-worker-design.md "typed IPC broker"
 require docs/runtime-worker-design.md "## sandbox検証"
 require docs/runtime-worker-design.md "旧generation"
 require docs/runtime-worker-design.md "seccomp"
+require docs/runtime-worker-design.md "Growse v0.15.0"
+require docs/visual-regression.md "v0.15.0 Modern Web Compatibility"
+require docs/visual-regression.md "tests/v015-visual.sh"
 require docs/details-design.md "歴史資料"
 require docs/details-design.md "runtime-worker-design.md"
 
@@ -125,11 +145,11 @@ if grep -Eq "Growse v0\.[4-9]\.0の実装を基準|Growse v0\.1[0-3]\.0の実装
     exit 1
 fi
 
-if grep -Eq 'GROWSE_VERSION=v0\.13\.0|growse:v0\.13\.0' README.md; then
-    echo "README.mdにv0.13.0向けの現行install例が残っています" >&2
+if grep -Eq 'GROWSE_VERSION=v0\.1[34]\.0|growse:v0\.1[34]\.0' README.md; then
+    echo "README.mdにv0.13.0またはv0.14.0向けの現行install例が残っています" >&2
     exit 1
 fi
-if grep -Fq '| 0.13.x | Yes |' SECURITY.md; then
+if grep -Eq '\| 0\.1[34]\.x \| Yes \|' SECURITY.md; then
     echo "SECURITY.mdに古いsupport系列が残っています" >&2
     exit 1
 fi
@@ -142,4 +162,4 @@ if grep -Fq 'Growse v0.13.0は' docs/devtools.md; then
     exit 1
 fi
 
-echo "v0.14.0文書同期検証成功: README, SECURITY.md, Runtime / Web API対応表, Runtime worker設計, DevTools, Storage / Cache対応表, Form / Fetch / Cookie対応表, CSS対応表, WPT文書, Showcase"
+echo "v0.15.0文書同期検証成功: README, SECURITY.md, Runtime / Web API対応表, Runtime worker設計, DevTools, Storage / Cache対応表, Form / Fetch / Cookie対応表, CSS対応表, WPT / Visual文書, Modern Web Showcase"

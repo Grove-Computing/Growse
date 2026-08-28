@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"image"
 	"mime"
 	"net/http"
 	"net/url"
@@ -17,6 +18,7 @@ import (
 	"github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/events"
 	htmlparser "github.com/Grove-Computing/Growse/internal/html"
+	layoutmodel "github.com/Grove-Computing/Growse/internal/layout"
 	"github.com/Grove-Computing/Growse/internal/network"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 	storagecore "github.com/Grove-Computing/Growse/internal/storage"
@@ -84,7 +86,7 @@ func (state *frameLoadState) loadChildren(parentPage *Page, root *dom.Node, pare
 	var frames []*Frame
 	var walk func(*dom.Node)
 	walk = func(node *dom.Node) {
-		if node == nil || state.frameLimitReached() {
+		if node == nil || node.Type == dom.NodeDocumentFragment || state.frameLimitReached() {
 			return
 		}
 		if node.Type == dom.NodeElement && node.TagName == "iframe" {
@@ -218,10 +220,11 @@ func (state *frameLoadState) buildPage(ctx context.Context, response *network.Re
 	}
 	baseURL := documentBaseURL(document, response.URL)
 	pageStore := state.browser.newDevToolsPageStore()
-	styleResources, imageResources, scriptResources := state.resourceClient, state.resourceClient, state.resourceClient
+	styleResources, imageResources, fontResources, scriptResources := state.resourceClient, state.resourceClient, state.resourceClient, state.resourceClient
 	if loader, ok := state.resourceClient.(requestLoader); ok {
 		styleResources = pageResourceLoader{loader: loader, siteURL: response.URL, kind: network.RequestStylesheet, observer: pageStore.ObserveNetwork}
 		imageResources = pageResourceLoader{loader: loader, siteURL: response.URL, kind: network.RequestImage, observer: pageStore.ObserveNetwork}
+		fontResources = pageResourceLoader{loader: loader, siteURL: response.URL, kind: network.RequestFont, observer: pageStore.ObserveNetwork}
 		scriptResources = pageResourceLoader{loader: loader, siteURL: response.URL, kind: network.RequestScript, engine: string(state.engine), observer: pageStore.ObserveNetwork}
 	}
 	stylesheet, err := state.browser.loadStylesWithBase(ctx, styleResources, response.URL, baseURL, document)
@@ -229,11 +232,22 @@ func (state *frameLoadState) buildPage(ctx context.Context, response *network.Re
 		pageStore.Close()
 		return nil, fmt.Errorf("load iframe styles: %w", err)
 	}
-	computed := style.ComputeWithEnvironment(document, stylesheet, style.InteractionState{}, style.Environment{
-		ViewportWidth: defaultFrameWidth, ViewportHeight: defaultFrameHeight, RootFontSize: 16, ResolutionDPI: 96,
-		ColorScheme: "light", Hover: true, Pointer: "fine", ReducedMotion: state.reducedMotion,
-	})
-	backgroundImages, backgroundErrors := loadBackgroundImages(ctx, imageResources, computed)
+	computed := computeStableStyles(document, stylesheet, style.InteractionState{}, defaultFrameWidth, defaultFrameHeight, state.reducedMotion)
+	imageBudget := newImageDecodeBudget()
+	backgroundImages, backgroundErrors := loadBackgroundImagesWithBudget(ctx, imageResources, computed, imageBudget)
+	var replacedImages map[dom.NodeID]layoutmodel.ImageResource
+	var decodedImages map[string]image.Image
+	var imageErrors []string
+	var fonts []FontResource
+	var fontErrors []string
+	if state.engine == runtimemodel.EngineJavaScript {
+		imagePolicy := imageViewportPolicy(document, computed, baseURL, defaultFrameWidth, defaultFrameHeight)
+		replacedImages, decodedImages, imageErrors = loadReplacedImagesWithPolicyAndBudget(ctx, imageResources, baseURL, document, defaultFrameWidth, 1, imagePolicy, imageBudget)
+		inlineResources, inlineImages, inlineFailures := loadInlineSVGImagesWithBudget(document, imageBudget)
+		mergeImageResources(replacedImages, decodedImages, inlineResources, inlineImages)
+		imageErrors = append(imageErrors, inlineFailures...)
+		fonts, fontErrors = loadWebFonts(ctx, fontResources, response.URL, stylesheet)
+	}
 	var scripts []Script
 	var scriptErrors []string
 	var importMap map[string]string
@@ -250,9 +264,12 @@ func (state *frameLoadState) buildPage(ctx context.Context, response *network.Re
 		Document: document, Events: events.NewDispatcher(), Stylesheet: stylesheet, ComputedStyles: computed,
 		Animations: style.NewAnimationRegistry(), Transitions: style.NewTransitionRegistry(), BackgroundImages: backgroundImages,
 		BackgroundErrors: backgroundErrors, Engine: state.engine, Scripts: scripts, ImportMap: importMap, ScriptErrors: scriptErrors,
+		ImageResources: replacedImages, Images: decodedImages, ImageErrors: imageErrors,
+		Fonts: fonts, FontErrors: fontErrors, WebFonts: layoutWebFonts(fonts),
 		StyleRevision: 1, ReducedMotion: state.reducedMotion, ViewportWidth: defaultFrameWidth, ViewportHeight: defaultFrameHeight, DevTools: pageStore,
 		FramePolicy:    policy,
 		serviceWorkers: state.rootPage.serviceWorkers,
+		imageLoader:    imageResources,
 	}
 	for _, scriptError := range scriptErrors {
 		pageStore.AddConsole(devtools.ConsoleError, "script", scriptError)

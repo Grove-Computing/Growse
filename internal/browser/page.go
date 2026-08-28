@@ -41,6 +41,12 @@ type Page struct {
 	Transitions      *style.TransitionRegistry
 	BackgroundImages map[string]image.Image
 	BackgroundErrors []string
+	ImageResources   map[dom.NodeID]layoutmodel.ImageResource
+	Images           map[string]image.Image
+	ImageErrors      []string
+	Fonts            []FontResource
+	FontErrors       []string
+	WebFonts         *layoutmodel.FontSet
 	Engine           runtimemodel.Engine
 	Scripts          []Script
 	ImportMap        map[string]string
@@ -51,6 +57,7 @@ type Page struct {
 	HoverTarget      dom.NodeID
 	HoverPath        []dom.NodeID
 	FocusTarget      dom.NodeID
+	FocusVisible     bool
 	Submitter        dom.NodeID
 	ViewportWidth    float32
 	ViewportHeight   float32
@@ -62,6 +69,86 @@ type Page struct {
 	window           runtimemodel.WindowContext
 	windows          *windowRegistry
 	serviceWorkers   *serviceworker.Manager
+	imageLoader      ResourceLoader
+	imageMu          sync.Mutex
+	imageCancel      context.CancelFunc
+	imageGeneration  uint64
+	imageEvents      map[dom.NodeID]string
+}
+
+func (p *Page) beginImageLoad(parent context.Context) (context.Context, uint64) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	p.imageMu.Lock()
+	defer p.imageMu.Unlock()
+	if p.imageCancel != nil {
+		p.imageCancel()
+	}
+	ctx, cancel := context.WithCancel(parent)
+	p.imageCancel = cancel
+	p.imageGeneration++
+	return ctx, p.imageGeneration
+}
+
+func (p *Page) commitImageLoad(generation uint64, resources map[dom.NodeID]layoutmodel.ImageResource, images map[string]image.Image, failures []string) bool {
+	p.imageMu.Lock()
+	defer p.imageMu.Unlock()
+	if generation != p.imageGeneration {
+		return false
+	}
+	p.ImageResources, p.Images, p.ImageErrors = resources, images, failures
+	p.StyleRevision++
+	return true
+}
+
+func (p *Page) cancelImageLoads() {
+	if p == nil {
+		return
+	}
+	p.imageMu.Lock()
+	if p.imageCancel != nil {
+		p.imageCancel()
+		p.imageCancel = nil
+	}
+	p.imageGeneration++
+	p.imageMu.Unlock()
+}
+
+func (p *Page) imageState(nodeID dom.NodeID) runtimemodel.ImageState {
+	if p == nil {
+		return runtimemodel.ImageState{}
+	}
+	p.imageMu.Lock()
+	defer p.imageMu.Unlock()
+	resource, exists := p.ImageResources[nodeID]
+	if !exists {
+		return runtimemodel.ImageState{}
+	}
+	return runtimemodel.ImageState{
+		URL: resource.URL, NaturalWidth: resource.IntrinsicWidth, NaturalHeight: resource.IntrinsicHeight,
+		Complete: !resource.Deferred, Loaded: resource.Loaded, Deferred: resource.Deferred, Error: resource.Error,
+	}
+}
+
+func (p *Page) markImageEventDelivered(nodeID dom.NodeID) {
+	if p == nil {
+		return
+	}
+	p.imageMu.Lock()
+	defer p.imageMu.Unlock()
+	resource, exists := p.ImageResources[nodeID]
+	if !exists || resource.Deferred {
+		return
+	}
+	if p.imageEvents == nil {
+		p.imageEvents = make(map[dom.NodeID]string)
+	}
+	signature := resource.URL + "\x00" + resource.Error
+	if resource.Loaded {
+		signature += "\x00loaded"
+	}
+	p.imageEvents[nodeID] = signature
 }
 
 // Frame is one nested browsing context owned by a parent Page.

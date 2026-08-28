@@ -17,6 +17,18 @@ type RuntimeSandbox struct {
 	Failure         bool
 }
 
+// CompatibilityDiagnostic is one body-free explanation for a framework-visible
+// resource, style, fallback, or runtime outcome.
+type CompatibilityDiagnostic struct {
+	Category  string
+	Subject   string
+	State     string
+	Reason    string
+	Initiator string
+	Schedule  string
+	Count     int
+}
+
 // RuntimeContext is a secret-free diagnostic row for one execution context.
 // URLs are credential- and query-redacted before this value is constructed.
 type RuntimeContext struct {
@@ -29,5 +41,6 @@ type RuntimeContext struct {
 	State              string
 	Scripts            []RuntimeScript
 	ErrorCategories    []string
+	Diagnostics        []CompatibilityDiagnostic
 	Sandbox            RuntimeSandbox
 }

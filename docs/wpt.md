@@ -5,7 +5,7 @@ GrowseはWeb Platform Tests（WPT）をブラウザで直接実行せず、対�
 - Upstream: `web-platform-tests/wpt`
 - Revision: `a7b5671e50ee3610ec3ad2e1278a33b2cb11339c`
 - License: WPTリポジトリの`LICENSE.md`（3-Clause BSD）
-- 配置: `internal/style/wpt_test.go`、`internal/layout/wpt_test.go`、`internal/forms/wpt_test.go`、`internal/browser/wpt_v*_test.go`、`internal/network/wpt_test.go`、`internal/storage/wpt_test.go`、`internal/webapi/scheduler/wpt_test.go`、`internal/runtime/javascript/wpt_v14_test.go`、`internal/serviceworker/wpt_v14_test.go`
+- 配置: `internal/style/wpt_test.go`、`internal/layout/wpt_test.go`、`internal/forms/wpt_test.go`、`internal/browser/wpt_v*_test.go`、`internal/network/wpt_test.go`、`internal/storage/wpt_test.go`、`internal/webapi/scheduler/wpt_test.go`、`internal/runtime/javascript/wpt_v14_test.go`、`internal/serviceworker/wpt_v14_test.go`、および`tests/v015-conformance.sh`が選択するv0.15.0実装Test
 - v0.14.0対象: v0.13.0までの範囲に加え、Module単一評価、WASM Module validation、iframe sandbox script gate、Service Worker default scope
 
 ## 対応表
@@ -40,6 +40,17 @@ GrowseはWeb Platform Tests（WPT）をブラウザで直接実行せず、対�
 | `TestWPTWebAssemblyModuleConstructorValidatesBytes` | `wasm/jsapi/module/constructor.any.js` | invalid binaryの`validate=false`、`CompileError`とvalid constructorを比較 | upstream fixture binaryをGrowse test生成binaryへ置換 |
 | `TestWPTIframeEmptySandboxBlocksScriptExecution` | `html/semantics/embedded-content/the-iframe-element/sandbox_005.htm` | 空sandboxがscriptとsame-originを許可せず、既知tokenだけをgrantすることを比較 | postMessage harnessを実行前FramePolicy assertionへ縮約 |
 | `TestWPTServiceWorkerDefaultScopeIsScriptDirectory` | `service-workers/service-worker/register-default-scope.https.html` | scope省略時にscript URLのdirectoryを採用することを比較 | HTTPS harnessとregistration jobをURL policyの直接assertionへ縮約 |
+| `TestJavaScriptNodeRelationshipsMutationsFragmentsAndCloneKeepIdentity` | `dom/nodes/Node-cloneNode.html`、`dom/nodes/ParentNode-append.html` | Node identity、DocumentFragment挿入、clone、tree mutationをJavaScript fixtureで比較 | custom element reactionとshadow tree cloneは対象外 |
+| `TestJavaScriptElementReflectionSelectorsDatasetStyleAndHTMLMutation` | `dom/nodes/Element-closest.html`、`dom/nodes/ParentNode-querySelector-All.html` | `matches`、`closest`、`querySelectorAll`とattribute reflectionを単一DOM fixtureへ縮約 | Shadow DOM境界とnamespace selectorは対象外 |
+| `TestDynamicClassicScriptsSnapshotFetchAndExecuteExactlyOnce` | `html/semantics/scripting-1/the-script-element/execution-timing/121.html` | 動的classic scriptの挿入時snapshot、fetch、load/error、単一評価をfake loaderで比較 | parser-blocking順序と実network timingは対象外 |
+| `TestJavaScriptDynamicStylesheetAndPreloadUpdateBrowserStyleRevision` | `css/cssom/stylesheet-same-origin.sub.html`、`html/semantics/document-metadata/the-link-element/link-load-event.html` | 動的`style` / `link`のload/errorとStyle revision更新をoffline responseで比較 | cross-document sheet共有とResource Timingは対象外 |
+| `TestLevel4SelectorMatchingHasScopeIsWhereAndComplexNot` | `css/selectors/is-where.html`、`css/selectors/has-basic.html` | `:is()`、`:where()`、`:has()`、complex `:not()`のmatchingとspecificityをGo assertionへ縮約 | pseudo-element、Shadow DOM、live invalidation全組合せは対象外 |
+| `TestCascadeLayerOrderImportantReversalAndRevertLayer` | `css/css-cascade/layer-order.html`、`css/css-cascade/revert-layer-001.html` | layer順、important反転、`revert-layer`をcomputed valueで比較 | user / UA origin layerとanimation originは対象外 |
+| `TestCSSOMGeometryAndMediaQueriesUseBrowserSnapshots` | `css/cssom/CSSStyleDeclaration-cssText.html`、`css/cssom-view/elementFromPoint.html` | CSS declaration、geometry、media queryを固定Viewport snapshotへ縮約 | live DOMRect、scrolling、visual viewportは対象外 |
+| `TestMutationObserverDeliversBoundedRecordsAtCheckpoint` | `dom/nodes/MutationObserver-childList.html` | child / attribute mutation recordとcheckpoint配送を決定的queueで比較 | browser全体のmicrotask orderingとShadow DOMは対象外 |
+| `TestResizeAndIntersectionObserversRunAfterFrame` | `resize-observer/observe.html`、`intersection-observer/basic.html` | Resize / Intersection entryを固定FrameとViewportで比較 | device pixel box、cross-origin root、scroll marginは対象外 |
+| `TestImageCandidatesSelectPictureSourceByTypeMediaSizesAndScale` | `html/semantics/embedded-content/the-img-element/update-the-image-data/select-an-image-source.html` | `picture`、`srcset`、`sizes`、DPR候補選択をoffline image metadataで比較 | animated image、client hints、network priorityは対象外 |
+| `TestLoadWebFontsValidatesDescriptorsAndDecodesWOFF` | `css/css-fonts/font-face-src-local.html`、`css/css-font-loading/fontface-load.html` | `@font-face` descriptor、source fallback、WOFF decodeをbounded loaderで比較 | OS local font探索、FontFaceSet Promise、可変font axisは対象外 |
 
 Upstreamのファイル全体はコピーせず、assertionの意味と最小入力だけを移植する。ケースを追加または更新するときは、Revision、Source、適応内容、および意図的な差分をこの表へ記録する。
 
@@ -98,3 +109,12 @@ Upstreamのファイル全体はコピーせず、assertionの意味と最小入
 - iframeは空sandboxのscript / Origin gateと既知token grantを選定し、plugin、Permissions Policy、credentialless Frameは対象外とする。
 - Service Workerはscript directory由来のdefault scopeを選定し、module worker、navigation preload、Push、Background Syncは対象外とする。
 - `tests/v014-conformance.sh`は固定shuffle seedでRuntime、Browser、Service Worker packageを新規processから3回実行し、WPTとsecurity / lifecycle / quota / crash / cancel回帰の順序依存を検出する。公開DNS、実時間resource、外部APIを合否条件に使わない。
+
+## v0.15.0の選定範囲
+
+- DOMはNode identity、DocumentFragment、clone、tree mutation、selector APIを選定し、Shadow DOM、custom element reaction、namespace selectorは対象外とする。
+- HTML dynamic resourceはclassic / module script、`style`、stylesheet `link`、preloadのsnapshot、単一評価、load/errorを選定し、parser-blocking timing、Resource Timing、公開networkは対象外とする。
+- Selectors Level 4とCascade Level 5は`:is()`、`:where()`、`:has()`、complex `:not()`、layer順、important反転、`revert-layer`を選定し、Shadow DOM selector、pseudo-element全体、user origin layerは対象外とする。
+- CSSOMとobserverは固定Viewportのdeclaration / geometry / media query、およびMutation / Resize / Intersectionのbounded配送を選定し、live DOMRect、visual viewport、browser全体のmicrotask orderingは対象外とする。
+- imageとfontは`picture` / `srcset` / `sizes` / DPR選択、`@font-face` descriptor、WOFF decode、source fallbackを選定し、animated image、OS local font探索、FontFaceSet Promise、可変font axisは対象外とする。
+- `tests/v015-conformance.sh`は上表のv0.15.0対象Testを固定shuffle seedで3回、新規processかつofflineで実行する。WPT harnessとupstream file全体は取り込まず、固定RevisionのassertionをGrowseのDOM、resource queue、computed style、layout / paint snapshotへ縮約する。

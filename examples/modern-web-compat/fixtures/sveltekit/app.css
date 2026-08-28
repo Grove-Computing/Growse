@@ -1,0 +1,4 @@
+@layer components {
+  [data-svelte-h="growse-v015"] { padding: 20px; color: #7c3aed; }
+  #svelte-state { font-weight: 700; }
+}

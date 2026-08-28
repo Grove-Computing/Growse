@@ -94,22 +94,26 @@ type Decoration struct {
 	StackingID int
 	NodeID     dom.NodeID
 	Rect
-	Background    uint32
-	Image         stylemodel.BackgroundImage
-	Layers        []stylemodel.BackgroundLayer
-	Repeat        stylemodel.BackgroundRepeat
-	Position      stylemodel.BackgroundPosition
-	Size          stylemodel.BackgroundSize
-	Border        stylemodel.Borders
-	Radius        BorderRadii
-	Opacity       float32
-	Clip          *Rect
-	Clips         []ClipRegion
-	BoxShadows    []stylemodel.Shadow
-	Outline       stylemodel.BorderSide
-	OutlineOffset float32
-	Transform     stylemodel.Matrix
-	Hidden        bool
+	Background      uint32
+	Image           stylemodel.BackgroundImage
+	Layers          []stylemodel.BackgroundLayer
+	Repeat          stylemodel.BackgroundRepeat
+	Position        stylemodel.BackgroundPosition
+	Size            stylemodel.BackgroundSize
+	Border          stylemodel.Borders
+	Radius          BorderRadii
+	Opacity         float32
+	Clip            *Rect
+	Clips           []ClipRegion
+	BoxShadows      []stylemodel.Shadow
+	Outline         stylemodel.BorderSide
+	OutlineOffset   float32
+	Filters         []stylemodel.Filter
+	BackdropFilters []stylemodel.Filter
+	BlendMode       stylemodel.BlendMode
+	Cursor          stylemodel.Cursor
+	Transform       stylemodel.Matrix
+	Hidden          bool
 }
 
 // CornerRadius is one resolved elliptical radius in CSS pixels.
@@ -125,24 +129,48 @@ type Rect struct {
 	X, Y, Width, Height float32
 }
 
+// ImageResource is browser-decoded metadata for one replaced image element.
+// Layout never fetches or decodes network content.
+type ImageResource struct {
+	URL                             string
+	IntrinsicWidth, IntrinsicHeight float32
+	Alt                             string
+	Loaded                          bool
+	Deferred                        bool
+	Error                           string
+}
+
 // Box is one line of visible page content.
 type Box struct {
-	Order      int
-	StackingID int
-	NodeID     dom.NodeID
-	Tag        string
-	Text       string
-	Input      bool
-	Multiline  bool
-	Select     bool
-	Options    []forms.Option
-	Selected   int
-	Checkable  bool
-	Checked    bool
-	InputType  string
-	Disabled   bool
-	ReadOnly   bool
-	Button     bool
+	Order       int
+	StackingID  int
+	NodeID      dom.NodeID
+	Tag         string
+	Text        string
+	Input       bool
+	Multiline   bool
+	Select      bool
+	Options     []forms.Option
+	Selected    int
+	Checkable   bool
+	Checked     bool
+	InputType   string
+	Disabled    bool
+	ReadOnly    bool
+	Button      bool
+	Image       bool
+	ImageURL    string
+	Alt         string
+	ImageRect   Rect
+	ImageClip   Rect
+	ImageFailed bool
+	ObjectFit   stylemodel.ObjectFit
+	ObjectPos   stylemodel.BackgroundPosition
+	ImageBorder stylemodel.Borders
+	ImageRadius BorderRadii
+	Appearance  stylemodel.Appearance
+	AccentColor uint32
+	Cursor      stylemodel.Cursor
 
 	X        float32
 	Y        float32
@@ -155,6 +183,12 @@ type Box struct {
 
 	FontSize        float32
 	Bold            bool
+	FontFamilies    []string
+	FontStyle       string
+	FontStretch     string
+	LetterSpacing   float32
+	WordSpacing     float32
+	VerticalOffset  float32
 	Color           uint32
 	Background      uint32
 	Decoration      stylemodel.TextDecorationLine
@@ -174,6 +208,12 @@ type TextRun struct {
 
 	FontSize        float32
 	Bold            bool
+	FontFamilies    []string
+	FontStyle       string
+	FontStretch     string
+	LetterSpacing   float32
+	WordSpacing     float32
+	VerticalOffset  float32
 	Color           uint32
 	Background      uint32
 	Baseline        float32
