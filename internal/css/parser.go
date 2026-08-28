@@ -23,6 +23,16 @@ type atRuleFrame struct {
 	propertyIndex  int
 }
 
+type rulesetFrame struct {
+	ruleIndex int
+	selectors []string
+}
+
+const (
+	maxNestingDepth            = 32
+	maxExpandedNestedSelectors = 1024
+)
+
 // Parse reads a stylesheet. Unsupported selectors and at-rules are ignored.
 func Parse(reader io.Reader) (*Stylesheet, error) {
 	input, err := io.ReadAll(reader)
@@ -37,6 +47,7 @@ func Parse(reader io.Reader) (*Stylesheet, error) {
 	var current *Rule
 	var currentKeyframe *Keyframe
 	var atRules []atRuleFrame
+	var rulesets []rulesetFrame
 	importsAllowed := true
 
 	for {
@@ -102,15 +113,28 @@ func Parse(reader io.Reader) (*Stylesheet, error) {
 				continue
 			}
 			selectorText := string(data) + tokenText(p.Values())
-			selectors := parseSelectorList(selectorText)
+			selectorTexts, validList := splitSelectorList(selectorText)
+			if len(rulesets) != 0 {
+				if len(rulesets) >= maxNestingDepth || rulesets[len(rulesets)-1].ruleIndex < 0 {
+					validList = false
+				} else {
+					selectorTexts, validList = expandNestedSelectors(rulesets[len(rulesets)-1].selectors, selectorTexts)
+				}
+			}
+			selectors := []Selector(nil)
+			if validList {
+				selectors = parseSelectorList(strings.Join(selectorTexts, ","))
+			}
 			if len(selectors) == 0 {
 				current = nil
+				rulesets = append(rulesets, rulesetFrame{ruleIndex: -1})
 				continue
 			}
 			stylesheet.Rules = append(stylesheet.Rules, Rule{
 				Kind: RuleStyle, Selectors: selectors, Order: len(stylesheet.Rules), Media: mediaGroups, Supports: supports, Containers: containers, Layer: layer,
 			})
 			current = &stylesheet.Rules[len(stylesheet.Rules)-1]
+			rulesets = append(rulesets, rulesetFrame{ruleIndex: len(stylesheet.Rules) - 1, selectors: selectorTexts})
 		case parser.DeclarationGrammar, parser.CustomPropertyGrammar:
 			if len(atRules) != 0 {
 				frame := &atRules[len(atRules)-1]
@@ -154,7 +178,14 @@ func Parse(reader io.Reader) (*Stylesheet, error) {
 				}
 			}
 		case parser.EndRulesetGrammar:
-			current, currentKeyframe = nil, nil
+			if currentKeyframe != nil {
+				currentKeyframe = nil
+				continue
+			}
+			if len(rulesets) != 0 {
+				rulesets = rulesets[:len(rulesets)-1]
+			}
+			current = currentRule(stylesheet, rulesets)
 		case parser.AtRuleGrammar:
 			name := strings.ToLower(strings.TrimSpace(string(data)))
 			if len(atRules) == 0 && name == "@import" && importsAllowed {
@@ -235,9 +266,89 @@ func Parse(reader io.Reader) (*Stylesheet, error) {
 			if len(atRules) != 0 {
 				atRules = atRules[:len(atRules)-1]
 			}
-			current, currentKeyframe = nil, nil
+			current, currentKeyframe = currentRule(stylesheet, rulesets), nil
 		}
 	}
+}
+
+func currentRule(stylesheet *Stylesheet, rulesets []rulesetFrame) *Rule {
+	if stylesheet == nil || len(rulesets) == 0 {
+		return nil
+	}
+	index := rulesets[len(rulesets)-1].ruleIndex
+	if index < 0 || index >= len(stylesheet.Rules) {
+		return nil
+	}
+	return &stylesheet.Rules[index]
+}
+
+func expandNestedSelectors(parents, nested []string) ([]string, bool) {
+	if len(parents) == 0 || len(nested) == 0 || len(parents) > maxExpandedNestedSelectors/len(nested) {
+		return nil, false
+	}
+	result := make([]string, 0, len(parents)*len(nested))
+	for _, parent := range parents {
+		for _, child := range nested {
+			child = strings.TrimSpace(child)
+			if child == "" {
+				return nil, false
+			}
+			expanded, found, valid := replaceNestingSelector(child, strings.TrimSpace(parent))
+			if !valid {
+				return nil, false
+			}
+			if !found {
+				expanded = strings.TrimSpace(parent) + " " + child
+			}
+			result = append(result, expanded)
+		}
+	}
+	return result, len(result) <= maxExpandedNestedSelectors
+}
+
+func replaceNestingSelector(value, parent string) (string, bool, bool) {
+	var result strings.Builder
+	found := false
+	var quote byte
+	escaped, bracketDepth := false, 0
+	for position := 0; position < len(value); position++ {
+		character := value[position]
+		if quote != 0 {
+			result.WriteByte(character)
+			if escaped {
+				escaped = false
+			} else if character == '\\' {
+				escaped = true
+			} else if character == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch character {
+		case '\'', '"':
+			quote = character
+			result.WriteByte(character)
+		case '[':
+			bracketDepth++
+			result.WriteByte(character)
+		case ']':
+			bracketDepth--
+			result.WriteByte(character)
+		case '&':
+			if bracketDepth == 0 {
+				result.WriteString(parent)
+				found = true
+			} else {
+				result.WriteByte(character)
+			}
+		default:
+			result.WriteByte(character)
+		}
+		if bracketDepth < 0 {
+			return "", false, false
+		}
+	}
+	return result.String(), found, quote == 0 && bracketDepth == 0
 }
 
 func currentLayer(frames []atRuleFrame) string {
