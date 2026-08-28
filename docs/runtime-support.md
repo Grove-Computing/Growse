@@ -1,6 +1,6 @@
 # Runtime / Web API対応表
 
-この表はGrowse v0.14.0の実装を基準とする。GrowseはGoを既定Engineとし、Tab単位でJavaScriptへ切り替えられる。切り替えはtop-level、Frame、WASM、pending callbackを停止する完全なPage reloadであり、両Engineのobjectを共有しない。
+この表はGrowse v0.15.0の実装を基準とする。GrowseはGoを既定Engineとし、Tab単位でJavaScriptへ切り替えられる。切り替えはtop-level、Frame、WASM、dynamic resource、observer、pending hydration callbackを停止する完全なPage reloadであり、両Engineのobjectを共有しない。
 
 ## EngineとScript
 
@@ -14,22 +14,27 @@
 | 実行順 | 文書順 | parser-blocking、`defer` / Module、`async`を区別 |
 | 実行境界 | Page / Frameごとの別process | Page / Frame / Service Workerごとの別process |
 
-選択していないEngineのScriptは取得しない。Go sourceは明示的な`text/go`に限定し、redirect後もtrusted loopbackかつsame-originでなければ実行しない。JavaScriptは通常のHTTP(S) Pageで実行できるが、redirect、status、MIME、mixed content、credentials、CORS、integrity、sizeを実行前に再検査する。
+選択していないEngineのScriptは取得しない。Go sourceは明示的な`text/go`に限定し、redirect後もtrusted loopbackかつsame-originでなければ実行しない。JavaScriptのinitial / dynamic script、modulepreload、hydrationはTabの`JS` selectorを利用者が明示選択した場合だけ有効にし、通常のHTTP(S) Pageでもredirect、status、MIME、mixed content、credentials、CORS、integrity、sizeを実行前に再検査する。
 
-classic / module sourceは1件2 MiB、選択Engineあたり64件、Page合計8 MiBを上限とする。Module graphは256 module、合計16 MiB、深さ64、import mapは1件・1,024 mapping・256 KiBを上限とする。
+classic / module sourceは1件2 MiB、Pageのinitial / dynamic script合計256件、JavaScript source合計32 MiBを上限とする。Module graphは512 module、深さ64、import mapは1件・1,024 mapping・256 KiBを上限とする。dynamic stylesheetは128件、preloadは256件までとし、同一Nodeの再prepare、失敗再試行、dynamic insertion chainを有限にする。
 
 ## Web API
 
-| API | Go | JavaScript | v0.14.0の範囲 |
+| API | Go | JavaScript | v0.15.0の範囲 |
 | --- | --- | --- | --- |
 | Console | `growse/console` | `console.log`、`info`、`warn`、`error` | Engine / context付きrecord、1件4 KiB、Page 1,000件 |
 | DOM検索・生成 | `growse/dom` | `getElementById`、`querySelector(All)`、`getElementsBy*`、`createElement`、`createTextNode` | 対応selectorとBrowser所有Node wrapperに限定 |
-| Element | `growse/dom` | text / value / attribute、append / prepend / remove / replace、children / parent / metadata、`innerHTML`、`classList` | 同じDOM mutation経路でStyle、Layout、Paint、Hit Testを更新 |
+| DOM interface | `growse/dom` | `EventTarget` / `Node` / `Document` / `DocumentFragment` / `Element` / HTML element prototype | 同一RealmのNode identityとprototype chainを保持 |
+| Element | `growse/dom` | text / value / attribute、append / prepend / before / after / remove / replace / clone、template、`innerHTML` / `outerHTML`、`classList` / `dataset` | 同じDOM mutation経路でStyle、Layout、Paint、Hit Testを更新 |
 | Event | `growse/dom` | add / remove listener、target / phase / cancel / propagation | click、input、change、submit、reset、focus、blur、mouseenter、mouseleave、message、lifecycle |
 | Scheduler | `growse/scheduler` | timeout、interval、Animation Frame、microtask | 文字列callbackを拒否し、Page終了時に解除 |
 | Fetch | `growse/fetch` callback | Promise形式`fetch`、`AbortController` | credentials、CORS、timeout、abort、buffered Response |
 | Storage | `growse/storage` | `localStorage`、`sessionStorage` | Origin分離、quota、same-origin `storage` Event |
 | Navigation | `growse/navigation` | `location`、`history` | assign、back / forward / go、push / replace state、event |
+| Dynamic resource | 非公開 | DOM挿入script / Module / stylesheet、modulepreload、load / error | snapshot、単一prepare、Page queue、generation cancel |
+| CSSOM / media | 非公開 | `element.style`、`getComputedStyle()`、geometry、`matchMedia()` | 同一Style / Layout revisionのsnapshot、対応propertyだけを公開 |
+| Observer | 非公開 | Mutation / Resize / Intersection Observer | record / callback / loop上限、Page closeとEngine切替で解除 |
+| Image / Font | 非公開 | `HTMLImageElement` state、resource load / error | picture / srcset / sizes、PNG / JPEG / GIF / WebP / static SVG、CORS WOFF / WOFF2 |
 | Frame | 非公開 | iframe、parent / top / frames、same-origin access、`postMessage` | sandbox token、opaque cross-origin proxy、structured clone subset |
 | Service Worker | 非公開 | register / update / unregister / ready / controller | install / waiting / activate、fetch、Cache Storage、idle restart |
 
@@ -68,7 +73,7 @@ Request 1 MiB、Response 4 MiB、Header 100件 / 64 KiB、redirect 10回、Page 
 - Service Worker Background Sync、Push、Notification、navigation preload、module worker
 - DevTools REPL、source debugger、breakpoint、heap profiler
 
-goja、WASM、HTML、CSS、Web APIの仕様全体や任意公開サイトの完全互換は保証しない。対応範囲は本書、v0.14.0定義、Showcase、選定WPTで観測できるsubsetである。
+goja、WASM、HTML、CSS、Web API、Next.js、SvelteKit、Tailwindの仕様全体や任意公開サイトの完全互換は保証しない。対応範囲は本書、v0.15.0定義、offline framework fixture、Showcase、選定WPTで観測できるsubsetである。
 
 ## Security Boundary
 
