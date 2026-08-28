@@ -19,6 +19,7 @@ import (
 
 	"gioui.org/f32"
 	"gioui.org/font"
+	"gioui.org/font/gofont"
 	"gioui.org/gesture"
 	"gioui.org/io/key"
 	"gioui.org/io/pointer"
@@ -26,9 +27,11 @@ import (
 	"gioui.org/op"
 	"gioui.org/op/clip"
 	"gioui.org/op/paint"
+	"gioui.org/text"
 	"gioui.org/unit"
 	"gioui.org/widget"
 	"gioui.org/widget/material"
+	textfont "github.com/go-text/typesetting/font"
 	"golang.org/x/exp/shiny/materialdesign/icons"
 	xdraw "golang.org/x/image/draw"
 
@@ -119,7 +122,10 @@ type BrowserUI struct {
 	formButtons       map[dom.NodeID]*widget.Clickable
 	layoutBuild       func(*dom.Document, stylemodel.Map, float32, float32, float32, float32) *layoutengine.Tree
 	layoutBuildImages func(*dom.Document, stylemodel.Map, map[dom.NodeID]layoutengine.ImageResource, float32, float32, float32, float32) *layoutengine.Tree
+	layoutBuildFonts  func(*dom.Document, stylemodel.Map, map[dom.NodeID]layoutengine.ImageResource, *layoutengine.FontSet, float32, float32, float32, float32) *layoutengine.Tree
 	layoutCache       documentLayoutCache
+	fontPage          *browser.Page
+	fontRevision      uint64
 	scrollRevision    uint64
 	updater           ApplicationUpdater
 	updateResults     chan applicationUpdateResult
@@ -313,6 +319,7 @@ func NewBrowserUIWithTabsAndUpdater(navigator Navigator, tabs TabController, inv
 		inspectorButtons:  make(map[browser.TabID]map[dom.NodeID]*widget.Clickable),
 		layoutBuild:       layoutengine.BuildWithScroll,
 		layoutBuildImages: layoutengine.BuildWithScrollAndImages,
+		layoutBuildFonts:  layoutengine.BuildWithScrollAndResources,
 		updater:           applicationUpdater,
 		updateResults:     make(chan applicationUpdateResult, 2),
 		updateContext:     updateContext,
@@ -1747,6 +1754,7 @@ func (ui *BrowserUI) layoutViewport(gtx layout.Context) layout.Dimensions {
 
 func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layout.Dimensions {
 	paint.Fill(gtx.Ops, color.NRGBA{R: 255, G: 255, B: 255, A: 255})
+	ui.installPageFonts(page)
 	if ui.scrollRevision != page.ScrollRevision {
 		ui.pageList.Position = layout.Position{First: page.ScrollFirst, Offset: page.ScrollOffset}
 		ui.scrollRevision = page.ScrollRevision
@@ -1826,6 +1834,9 @@ func (ui *BrowserUI) cachedDocumentTree(page *browser.Page, viewportWidth, viewp
 		build = layoutengine.BuildWithScroll
 	}
 	buildTree := func(scrollY float32) *layoutengine.Tree {
+		if ui.layoutBuildFonts != nil && (page.ImageResources != nil || page.WebFonts != nil) {
+			return ui.layoutBuildFonts(page.Document, page.ComputedStyles, page.ImageResources, page.WebFonts, viewportWidth, viewportHeight, 0, scrollY)
+		}
 		if page.ImageResources != nil && ui.layoutBuildImages != nil {
 			return ui.layoutBuildImages(page.Document, page.ComputedStyles, page.ImageResources, viewportWidth, viewportHeight, 0, scrollY)
 		}
@@ -1850,6 +1861,58 @@ func (ui *BrowserUI) cachedDocumentTree(page *browser.Page, viewportWidth, viewp
 		listFirst: position.First, listOffset: position.Offset, tree: tree,
 	}
 	return layoutengine.Clone(tree)
+}
+
+type pageFontFace struct{ face *textfont.Face }
+
+func (face pageFontFace) Face() *textfont.Face { return face.face }
+
+func (ui *BrowserUI) installPageFonts(page *browser.Page) {
+	if page == nil || ui.fontPage == page && ui.fontRevision == page.StyleRevision {
+		return
+	}
+	if page.Engine != runtimemodel.EngineJavaScript {
+		ui.theme.Shaper = &text.Shaper{}
+		ui.fontPage, ui.fontRevision = page, page.StyleRevision
+		return
+	}
+	collection := make([]font.FontFace, 0, len(page.Fonts)+len(gofont.Collection()))
+	for _, resource := range page.Fonts {
+		if !resource.Decoded || resource.Face == nil {
+			continue
+		}
+		description := font.Font{Typeface: font.Typeface(resource.Family), Weight: pageFontWeight(resource.Weight)}
+		if resource.Style == "italic" || strings.HasPrefix(resource.Style, "oblique") {
+			description.Style = font.Italic
+		}
+		collection = append(collection, font.FontFace{Font: description, Face: pageFontFace{face: resource.Face}})
+	}
+	collection = append(collection, gofont.Collection()...)
+	ui.theme.Shaper = text.NewShaper(text.NoSystemFonts(), text.WithCollection(collection))
+	ui.fontPage, ui.fontRevision = page, page.StyleRevision
+}
+
+func pageFontWeight(value string) font.Weight {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "bold", "700":
+		return font.Bold
+	case "100":
+		return font.Thin
+	case "200":
+		return font.ExtraLight
+	case "300":
+		return font.Light
+	case "500":
+		return font.Medium
+	case "600":
+		return font.SemiBold
+	case "800":
+		return font.ExtraBold
+	case "900", "1000":
+		return font.Black
+	default:
+		return font.Normal
+	}
 }
 
 func (ui *BrowserUI) updateViewportHover(gtx layout.Context, page *browser.Page, tree *layoutengine.Tree, displayList *paintmodel.DisplayList) {

@@ -11,8 +11,10 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Grove-Computing/Growse/internal/css"
+	layoutmodel "github.com/Grove-Computing/Growse/internal/layout"
 	"github.com/Grove-Computing/Growse/internal/network"
 	textfont "github.com/go-text/typesetting/font"
 	woff2 "github.com/pgaskin/go-woff2"
@@ -22,6 +24,10 @@ const (
 	maxFontBytes     = 2 << 20
 	maxPageFontBytes = 16 << 20
 	maxFontFaces     = 128
+	fontBlockTimeout = 3 * time.Second
+	fontFallbackWait = 100 * time.Millisecond
+	fontOptionalWait = 50 * time.Millisecond
+	pageFontTimeout  = 5 * time.Second
 )
 
 // FontRange is one inclusive @font-face unicode-range interval.
@@ -54,6 +60,8 @@ func loadWebFonts(ctx context.Context, client ResourceLoader, pageURL *url.URL, 
 	resources := make([]FontResource, 0, len(faces))
 	var failures []string
 	totalBytes := 0
+	pageContext, cancelPage := context.WithTimeout(ctx, pageFontTimeout)
+	defer cancelPage()
 	for _, rule := range faces {
 		resource := FontResource{Family: rule.Family, Style: rule.Style, Weight: rule.Weight, Stretch: rule.Stretch, Display: rule.Display}
 		ranges, descriptorErr := parseFontUnicodeRanges(rule.UnicodeRange)
@@ -70,9 +78,15 @@ func loadWebFonts(ctx context.Context, client ResourceLoader, pageURL *url.URL, 
 		}
 		for _, source := range sources {
 			resource.URL, resource.Format = source.url.String(), source.format
-			response, err := fetchFontResource(ctx, client, pageURL, source.url)
+			loadContext, cancel := context.WithTimeout(pageContext, fontLoadTimeout(rule.Display))
+			response, err := fetchFontResource(loadContext, client, pageURL, source.url)
+			cancel()
 			if err != nil {
-				resource.Error = err.Error()
+				if errors.Is(err, context.DeadlineExceeded) {
+					resource.Error = "font load timed out"
+				} else {
+					resource.Error = err.Error()
+				}
 				continue
 			}
 			finalURL := response.URL
@@ -102,6 +116,35 @@ func loadWebFonts(ctx context.Context, client ResourceLoader, pageURL *url.URL, 
 		resources = append(resources, resource)
 	}
 	return resources, failures
+}
+
+func fontLoadTimeout(display string) time.Duration {
+	switch strings.ToLower(strings.TrimSpace(display)) {
+	case "fallback":
+		return fontFallbackWait
+	case "optional":
+		return fontOptionalWait
+	default:
+		return fontBlockTimeout
+	}
+}
+
+func layoutWebFonts(resources []FontResource) *layoutmodel.FontSet {
+	faces := make([]layoutmodel.WebFontFace, 0, len(resources))
+	for _, resource := range resources {
+		if !resource.Decoded || resource.Face == nil {
+			continue
+		}
+		ranges := make([]layoutmodel.FontRange, len(resource.UnicodeRanges))
+		for index, interval := range resource.UnicodeRanges {
+			ranges[index] = layoutmodel.FontRange{Start: interval.Start, End: interval.End}
+		}
+		faces = append(faces, layoutmodel.WebFontFace{
+			Family: resource.Family, Style: resource.Style, Weight: resource.Weight,
+			UnicodeRanges: ranges, Face: resource.Face,
+		})
+	}
+	return layoutmodel.NewFontSet(faces)
 }
 
 func fetchFontResource(ctx context.Context, client ResourceLoader, pageURL, target *url.URL) (*network.Response, error) {

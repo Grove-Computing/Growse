@@ -264,7 +264,7 @@ func (state *frameLoadState) buildPage(ctx context.Context, response *network.Re
 		Animations: style.NewAnimationRegistry(), Transitions: style.NewTransitionRegistry(), BackgroundImages: backgroundImages,
 		BackgroundErrors: backgroundErrors, Engine: state.engine, Scripts: scripts, ImportMap: importMap, ScriptErrors: scriptErrors,
 		ImageResources: replacedImages, Images: decodedImages, ImageErrors: imageErrors,
-		Fonts: fonts, FontErrors: fontErrors,
+		Fonts: fonts, FontErrors: fontErrors, WebFonts: layoutWebFonts(fonts),
 		StyleRevision: 1, ReducedMotion: state.reducedMotion, ViewportWidth: defaultFrameWidth, ViewportHeight: defaultFrameHeight, DevTools: pageStore,
 		FramePolicy:    policy,
 		serviceWorkers: state.rootPage.serviceWorkers,

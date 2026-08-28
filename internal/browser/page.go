@@ -46,6 +46,7 @@ type Page struct {
 	ImageErrors      []string
 	Fonts            []FontResource
 	FontErrors       []string
+	WebFonts         *layoutmodel.FontSet
 	Engine           runtimemodel.Engine
 	Scripts          []Script
 	ImportMap        map[string]string

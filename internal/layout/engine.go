@@ -22,6 +22,7 @@ const (
 )
 
 type blockStyle struct {
+	fonts               *FontSet
 	fontSize            float32
 	bold                bool
 	fontFamilies        []string
@@ -132,7 +133,7 @@ type inlineRun struct {
 
 // Build creates a vertical block layout with a minimal inline text flow.
 func Build(document *dom.Document, computed stylemodel.Map, viewportWidth float32) *Tree {
-	return build(document, computed, nil, viewportWidth, 0, 0, 0)
+	return build(document, computed, nil, nil, viewportWidth, 0, 0, 0)
 }
 
 // BuildAtRevision lays out one immutable DOM/style revision.
@@ -144,17 +145,22 @@ func BuildAtRevision(document *dom.Document, computed stylemodel.Map, viewportWi
 
 // BuildWithViewport lays out a document with definite viewport dimensions.
 func BuildWithViewport(document *dom.Document, computed stylemodel.Map, viewportWidth, viewportHeight float32) *Tree {
-	return build(document, computed, nil, viewportWidth, viewportHeight, 0, 0)
+	return build(document, computed, nil, nil, viewportWidth, viewportHeight, 0, 0)
 }
 
 // BuildWithScroll lays out viewport-attached and sticky elements at a scroll offset.
 func BuildWithScroll(document *dom.Document, computed stylemodel.Map, viewportWidth, viewportHeight, scrollX, scrollY float32) *Tree {
-	return build(document, computed, nil, viewportWidth, viewportHeight, max(scrollX, float32(0)), max(scrollY, float32(0)))
+	return build(document, computed, nil, nil, viewportWidth, viewportHeight, max(scrollX, float32(0)), max(scrollY, float32(0)))
 }
 
 // BuildWithScrollAndImages lays out browser-decoded replaced image metadata.
 func BuildWithScrollAndImages(document *dom.Document, computed stylemodel.Map, images map[dom.NodeID]ImageResource, viewportWidth, viewportHeight, scrollX, scrollY float32) *Tree {
-	return build(document, computed, images, viewportWidth, viewportHeight, max(scrollX, float32(0)), max(scrollY, float32(0)))
+	return build(document, computed, images, nil, viewportWidth, viewportHeight, max(scrollX, float32(0)), max(scrollY, float32(0)))
+}
+
+// BuildWithScrollAndResources lays out decoded images and page-scoped web fonts.
+func BuildWithScrollAndResources(document *dom.Document, computed stylemodel.Map, images map[dom.NodeID]ImageResource, fonts *FontSet, viewportWidth, viewportHeight, scrollX, scrollY float32) *Tree {
+	return build(document, computed, images, fonts, viewportWidth, viewportHeight, max(scrollX, float32(0)), max(scrollY, float32(0)))
 }
 
 // BuildWithScrollAtRevision lays out one immutable DOM/style revision at a scroll offset.
@@ -164,7 +170,7 @@ func BuildWithScrollAtRevision(document *dom.Document, computed stylemodel.Map, 
 	return tree
 }
 
-func build(document *dom.Document, computed stylemodel.Map, images map[dom.NodeID]ImageResource, viewportWidth, viewportHeight, scrollX, scrollY float32) *Tree {
+func build(document *dom.Document, computed stylemodel.Map, images map[dom.NodeID]ImageResource, fonts *FontSet, viewportWidth, viewportHeight, scrollX, scrollY float32) *Tree {
 	if viewportWidth < pagePadding*2+1 {
 		viewportWidth = pagePadding*2 + 1
 	}
@@ -178,6 +184,7 @@ func build(document *dom.Document, computed stylemodel.Map, images map[dom.NodeI
 		tree:           tree,
 		computed:       computed,
 		images:         images,
+		fonts:          fonts,
 		y:              pagePadding,
 		opacity:        1,
 		viewportWidth:  viewportWidth,
@@ -217,6 +224,7 @@ type engine struct {
 	tree                          *Tree
 	computed                      stylemodel.Map
 	images                        map[dom.NodeID]ImageResource
+	fonts                         *FontSet
 	y                             float32
 	clip                          *Rect
 	clips                         []ClipRegion
@@ -246,6 +254,7 @@ func (e *engine) walk(node *dom.Node, x, width, containingHeight float32, height
 			if computed, ok := e.computed.For(node); ok {
 				textStyle = applyComputed(textStyle, computed)
 			}
+			textStyle.fonts = e.fonts
 			e.addText(node.ID, "text", text, textStyle, x, width)
 		}
 		return
@@ -1068,7 +1077,7 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 		}
 		if final && container.textOverflow == stylemodel.TextOverflowEllipsis &&
 			container.whiteSpace == stylemodel.WhiteSpaceNowrap && container.overflowX != stylemodel.OverflowVisible && usedWidth > lineWidth {
-			lineRuns, usedWidth = truncateTextRuns(lineRuns, lineWidth)
+			lineRuns, usedWidth = truncateTextRuns(lineRuns, lineWidth, e.fonts)
 			lineText.Reset()
 			for _, run := range lineRuns {
 				if run.Tag != "::marker" {
@@ -1386,12 +1395,12 @@ func verticalAlignOffset(style blockStyle) float32 {
 	}
 }
 
-func truncateTextRuns(runs []TextRun, width float32) ([]TextRun, float32) {
+func truncateTextRuns(runs []TextRun, width float32, fonts *FontSet) ([]TextRun, float32) {
 	if len(runs) == 0 {
 		return runs, 0
 	}
 	last := runs[len(runs)-1]
-	ellipsisWidth := measureTextRun("…", last)
+	ellipsisWidth := measureTextRun("…", last, fonts)
 	limit := max(width-ellipsisWidth, float32(0))
 	result := make([]TextRun, 0, len(runs))
 	used := float32(0)
@@ -1400,7 +1409,7 @@ func truncateTextRuns(runs []TextRun, width float32) ([]TextRun, float32) {
 		kept.Text, kept.Width = "", 0
 		for _, character := range run.Text {
 			piece := string(character)
-			pieceWidth := measureTextRun(piece, run)
+			pieceWidth := measureTextRun(piece, run, fonts)
 			if kept.Text != "" {
 				pieceWidth += run.LetterSpacing
 			}
@@ -1429,8 +1438,8 @@ func truncateTextRuns(runs []TextRun, width float32) ([]TextRun, float32) {
 	return result, min(used+ellipsisWidth, width)
 }
 
-func measureTextRun(text string, run TextRun) float32 {
-	style := blockStyle{fontSize: run.FontSize, bold: run.Bold, fontStretch: run.FontStretch, letterSpacing: run.LetterSpacing, wordSpacing: run.WordSpacing}
+func measureTextRun(text string, run TextRun, fonts *FontSet) float32 {
+	style := blockStyle{fonts: fonts, fontSize: run.FontSize, bold: run.Bold, fontFamilies: run.FontFamilies, fontStyle: run.FontStyle, fontStretch: run.FontStretch, letterSpacing: run.LetterSpacing, wordSpacing: run.WordSpacing}
 	width, _, _ := measureStyledText(text, style)
 	return width
 }
@@ -1529,6 +1538,7 @@ func (e *engine) styleFor(node *dom.Node) blockStyle {
 	if computed, ok := e.computed.For(node); ok {
 		style = applyComputed(style, computed)
 	}
+	style.fonts = e.fonts
 	if style.cursor == stylemodel.CursorAuto {
 		switch node.TagName {
 		case "a", "button", "select":

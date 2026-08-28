@@ -1431,6 +1431,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 		ImageErrors:      imageErrors,
 		Fonts:            fonts,
 		FontErrors:       fontErrors,
+		WebFonts:         layoutWebFonts(fonts),
 		Engine:           engine,
 		Scripts:          scripts,
 		ImportMap:        importMap,

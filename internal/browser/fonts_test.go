@@ -6,14 +6,30 @@ import (
 	"context"
 	"encoding/binary"
 	"net/http"
+	"net/url"
 	"testing"
+	"time"
 
 	"github.com/Grove-Computing/Growse/internal/css"
+	layoutmodel "github.com/Grove-Computing/Growse/internal/layout"
 	"github.com/Grove-Computing/Growse/internal/network"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 	woff2 "github.com/pgaskin/go-woff2"
 	"golang.org/x/image/font/gofont/goregular"
 )
+
+type timeoutFontLoader struct {
+	pageURL *url.URL
+	body    []byte
+}
+
+func (loader timeoutFontLoader) Get(ctx context.Context, target *url.URL) (*network.Response, error) {
+	if target.String() == loader.pageURL.String() {
+		return &network.Response{URL: loader.pageURL, StatusCode: http.StatusOK, ContentType: "text/html", Body: loader.body}, nil
+	}
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
 
 func TestNavigateLoadsWebFontsOnlyForExplicitJavaScriptEngine(t *testing.T) {
 	pageURL := "https://example.com/index.html"
@@ -49,6 +65,34 @@ func TestNavigateLoadsWebFontsOnlyForExplicitJavaScriptEngine(t *testing.T) {
 	}
 	if len(jsPage.Fonts) != 1 || !jsPage.Fonts[0].Decoded || len(jsLoader.requested) != 2 {
 		t.Fatalf("JavaScript page fonts=%#v requested=%#v", jsPage.Fonts, jsLoader.requested)
+	}
+}
+
+func TestWebFontTimeoutKeepsPageVisibleWithBundledFallback(t *testing.T) {
+	pageURL := mustParseURL(t, "https://example.com/index.html")
+	loader := timeoutFontLoader{pageURL: pageURL, body: []byte(`<style>
+		@font-face { font-family: Fixture; src: url("fixture.woff2") format("woff2"); font-display: optional; }
+		p { font-family: Fixture, sans-serif; }
+	</style><p>fallback remains visible</p>`)}
+	browserState := NewWithEngineFactory(loader, func(runtimemodel.Engine) runtimemodel.Runtime { return &runtimeStub{} })
+	t.Cleanup(func() { _ = browserState.Close() })
+	if _, err := browserState.SetEngine(context.Background(), runtimemodel.EngineJavaScript); err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now()
+	page, err := browserState.Navigate(context.Background(), pageURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
+		t.Fatalf("optional font timeout took %v", elapsed)
+	}
+	if page.Document == nil || page.WebFonts != nil || len(page.FontErrors) != 1 || page.Fonts[0].Error != "font load timed out" {
+		t.Fatalf("page font fallback state = fonts:%#v errors:%#v", page.Fonts, page.FontErrors)
+	}
+	tree := layoutmodel.BuildWithScrollAndResources(page.Document, page.ComputedStyles, page.ImageResources, page.WebFonts, 800, 600, 0, 0)
+	if len(tree.Boxes) == 0 {
+		t.Fatal("fallback page produced no visible layout boxes")
 	}
 }
 

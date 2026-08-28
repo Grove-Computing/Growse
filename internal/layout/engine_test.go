@@ -1,12 +1,15 @@
 package layout
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 
 	"github.com/Grove-Computing/Growse/internal/css"
 	"github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/style"
+	textfont "github.com/go-text/typesetting/font"
+	"golang.org/x/image/font/gofont/gomono"
 )
 
 func TestBuildCreatesVisibleVerticalBoxes(t *testing.T) {
@@ -133,6 +136,56 @@ func TestBuildUsesComputedTextStyle(t *testing.T) {
 	if box.Color != 0xabcdefff || box.FontSize != 24 || !box.Bold {
 		t.Fatalf("box style = %#v, want CSS color, size and weight", box)
 	}
+}
+
+func TestBuildWithWebFontsRemeasuresMatchingTextAndKeepsUnicodeFallback(t *testing.T) {
+	document := dom.NewDocument()
+	paragraph := document.CreateElement("p", nil)
+	appendNodes(t, document, [2]*dom.Node{document.Root, paragraph}, [2]*dom.Node{paragraph, document.CreateText("iiiiiiiiiiii")})
+	stylesheet, err := css.Parse(strings.NewReader(`p { font-family: Fixture, sans-serif; font-size: 24px; }`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	computed := style.Compute(document, stylesheet)
+	face, err := textfont.ParseTTF(bytes.NewReader(gomono.TTF))
+	if err != nil {
+		t.Fatal(err)
+	}
+	webFonts := NewFontSet([]WebFontFace{{
+		Family: "Fixture", Style: "normal", Weight: "normal",
+		UnicodeRanges: []FontRange{{Start: 0x20, End: 0x7f}}, Face: face,
+	}})
+	fallback := BuildWithScroll(document, computed, 800, 600, 0, 0)
+	loaded := BuildWithScrollAndResources(document, computed, nil, webFonts, 800, 600, 0, 0)
+	fallbackWidth, loadedWidth := layoutTextWidth(fallback), layoutTextWidth(loaded)
+	if fallbackWidth == loadedWidth || fallbackWidth <= 0 || loadedWidth <= 0 {
+		t.Fatalf("text widths fallback=%v loaded=%v", fallbackWidth, loadedWidth)
+	}
+
+	excluded := NewFontSet([]WebFontFace{{
+		Family: "Fixture", Style: "normal", Weight: "normal",
+		UnicodeRanges: []FontRange{{Start: 0x400, End: 0x4ff}}, Face: face,
+	}})
+	unicodeFallback := BuildWithScrollAndResources(document, computed, nil, excluded, 800, 600, 0, 0)
+	if got := layoutTextWidth(unicodeFallback); got != fallbackWidth {
+		t.Fatalf("unicode-range fallback width=%v, want %v", got, fallbackWidth)
+	}
+}
+
+func layoutTextWidth(tree *Tree) float32 {
+	var width float32
+	for _, box := range tree.Boxes {
+		if len(box.Runs) == 0 {
+			if box.Text != "" {
+				width += box.Width
+			}
+			continue
+		}
+		for _, run := range box.Runs {
+			width += run.Width
+		}
+	}
+	return width
 }
 
 func TestBuildAppliesBoxModelAndDisplay(t *testing.T) {
