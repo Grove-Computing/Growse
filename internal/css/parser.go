@@ -297,6 +297,12 @@ func parseSelectorList(value string) []Selector {
 	return selectors
 }
 
+// ParseSelectorList parses a bounded DOM/CSS selector list using the same
+// grammar accepted by the style engine.
+func ParseSelectorList(value string) []Selector {
+	return parseSelectorList(value)
+}
+
 func parseSelector(value string) (Selector, bool) {
 	parts, combinators, ok := splitComplexSelector(value)
 	if !ok {

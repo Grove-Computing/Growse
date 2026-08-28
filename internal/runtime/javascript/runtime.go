@@ -24,7 +24,7 @@ import (
 )
 
 const (
-	MaxEventListeners         = 10_000
+	MaxEventListeners         = 20_000
 	maxModuleBytes            = 2 << 20
 	maxCallStackSize          = 1_000
 	callbackQueueSize         = 64
@@ -78,23 +78,42 @@ type Runtime struct {
 	maxMicrotasks     int
 	moduleTimeout     time.Duration
 
-	elements              map[*goja.Object]*domapi.Element
-	elementByID           map[uint64]*goja.Object
-	listeners             []listenerRecord
-	listenerCount         int
-	maxListeners          int
-	dynamicScripts        map[uint64]struct{}
-	modulePreloads        map[uint64]struct{}
-	moduleRegistry        *moduleRegistry
-	moduleEvaluations     map[string]*moduleEvaluation
-	stylesheetStates      map[uint64]string
-	preloadStates         map[uint64]string
-	currentScript         *goja.Object
-	scriptCount           int
-	scriptBytes           int
-	dynamicInsertDepth    int
-	resourcePrepareCounts map[uint64]int
-	resourceFailures      map[string]int
+	elements               map[*goja.Object]*domapi.Element
+	elementByID            map[uint64]*goja.Object
+	listeners              []listenerRecord
+	listenerCount          int
+	maxListeners           int
+	dynamicScripts         map[uint64]struct{}
+	modulePreloads         map[uint64]struct{}
+	moduleRegistry         *moduleRegistry
+	moduleEvaluations      map[string]*moduleEvaluation
+	stylesheetStates       map[uint64]string
+	preloadStates          map[uint64]string
+	currentScript          *goja.Object
+	scriptCount            int
+	scriptBytes            int
+	dynamicInsertDepth     int
+	resourcePrepareCounts  map[uint64]int
+	resourceFailures       map[string]int
+	jsEventObjects         map[uint64]*goja.Object
+	nextJSEventID          uint64
+	media                  runtimemodel.MediaEnvironment
+	mediaQueries           []*mediaQueryRecord
+	mutationObservers      []*mutationObserverRecord
+	resizeObservers        []*resizeObserverRecord
+	intersectionObservers  []*intersectionObserverRecord
+	mutationSnapshot       dommodel.DocumentSnapshot
+	pendingMutationRecords int
+	observerCount          int
+	frameObserversDirty    atomic.Bool
+	maxObservers           int
+	maxObserverRecords     int
+	maxObserverCallbacks   int
+	maxObserverLoops       int
+	mutationCount          int
+	forcedReadCount        int
+	maxMutationsPerTask    int
+	maxForcedReadsPerTask  int
 
 	loaded    bool
 	started   bool
@@ -107,12 +126,19 @@ type listenerRecord struct {
 	eventType string
 	function  goja.Value
 	capture   bool
+	once      bool
+	passive   bool
 	token     events.ListenerID
 }
 
 // New returns an unloaded page-scoped JavaScript Runtime.
 func New() *Runtime {
-	return &Runtime{maxListeners: MaxEventListeners, maxMicrotasks: maxMicrotaskQueue, moduleTimeout: defaultModuleTimeout}
+	return &Runtime{
+		maxListeners: MaxEventListeners, maxMicrotasks: maxMicrotaskQueue, moduleTimeout: defaultModuleTimeout,
+		maxObservers: maxObserversPerPage, maxObserverRecords: maxPendingObserverRecords,
+		maxObserverCallbacks: maxObserverCallbacks, maxObserverLoops: maxResizeObserverLoops,
+		maxMutationsPerTask: 100_000, maxForcedReadsPerTask: 1_024,
+	}
 }
 
 // Load prepares a VM and host objects without evaluating Page scripts.
@@ -164,7 +190,11 @@ func (runtime *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script,
 	runtime.done = make(chan struct{})
 	runtime.scripts = cloneScripts(scripts)
 	runtime.environment = environment
-	runtime.domAPI = domapi.New(environment.Document, environment.Events, environment.OnMutation)
+	runtime.mutationSnapshot = dommodel.DocumentSnapshot{}
+	if environment.Document != nil {
+		runtime.mutationSnapshot = environment.Document.Snapshot()
+	}
+	runtime.domAPI = domapi.New(environment.Document, environment.Events, runtime.handleDOMMutation)
 	resourceBaseURL := environment.ResourceBaseURL
 	if resourceBaseURL == nil {
 		resourceBaseURL = environment.BaseURL
@@ -206,6 +236,18 @@ func (runtime *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script,
 	runtime.dynamicInsertDepth = 0
 	runtime.resourcePrepareCounts = make(map[uint64]int)
 	runtime.resourceFailures = make(map[string]int)
+	runtime.jsEventObjects = make(map[uint64]*goja.Object)
+	runtime.nextJSEventID = 0
+	runtime.media = environment.Media
+	runtime.mediaQueries = nil
+	runtime.mutationObservers = nil
+	runtime.resizeObservers = nil
+	runtime.intersectionObservers = nil
+	runtime.pendingMutationRecords = 0
+	runtime.observerCount = 0
+	runtime.frameObserversDirty.Store(false)
+	runtime.mutationCount = 0
+	runtime.forcedReadCount = 0
 	runtime.windowListeners = nil
 	runtime.documentListeners = nil
 	runtime.microtasks = nil
@@ -233,6 +275,15 @@ func (runtime *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script,
 			return err
 		}
 		if err := runtime.installGlobals(vm); err != nil {
+			return err
+		}
+		if err := runtime.installBrowserGlobals(vm); err != nil {
+			return err
+		}
+		if err := runtime.installCSSOM(vm); err != nil {
+			return err
+		}
+		if err := runtime.installObservers(vm); err != nil {
 			return err
 		}
 		if err := runtime.installServiceWorker(vm); err != nil {
@@ -394,6 +445,19 @@ func (runtime *Runtime) Stop() error {
 	runtime.dynamicInsertDepth = 0
 	runtime.resourcePrepareCounts = nil
 	runtime.resourceFailures = nil
+	runtime.jsEventObjects = nil
+	runtime.nextJSEventID = 0
+	runtime.media = runtimemodel.MediaEnvironment{}
+	runtime.mediaQueries = nil
+	runtime.mutationObservers = nil
+	runtime.resizeObservers = nil
+	runtime.intersectionObservers = nil
+	runtime.mutationSnapshot = dommodel.DocumentSnapshot{}
+	runtime.pendingMutationRecords = 0
+	runtime.observerCount = 0
+	runtime.frameObserversDirty.Store(false)
+	runtime.mutationCount = 0
+	runtime.forcedReadCount = 0
 	runtime.windowListeners = nil
 	runtime.documentListeners = nil
 	runtime.microtasks = nil
@@ -593,13 +657,17 @@ func (runtime *Runtime) DispatchHashChange(oldURL, newURL string) {
 func (runtime *Runtime) RunAnimationFrame(current time.Time) bool {
 	runtime.mu.Lock()
 	scheduler := runtime.schedulerAPI
+	observerFrame := runtime.frameObserversDirty.Load()
 	runtime.mu.Unlock()
-	if scheduler == nil || !scheduler.HasAnimationFrameCallbacks() {
+	if scheduler == nil || !scheduler.HasAnimationFrameCallbacks() && !observerFrame {
 		return false
 	}
 	ran := false
-	if err := runtime.runSync(context.Background(), func(*goja.Runtime) error {
+	if err := runtime.runSync(context.Background(), func(vm *goja.Runtime) error {
 		ran = scheduler.RunAnimationFrame(current)
+		if runtime.deliverFrameObservers(vm) {
+			ran = true
+		}
 		return nil
 	}); err != nil {
 		return false
@@ -611,8 +679,9 @@ func (runtime *Runtime) RunAnimationFrame(current time.Time) bool {
 func (runtime *Runtime) HasAnimationFrameCallbacks() bool {
 	runtime.mu.Lock()
 	scheduler := runtime.schedulerAPI
+	observerFrame := runtime.frameObserversDirty.Load()
 	runtime.mu.Unlock()
-	return scheduler != nil && scheduler.HasAnimationFrameCallbacks()
+	return scheduler != nil && (scheduler.HasAnimationFrameCallbacks() || observerFrame)
 }
 
 // SetBackground applies hidden-Tab scheduling policy to the Page.
@@ -658,8 +727,12 @@ func (runtime *Runtime) run(ctx context.Context, vm *goja.Runtime, queue <-chan 
 			default:
 			}
 			runtime.executing.Store(true)
+			runtime.mutationCount = 0
+			runtime.forcedReadCount = 0
 			err := executeTask(vm, queued.run)
 			if ctx.Err() == nil {
+				runtime.drainMicrotasks(vm)
+				runtime.deliverMutationObservers(vm)
 				runtime.drainMicrotasks(vm)
 			}
 			runtime.executing.Store(false)

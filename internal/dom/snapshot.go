@@ -5,8 +5,6 @@ import (
 	"fmt"
 )
 
-const maxSnapshotNodes = 100_000
-
 // DocumentSnapshot is the pointer-free representation exchanged with an
 // isolated runtime worker. Node IDs remain stable across snapshots.
 type DocumentSnapshot struct {
@@ -65,7 +63,7 @@ func (d *Document) ApplySnapshot(snapshot DocumentSnapshot) error {
 		return fmt.Errorf("DOM snapshot has invalid ready state %q", readyState)
 	}
 	flat := make(map[NodeID]NodeSnapshot)
-	if err := flattenSnapshot(snapshot.Root, flat, 0); err != nil {
+	if err := flattenSnapshot(snapshot.Root, flat, 0, ""); err != nil {
 		return err
 	}
 
@@ -133,29 +131,44 @@ func snapshotNode(node *Node) NodeSnapshot {
 	return state
 }
 
-func flattenSnapshot(node NodeSnapshot, flat map[NodeID]NodeSnapshot, depth int) error {
-	if depth > maxSnapshotNodes {
+func flattenSnapshot(node NodeSnapshot, flat map[NodeID]NodeSnapshot, depth int, parentTag string) error {
+	if depth > MaxTreeDepth {
 		return errors.New("DOM snapshot depth exceeds safety limit")
 	}
 	if node.ID == 0 {
 		return errors.New("DOM snapshot contains a zero node ID")
 	}
-	if node.Type > NodeText {
+	if node.Type > NodeDocumentFragment {
 		return fmt.Errorf("DOM snapshot node %d has invalid type %d", node.ID, node.Type)
+	}
+	if !validSnapshotPayload(node, parentTag) {
+		return fmt.Errorf("DOM snapshot node %d exceeds payload limit", node.ID)
 	}
 	if _, duplicate := flat[node.ID]; duplicate {
 		return fmt.Errorf("DOM snapshot contains duplicate node ID %d", node.ID)
 	}
-	if len(flat) >= maxSnapshotNodes {
+	if len(flat) >= MaxNodesPerDocument {
 		return errors.New("DOM snapshot node count exceeds safety limit")
 	}
 	flat[node.ID] = node
 	for _, child := range node.Children {
-		if err := flattenSnapshot(child, flat, depth+1); err != nil {
+		if err := flattenSnapshot(child, flat, depth+1, node.TagName); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func validSnapshotPayload(node NodeSnapshot, parentTag string) bool {
+	if len(node.TagName) > MaxDOMStringBytes || len(node.Text) > TextLimitForParent(parentTag) || len(node.ControlValue) > MaxDOMStringBytes || len(node.Attributes) > MaxAttributesPerNode {
+		return false
+	}
+	for name, value := range node.Attributes {
+		if len(name) > MaxDOMStringBytes || len(value) > MaxDOMStringBytes {
+			return false
+		}
+	}
+	return true
 }
 
 func linkSnapshot(state NodeSnapshot, nodes map[NodeID]*Node, parent *Node) error {

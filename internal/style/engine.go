@@ -82,6 +82,9 @@ func ComputeWithEnvironment(document *dom.Document, stylesheet *css.Stylesheet, 
 }
 
 func computeNode(node *dom.Node, parent ComputedStyle, stylesheet *css.Stylesheet, state InteractionState, environment Environment, result Map) {
+	if node == nil || node.Type == dom.NodeDocumentFragment {
+		return
+	}
 	computed := inheritedStyle(parent)
 	if node.Type == dom.NodeDocument {
 		computed = initialStyle()
@@ -1279,6 +1282,11 @@ func matches(node *dom.Node, selector css.Selector, state InteractionState) bool
 	return true
 }
 
+// MatchesSelector exposes the style engine's selector semantics to DOM APIs.
+func MatchesSelector(node *dom.Node, selector css.Selector, state InteractionState) bool {
+	return matches(node, selector, state)
+}
+
 func matchesSelectorAt(node *dom.Node, selector css.Selector, index int, state InteractionState) bool {
 	if !matchesCompound(node, selector.Compounds[index], state) {
 		return false
@@ -1289,6 +1297,9 @@ func matchesSelectorAt(node *dom.Node, selector css.Selector, index int, state I
 	switch selector.Combinators[index-1] {
 	case css.CombinatorDescendant:
 		for ancestor := node.Parent; ancestor != nil; ancestor = ancestor.Parent {
+			if ancestor.Type == dom.NodeDocumentFragment {
+				return false
+			}
 			if ancestor.Type == dom.NodeElement && matchesSelectorAt(ancestor, selector, index-1, state) {
 				return true
 			}

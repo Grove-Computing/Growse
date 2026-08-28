@@ -64,6 +64,10 @@ type isolatedDOMEventRuntime interface {
 	DispatchDOMEvent(events.Event) bool
 }
 
+type mediaEnvironmentRuntime interface {
+	UpdateMediaEnvironment(runtimemodel.MediaEnvironment)
+}
+
 // Browser owns the state for one browser window.
 //
 // MVPでは1つのアクティブページ、線形の閲覧履歴、信頼済みページごとに
@@ -720,7 +724,12 @@ func (b *Browser) UpdateViewport(width, height float32) bool {
 	}
 	page.ViewportWidth, page.ViewportHeight = width, height
 	recomputePageStyles(page, b.currentTime())
+	activeRuntime := b.activeRuntime
+	media := pageMediaEnvironment(page)
 	b.mu.Unlock()
+	if runtime, ok := activeRuntime.(mediaEnvironmentRuntime); ok {
+		runtime.UpdateMediaEnvironment(media)
+	}
 	return true
 }
 
@@ -735,11 +744,17 @@ func (b *Browser) SetReducedMotion(reduce bool) bool {
 	b.reducedMotion = reduce
 	page := b.page
 	onMutation := b.onMutation
+	activeRuntime := b.activeRuntime
+	media := runtimemodel.MediaEnvironment{}
 	if page != nil {
 		page.ReducedMotion = reduce
 		recomputePageStyles(page, b.currentTime())
+		media = pageMediaEnvironment(page)
 	}
 	b.mu.Unlock()
+	if runtime, ok := activeRuntime.(mediaEnvironmentRuntime); ok && page != nil {
+		runtime.UpdateMediaEnvironment(media)
+	}
 	if page != nil && onMutation != nil {
 		onMutation()
 	}
@@ -1349,6 +1364,8 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 		Transitions:      style.NewTransitionRegistry(),
 		StyleRevision:    1,
 		ReducedMotion:    reducedMotion,
+		ViewportWidth:    1280,
+		ViewportHeight:   720,
 		BackgroundImages: backgroundImages,
 		BackgroundErrors: backgroundErrors,
 		Engine:           engine,
@@ -1730,6 +1747,10 @@ func startRuntime(ctx context.Context, factory runtimemodel.EngineFactory, engin
 			}
 		},
 		RequestFrame: onMutation,
+		ReadRender: func(readContext context.Context, nodeID dom.NodeID) (runtimemodel.RenderSnapshot, error) {
+			return pageRenderSnapshot(readContext, page, nodeID)
+		},
+		Media: pageMediaEnvironment(page),
 		FrameScope: func(current time.Time, callback func()) {
 			frameMu.Lock()
 			frameTime = current

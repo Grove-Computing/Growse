@@ -84,7 +84,7 @@ func (state *frameLoadState) loadChildren(parentPage *Page, root *dom.Node, pare
 	var frames []*Frame
 	var walk func(*dom.Node)
 	walk = func(node *dom.Node) {
-		if node == nil || state.frameLimitReached() {
+		if node == nil || node.Type == dom.NodeDocumentFragment || state.frameLimitReached() {
 			return
 		}
 		if node.Type == dom.NodeElement && node.TagName == "iframe" {

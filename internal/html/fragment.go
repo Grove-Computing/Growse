@@ -21,7 +21,7 @@ func ParseFragment(source, contextTag string) (*dom.Document, error) {
 	}
 	document := dom.NewDocument()
 	for _, node := range nodes {
-		if err := convertNode(document, document.Root, node); err != nil {
+		if err := convertNode(document, document.Root, node, 1); err != nil {
 			return nil, err
 		}
 	}
@@ -38,6 +38,18 @@ func SerializeChildren(parent *dom.Node) (string, error) {
 		if err := xhtml.Render(&output, renderNode(child)); err != nil {
 			return "", fmt.Errorf("serialize HTML fragment: %w", err)
 		}
+	}
+	return output.String(), nil
+}
+
+// SerializeNode renders one DOM node and its subtree as HTML.
+func SerializeNode(node *dom.Node) (string, error) {
+	if node == nil {
+		return "", nil
+	}
+	var output bytes.Buffer
+	if err := xhtml.Render(&output, renderNode(node)); err != nil {
+		return "", fmt.Errorf("serialize HTML node: %w", err)
 	}
 	return output.String(), nil
 }
@@ -60,10 +72,18 @@ func renderNode(source *dom.Node) *xhtml.Node {
 		for _, name := range names {
 			target.Attr = append(target.Attr, xhtml.Attribute{Key: name, Val: source.Attributes[name]})
 		}
-	default:
+	case dom.NodeDocument, dom.NodeDocumentFragment:
 		target.Type = xhtml.DocumentNode
 	}
 	for _, child := range source.Children {
+		if source.Type == dom.NodeElement && source.TagName == "template" && child.Type == dom.NodeDocumentFragment {
+			for _, contentChild := range child.Children {
+				if converted := renderNode(contentChild); converted != nil {
+					target.AppendChild(converted)
+				}
+			}
+			continue
+		}
 		if converted := renderNode(child); converted != nil {
 			target.AppendChild(converted)
 		}

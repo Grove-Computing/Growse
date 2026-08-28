@@ -16,6 +16,9 @@ func parseMediaQueryList(value string) []MediaQuery {
 	return queries
 }
 
+// ParseMediaQueryList parses the subset shared by author CSS and matchMedia.
+func ParseMediaQueryList(value string) []MediaQuery { return parseMediaQueryList(value) }
+
 func parseMediaQuery(value string) (MediaQuery, bool) {
 	value = strings.ToLower(strings.TrimSpace(value))
 	if value == "" {

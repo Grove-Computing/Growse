@@ -48,6 +48,10 @@ type navigationEventRuntime interface {
 	DispatchHashChange(string, string)
 }
 
+type mediaEnvironmentRuntime interface {
+	UpdateMediaEnvironment(runtimemodel.MediaEnvironment)
+}
+
 type workerState struct {
 	peer    *peer
 	sandbox sandboxStatusResponse
@@ -114,6 +118,7 @@ func (state *workerState) installHandlers() {
 	state.peer.handleEvent("runtime.hashchange", state.dispatchHashChange)
 	state.peer.handleEvent("runtime.frames", state.updateFrames)
 	state.peer.handleEvent("runtime.window", state.updateWindow)
+	state.peer.handleEvent("runtime.media", state.updateMediaEnvironment)
 	state.peer.handleEvent("storage.external", state.applyExternalStorage)
 }
 
@@ -191,6 +196,7 @@ func (state *workerState) load(ctx context.Context, payload json.RawMessage) (an
 	environment := runtimemodel.Environment{
 		Document: document, Events: dispatcher, BaseURL: baseURL, ResourceBaseURL: resourceBaseURL,
 		ImportMap: cloneStringMap(request.ImportMap), Frames: frames, FramePolicy: request.FramePolicy, Window: request.Window,
+		Media:        request.Media,
 		LocalStorage: local, SessionStorage: session, StorageSource: request.StorageSource,
 		OnMutation: func() {
 			_ = state.peer.event("dom.mutation", mutationEvent{Document: document.Snapshot()})
@@ -235,6 +241,11 @@ func (state *workerState) load(ctx context.Context, payload json.RawMessage) (an
 		environment.RefreshStyles = func(refreshContext context.Context) error {
 			return state.peer.call(refreshContext, "host.styles-refresh", nil, nil)
 		}
+		environment.ReadRender = func(readContext context.Context, nodeID dom.NodeID) (runtimemodel.RenderSnapshot, error) {
+			var response renderReadResponse
+			err := state.peer.call(readContext, "host.render-read", renderReadRequest{NodeID: nodeID}, &response)
+			return response.Snapshot, err
+		}
 	}
 	if request.ServiceWorker {
 		environment.ServiceWorker = state.serviceWorkerHost(runtimeContext)
@@ -257,6 +268,19 @@ func (state *workerState) load(ctx context.Context, payload json.RawMessage) (an
 	}
 	state.mu.Unlock()
 	return nil, nil
+}
+
+func (state *workerState) updateMediaEnvironment(payload json.RawMessage) {
+	var event mediaEnvironmentEvent
+	if workerproto.DecodePayload(payload, &event) != nil {
+		return
+	}
+	state.mu.Lock()
+	runtime := state.runtime
+	state.mu.Unlock()
+	if updater, ok := runtime.(mediaEnvironmentRuntime); ok {
+		updater.UpdateMediaEnvironment(event.Media)
+	}
 }
 
 func (state *workerState) start(ctx context.Context, _ json.RawMessage) (any, error) {

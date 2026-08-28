@@ -190,7 +190,7 @@ func collectScriptsForEngine(root *dom.Node, engine runtimemodel.Engine) []scrip
 	var result []scriptSource
 	var walk func(*dom.Node)
 	walk = func(node *dom.Node) {
-		if node == nil {
+		if node == nil || node.Type == dom.NodeDocumentFragment {
 			return
 		}
 		if node.Type == dom.NodeElement && node.TagName == "script" {

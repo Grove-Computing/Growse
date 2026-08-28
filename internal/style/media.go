@@ -24,6 +24,16 @@ func matchesMediaGroups(groups [][]css.MediaQuery, environment Environment) bool
 	return true
 }
 
+// MatchesMediaQueryList evaluates one comma-separated query list.
+func MatchesMediaQueryList(queries []css.MediaQuery, environment Environment) bool {
+	for _, query := range queries {
+		if matchesMediaQuery(query, environment) {
+			return true
+		}
+	}
+	return false
+}
+
 func matchesMediaQuery(query css.MediaQuery, environment Environment) bool {
 	matched := query.Type == "all" || query.Type == "screen"
 	if matched {
