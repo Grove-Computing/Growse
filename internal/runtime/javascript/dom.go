@@ -11,7 +11,13 @@ import (
 )
 
 func (runtime *Runtime) installDOM(vm *goja.Runtime) error {
+	if err := runtime.installDOMInterfaces(vm); err != nil {
+		return err
+	}
 	document := vm.NewObject()
+	if prototype := domInterfacePrototype(vm, "Document"); prototype != nil {
+		_ = document.SetPrototype(prototype)
+	}
 	currentScriptGetter := vm.ToValue(func(goja.FunctionCall) goja.Value {
 		if runtime.currentScript == nil {
 			return goja.Null()
@@ -165,6 +171,9 @@ func (runtime *Runtime) elementValue(vm *goja.Runtime, element *domapi.Element) 
 	object := vm.NewObject()
 	runtime.elements[object] = element
 	runtime.elementByID[id] = object
+	if prototype := runtime.elementPrototype(vm, element); prototype != nil {
+		_ = object.SetPrototype(prototype)
+	}
 
 	_ = object.Set("getAttribute", func(call goja.FunctionCall) goja.Value {
 		value, ok := element.GetAttribute(call.Argument(0).String())
@@ -319,6 +328,101 @@ func (runtime *Runtime) elementValue(vm *goja.Runtime, element *domapi.Element) 
 	runtime.installStyleElement(vm, object, element)
 	runtime.installFrameElement(vm, object, id)
 	return object
+}
+
+func (runtime *Runtime) installDOMInterfaces(vm *goja.Runtime) error {
+	_, err := vm.RunString(`
+		(function (global) {
+			function illegal() { throw new TypeError("Illegal constructor"); }
+			function EventTarget() { illegal(); }
+			function Node() { illegal(); }
+			function Document() { illegal(); }
+			function DocumentFragment() { illegal(); }
+			function Element() { illegal(); }
+			function HTMLElement() { illegal(); }
+			function HTMLScriptElement() { illegal(); }
+			function HTMLLinkElement() { illegal(); }
+			function HTMLImageElement() { illegal(); }
+			function HTMLTemplateElement() { illegal(); }
+
+			Object.setPrototypeOf(Node.prototype, EventTarget.prototype);
+			Object.setPrototypeOf(Document.prototype, Node.prototype);
+			Object.setPrototypeOf(DocumentFragment.prototype, Node.prototype);
+			Object.setPrototypeOf(Element.prototype, Node.prototype);
+			Object.setPrototypeOf(HTMLElement.prototype, Element.prototype);
+			Object.setPrototypeOf(HTMLScriptElement.prototype, HTMLElement.prototype);
+			Object.setPrototypeOf(HTMLLinkElement.prototype, HTMLElement.prototype);
+			Object.setPrototypeOf(HTMLImageElement.prototype, HTMLElement.prototype);
+			Object.setPrototypeOf(HTMLTemplateElement.prototype, HTMLElement.prototype);
+
+			var interfaces = {
+				EventTarget: EventTarget,
+				Node: Node,
+				Document: Document,
+				DocumentFragment: DocumentFragment,
+				Element: Element,
+				HTMLElement: HTMLElement,
+				HTMLScriptElement: HTMLScriptElement,
+				HTMLLinkElement: HTMLLinkElement,
+				HTMLImageElement: HTMLImageElement,
+				HTMLTemplateElement: HTMLTemplateElement
+			};
+			Object.keys(interfaces).forEach(function (name) {
+				Object.defineProperty(interfaces[name].prototype, Symbol.toStringTag, { value: name });
+				Object.defineProperty(global, name, { value: interfaces[name], writable: true, configurable: true });
+			});
+		})(globalThis);
+	`)
+	if err != nil {
+		return fmt.Errorf("install DOM interfaces: %w", err)
+	}
+	elementPrototype := domInterfacePrototype(vm, "Element")
+	if elementPrototype == nil {
+		return errors.New("Element prototype is unavailable")
+	}
+	return elementPrototype.Set("getAttribute", func(call goja.FunctionCall) goja.Value {
+		element := runtime.domElementForThis(vm, call.This)
+		value, ok := element.GetAttribute(call.Argument(0).String())
+		if !ok {
+			return goja.Null()
+		}
+		return vm.ToValue(value)
+	})
+}
+
+func domInterfacePrototype(vm *goja.Runtime, name string) *goja.Object {
+	constructor, ok := vm.Get(name).(*goja.Object)
+	if !ok {
+		return nil
+	}
+	prototype, _ := constructor.Get("prototype").(*goja.Object)
+	return prototype
+}
+
+func (runtime *Runtime) elementPrototype(vm *goja.Runtime, element *domapi.Element) *goja.Object {
+	name := "Node"
+	if tagName := element.TagName(); tagName != "" {
+		name = "HTMLElement"
+		switch strings.ToLower(tagName) {
+		case "script":
+			name = "HTMLScriptElement"
+		case "link":
+			name = "HTMLLinkElement"
+		case "img":
+			name = "HTMLImageElement"
+		case "template":
+			name = "HTMLTemplateElement"
+		}
+	}
+	return domInterfacePrototype(vm, name)
+}
+
+func (runtime *Runtime) domElementForThis(vm *goja.Runtime, value goja.Value) *domapi.Element {
+	object, ok := value.(*goja.Object)
+	if !ok || runtime.elements[object] == nil {
+		panic(vm.NewTypeError("Illegal invocation"))
+	}
+	return runtime.elements[object]
 }
 
 func (runtime *Runtime) elementArrayValue(vm *goja.Runtime, elements []*domapi.Element) goja.Value {
