@@ -46,7 +46,10 @@ case "$goos" in
     fi
     output="${output}.exe"
     ldflags="$ldflags -H windowsgui"
-    go run github.com/tc-hib/go-winres@v0.3.3 simply \
+    host_goos=$(go env GOHOSTOS)
+    host_goarch=$(go env GOHOSTARCH)
+    GOOS="$host_goos" GOARCH="$host_goarch" CGO_ENABLED=0 \
+      go run github.com/tc-hib/go-winres@v0.3.3 simply \
       --arch amd64 \
       --out cmd/growse/rsrc \
       --product-version "${short_version}.0" \
@@ -72,6 +75,7 @@ example_resources=(
   dual-runtime
   external-web-platform
   flexbox
+  modern-web-compat
   multi-tab-workspace
   persistent-app
   todo
