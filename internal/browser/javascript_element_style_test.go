@@ -2,6 +2,7 @@ package browser
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	layoutengine "github.com/Grove-Computing/Growse/internal/layout"
@@ -49,5 +50,84 @@ func TestJavaScriptElementMutationPublishesStyleAndLayoutRevision(t *testing.T) 
 	_, insertedLayout := tree.Bounds[inserted.ID]
 	if !targetLayout || !insertedLayout || targetBounds.Width != 240 || tree.Revision != page.StyleRevision {
 		t.Fatalf("layout revision/result = revision:%d target:%+v targetOK:%v insertedOK:%v", tree.Revision, targetBounds, targetLayout, insertedLayout)
+	}
+}
+
+func TestJavaScriptCSSOMReadsBrowserStyleAndLayoutRevision(t *testing.T) {
+	pageURL := mustParseURL(t, "https://app.example/cssom")
+	loader := stubLoader{response: &network.Response{
+		URL: pageURL, StatusCode: 200, ContentType: "text/html",
+		Body: []byte(`<html><head><style>#target { display:grid; width:240px; height:40px; border:2px solid red; }</style></head><body><main id="target">content</main><script>
+			var target = document.getElementById("target");
+			var style = getComputedStyle(target);
+			var rect = target.getBoundingClientRect();
+			target.setAttribute("data-cssom", [style.display, style.width, rect.width, target.clientWidth, target.scrollWidth].join("|"));
+		</script></body></html>`),
+	}}
+	browserState := NewWithEngineFactory(loader, func(engine runtimemodel.Engine) runtimemodel.Runtime {
+		if engine == runtimemodel.EngineJavaScript {
+			return runtimejavascript.New()
+		}
+		return nil
+	})
+	t.Cleanup(func() { _ = browserState.Close() })
+	if _, err := browserState.SetEngine(context.Background(), runtimemodel.EngineJavaScript); err != nil {
+		t.Fatal(err)
+	}
+	page, err := browserState.Navigate(context.Background(), pageURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, ok := page.Document.GetElementByID("target")
+	if !ok {
+		t.Fatal("CSSOM target is missing")
+	}
+	if result := target.Attributes["data-cssom"]; !strings.HasPrefix(result, "grid|240px|244|") {
+		t.Fatalf("JavaScript CSSOM result = %q", result)
+	}
+	snapshot, err := pageRenderSnapshot(context.Background(), page, target.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Revision != page.StyleRevision || snapshot.Rect.Width != 244 || snapshot.Style["display"] != "grid" {
+		t.Fatalf("render snapshot/revision = %#v, page revision %d", snapshot, page.StyleRevision)
+	}
+}
+
+func TestJavaScriptMatchMediaChangeFollowsBrowserViewport(t *testing.T) {
+	pageURL := mustParseURL(t, "https://app.example/media-change")
+	loader := stubLoader{response: &network.Response{
+		URL: pageURL, StatusCode: 200, ContentType: "text/html",
+		Body: []byte(`<html><body><main id="target"></main><script>
+			var media = matchMedia("(max-width: 600px)");
+			document.getElementById("target").setAttribute("data-initial", String(media.matches));
+			media.addEventListener("change", function(event) {
+				document.getElementById("target").setAttribute("data-change", event.matches + ":" + innerWidth);
+			});
+		</script></body></html>`),
+	}}
+	browserState := NewWithEngineFactory(loader, func(engine runtimemodel.Engine) runtimemodel.Runtime {
+		if engine == runtimemodel.EngineJavaScript {
+			return runtimejavascript.New()
+		}
+		return nil
+	})
+	t.Cleanup(func() { _ = browserState.Close() })
+	if _, err := browserState.SetEngine(context.Background(), runtimemodel.EngineJavaScript); err != nil {
+		t.Fatal(err)
+	}
+	page, err := browserState.Navigate(context.Background(), pageURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, _ := page.Document.GetElementByID("target")
+	if target.Attributes["data-initial"] != "false" {
+		t.Fatalf("initial matchMedia = %q", target.Attributes["data-initial"])
+	}
+	if !browserState.UpdateViewport(500, 700) {
+		t.Fatal("UpdateViewport() = false")
+	}
+	if target.Attributes["data-change"] != "true:500" {
+		t.Fatalf("matchMedia change = %q", target.Attributes["data-change"])
 	}
 }

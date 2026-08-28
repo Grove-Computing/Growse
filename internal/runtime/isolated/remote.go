@@ -114,6 +114,7 @@ func (r *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script, envir
 		ImportMap: cloneStringMap(environment.ImportMap), Frames: frameAccessToWire(environment.Frames), FramePolicy: environment.FramePolicy,
 		Window:        environment.Window,
 		ServiceWorker: environment.ServiceWorker != nil,
+		Media:         environment.Media,
 	}
 	if environment.BaseURL != nil {
 		request.BaseURL = publicRuntimeURL(environment.BaseURL).String()
@@ -439,6 +440,7 @@ func (r *Runtime) installHostHandlers(p *peer) {
 	p.handleEvent("storage.change", r.applyStorageChange)
 	p.handleRequest("host.fetch", r.handleFetch)
 	p.handleRequest("host.styles-refresh", r.handleStylesRefresh)
+	p.handleRequest("host.render-read", r.handleRenderRead)
 	p.handleRequest("host.navigate", r.handleNavigate)
 	p.handleRequest("host.history-push", r.handleHistoryPush)
 	p.handleRequest("host.history-replace", r.handleHistoryReplace)
@@ -452,6 +454,26 @@ func (r *Runtime) installHostHandlers(p *peer) {
 	p.handleRequest("host.service-worker-get", r.handleServiceWorkerGet)
 	p.handleRequest("host.service-worker-list", r.handleServiceWorkerList)
 	p.handleRequest("host.service-worker-controller", r.handleServiceWorkerController)
+}
+
+func (r *Runtime) handleRenderRead(ctx context.Context, payload json.RawMessage) (any, error) {
+	var request renderReadRequest
+	if err := workerproto.DecodePayload(payload, &request); err != nil {
+		return nil, err
+	}
+	r.mu.Lock()
+	read := r.environment.ReadRender
+	r.mu.Unlock()
+	if read == nil {
+		return nil, errors.New("browser render snapshot is unavailable")
+	}
+	snapshot, err := read(ctx, request.NodeID)
+	return renderReadResponse{Snapshot: snapshot}, err
+}
+
+// UpdateMediaEnvironment forwards browser-owned media changes to the Page worker.
+func (r *Runtime) UpdateMediaEnvironment(media runtimemodel.MediaEnvironment) {
+	r.sendEvent("runtime.media", mediaEnvironmentEvent{Media: media})
 }
 
 func (r *Runtime) handleStylesRefresh(ctx context.Context, _ json.RawMessage) (any, error) {

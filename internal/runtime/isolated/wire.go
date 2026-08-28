@@ -33,21 +33,34 @@ type wireScript struct {
 }
 
 type loadRequest struct {
-	Engine          runtimemodel.Engine        `json:"engine"`
-	Scripts         []wireScript               `json:"scripts"`
-	Document        dom.DocumentSnapshot       `json:"document"`
-	BaseURL         string                     `json:"baseUrl"`
-	ResourceBaseURL string                     `json:"resourceBaseUrl,omitempty"`
-	ImportMap       map[string]string          `json:"importMap,omitempty"`
-	LocalStorage    []storagecore.Entry        `json:"localStorage,omitempty"`
-	SessionStorage  []storagecore.Entry        `json:"sessionStorage,omitempty"`
-	StorageSource   storagecore.MutationSource `json:"storageSource"`
-	HistoryLength   int                        `json:"historyLength"`
-	HistoryState    string                     `json:"historyState,omitempty"`
-	Frames          []wireFrame                `json:"frames,omitempty"`
-	FramePolicy     runtimemodel.FramePolicy   `json:"framePolicy,omitempty"`
-	Window          runtimemodel.WindowContext `json:"window"`
-	ServiceWorker   bool                       `json:"serviceWorker,omitempty"`
+	Engine          runtimemodel.Engine           `json:"engine"`
+	Scripts         []wireScript                  `json:"scripts"`
+	Document        dom.DocumentSnapshot          `json:"document"`
+	BaseURL         string                        `json:"baseUrl"`
+	ResourceBaseURL string                        `json:"resourceBaseUrl,omitempty"`
+	ImportMap       map[string]string             `json:"importMap,omitempty"`
+	LocalStorage    []storagecore.Entry           `json:"localStorage,omitempty"`
+	SessionStorage  []storagecore.Entry           `json:"sessionStorage,omitempty"`
+	StorageSource   storagecore.MutationSource    `json:"storageSource"`
+	HistoryLength   int                           `json:"historyLength"`
+	HistoryState    string                        `json:"historyState,omitempty"`
+	Frames          []wireFrame                   `json:"frames,omitempty"`
+	FramePolicy     runtimemodel.FramePolicy      `json:"framePolicy,omitempty"`
+	Window          runtimemodel.WindowContext    `json:"window"`
+	ServiceWorker   bool                          `json:"serviceWorker,omitempty"`
+	Media           runtimemodel.MediaEnvironment `json:"media"`
+}
+
+type renderReadRequest struct {
+	NodeID dom.NodeID `json:"nodeId"`
+}
+
+type renderReadResponse struct {
+	Snapshot runtimemodel.RenderSnapshot `json:"snapshot"`
+}
+
+type mediaEnvironmentEvent struct {
+	Media runtimemodel.MediaEnvironment `json:"media"`
 }
 
 type wireFrame struct {

@@ -102,6 +102,8 @@ type Environment struct {
 	StorageSource   storagecore.MutationSource
 	OnMutation      func()
 	RefreshStyles   func(context.Context) error
+	ReadRender      func(context.Context, dom.NodeID) (RenderSnapshot, error)
+	Media           MediaEnvironment
 	RequestFrame    func()
 	FrameScope      func(time.Time, func())
 	ConsoleLog      func(message string)
@@ -113,6 +115,37 @@ type Environment struct {
 	Window          WindowContext
 	PostMessage     func(target WindowReference, targetOrigin string, payload []byte) error
 	ServiceWorker   *ServiceWorkerHost
+}
+
+// RenderSnapshot is one browser-produced CSSOM and geometry read tied to one
+// immutable Style/Layout revision.
+type RenderSnapshot struct {
+	Revision     uint64            `json:"revision"`
+	Style        map[string]string `json:"style,omitempty"`
+	Rect         DOMRect           `json:"rect"`
+	ClientWidth  float32           `json:"clientWidth"`
+	ClientHeight float32           `json:"clientHeight"`
+	ScrollWidth  float32           `json:"scrollWidth"`
+	ScrollHeight float32           `json:"scrollHeight"`
+}
+
+// DOMRect is the bounded CSS-pixel rectangle exposed to JavaScript.
+type DOMRect struct {
+	X, Y, Width, Height float32
+}
+
+// MediaEnvironment is the browser-owned input used by matchMedia.
+type MediaEnvironment struct {
+	ViewportWidth, ViewportHeight float32
+	ColorScheme                   string
+	Hover                         bool
+	Pointer                       string
+	ReducedMotion                 bool
+}
+
+// MediaEnvironmentUpdater receives browser preference and viewport changes.
+type MediaEnvironmentUpdater interface {
+	UpdateMediaEnvironment(MediaEnvironment)
 }
 
 // FramePolicy contains the capabilities granted by an iframe sandbox.

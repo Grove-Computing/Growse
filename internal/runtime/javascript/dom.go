@@ -538,7 +538,11 @@ func (runtime *Runtime) elementValue(vm *goja.Runtime, element *domapi.Element) 
 	_ = classList.DefineAccessorProperty("value", classValueGetter, classValueSetter, goja.FLAG_FALSE, goja.FLAG_TRUE)
 	_ = object.DefineDataProperty("classList", classList, goja.FLAG_FALSE, goja.FLAG_FALSE, goja.FLAG_TRUE)
 	_ = object.DefineDataProperty("dataset", vm.NewDynamicObject(&datasetObject{vm: vm, element: element}), goja.FLAG_FALSE, goja.FLAG_FALSE, goja.FLAG_TRUE)
-	_ = object.DefineDataProperty("style", newInlineStyleObject(vm, element), goja.FLAG_FALSE, goja.FLAG_FALSE, goja.FLAG_TRUE)
+	inlineStyle := newInlineStyleObject(vm, element)
+	if prototype := domInterfacePrototype(vm, "CSSStyleDeclaration"); prototype != nil {
+		_ = inlineStyle.SetPrototype(prototype)
+	}
+	_ = object.DefineDataProperty("style", inlineStyle, goja.FLAG_FALSE, goja.FLAG_FALSE, goja.FLAG_TRUE)
 
 	textGetter := vm.ToValue(func(goja.FunctionCall) goja.Value { return vm.ToValue(element.Text()) })
 	textSetter := vm.ToValue(func(call goja.FunctionCall) goja.Value {
@@ -618,6 +622,7 @@ func (runtime *Runtime) elementValue(vm *goja.Runtime, element *domapi.Element) 
 		runtime.prepareConnectedScripts(vm, inserted...)
 		return goja.Undefined()
 	})
+	runtime.installElementGeometry(vm, object, element)
 	valueGetter := vm.ToValue(func(goja.FunctionCall) goja.Value { return vm.ToValue(element.Value()) })
 	valueSetter := vm.ToValue(func(call goja.FunctionCall) goja.Value {
 		element.SetValue(call.Argument(0).String())
@@ -646,6 +651,7 @@ func (runtime *Runtime) installDOMInterfaces(vm *goja.Runtime) error {
 			function HTMLLinkElement() { illegal(); }
 			function HTMLImageElement() { illegal(); }
 			function HTMLTemplateElement() { illegal(); }
+			function CSSStyleDeclaration() { illegal(); }
 
 			Object.setPrototypeOf(Node.prototype, EventTarget.prototype);
 			Object.setPrototypeOf(Document.prototype, Node.prototype);
@@ -667,7 +673,8 @@ func (runtime *Runtime) installDOMInterfaces(vm *goja.Runtime) error {
 				HTMLScriptElement: HTMLScriptElement,
 				HTMLLinkElement: HTMLLinkElement,
 				HTMLImageElement: HTMLImageElement,
-				HTMLTemplateElement: HTMLTemplateElement
+				HTMLTemplateElement: HTMLTemplateElement,
+				CSSStyleDeclaration: CSSStyleDeclaration
 			};
 			Object.keys(interfaces).forEach(function (name) {
 				Object.defineProperty(interfaces[name].prototype, Symbol.toStringTag, { value: name });

@@ -97,6 +97,8 @@ type Runtime struct {
 	resourceFailures      map[string]int
 	jsEventObjects        map[uint64]*goja.Object
 	nextJSEventID         uint64
+	media                 runtimemodel.MediaEnvironment
+	mediaQueries          []*mediaQueryRecord
 
 	loaded    bool
 	started   bool
@@ -212,6 +214,8 @@ func (runtime *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script,
 	runtime.resourceFailures = make(map[string]int)
 	runtime.jsEventObjects = make(map[uint64]*goja.Object)
 	runtime.nextJSEventID = 0
+	runtime.media = environment.Media
+	runtime.mediaQueries = nil
 	runtime.windowListeners = nil
 	runtime.documentListeners = nil
 	runtime.microtasks = nil
@@ -242,6 +246,9 @@ func (runtime *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script,
 			return err
 		}
 		if err := runtime.installBrowserGlobals(vm); err != nil {
+			return err
+		}
+		if err := runtime.installCSSOM(vm); err != nil {
 			return err
 		}
 		if err := runtime.installServiceWorker(vm); err != nil {
@@ -405,6 +412,8 @@ func (runtime *Runtime) Stop() error {
 	runtime.resourceFailures = nil
 	runtime.jsEventObjects = nil
 	runtime.nextJSEventID = 0
+	runtime.media = runtimemodel.MediaEnvironment{}
+	runtime.mediaQueries = nil
 	runtime.windowListeners = nil
 	runtime.documentListeners = nil
 	runtime.microtasks = nil
