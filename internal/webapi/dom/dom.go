@@ -66,6 +66,26 @@ func (element *Element) NodeType() dommodel.NodeType {
 	return node.Type
 }
 
+// NodeName returns the DOM-facing node name.
+func (element *Element) NodeName() string {
+	node, ok := element.node()
+	if !ok {
+		return ""
+	}
+	switch node.Type {
+	case dommodel.NodeDocument:
+		return "#document"
+	case dommodel.NodeDocumentFragment:
+		return "#document-fragment"
+	case dommodel.NodeText:
+		return "#text"
+	case dommodel.NodeElement:
+		return strings.ToUpper(node.TagName)
+	default:
+		return ""
+	}
+}
+
 // PreventDefault cancels a cancelable browser default action such as form submission.
 func (event Event) PreventDefault() {
 	if event.preventDefault != nil {
@@ -160,6 +180,18 @@ func (api *API) ElementByNodeID(id dommodel.NodeID) *Element {
 	}
 	node, ok := api.document.NodeByID(id)
 	if !ok || !api.document.IsConnected(node) {
+		return nil
+	}
+	return api.element(node)
+}
+
+// NodeByID returns a handle for connected or detached nodes owned by this Document.
+func (api *API) NodeByID(id dommodel.NodeID) *Element {
+	if api == nil || api.document == nil || id == 0 {
+		return nil
+	}
+	node, ok := api.document.NodeByID(id)
+	if !ok {
 		return nil
 	}
 	return api.element(node)
@@ -423,6 +455,75 @@ func (element *Element) RemoveChild(child *Element) bool {
 	return true
 }
 
+// InsertBefore inserts or moves child immediately before reference. A nil reference appends.
+func (element *Element) InsertBefore(child, reference *Element) bool {
+	parent, nodes, ok := element.mutationNodes([]*Element{child})
+	if !ok {
+		return false
+	}
+	var referenceNode *dommodel.Node
+	if reference != nil {
+		if reference.document != element.document {
+			return false
+		}
+		referenceNode, ok = reference.node()
+		if !ok || referenceNode.Parent != parent {
+			return false
+		}
+		if len(nodes) == 1 && nodes[0] == referenceNode {
+			return true
+		}
+	}
+	wanted := withoutNodes(parent.Children, nodes, nil)
+	index := len(wanted)
+	if referenceNode != nil {
+		index = nodeIndex(wanted, referenceNode)
+		if index < 0 {
+			return false
+		}
+	}
+	wanted = insertNodes(wanted, index, nodes)
+	if !element.document.ReplaceChildren(parent, wanted) {
+		return false
+	}
+	element.notifyMutation()
+	return true
+}
+
+// ReplaceChild replaces a direct child while preserving the removed subtree identity.
+func (element *Element) ReplaceChild(child, replaced *Element) bool {
+	if replaced == nil || replaced.document != element.document {
+		return false
+	}
+	parent, nodes, ok := element.mutationNodes([]*Element{child})
+	if !ok {
+		return false
+	}
+	replacedNode, ok := replaced.node()
+	if !ok || replacedNode.Parent != parent {
+		return false
+	}
+	if len(nodes) == 1 && nodes[0] == replacedNode {
+		return true
+	}
+	index := 0
+	for _, current := range parent.Children {
+		if current == replacedNode {
+			break
+		}
+		if !nodeIncluded(nodes, current) {
+			index++
+		}
+	}
+	wanted := withoutNodes(parent.Children, nodes, replacedNode)
+	wanted = insertNodes(wanted, index, nodes)
+	if !element.document.ReplaceChildren(parent, wanted) {
+		return false
+	}
+	element.notifyMutation()
+	return true
+}
+
 // ReplaceChildren atomically replaces this element's children with supplied nodes.
 func (element *Element) ReplaceChildren(children ...*Element) bool {
 	parent, nodes, ok := element.mutationNodes(children)
@@ -435,15 +536,16 @@ func (element *Element) ReplaceChildren(children ...*Element) bool {
 
 // Remove は要素自身とその子孫をDocumentから削除する。
 func (element *Element) Remove() bool {
-	if element == nil || element.document == nil {
+	node, ok := element.node()
+	if !ok || node == element.document.Root || node.Parent == nil {
 		return false
 	}
-	removed, ok := element.document.Remove(element.id)
-	if !ok {
+	parent := node.Parent
+	if !element.document.DetachChild(parent, node) {
 		return false
 	}
 	if element.events != nil {
-		element.events.RemoveEventListeners(removed...)
+		element.events.RemoveEventListeners(subtreeNodeIDs(node, nil)...)
 	}
 	if element.onMutation != nil {
 		element.onMutation()
@@ -581,6 +683,99 @@ func (element *Element) ParentElement() *Element {
 		return nil
 	}
 	return (&API{document: element.document, events: element.events, onMutation: element.onMutation}).element(node.Parent)
+}
+
+// ParentNode returns the parent Node, including a DocumentFragment or Document.
+func (element *Element) ParentNode() *Element {
+	node, ok := element.node()
+	if !ok || node.Parent == nil || node.Type == dommodel.NodeDocumentFragment {
+		return nil
+	}
+	return (&API{document: element.document, events: element.events, onMutation: element.onMutation}).element(node.Parent)
+}
+
+// ChildNodes returns a bounded static snapshot of direct DOM children.
+func (element *Element) ChildNodes() []*Element {
+	node, ok := element.node()
+	if !ok || node.Type == dommodel.NodeElement && node.TagName == "template" {
+		return nil
+	}
+	api := &API{document: element.document, events: element.events, onMutation: element.onMutation}
+	children := node.Children
+	if len(children) > maxDOMCollectionResults {
+		children = children[:maxDOMCollectionResults]
+	}
+	result := make([]*Element, len(children))
+	for index, child := range children {
+		result[index] = api.element(child)
+	}
+	return result
+}
+
+// FirstChild returns the first child Node.
+func (element *Element) FirstChild() *Element {
+	children := element.ChildNodes()
+	if len(children) == 0 {
+		return nil
+	}
+	return children[0]
+}
+
+// LastChild returns the last child Node.
+func (element *Element) LastChild() *Element {
+	children := element.ChildNodes()
+	if len(children) == 0 {
+		return nil
+	}
+	return children[len(children)-1]
+}
+
+// NextSibling returns the following sibling Node.
+func (element *Element) NextSibling() *Element { return element.sibling(1) }
+
+// PreviousSibling returns the preceding sibling Node.
+func (element *Element) PreviousSibling() *Element { return element.sibling(-1) }
+
+func (element *Element) sibling(offset int) *Element {
+	node, ok := element.node()
+	if !ok || node.Parent == nil {
+		return nil
+	}
+	index := nodeIndex(node.Parent.Children, node)
+	if index < 0 || index+offset < 0 || index+offset >= len(node.Parent.Children) {
+		return nil
+	}
+	return (&API{document: element.document, events: element.events, onMutation: element.onMutation}).element(node.Parent.Children[index+offset])
+}
+
+// Contains reports inclusive descendant membership without crossing template fragments.
+func (element *Element) Contains(candidate *Element) bool {
+	if element == nil || candidate == nil || element.document == nil || candidate.document != element.document {
+		return false
+	}
+	wanted, wantedOK := element.node()
+	current, currentOK := candidate.node()
+	if !wantedOK || !currentOK {
+		return false
+	}
+	for current != nil {
+		if current == wanted {
+			return true
+		}
+		if current.Type == dommodel.NodeDocumentFragment {
+			return false
+		}
+		current = current.Parent
+	}
+	return false
+}
+
+// CloneNode returns a detached shallow or deep clone owned by the same Document.
+func (element *Element) CloneNode(deep bool) *Element {
+	if element == nil || element.document == nil {
+		return nil
+	}
+	return (&API{document: element.document, events: element.events, onMutation: element.onMutation}).ImportNode(element, deep)
 }
 
 // Children returns a bounded static collection of direct element children.
@@ -890,6 +1085,51 @@ func countSubtreeNodes(node *dommodel.Node) int {
 		count += countSubtreeNodes(child)
 	}
 	return count
+}
+
+func subtreeNodeIDs(node *dommodel.Node, result []dommodel.NodeID) []dommodel.NodeID {
+	if node == nil {
+		return result
+	}
+	result = append(result, node.ID)
+	for _, child := range node.Children {
+		result = subtreeNodeIDs(child, result)
+	}
+	return result
+}
+
+func nodeIndex(nodes []*dommodel.Node, wanted *dommodel.Node) int {
+	for index, node := range nodes {
+		if node == wanted {
+			return index
+		}
+	}
+	return -1
+}
+
+func nodeIncluded(nodes []*dommodel.Node, wanted *dommodel.Node) bool {
+	return nodeIndex(nodes, wanted) >= 0
+}
+
+func withoutNodes(source, moving []*dommodel.Node, removed *dommodel.Node) []*dommodel.Node {
+	result := make([]*dommodel.Node, 0, len(source))
+	for _, node := range source {
+		if node != removed && !nodeIncluded(moving, node) {
+			result = append(result, node)
+		}
+	}
+	return result
+}
+
+func insertNodes(source []*dommodel.Node, index int, inserted []*dommodel.Node) []*dommodel.Node {
+	if index < 0 || index > len(source) {
+		return source
+	}
+	result := make([]*dommodel.Node, 0, len(source)+len(inserted))
+	result = append(result, source[:index]...)
+	result = append(result, inserted...)
+	result = append(result, source[index:]...)
+	return result
 }
 
 func (element *Element) textInputNode() (*dommodel.Node, bool) {

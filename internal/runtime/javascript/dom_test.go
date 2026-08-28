@@ -88,13 +88,78 @@ func TestDOMRejectsInvalidAndDisconnectedOperations(t *testing.T) {
 		if (app.setAttribute("bad name", "value")) { throw new Error("invalid attribute accepted"); }
 		var removed = document.getElementById("removed");
 		removed.remove();
-		if (removed.setAttribute("data-state", "after")) { throw new Error("disconnected mutation accepted"); }
+		if (!removed.setAttribute("data-state", "after") || removed.getAttribute("data-state") !== "after") { throw new Error("disconnected identity was lost"); }
 		if (app.appendChild({}) !== null) { throw new Error("foreign object appended"); }`
 	if err := runtime.Load(context.Background(), []runtimemodel.Script{javaScript(source)}, environment); err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
 	if err := runtime.Start(context.Background()); err != nil {
 		t.Fatalf("Start() error = %v", err)
+	}
+}
+
+func TestJavaScriptNodeRelationshipsMutationsFragmentsAndCloneKeepIdentity(t *testing.T) {
+	document, err := htmlparser.Parse(strings.NewReader(`<html><head></head><body><main id="host"><p id="a">A</p><p id="b">B</p></main></body></html>`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var message string
+	runtime := New()
+	t.Cleanup(func() { _ = runtime.Stop() })
+	source := `
+		var host = document.getElementById("host");
+		var a = document.getElementById("a");
+		var b = document.getElementById("b");
+		var clone = a.cloneNode(true);
+		clone.id = "clone";
+		var fragment = document.createDocumentFragment();
+		var x = document.createElement("span"); x.id = "x";
+		var y = document.createElement("span"); y.id = "y";
+		fragment.append(x, y);
+		var inserted = host.insertBefore(fragment, b);
+		var replaced = host.replaceChild(clone, a);
+		var cycleRejected = x.appendChild(host) === null;
+		b.before("before-b");
+		b.after("after-b");
+		b.remove();
+		b.setAttribute("data-detached", "yes");
+		host.appendChild(b);
+		var replacement = document.createElement("strong"); replacement.id = "replacement";
+		x.replaceWith(replacement, "tail");
+		console.log([
+			document.nodeType,
+			document.nodeName,
+			document.documentElement.parentNode === document,
+			host.nodeType,
+			host.nodeName,
+			host.parentNode === document.body,
+			host.firstChild === clone,
+			host.lastChild === b,
+			clone.nextSibling === replacement,
+			y.previousSibling.nodeType === 3,
+			host.childNodes.item(0) === clone,
+			inserted === fragment,
+			fragment.childNodes.length,
+			replaced === a,
+			!a.isConnected,
+			clone !== a && clone.firstChild !== a.firstChild,
+			cycleRejected,
+			host.contains(replacement),
+			!replacement.contains(host),
+			document.getElementById("b") === b,
+			b.getAttribute("data-detached"),
+			host.childNodes.length
+		].join("|"));`
+	environment := runtimemodel.Environment{Document: document, Events: events.NewDispatcher(), ConsoleRecord: func(_, value string) { message = value }}
+	if err := runtime.Load(context.Background(), []runtimemodel.Script{javaScript(source)}, environment); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	want := "9|#document|true|1|MAIN|true|true|true|true|true|true|true|0|true|true|true|true|true|true|true|yes|7"
+	if message != want {
+		t.Fatalf("Node mutation result = %q, want %q", message, want)
 	}
 }
 

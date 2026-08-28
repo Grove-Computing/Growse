@@ -29,6 +29,25 @@ func (runtime *Runtime) installDOM(vm *goja.Runtime) error {
 			return err
 		}
 	}
+	var documentRoot *domapi.Element
+	if runtime.environment.Document != nil && runtime.environment.Document.Root != nil {
+		documentRoot = runtime.domAPI.NodeByID(runtime.environment.Document.Root.ID)
+	}
+	_ = document.DefineDataProperty("nodeType", vm.ToValue(9), goja.FLAG_FALSE, goja.FLAG_FALSE, goja.FLAG_TRUE)
+	_ = document.DefineDataProperty("nodeName", vm.ToValue("#document"), goja.FLAG_FALSE, goja.FLAG_FALSE, goja.FLAG_TRUE)
+	_ = document.DefineDataProperty("parentNode", goja.Null(), goja.FLAG_FALSE, goja.FLAG_FALSE, goja.FLAG_TRUE)
+	documentChildrenGetter := vm.ToValue(func(goja.FunctionCall) goja.Value {
+		return runtime.nodeCollectionValue(vm, documentRoot.ChildNodes())
+	})
+	_ = document.DefineAccessorProperty("childNodes", documentChildrenGetter, nil, goja.FLAG_FALSE, goja.FLAG_TRUE)
+	documentFirstChildGetter := vm.ToValue(func(goja.FunctionCall) goja.Value {
+		return runtime.nodeValue(vm, documentRoot.FirstChild())
+	})
+	_ = document.DefineAccessorProperty("firstChild", documentFirstChildGetter, nil, goja.FLAG_FALSE, goja.FLAG_TRUE)
+	documentLastChildGetter := vm.ToValue(func(goja.FunctionCall) goja.Value {
+		return runtime.nodeValue(vm, documentRoot.LastChild())
+	})
+	_ = document.DefineAccessorProperty("lastChild", documentLastChildGetter, nil, goja.FLAG_FALSE, goja.FLAG_TRUE)
 	currentScriptGetter := vm.ToValue(func(goja.FunctionCall) goja.Value {
 		if runtime.currentScript == nil {
 			return goja.Null()
@@ -232,27 +251,65 @@ func (runtime *Runtime) elementValue(vm *goja.Runtime, element *domapi.Element) 
 			return goja.Null()
 		}
 		child := runtime.elements[childObject]
+		preparationRoots := runtime.connectionPreparationRoots(child)
 		if child == nil || !element.AppendChild(child) {
 			return goja.Null()
 		}
-		runtime.prepareConnectedScripts(vm, child)
+		runtime.prepareConnectedScripts(vm, preparationRoots...)
 		return childObject
 	})
 	_ = object.Set("append", func(call goja.FunctionCall) goja.Value {
 		children, ok := runtime.domArguments(vm, call.Arguments)
+		preparationRoots := runtime.connectionPreparationRoots(children...)
 		if !ok || len(children) != 0 && !element.Append(children...) {
 			panic(vm.NewTypeError("append arguments are invalid"))
 		}
-		runtime.prepareConnectedScripts(vm, children...)
+		runtime.prepareConnectedScripts(vm, preparationRoots...)
 		return goja.Undefined()
 	})
 	_ = object.Set("prepend", func(call goja.FunctionCall) goja.Value {
 		children, ok := runtime.domArguments(vm, call.Arguments)
+		preparationRoots := runtime.connectionPreparationRoots(children...)
 		if !ok || len(children) != 0 && !element.Prepend(children...) {
 			panic(vm.NewTypeError("prepend arguments are invalid"))
 		}
-		runtime.prepareConnectedScripts(vm, children...)
+		runtime.prepareConnectedScripts(vm, preparationRoots...)
 		return goja.Undefined()
+	})
+	_ = object.Set("insertBefore", func(call goja.FunctionCall) goja.Value {
+		childObject, ok := call.Argument(0).(*goja.Object)
+		if !ok || runtime.elements[childObject] == nil {
+			return goja.Null()
+		}
+		var reference *domapi.Element
+		if !goja.IsNull(call.Argument(1)) && !goja.IsUndefined(call.Argument(1)) {
+			referenceObject, valid := call.Argument(1).(*goja.Object)
+			if !valid || runtime.elements[referenceObject] == nil {
+				return goja.Null()
+			}
+			reference = runtime.elements[referenceObject]
+		}
+		child := runtime.elements[childObject]
+		preparationRoots := runtime.connectionPreparationRoots(child)
+		if !element.InsertBefore(child, reference) {
+			return goja.Null()
+		}
+		runtime.prepareConnectedScripts(vm, preparationRoots...)
+		return childObject
+	})
+	_ = object.Set("replaceChild", func(call goja.FunctionCall) goja.Value {
+		childObject, childOK := call.Argument(0).(*goja.Object)
+		replacedObject, replacedOK := call.Argument(1).(*goja.Object)
+		child, replaced := runtime.elements[childObject], runtime.elements[replacedObject]
+		if !childOK || !replacedOK || child == nil || replaced == nil {
+			return goja.Null()
+		}
+		preparationRoots := runtime.connectionPreparationRoots(child)
+		if !element.ReplaceChild(child, replaced) {
+			return goja.Null()
+		}
+		runtime.prepareConnectedScripts(vm, preparationRoots...)
+		return replacedObject
 	})
 	_ = object.Set("removeChild", func(call goja.FunctionCall) goja.Value {
 		childObject, ok := call.Argument(0).(*goja.Object)
@@ -269,10 +326,11 @@ func (runtime *Runtime) elementValue(vm *goja.Runtime, element *domapi.Element) 
 	_ = object.Set("replaceChildren", func(call goja.FunctionCall) goja.Value {
 		oldChildren := element.Children()
 		children, ok := runtime.domArguments(vm, call.Arguments)
+		preparationRoots := runtime.connectionPreparationRoots(children...)
 		if !ok || !element.ReplaceChildren(children...) {
 			panic(vm.NewTypeError("replaceChildren arguments are invalid"))
 		}
-		runtime.prepareConnectedScripts(vm, children...)
+		runtime.prepareConnectedScripts(vm, preparationRoots...)
 		for _, oldChild := range oldChildren {
 			runtime.refreshRemovedStyleTree(oldChild)
 		}
@@ -285,6 +343,67 @@ func (runtime *Runtime) elementValue(vm *goja.Runtime, element *domapi.Element) 
 			runtime.refreshInlineStyles(dynamicStyleSnapshot{})
 		}
 		return goja.Undefined()
+	})
+	_ = object.Set("before", func(call goja.FunctionCall) goja.Value {
+		parent := element.ParentNode()
+		children, ok := runtime.domArguments(vm, call.Arguments)
+		if parent == nil || !ok {
+			return goja.Undefined()
+		}
+		preparationRoots := runtime.connectionPreparationRoots(children...)
+		for _, child := range children {
+			if !parent.InsertBefore(child, element) {
+				panic(vm.NewTypeError("before arguments are invalid"))
+			}
+		}
+		runtime.prepareConnectedScripts(vm, preparationRoots...)
+		return goja.Undefined()
+	})
+	_ = object.Set("after", func(call goja.FunctionCall) goja.Value {
+		parent, reference := element.ParentNode(), element.NextSibling()
+		children, ok := runtime.domArguments(vm, call.Arguments)
+		if parent == nil || !ok {
+			return goja.Undefined()
+		}
+		preparationRoots := runtime.connectionPreparationRoots(children...)
+		for _, child := range children {
+			if !parent.InsertBefore(child, reference) {
+				panic(vm.NewTypeError("after arguments are invalid"))
+			}
+		}
+		runtime.prepareConnectedScripts(vm, preparationRoots...)
+		return goja.Undefined()
+	})
+	_ = object.Set("replaceWith", func(call goja.FunctionCall) goja.Value {
+		parent := element.ParentNode()
+		children, ok := runtime.domArguments(vm, call.Arguments)
+		if parent == nil || !ok {
+			return goja.Undefined()
+		}
+		if len(children) == 0 {
+			element.Remove()
+			return goja.Undefined()
+		}
+		fragment := runtime.domAPI.CreateDocumentFragment()
+		if fragment == nil || !fragment.Append(children...) {
+			panic(vm.NewTypeError("replaceWith arguments are invalid"))
+		}
+		preparationRoots := runtime.connectionPreparationRoots(fragment)
+		if !parent.ReplaceChild(fragment, element) {
+			panic(vm.NewTypeError("replaceWith target is invalid"))
+		}
+		runtime.prepareConnectedScripts(vm, preparationRoots...)
+		return goja.Undefined()
+	})
+	_ = object.Set("cloneNode", func(call goja.FunctionCall) goja.Value {
+		return runtime.nodeValue(vm, element.CloneNode(call.Argument(0).ToBoolean()))
+	})
+	_ = object.Set("contains", func(call goja.FunctionCall) goja.Value {
+		candidateObject, ok := call.Argument(0).(*goja.Object)
+		if !ok {
+			return vm.ToValue(false)
+		}
+		return vm.ToValue(element.Contains(runtime.elements[candidateObject]))
 	})
 	_ = object.Set("addEventListener", func(call goja.FunctionCall) goja.Value {
 		runtime.addEventListener(vm, object, element, call.Argument(0).String(), call.Argument(1), call.Argument(2))
@@ -337,8 +456,22 @@ func (runtime *Runtime) elementValue(vm *goja.Runtime, element *domapi.Element) 
 	_ = object.DefineDataProperty("tagName", vm.ToValue(element.TagName()), goja.FLAG_FALSE, goja.FLAG_FALSE, goja.FLAG_TRUE)
 	connectedGetter := vm.ToValue(func(goja.FunctionCall) goja.Value { return vm.ToValue(element.IsConnected()) })
 	_ = object.DefineAccessorProperty("isConnected", connectedGetter, nil, goja.FLAG_FALSE, goja.FLAG_TRUE)
+	_ = object.DefineDataProperty("nodeType", vm.ToValue(domNodeTypeValue(element.NodeType())), goja.FLAG_FALSE, goja.FLAG_FALSE, goja.FLAG_TRUE)
+	_ = object.DefineDataProperty("nodeName", vm.ToValue(element.NodeName()), goja.FLAG_FALSE, goja.FLAG_FALSE, goja.FLAG_TRUE)
+	parentNodeGetter := vm.ToValue(func(goja.FunctionCall) goja.Value { return runtime.nodeValue(vm, element.ParentNode()) })
+	_ = object.DefineAccessorProperty("parentNode", parentNodeGetter, nil, goja.FLAG_FALSE, goja.FLAG_TRUE)
 	childrenGetter := vm.ToValue(func(goja.FunctionCall) goja.Value { return runtime.elementArrayValue(vm, element.Children()) })
 	_ = object.DefineAccessorProperty("children", childrenGetter, nil, goja.FLAG_FALSE, goja.FLAG_TRUE)
+	childNodesGetter := vm.ToValue(func(goja.FunctionCall) goja.Value { return runtime.nodeCollectionValue(vm, element.ChildNodes()) })
+	_ = object.DefineAccessorProperty("childNodes", childNodesGetter, nil, goja.FLAG_FALSE, goja.FLAG_TRUE)
+	firstChildGetter := vm.ToValue(func(goja.FunctionCall) goja.Value { return runtime.nodeValue(vm, element.FirstChild()) })
+	_ = object.DefineAccessorProperty("firstChild", firstChildGetter, nil, goja.FLAG_FALSE, goja.FLAG_TRUE)
+	lastChildGetter := vm.ToValue(func(goja.FunctionCall) goja.Value { return runtime.nodeValue(vm, element.LastChild()) })
+	_ = object.DefineAccessorProperty("lastChild", lastChildGetter, nil, goja.FLAG_FALSE, goja.FLAG_TRUE)
+	nextSiblingGetter := vm.ToValue(func(goja.FunctionCall) goja.Value { return runtime.nodeValue(vm, element.NextSibling()) })
+	_ = object.DefineAccessorProperty("nextSibling", nextSiblingGetter, nil, goja.FLAG_FALSE, goja.FLAG_TRUE)
+	previousSiblingGetter := vm.ToValue(func(goja.FunctionCall) goja.Value { return runtime.nodeValue(vm, element.PreviousSibling()) })
+	_ = object.DefineAccessorProperty("previousSibling", previousSiblingGetter, nil, goja.FLAG_FALSE, goja.FLAG_TRUE)
 	parentGetter := vm.ToValue(func(goja.FunctionCall) goja.Value { return runtime.elementValue(vm, element.ParentElement()) })
 	_ = object.DefineAccessorProperty("parentElement", parentGetter, nil, goja.FLAG_FALSE, goja.FLAG_TRUE)
 	if strings.EqualFold(element.TagName(), "template") {
@@ -473,6 +606,52 @@ func (runtime *Runtime) elementArrayValue(vm *goja.Runtime, elements []*domapi.E
 		values[index] = runtime.elementValue(vm, element)
 	}
 	return vm.NewArray(values...)
+}
+
+func (runtime *Runtime) nodeCollectionValue(vm *goja.Runtime, nodes []*domapi.Element) goja.Value {
+	return runtime.elementCollectionValue(vm, nodes)
+}
+
+func (runtime *Runtime) nodeValue(vm *goja.Runtime, node *domapi.Element) goja.Value {
+	if node == nil {
+		return goja.Null()
+	}
+	if node.NodeType() == dommodel.NodeDocument {
+		if document, ok := vm.Get("document").(*goja.Object); ok {
+			return document
+		}
+	}
+	return runtime.elementValue(vm, node)
+}
+
+func domNodeTypeValue(nodeType dommodel.NodeType) int {
+	switch nodeType {
+	case dommodel.NodeElement:
+		return 1
+	case dommodel.NodeText:
+		return 3
+	case dommodel.NodeDocument:
+		return 9
+	case dommodel.NodeDocumentFragment:
+		return 11
+	default:
+		return 0
+	}
+}
+
+func (runtime *Runtime) connectionPreparationRoots(nodes ...*domapi.Element) []*domapi.Element {
+	var result []*domapi.Element
+	for _, node := range nodes {
+		if node == nil {
+			continue
+		}
+		if node.NodeType() == dommodel.NodeDocumentFragment {
+			result = append(result, node.ChildNodes()...)
+			continue
+		}
+		result = append(result, node)
+	}
+	return result
 }
 
 func (runtime *Runtime) domArguments(vm *goja.Runtime, values []goja.Value) ([]*domapi.Element, bool) {
