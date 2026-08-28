@@ -1,6 +1,7 @@
 package layout
 
 import (
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -70,6 +71,18 @@ type blockStyle struct {
 	overflowWrap        stylemodel.OverflowWrap
 	verticalAlign       stylemodel.VerticalAlign
 	textOverflow        stylemodel.TextOverflow
+	objectFit           stylemodel.ObjectFit
+	objectPosition      stylemodel.BackgroundPosition
+	listStyleType       stylemodel.ListStyleType
+	listStylePosition   stylemodel.ListStylePosition
+	listStyleImage      string
+	appearance          stylemodel.Appearance
+	accentColor         uint32
+	accentColorAuto     bool
+	cursor              stylemodel.Cursor
+	filters             []stylemodel.Filter
+	backdropFilters     []stylemodel.Filter
+	mixBlendMode        stylemodel.BlendMode
 	overflowX           stylemodel.Overflow
 	overflowY           stylemodel.Overflow
 	flexDirection       stylemodel.FlexDirection
@@ -311,6 +324,9 @@ func (e *engine) addInput(node *dom.Node, style blockStyle, x, width, containing
 		InputType:   inputType,
 		Disabled:    forms.Disabled(node),
 		ReadOnly:    forms.ReadOnly(node),
+		Appearance:  style.appearance,
+		AccentColor: resolvedAccentColor(style),
+		Cursor:      style.cursor,
 		X:           x,
 		Y:           e.y,
 		Width:       usedWidth,
@@ -367,6 +383,7 @@ func (e *engine) addSubmitButton(node *dom.Node, style blockStyle, x, width, con
 	e.tree.Boxes = append(e.tree.Boxes, Box{
 		Order: e.nextOrder(), StackingID: e.stackingID, NodeID: node.ID, Tag: node.TagName,
 		Text: label, Button: true, Disabled: forms.Disabled(node),
+		Appearance: style.appearance, AccentColor: resolvedAccentColor(style), Cursor: style.cursor,
 		X: x, Y: e.y, Width: max(usedWidth, float32(1)), Height: max(usedHeight, float32(1)), Color: style.color,
 		Clip: cloneRect(e.clip), Clips: cloneClipRegions(e.clips), Opacity: e.opacity * style.opacity,
 		Transform: stylemodel.IdentityMatrix(), Hidden: style.hidden,
@@ -389,6 +406,7 @@ func (e *engine) addCheckable(node *dom.Node, style blockStyle, x, width, contai
 	e.tree.Boxes = append(e.tree.Boxes, Box{
 		Order: e.nextOrder(), StackingID: e.stackingID, NodeID: node.ID, Tag: node.TagName,
 		Checkable: true, Checked: state.Checked, InputType: state.Kind,
+		Appearance: style.appearance, AccentColor: resolvedAccentColor(style), Cursor: style.cursor,
 		Disabled: forms.Disabled(node),
 		X:        x, Y: e.y, Width: max(usedWidth, float32(1)), Height: max(usedHeight, float32(1)), Color: style.color,
 		Clip: cloneRect(e.clip), Clips: cloneClipRegions(e.clips), Opacity: e.opacity * style.opacity,
@@ -420,6 +438,7 @@ func (e *engine) addSelect(node *dom.Node, style blockStyle, x, width, containin
 	e.tree.Boxes = append(e.tree.Boxes, Box{
 		Order: e.nextOrder(), StackingID: e.stackingID, NodeID: node.ID, Tag: node.TagName,
 		Text: label, Select: true, Options: options, Selected: selected,
+		Appearance: style.appearance, AccentColor: resolvedAccentColor(style), Cursor: style.cursor,
 		Disabled: forms.Disabled(node),
 		X:        x, Y: e.y, Width: usedWidth, Height: usedHeight, Color: style.color,
 		Clip: cloneRect(e.clip), Clips: cloneClipRegions(e.clips), Opacity: e.opacity * style.opacity,
@@ -432,9 +451,10 @@ func (e *engine) addSelect(node *dom.Node, style blockStyle, x, width, containin
 func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containingHeight float32, heightDefinite bool, topMargin *float32) {
 	geometryBoxStart, geometryDecorationStart := len(e.tree.Boxes), len(e.tree.Decorations)
 	previousStackingID := e.stackingID
-	if style.opacity < 1 || len(style.transform) != 0 || style.layoutPosition != stylemodel.PositionStatic && !style.zIndexAuto {
+	effectRequested := len(style.filters) != 0 || len(style.backdropFilters) != 0 || style.mixBlendMode != stylemodel.BlendNormal
+	if style.opacity < 1 || len(style.transform) != 0 || effectRequested || style.layoutPosition != stylemodel.PositionStatic && !style.zIndexAuto {
 		e.stackingID = len(e.tree.StackingContexts)
-		e.tree.StackingContexts = append(e.tree.StackingContexts, StackingContext{Parent: previousStackingID, NodeID: node.ID, ZIndex: style.zIndex, Order: e.order, Opacity: style.opacity, Offscreen: style.opacity < 1})
+		e.tree.StackingContexts = append(e.tree.StackingContexts, StackingContext{Parent: previousStackingID, NodeID: node.ID, ZIndex: style.zIndex, Order: e.order, Opacity: style.opacity, Offscreen: style.opacity < 1 || effectRequested})
 	}
 	previousOpacity := e.opacity
 	e.opacity *= style.opacity
@@ -475,7 +495,7 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 	}
 	boxTop := e.y
 	decorationIndex := -1
-	if style.background != 0 || style.image.Kind != stylemodel.BackgroundImageNone || hasVisibleBorder(style.border) || len(style.boxShadows) != 0 || style.outline.Style != stylemodel.BorderNone {
+	if style.background != 0 || style.image.Kind != stylemodel.BackgroundImageNone || hasVisibleBorder(style.border) || len(style.boxShadows) != 0 || style.outline.Style != stylemodel.BorderNone || effectRequested {
 		decorationIndex = len(e.tree.Decorations)
 		e.tree.Decorations = append(e.tree.Decorations, Decoration{
 			Order: e.nextOrder(), StackingID: e.stackingID, NodeID: node.ID,
@@ -485,6 +505,7 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 			Clips:  cloneClipRegions(e.clips),
 			Border: style.border, Opacity: e.opacity, BoxShadows: append([]stylemodel.Shadow(nil), style.boxShadows...),
 			Outline: style.outline, OutlineOffset: style.outlineOffset,
+			Filters: append([]stylemodel.Filter(nil), style.filters...), BackdropFilters: append([]stylemodel.Filter(nil), style.backdropFilters...), BlendMode: style.mixBlendMode, Cursor: style.cursor,
 			Transform: stylemodel.IdentityMatrix(),
 			Hidden:    style.hidden,
 		})
@@ -528,7 +549,8 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 	} else if style.display == stylemodel.DisplayGrid {
 		e.addGridChildren(node, style, contentX, contentWidth, childContainingHeight, declaredHeightDefinite)
 	} else {
-		inlineRuns := e.generatedRuns(node, true, style)
+		inlineRuns := e.listMarkerRuns(node, style)
+		inlineRuns = append(inlineRuns, e.generatedRuns(node, true, style)...)
 		previousBlock := false
 		previousBottomMargin := float32(0)
 		flushInline := func() {
@@ -617,6 +639,14 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 	if decorationIndex >= 0 {
 		e.tree.Decorations[decorationIndex].Height = outerHeight
 		e.tree.Decorations[decorationIndex].Radius = resolveBorderRadii(style.radius, outerWidth, outerHeight)
+		if effectRequested && !stylemodel.FilterSurfaceAllowed(outerWidth, outerHeight) {
+			e.tree.Decorations[decorationIndex].Filters = nil
+			e.tree.Decorations[decorationIndex].BackdropFilters = nil
+			e.tree.Decorations[decorationIndex].BlendMode = stylemodel.BlendNormal
+			if e.stackingID > 0 && e.stackingID < len(e.tree.StackingContexts) && style.opacity >= 1 {
+				e.tree.StackingContexts[e.stackingID].Offscreen = false
+			}
+		}
 	}
 	if e.positionCB != nil && style.layoutPosition != stylemodel.PositionStatic {
 		e.positionCB.Height = max(outerHeight-verticalBorder, float32(0))
@@ -810,6 +840,47 @@ func (e *engine) generatedRuns(node *dom.Node, before bool, style blockStyle) []
 	return e.generatedRunsWithOpacity(node, before, style, e.opacity)
 }
 
+func (e *engine) listMarkerRuns(node *dom.Node, style blockStyle) []inlineRun {
+	if node == nil || node.TagName != "li" || style.listStyleType == stylemodel.ListStyleNone {
+		return nil
+	}
+	marker := "•"
+	switch style.listStyleType {
+	case stylemodel.ListStyleCircle:
+		marker = "◦"
+	case stylemodel.ListStyleSquare:
+		marker = "▪"
+	case stylemodel.ListStyleDecimal:
+		index := 1
+		if node.Parent != nil {
+			index = 0
+			for _, sibling := range node.Parent.Children {
+				if sibling.Type == dom.NodeElement && sibling.TagName == "li" {
+					index++
+				}
+				if sibling == node {
+					break
+				}
+			}
+			if index == 0 {
+				index = 1
+			}
+		}
+		marker = strconv.Itoa(index) + "."
+	}
+	if style.listStyleImage != "" {
+		marker = "◆"
+	}
+	return []inlineRun{{nodeID: node.ID, tag: "::marker", text: marker + " ", style: style, opacity: e.opacity}}
+}
+
+func resolvedAccentColor(style blockStyle) uint32 {
+	if !style.accentColorAuto {
+		return style.accentColor
+	}
+	return 0x0969daff
+}
+
 func (e *engine) generatedRunsWithOpacity(node *dom.Node, before bool, style blockStyle, opacity float32) []inlineRun {
 	computed, ok := e.computed.For(node)
 	if !ok {
@@ -868,7 +939,9 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 			lineRuns, usedWidth = truncateTextRuns(lineRuns, lineWidth)
 			lineText.Reset()
 			for _, run := range lineRuns {
-				lineText.WriteString(run.Text)
+				if run.Tag != "::marker" {
+					lineText.WriteString(run.Text)
+				}
 			}
 		}
 		if lineHeight == 0 {
@@ -908,6 +981,7 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 			FontSize: container.fontSize, Bold: container.bold, Color: container.color,
 			FontFamilies: append([]string(nil), container.fontFamilies...), FontStyle: container.fontStyle, FontStretch: container.fontStretch,
 			LetterSpacing: container.letterSpacing, WordSpacing: container.wordSpacing,
+			Cursor:  container.cursor,
 			Opacity: e.opacity, Decoration: container.decoration, DecorationColor: container.decorationColor,
 			TextShadows: append([]stylemodel.Shadow(nil), container.textShadows...),
 			Transform:   stylemodel.IdentityMatrix(),
@@ -954,7 +1028,9 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 		} else {
 			lineRuns = append(lineRuns, textRun)
 		}
-		lineText.WriteString(text)
+		if run.tag != "::marker" {
+			lineText.WriteString(text)
+		}
 		usedWidth += pieceWidth
 		height := runHeight + absFloat32(textRun.VerticalOffset)
 		if height > lineHeight {
@@ -1321,6 +1397,16 @@ func (e *engine) styleFor(node *dom.Node) blockStyle {
 	if computed, ok := e.computed.For(node); ok {
 		style = applyComputed(style, computed)
 	}
+	if style.cursor == stylemodel.CursorAuto {
+		switch node.TagName {
+		case "a", "button", "select":
+			style.cursor = stylemodel.CursorPointer
+		case "input", "textarea":
+			style.cursor = stylemodel.CursorText
+		default:
+			style.cursor = stylemodel.CursorDefault
+		}
+	}
 	return style
 }
 
@@ -1365,7 +1451,7 @@ func uaStyle(tag string) blockStyle {
 }
 
 func defaultStyle() blockStyle {
-	return blockStyle{fontSize: 16, fontFamilies: []string{"Growse Sans", "sans-serif"}, fontStyle: "normal", fontStretch: "normal", color: textColor, decorationColor: textColor, opacity: 1, display: stylemodel.DisplayInline}
+	return blockStyle{fontSize: 16, fontFamilies: []string{"Growse Sans", "sans-serif"}, fontStyle: "normal", fontStretch: "normal", color: textColor, decorationColor: textColor, opacity: 1, display: stylemodel.DisplayInline, listStyleType: stylemodel.ListStyleDisc, accentColorAuto: true}
 }
 
 func applyComputed(block blockStyle, computed stylemodel.ComputedStyle) blockStyle {
@@ -1405,6 +1491,12 @@ func applyComputed(block blockStyle, computed stylemodel.ComputedStyle) blockSty
 	block.letterSpacing, block.wordSpacing = computed.LetterSpacing, computed.WordSpacing
 	block.wordBreak, block.overflowWrap = computed.WordBreak, computed.OverflowWrap
 	block.verticalAlign, block.textOverflow = computed.VerticalAlign, computed.TextOverflow
+	block.objectFit, block.objectPosition = computed.ObjectFit, computed.ObjectPosition
+	block.listStyleType, block.listStylePosition, block.listStyleImage = computed.ListStyleType, computed.ListStylePosition, computed.ListStyleImage
+	block.appearance, block.accentColor, block.accentColorAuto, block.cursor = computed.Appearance, computed.AccentColor, computed.AccentColorAuto, computed.Cursor
+	block.filters = append([]stylemodel.Filter(nil), computed.Filters...)
+	block.backdropFilters = append([]stylemodel.Filter(nil), computed.BackdropFilters...)
+	block.mixBlendMode = computed.MixBlendMode
 	block.overflowX, block.overflowY = computed.OverflowX, computed.OverflowY
 	block.flexDirection, block.flexWrap = computed.FlexDirection, computed.FlexWrap
 	block.justifyContent, block.alignItems, block.justifyItems, block.alignContent = computed.JustifyContent, computed.AlignItems, computed.JustifyItems, computed.AlignContent

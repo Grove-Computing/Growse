@@ -147,6 +147,20 @@ func TestBuildPreservesTypographyForThePainter(t *testing.T) {
 	}
 }
 
+func TestBuildAppliesAndPreservesBoundedVisualEffects(t *testing.T) {
+	filters := []style.Filter{{Kind: style.FilterBrightness, Amount: 2}, {Kind: style.FilterBlur, Radius: 4}}
+	tree := &layout.Tree{Background: 0xffffffff, Decorations: []layout.Decoration{{Background: 0x402010ff, Filters: filters, BackdropFilters: []style.Filter{{Kind: style.FilterContrast, Amount: .8}}, BlendMode: style.BlendMultiply, Cursor: style.CursorPointer}}}
+	command := Build(tree).Commands[0].(DrawBox)
+	expected := style.BlendColors(style.ApplyColorFilters(0x402010ff, filters), style.ApplyColorFilters(tree.Background, tree.Decorations[0].BackdropFilters), style.BlendMultiply)
+	if command.Color != expected || len(command.Filters) != 2 || len(command.BackdropFilters) != 1 || command.BlendMode != style.BlendMultiply || command.Cursor != style.CursorPointer {
+		t.Fatalf("visual command = %#v", command)
+	}
+	tree.Decorations[0].Filters[0].Amount = 9
+	if command.Filters[0].Amount != 2 {
+		t.Fatal("display list shares mutable filter storage")
+	}
+}
+
 func TestBuildPreservesShadowsAndOutline(t *testing.T) {
 	shadow := style.Shadow{OffsetX: 2, OffsetY: 3, Blur: 4, Spread: 1, Color: 0x123456ff}
 	tree := &layout.Tree{

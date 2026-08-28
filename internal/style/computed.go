@@ -361,6 +361,101 @@ const (
 	TextOverflowEllipsis
 )
 
+// ObjectFit selects how replaced content maps into its content box.
+type ObjectFit uint8
+
+const (
+	ObjectFitFill ObjectFit = iota
+	ObjectFitContain
+	ObjectFitCover
+	ObjectFitNone
+	ObjectFitScaleDown
+)
+
+// ListStyleType is the bounded marker subset used by framework fixtures.
+type ListStyleType uint8
+
+const (
+	ListStyleDisc ListStyleType = iota
+	ListStyleCircle
+	ListStyleSquare
+	ListStyleDecimal
+	ListStyleNone
+)
+
+// ListStylePosition controls whether a marker is inside or outside the item.
+type ListStylePosition uint8
+
+const (
+	ListStyleOutside ListStylePosition = iota
+	ListStyleInside
+)
+
+// Appearance controls native form-control chrome.
+type Appearance uint8
+
+const (
+	AppearanceAuto Appearance = iota
+	AppearanceNone
+)
+
+// Cursor is the implemented platform cursor subset.
+type Cursor uint8
+
+const (
+	CursorAuto Cursor = iota
+	CursorDefault
+	CursorPointer
+	CursorText
+	CursorCrosshair
+	CursorMove
+	CursorGrab
+	CursorGrabbing
+	CursorNotAllowed
+	CursorWait
+	CursorProgress
+	CursorColResize
+	CursorRowResize
+)
+
+// FilterKind identifies a supported bounded CSS filter function.
+type FilterKind uint8
+
+const (
+	FilterBlur FilterKind = iota
+	FilterBrightness
+	FilterContrast
+	FilterGrayscale
+	FilterHueRotate
+	FilterInvert
+	FilterOpacity
+	FilterSaturate
+	FilterSepia
+	FilterDropShadow
+)
+
+// Filter is one validated filter function. Amount is a normalized scalar,
+// Angle uses degrees, Radius uses CSS px, and Shadow is used by drop-shadow.
+type Filter struct {
+	Kind   FilterKind
+	Amount float32
+	Angle  float32
+	Radius float32
+	Shadow Shadow
+}
+
+// BlendMode is the fixture-supported mix-blend-mode subset.
+type BlendMode uint8
+
+const (
+	BlendNormal BlendMode = iota
+	BlendMultiply
+	BlendScreen
+	BlendOverlay
+	BlendDarken
+	BlendLighten
+)
+
 // Overflow controls clipping and scroll-container creation on one axis.
 type Overflow uint8
 
@@ -461,6 +556,18 @@ type ComputedStyle struct {
 	OverflowWrap        OverflowWrap
 	VerticalAlign       VerticalAlign
 	TextOverflow        TextOverflow
+	ObjectFit           ObjectFit
+	ObjectPosition      BackgroundPosition
+	ListStyleType       ListStyleType
+	ListStylePosition   ListStylePosition
+	ListStyleImage      string
+	Appearance          Appearance
+	AccentColor         uint32
+	AccentColorAuto     bool
+	Cursor              Cursor
+	Filters             []Filter
+	BackdropFilters     []Filter
+	MixBlendMode        BlendMode
 	OverflowX           Overflow
 	OverflowY           Overflow
 	Display             Display

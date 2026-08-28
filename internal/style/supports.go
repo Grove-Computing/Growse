@@ -152,6 +152,40 @@ func supportsDeclaration(property, value string) bool {
 		return parsed.Kind != VerticalAlignBaseline || strings.EqualFold(strings.TrimSpace(value), "baseline") || parsed.Value != 0
 	case "text-overflow":
 		return value == "clip" || value == "ellipsis"
+	case "object-fit":
+		_, ok := parseObjectFit(value)
+		return ok
+	case "object-position":
+		_, ok := parseBackgroundPosition(value, context)
+		return ok
+	case "list-style-type":
+		_, ok := parseListStyleType(value)
+		return ok
+	case "list-style":
+		candidate := winner{source: "list-style"}
+		return listStyleComponent(candidate, value, "type") != "" && listStyleComponent(candidate, value, "position") != ""
+	case "list-style-position":
+		return value == "inside" || value == "outside"
+	case "list-style-image":
+		return value == "none" || strings.HasPrefix(strings.ToLower(value), "url(") && strings.HasSuffix(value, ")")
+	case "appearance", "-webkit-appearance":
+		_, ok := parseAppearance(value)
+		return ok
+	case "accent-color":
+		if value == "auto" {
+			return true
+		}
+		_, ok := parseColor(value, defaultTextColor)
+		return ok
+	case "cursor":
+		_, ok := parseCursor(value)
+		return ok
+	case "filter", "backdrop-filter":
+		_, ok := parseFilterList(value, context)
+		return ok
+	case "mix-blend-mode":
+		_, ok := parseBlendMode(value)
+		return ok
 	case "container-type":
 		return value == "normal" || value == "inline-size"
 	case "container-name":
@@ -164,6 +198,7 @@ func supportsDeclaration(property, value string) bool {
 func supportsProperty(property string) bool {
 	switch property {
 	case "display", "color", "background-color", "background-image", "font", "font-size", "font-weight", "font-family", "font-style", "font-stretch", "line-height", "letter-spacing", "word-spacing", "text-indent", "text-align", "text-transform", "word-break", "overflow-wrap", "vertical-align", "text-overflow",
+		"object-fit", "object-position", "list-style", "list-style-type", "list-style-position", "list-style-image", "appearance", "-webkit-appearance", "accent-color", "cursor", "filter", "backdrop-filter", "mix-blend-mode",
 		"width", "height", "min-width", "min-height", "max-width", "max-height", "box-sizing", "position", "top", "right", "bottom", "left", "z-index",
 		"margin", "margin-top", "margin-right", "margin-bottom", "margin-left", "padding", "padding-top", "padding-right", "padding-bottom", "padding-left",
 		"border", "border-width", "border-style", "border-color", "border-top", "border-right", "border-bottom", "border-left", "border-radius", "outline",

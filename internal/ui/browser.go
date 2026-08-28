@@ -2042,6 +2042,9 @@ func layoutDrawBox(gtx layout.Context, command paintmodel.DrawBox, backgroundIma
 		width := min(gtx.Dp(unit.Dp(command.Width)), gtx.Constraints.Max.X)
 		height := min(gtx.Dp(unit.Dp(command.Height)), gtx.Constraints.Max.Y)
 		bounds := clip.Rect{Max: image.Pt(width, height)}
+		cursorArea := bounds.Push(gtx.Ops)
+		cssCursor(command.Cursor).Add(gtx.Ops)
+		defer cursorArea.Pop()
 		if command.Opacity < 1 {
 			defer paint.PushOpacity(gtx.Ops, max(command.Opacity, 0)).Pop()
 		}
@@ -2053,8 +2056,27 @@ func layoutDrawBox(gtx layout.Context, command paintmodel.DrawBox, backgroundIma
 			offsetX, offsetY := gtx.Dp(unit.Dp(shadow.OffsetX)), gtx.Dp(unit.Dp(shadow.OffsetY))
 			paint.FillShape(gtx.Ops, rgba(shadow.Color), clip.Rect{Min: image.Pt(offsetX-spread, offsetY-spread), Max: image.Pt(width+offsetX+spread, height+offsetY+spread)}.Op())
 		}
+		for _, filter := range command.Filters {
+			switch filter.Kind {
+			case stylemodel.FilterDropShadow:
+				shadow := filter.Shadow
+				spread := gtx.Dp(unit.Dp(shadow.Blur / 2))
+				offsetX, offsetY := gtx.Dp(unit.Dp(shadow.OffsetX)), gtx.Dp(unit.Dp(shadow.OffsetY))
+				paint.FillShape(gtx.Ops, rgba(shadow.Color), clip.Rect{Min: image.Pt(offsetX-spread, offsetY-spread), Max: image.Pt(width+offsetX+spread, height+offsetY+spread)}.Op())
+			case stylemodel.FilterBlur:
+				radius := gtx.Dp(unit.Dp(filter.Radius))
+				if radius > 0 && command.Color != 0 {
+					blurColor := rgba(command.Color)
+					blurColor.A /= 4
+					paint.FillShape(gtx.Ops, blurColor, clip.Rect{Min: image.Pt(-radius, -radius), Max: image.Pt(width+radius, height+radius)}.Op())
+				}
+			}
+		}
 		rounded := roundedClip(gtx, command.Radius, width, height).Push(gtx.Ops)
 		defer rounded.Pop()
+		if len(command.BackdropFilters) != 0 && command.BackdropColor != 0 {
+			paint.FillShape(gtx.Ops, rgba(command.BackdropColor), bounds.Op())
+		}
 		if command.Color != 0 {
 			paint.FillShape(gtx.Ops, rgba(command.Color), bounds.Op())
 		}
@@ -2075,6 +2097,7 @@ func layoutDrawBox(gtx layout.Context, command paintmodel.DrawBox, backgroundIma
 				raster = rasterBackgroundImage(width, height, backgroundImages[layer.Image.URL], layerCommand, gtx.Metric.PxPerDp)
 			}
 			if raster != nil {
+				raster = rasterFilterImage(raster, command.Filters)
 				area := bounds.Push(gtx.Ops)
 				widget.Image{Src: paint.NewImageOp(raster), Fit: widget.Unscaled, Scale: 1 / gtx.Metric.PxPerDp}.Layout(gtx)
 				area.Pop()
@@ -2084,6 +2107,26 @@ func layoutDrawBox(gtx layout.Context, command paintmodel.DrawBox, backgroundIma
 		paintOutline(gtx, command.Outline, command.OutlineOffset, width, height)
 		return layout.Dimensions{}
 	})
+}
+
+func rasterFilterImage(source image.Image, filters []stylemodel.Filter) image.Image {
+	if source == nil || len(filters) == 0 {
+		return source
+	}
+	bounds := source.Bounds()
+	if !stylemodel.FilterSurfaceAllowed(float32(bounds.Dx()), float32(bounds.Dy())) {
+		return source
+	}
+	result := image.NewNRGBA(image.Rect(0, 0, bounds.Dx(), bounds.Dy()))
+	for y := 0; y < bounds.Dy(); y++ {
+		for x := 0; x < bounds.Dx(); x++ {
+			color := color.NRGBAModel.Convert(source.At(bounds.Min.X+x, bounds.Min.Y+y)).(color.NRGBA)
+			packed := uint32(color.R)<<24 | uint32(color.G)<<16 | uint32(color.B)<<8 | uint32(color.A)
+			filtered := stylemodel.ApplyColorFilters(packed, filters)
+			result.SetNRGBA(x, y, rgba(filtered))
+		}
+	}
+	return result
 }
 
 func paintOutline(gtx layout.Context, outline stylemodel.BorderSide, offset float32, width, height int) {
@@ -2349,6 +2392,9 @@ func (ui *BrowserUI) layoutDrawInput(gtx layout.Context, command paintmodel.Draw
 	}
 	right := unit.Dp(rightValue)
 	return layout.Inset{Top: unit.Dp(command.Top), Left: left, Right: right}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		cursorArea := clip.Rect{Max: image.Pt(gtx.Dp(unit.Dp(command.Width)), gtx.Dp(unit.Dp(command.Height)))}.Push(gtx.Ops)
+		cssCursor(command.Cursor).Add(gtx.Ops)
+		defer cursorArea.Pop()
 		if command.Clip != nil {
 			defer commandClip(gtx, command.Clip, command.X, command.Y).Push(gtx.Ops).Pop()
 		}
@@ -2413,15 +2459,21 @@ func (ui *BrowserUI) layoutDrawInput(gtx layout.Context, command paintmodel.Draw
 			ui.commitInput(command.NodeID, editor.Text())
 		}
 		ui.inputFocused[command.NodeID] = focused
+		content := func(gtx layout.Context) layout.Dimensions {
+			style := material.Editor(ui.theme, editor, "")
+			style.Color = rgba(command.Color)
+			return layout.UniformInset(unit.Dp(8)).Layout(gtx, style.Layout)
+		}
+		if command.Appearance == stylemodel.AppearanceNone {
+			return content(gtx)
+		}
 		return widget.Border{
 			Color:        color.NRGBA{R: 150, G: 160, B: 175, A: 255},
 			CornerRadius: unit.Dp(6),
 			Width:        unit.Dp(1),
 		}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 			paint.FillShape(gtx.Ops, color.NRGBA{R: 255, G: 255, B: 255, A: 255}, clip.Rect{Max: gtx.Constraints.Min}.Op())
-			style := material.Editor(ui.theme, editor, "")
-			style.Color = rgba(command.Color)
-			return layout.UniformInset(unit.Dp(8)).Layout(gtx, style.Layout)
+			return content(gtx)
 		})
 	})
 }
@@ -2431,6 +2483,9 @@ func (ui *BrowserUI) layoutDrawSelect(gtx layout.Context, command paintmodel.Dra
 	viewportWidth := float32(gtx.Constraints.Max.X) / gtx.Metric.PxPerDp
 	right := unit.Dp(max(viewportWidth-command.X-command.Width, float32(0)))
 	return layout.Inset{Top: unit.Dp(command.Top), Left: left, Right: right}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		cursorArea := clip.Rect{Max: image.Pt(gtx.Dp(unit.Dp(command.Width)), gtx.Dp(unit.Dp(command.Height)))}.Push(gtx.Ops)
+		cssCursor(command.Cursor).Add(gtx.Ops)
+		defer cursorArea.Pop()
 		if command.Clip != nil {
 			defer commandClip(gtx, command.Clip, command.X, command.Y).Push(gtx.Ops).Pop()
 		}
@@ -2459,6 +2514,10 @@ func (ui *BrowserUI) layoutDrawSelect(gtx layout.Context, command paintmodel.Dra
 		}
 		style := material.Button(ui.theme, button, label+" ▾")
 		style.Color = rgba(command.Color)
+		style.Background = rgba(command.AccentColor)
+		if command.Appearance == stylemodel.AppearanceNone {
+			style.Background = color.NRGBA{}
+		}
 		return style.Layout(gtx)
 	})
 }
@@ -2468,6 +2527,9 @@ func (ui *BrowserUI) layoutDrawCheckable(gtx layout.Context, command paintmodel.
 	viewportWidth := float32(gtx.Constraints.Max.X) / gtx.Metric.PxPerDp
 	right := unit.Dp(max(viewportWidth-command.X-command.Width, float32(0)))
 	return layout.Inset{Top: unit.Dp(command.Top), Left: left, Right: right}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		cursorArea := clip.Rect{Max: image.Pt(gtx.Dp(unit.Dp(command.Width)), gtx.Dp(unit.Dp(command.Height)))}.Push(gtx.Ops)
+		cssCursor(command.Cursor).Add(gtx.Ops)
+		defer cursorArea.Pop()
 		if command.Clip != nil {
 			defer commandClip(gtx, command.Clip, command.X, command.Y).Push(gtx.Ops).Pop()
 		}
@@ -2502,6 +2564,12 @@ func (ui *BrowserUI) layoutDrawCheckable(gtx layout.Context, command paintmodel.
 		}
 		style := material.Button(ui.theme, button, label)
 		style.Color = rgba(command.Color)
+		if command.Checked {
+			style.Background = rgba(command.AccentColor)
+		}
+		if command.Appearance == stylemodel.AppearanceNone {
+			style.Background = color.NRGBA{}
+		}
 		return style.Layout(gtx)
 	})
 }
@@ -2511,6 +2579,9 @@ func (ui *BrowserUI) layoutDrawButton(gtx layout.Context, command paintmodel.Dra
 	viewportWidth := float32(gtx.Constraints.Max.X) / gtx.Metric.PxPerDp
 	right := unit.Dp(max(viewportWidth-command.X-command.Width, float32(0)))
 	return layout.Inset{Top: unit.Dp(command.Top), Left: left, Right: right}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		cursorArea := clip.Rect{Max: image.Pt(gtx.Dp(unit.Dp(command.Width)), gtx.Dp(unit.Dp(command.Height)))}.Push(gtx.Ops)
+		cssCursor(command.Cursor).Add(gtx.Ops)
+		defer cursorArea.Pop()
 		if command.Clip != nil {
 			defer commandClip(gtx, command.Clip, command.X, command.Y).Push(gtx.Ops).Pop()
 		}
@@ -2535,6 +2606,10 @@ func (ui *BrowserUI) layoutDrawButton(gtx layout.Context, command paintmodel.Dra
 		gtx.Constraints.Max.Y = gtx.Constraints.Min.Y
 		style := material.Button(ui.theme, button, command.Label)
 		style.Color = rgba(command.Color)
+		style.Background = rgba(command.AccentColor)
+		if command.Appearance == stylemodel.AppearanceNone {
+			style.Background = color.NRGBA{}
+		}
 		return style.Layout(gtx)
 	})
 }
@@ -2603,6 +2678,9 @@ func (ui *BrowserUI) layoutDrawText(gtx layout.Context, command paintmodel.DrawT
 		}
 		gtx.Constraints.Min.Y = height
 		gtx.Constraints.Max.Y = height
+		cursorArea := clip.Rect{Max: image.Pt(gtx.Dp(unit.Dp(command.Width)), height)}.Push(gtx.Ops)
+		cssCursor(command.Cursor).Add(gtx.Ops)
+		defer cursorArea.Pop()
 		if command.Background != 0 {
 			paint.FillShape(gtx.Ops, rgba(command.Background), clip.Rect{Max: gtx.Constraints.Min}.Op())
 		}
@@ -2762,5 +2840,34 @@ func rgba(value uint32) color.NRGBA {
 		G: uint8(value >> 16),
 		B: uint8(value >> 8),
 		A: uint8(value),
+	}
+}
+
+func cssCursor(value stylemodel.Cursor) pointer.Cursor {
+	switch value {
+	case stylemodel.CursorPointer:
+		return pointer.CursorPointer
+	case stylemodel.CursorText:
+		return pointer.CursorText
+	case stylemodel.CursorCrosshair:
+		return pointer.CursorCrosshair
+	case stylemodel.CursorMove:
+		return pointer.CursorAllScroll
+	case stylemodel.CursorGrab:
+		return pointer.CursorGrab
+	case stylemodel.CursorGrabbing:
+		return pointer.CursorGrabbing
+	case stylemodel.CursorNotAllowed:
+		return pointer.CursorNotAllowed
+	case stylemodel.CursorWait:
+		return pointer.CursorWait
+	case stylemodel.CursorProgress:
+		return pointer.CursorProgress
+	case stylemodel.CursorColResize:
+		return pointer.CursorColResize
+	case stylemodel.CursorRowResize:
+		return pointer.CursorRowResize
+	default:
+		return pointer.CursorDefault
 	}
 }

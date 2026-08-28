@@ -141,6 +141,7 @@ func initialStyle() ComputedStyle {
 	return ComputedStyle{
 		Color: defaultTextColor, BackgroundColor: transparent, FontSize: 16, FontWeight: 400,
 		FontFamilies: []string{"Growse Sans", "sans-serif"}, FontStyle: "normal", FontStretch: "normal", FontFaceIndex: -1,
+		ObjectPosition: BackgroundPosition{X: LengthPercentage{Percentage: 50}, Y: LengthPercentage{Percentage: 50}}, AccentColorAuto: true,
 		BackgroundRepeat: BackgroundRepeat{X: true, Y: true},
 		DecorationColor:  defaultTextColor, Opacity: 1, FlexShrink: 1,
 		ZIndexAuto: true,
@@ -160,6 +161,9 @@ func inheritedStyle(parent ComputedStyle) ComputedStyle {
 		LineHeight: parent.LineHeight, WhiteSpace: parent.WhiteSpace, Visibility: parent.Visibility,
 		TextAlign: parent.TextAlign, TextTransform: parent.TextTransform, TextIndent: parent.TextIndent,
 		LetterSpacing: parent.LetterSpacing, WordSpacing: parent.WordSpacing, WordBreak: parent.WordBreak, OverflowWrap: parent.OverflowWrap,
+		ListStyleType: parent.ListStyleType, ListStylePosition: parent.ListStylePosition, ListStyleImage: parent.ListStyleImage,
+		AccentColor: parent.AccentColor, AccentColorAuto: parent.AccentColorAuto, Cursor: parent.Cursor,
+		ObjectPosition:  BackgroundPosition{X: LengthPercentage{Percentage: 50}, Y: LengthPercentage{Percentage: 50}},
 		BackgroundColor: transparent, Display: DisplayInline,
 		BackgroundRepeat: BackgroundRepeat{X: true, Y: true},
 		DecorationColor:  parent.Color, Opacity: 1, FlexShrink: 1,
@@ -184,6 +188,9 @@ func applyUADefaults(tag string, computed ComputedStyle) ComputedStyle {
 	switch tag {
 	case "html", "body", "div", "main", "section", "article", "header", "footer", "nav", "form", "ul", "ol", "input":
 		computed.Display = DisplayBlock
+		if tag == "ol" {
+			computed.ListStyleType = ListStyleDecimal
+		}
 	case "h1":
 		computed.Display, computed.FontSize, computed.FontWeight = DisplayBlock, 32, 700
 		computed.Margin = Edges{Top: 12, Bottom: 12}
@@ -474,6 +481,7 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 		}
 	}
 	computed = applyTextProperties(computed, parent, winners, fontContext)
+	computed = applyVisualProperties(computed, parent, winners, fontContext)
 	if value, ok := winners["overflow-x"]; ok {
 		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
 			if parsed, valid := resolveOverflow(resolved, parent.OverflowX); valid {
@@ -1126,6 +1134,10 @@ func expandedProperties(property string) []string {
 		return []string{"flex-grow", "flex-shrink", "flex-basis"}
 	case "font":
 		return []string{"font-style", "font-weight", "font-stretch", "font-size", "line-height", "font-family"}
+	case "list-style":
+		return []string{"list-style-type", "list-style-position", "list-style-image"}
+	case "-webkit-appearance":
+		return []string{"appearance"}
 	case "gap":
 		return []string{"row-gap", "column-gap"}
 	case "place-content":
