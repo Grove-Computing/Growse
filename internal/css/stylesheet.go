@@ -237,6 +237,11 @@ const (
 	PseudoNthOfType
 	PseudoNthLastOfType
 	PseudoNot
+	PseudoIs
+	PseudoWhere
+	PseudoHas
+	PseudoScope
+	PseudoRelativeScope
 	PseudoLink
 	PseudoFocus
 	PseudoEnabled
@@ -249,10 +254,11 @@ const (
 // PseudoClass stores a pseudo-class and its parsed arguments. Nth expressions
 // use A*n+B, while :not() stores its Level 3 simple-selector argument.
 type PseudoClass struct {
-	Kind     PseudoClassKind
-	A        int
-	B        int
-	Negation *CompoundSelector
+	Kind      PseudoClassKind
+	A         int
+	B         int
+	Negation  *CompoundSelector
+	Selectors []Selector
 }
 
 // AttributeMatcher identifies how an attribute value is compared.
@@ -333,10 +339,29 @@ func compoundSpecificity(compound CompoundSelector) [3]int {
 		result[2]++
 	}
 	for _, pseudo := range compound.Pseudos {
-		if pseudo.Kind == PseudoNot && pseudo.Negation != nil {
-			addSpecificity(&result, compoundSpecificity(*pseudo.Negation))
-		} else {
+		switch pseudo.Kind {
+		case PseudoWhere, PseudoRelativeScope:
+			// :where() deliberately contributes zero specificity.
+		case PseudoIs, PseudoNot, PseudoHas:
+			addSpecificity(&result, maxSelectorSpecificity(pseudo.Selectors))
+		default:
 			result[1]++
+		}
+	}
+	return result
+}
+
+func maxSelectorSpecificity(selectors []Selector) [3]int {
+	var result [3]int
+	for _, selector := range selectors {
+		candidate := selector.Specificity()
+		for index := range candidate {
+			if candidate[index] > result[index] {
+				result = candidate
+			}
+			if candidate[index] < result[index] {
+				break
+			}
 		}
 	}
 	return result

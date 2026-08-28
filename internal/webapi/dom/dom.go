@@ -135,7 +135,7 @@ func (api *API) QuerySelector(selector string) *Element {
 		return nil
 	}
 	selectors := css.ParseSelectorList(selector)
-	node := firstMatchingDescendant(api.document.Root, selectors, true)
+	node := firstMatchingDescendant(api.document.Root, selectors, true, documentScope(api.document.Root))
 	if node == nil {
 		return nil
 	}
@@ -148,7 +148,7 @@ func (api *API) QuerySelectorAll(selector string) []*Element {
 		return nil
 	}
 	selectors := css.ParseSelectorList(selector)
-	return api.elements(matchingDescendants(api.document.Root, selectors, true, nil))
+	return api.elements(matchingDescendants(api.document.Root, selectors, true, nil, documentScope(api.document.Root)))
 }
 
 // GetElementsByClassName returns a bounded static collection for class tokens.
@@ -679,7 +679,7 @@ func (element *Element) Matches(selector string) bool {
 	if !ok || node.Type != dommodel.NodeElement {
 		return false
 	}
-	return matchesAnySelector(node, css.ParseSelectorList(selector))
+	return matchesAnySelector(node, css.ParseSelectorList(selector), node.ID)
 }
 
 // Closest returns this element or its nearest element ancestor matching selector.
@@ -697,7 +697,7 @@ func (element *Element) Closest(selector string) *Element {
 		if current.Type == dommodel.NodeDocumentFragment {
 			break
 		}
-		if current.Type == dommodel.NodeElement && matchesAnySelector(current, selectors) {
+		if current.Type == dommodel.NodeElement && matchesAnySelector(current, selectors, node.ID) {
 			return api.element(current)
 		}
 	}
@@ -711,7 +711,7 @@ func (element *Element) QuerySelector(selector string) *Element {
 	if !ok || len(selectors) == 0 {
 		return nil
 	}
-	match := firstMatchingDescendant(node, selectors, false)
+	match := firstMatchingDescendant(node, selectors, false, node.ID)
 	return (&API{document: element.document, events: element.events, onMutation: element.onMutation}).element(match)
 }
 
@@ -723,7 +723,7 @@ func (element *Element) QuerySelectorAll(selector string) []*Element {
 		return nil
 	}
 	return (&API{document: element.document, events: element.events, onMutation: element.onMutation}).elements(
-		matchingDescendants(node, selectors, false, nil),
+		matchingDescendants(node, selectors, false, nil, node.ID),
 	)
 }
 
@@ -1500,11 +1500,11 @@ func insertNodes(source []*dommodel.Node, index int, inserted []*dommodel.Node) 
 	return result
 }
 
-func firstMatchingDescendant(root *dommodel.Node, selectors []css.Selector, includeRoot bool) *dommodel.Node {
+func firstMatchingDescendant(root *dommodel.Node, selectors []css.Selector, includeRoot bool, scope dommodel.NodeID) *dommodel.Node {
 	if len(selectors) == 0 || root == nil {
 		return nil
 	}
-	if includeRoot && root.Type == dommodel.NodeElement && matchesAnySelector(root, selectors) {
+	if includeRoot && root.Type == dommodel.NodeElement && matchesAnySelector(root, selectors, scope) {
 		return root
 	}
 	if root.Type == dommodel.NodeElement && root.TagName == "template" {
@@ -1514,18 +1514,18 @@ func firstMatchingDescendant(root *dommodel.Node, selectors []css.Selector, incl
 		if child.Type == dommodel.NodeDocumentFragment && root.Type != dommodel.NodeDocumentFragment {
 			continue
 		}
-		if match := firstMatchingDescendant(child, selectors, true); match != nil {
+		if match := firstMatchingDescendant(child, selectors, true, scope); match != nil {
 			return match
 		}
 	}
 	return nil
 }
 
-func matchingDescendants(root *dommodel.Node, selectors []css.Selector, includeRoot bool, result []*dommodel.Node) []*dommodel.Node {
+func matchingDescendants(root *dommodel.Node, selectors []css.Selector, includeRoot bool, result []*dommodel.Node, scope dommodel.NodeID) []*dommodel.Node {
 	if len(selectors) == 0 || root == nil || len(result) >= maxDOMCollectionResults {
 		return result
 	}
-	if includeRoot && root.Type == dommodel.NodeElement && matchesAnySelector(root, selectors) {
+	if includeRoot && root.Type == dommodel.NodeElement && matchesAnySelector(root, selectors, scope) {
 		result = append(result, root)
 	}
 	if root.Type == dommodel.NodeElement && root.TagName == "template" {
@@ -1535,7 +1535,7 @@ func matchingDescendants(root *dommodel.Node, selectors []css.Selector, includeR
 		if child.Type == dommodel.NodeDocumentFragment && root.Type != dommodel.NodeDocumentFragment {
 			continue
 		}
-		result = matchingDescendants(child, selectors, true, result)
+		result = matchingDescendants(child, selectors, true, result, scope)
 		if len(result) >= maxDOMCollectionResults {
 			break
 		}
@@ -1543,13 +1543,25 @@ func matchingDescendants(root *dommodel.Node, selectors []css.Selector, includeR
 	return result
 }
 
-func matchesAnySelector(node *dommodel.Node, selectors []css.Selector) bool {
+func matchesAnySelector(node *dommodel.Node, selectors []css.Selector, scope dommodel.NodeID) bool {
 	for _, selector := range selectors {
-		if stylemodel.MatchesSelector(node, selector, stylemodel.InteractionState{}) {
+		if stylemodel.MatchesSelector(node, selector, stylemodel.InteractionState{Scope: scope}) {
 			return true
 		}
 	}
 	return false
+}
+
+func documentScope(root *dommodel.Node) dommodel.NodeID {
+	if root == nil {
+		return 0
+	}
+	for _, child := range root.Children {
+		if child.Type == dommodel.NodeElement {
+			return child.ID
+		}
+	}
+	return 0
 }
 
 func normalizeCSSPropertyName(name string) string {

@@ -1530,7 +1530,29 @@ func matchesPseudoClass(node *dom.Node, pseudo css.PseudoClass, state Interactio
 	case css.PseudoNthLastOfType:
 		return matchesNth(elementPosition(node, true, true), pseudo.A, pseudo.B)
 	case css.PseudoNot:
-		return pseudo.Negation != nil && !matchesCompound(node, *pseudo.Negation, state)
+		if len(pseudo.Selectors) == 0 && pseudo.Negation != nil {
+			return !matchesCompound(node, *pseudo.Negation, state)
+		}
+		for _, selector := range pseudo.Selectors {
+			if matches(node, selector, state) {
+				return false
+			}
+		}
+		return len(pseudo.Selectors) != 0
+	case css.PseudoIs, css.PseudoWhere:
+		for _, selector := range pseudo.Selectors {
+			if matches(node, selector, state) {
+				return true
+			}
+		}
+		return false
+	case css.PseudoHas:
+		return matchesHas(node, pseudo.Selectors, state)
+	case css.PseudoScope, css.PseudoRelativeScope:
+		if state.Scope != 0 {
+			return state.Scope == node.ID
+		}
+		return node.Parent != nil && node.Parent.Type == dom.NodeDocument
 	case css.PseudoLink:
 		_, hasReference := node.Attribute("href")
 		return (node.TagName == "a" || node.TagName == "area") && hasReference
@@ -1555,6 +1577,42 @@ func matchesPseudoClass(node *dom.Node, pseudo css.PseudoClass, state Interactio
 	default:
 		return false
 	}
+}
+
+func matchesHas(anchor *dom.Node, selectors []css.Selector, state InteractionState) bool {
+	if anchor == nil || len(selectors) == 0 {
+		return false
+	}
+	root := anchor
+	for root.Parent != nil && root.Parent.Type != dom.NodeDocumentFragment {
+		root = root.Parent
+	}
+	state.Scope = anchor.ID
+	visited := 0
+	var walk func(*dom.Node) bool
+	walk = func(candidate *dom.Node) bool {
+		if candidate == nil || visited >= 50_000 {
+			return false
+		}
+		visited++
+		if candidate.Type == dom.NodeElement {
+			for _, selector := range selectors {
+				if matches(candidate, selector, state) {
+					return true
+				}
+			}
+		}
+		if candidate.Type == dom.NodeElement && candidate.TagName == "template" {
+			return false
+		}
+		for _, child := range candidate.Children {
+			if walk(child) {
+				return true
+			}
+		}
+		return false
+	}
+	return walk(root)
 }
 
 func isFormControl(node *dom.Node) bool {

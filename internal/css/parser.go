@@ -740,11 +740,34 @@ func parsePseudoClass(value string, start int) (*PseudoClass, int, bool) {
 		if argument == nil {
 			return nil, 0, false
 		}
-		negation, ok := parseCompoundSelector(*argument)
-		if !ok || simpleSelectorCount(negation) != 1 || containsNegation(negation) || negation.PseudoElement != PseudoElementNone {
+		selectors, ok := parseFunctionalSelectorList(*argument, false, false)
+		if !ok {
 			return nil, 0, false
 		}
-		pseudo.Kind, pseudo.Negation = PseudoNot, &negation
+		pseudo.Kind, pseudo.Selectors = PseudoNot, selectors
+		if len(selectors) == 1 && len(selectors[0].Compounds) == 1 {
+			pseudo.Negation = &selectors[0].Compounds[0]
+		}
+	case "is", "where", "has":
+		if argument == nil {
+			return nil, 0, false
+		}
+		relative := name == "has"
+		selectors, ok := parseFunctionalSelectorList(*argument, true, relative)
+		if !ok {
+			return nil, 0, false
+		}
+		pseudo.Selectors = selectors
+		switch name {
+		case "is":
+			pseudo.Kind = PseudoIs
+		case "where":
+			pseudo.Kind = PseudoWhere
+		case "has":
+			pseudo.Kind = PseudoHas
+		}
+	case "scope":
+		pseudo.Kind = PseudoScope
 	case "link":
 		pseudo.Kind = PseudoLink
 	case "focus":
@@ -763,10 +786,59 @@ func parsePseudoClass(value string, start int) (*PseudoClass, int, bool) {
 		return nil, 0, false
 	}
 	if argument != nil && pseudo.Kind != PseudoNthChild && pseudo.Kind != PseudoNthLastChild &&
-		pseudo.Kind != PseudoNthOfType && pseudo.Kind != PseudoNthLastOfType && pseudo.Kind != PseudoNot {
+		pseudo.Kind != PseudoNthOfType && pseudo.Kind != PseudoNthLastOfType && pseudo.Kind != PseudoNot &&
+		pseudo.Kind != PseudoIs && pseudo.Kind != PseudoWhere && pseudo.Kind != PseudoHas {
+		return nil, 0, false
+	}
+	if argument == nil && (pseudo.Kind == PseudoNot || pseudo.Kind == PseudoIs || pseudo.Kind == PseudoWhere || pseudo.Kind == PseudoHas) {
 		return nil, 0, false
 	}
 	return pseudo, next, true
+}
+
+func parseFunctionalSelectorList(value string, forgiving, relative bool) ([]Selector, bool) {
+	parts, ok := splitSelectorList(value)
+	if !ok {
+		return nil, false
+	}
+	selectors := make([]Selector, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if relative {
+			if part == "" {
+				continue
+			}
+			if _, explicit := explicitCombinator(part[0]); explicit {
+				part = ":scope " + part
+			} else {
+				part = ":scope " + part
+			}
+		}
+		selector, valid := parseSelector(part)
+		if !valid || selectorPseudoElementKind(selector) != PseudoElementNone {
+			if forgiving {
+				continue
+			}
+			return nil, false
+		}
+		if relative && len(selector.Compounds) != 0 {
+			for index := range selector.Compounds[0].Pseudos {
+				if selector.Compounds[0].Pseudos[index].Kind == PseudoScope {
+					selector.Compounds[0].Pseudos[index].Kind = PseudoRelativeScope
+					break
+				}
+			}
+		}
+		selectors = append(selectors, selector)
+	}
+	return selectors, len(selectors) != 0
+}
+
+func selectorPseudoElementKind(selector Selector) PseudoElementKind {
+	if len(selector.Compounds) == 0 {
+		return PseudoElementNone
+	}
+	return selector.Compounds[len(selector.Compounds)-1].PseudoElement
 }
 
 func parenthesisEnd(value string, start int) (int, bool) {

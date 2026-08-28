@@ -517,6 +517,7 @@ type Map map[dom.NodeID]ComputedStyle
 type InteractionState struct {
 	Hovered  map[dom.NodeID]bool
 	Focused  dom.NodeID
+	Scope    dom.NodeID
 	Document *dom.Document
 }
 
