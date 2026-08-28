@@ -1372,11 +1372,13 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	baseURL := documentBaseURL(document, response.URL)
 	styleResources := resourceClient
 	imageResources := resourceClient
+	fontResources := resourceClient
 	scriptResources := resourceClient
 	engine = runtimemodel.NormalizeEngine(engine)
 	if loader, ok := resourceClient.(requestLoader); ok {
 		styleResources = pageResourceLoader{loader: loader, siteURL: response.URL, kind: network.RequestStylesheet, observer: pageStore.ObserveNetwork}
 		imageResources = pageResourceLoader{loader: loader, siteURL: response.URL, kind: network.RequestImage, observer: pageStore.ObserveNetwork}
+		fontResources = pageResourceLoader{loader: loader, siteURL: response.URL, kind: network.RequestFont, observer: pageStore.ObserveNetwork}
 		scriptResources = pageResourceLoader{loader: loader, siteURL: response.URL, kind: network.RequestScript, engine: string(engine), observer: pageStore.ObserveNetwork}
 	}
 	stylesheet, err := b.loadStylesWithBase(ctx, styleResources, response.URL, baseURL, document)
@@ -1388,12 +1390,15 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	var replacedImages map[dom.NodeID]layoutengine.ImageResource
 	var decodedImages map[string]image.Image
 	var imageErrors []string
+	var fonts []FontResource
+	var fontErrors []string
 	if engine == runtimemodel.EngineJavaScript {
 		imagePolicy := imageViewportPolicy(document, computedStyles, baseURL, 1280, 720)
 		replacedImages, decodedImages, imageErrors = loadReplacedImagesWithPolicy(ctx, imageResources, baseURL, document, 1280, 1, imagePolicy)
 		inlineResources, inlineImages, inlineErrors := loadInlineSVGImages(document)
 		mergeImageResources(replacedImages, decodedImages, inlineResources, inlineImages)
 		imageErrors = append(imageErrors, inlineErrors...)
+		fonts, fontErrors = loadWebFonts(ctx, fontResources, response.URL, stylesheet)
 	}
 	scripts, scriptErrors := loadScriptsForEngineWithBase(ctx, scriptResources, response.URL, baseURL, document, engine)
 	var importMap map[string]string
@@ -1424,6 +1429,8 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 		ImageResources:   replacedImages,
 		Images:           decodedImages,
 		ImageErrors:      imageErrors,
+		Fonts:            fonts,
+		FontErrors:       fontErrors,
 		Engine:           engine,
 		Scripts:          scripts,
 		ImportMap:        importMap,

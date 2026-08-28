@@ -44,6 +44,8 @@ type Page struct {
 	ImageResources   map[dom.NodeID]layoutmodel.ImageResource
 	Images           map[string]image.Image
 	ImageErrors      []string
+	Fonts            []FontResource
+	FontErrors       []string
 	Engine           runtimemodel.Engine
 	Scripts          []Script
 	ImportMap        map[string]string
