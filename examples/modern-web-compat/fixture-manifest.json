@@ -1,0 +1,66 @@
+{
+  "schemaVersion": 1,
+  "release": "v0.15.0",
+  "artifactPolicy": "checked-in reduced HTTP contracts",
+  "publicInternetRequired": false,
+  "verificationCommand": "go test ./examples/modern-web-compat -run TestFixtureManifestIsCompleteAndUntampered",
+  "fixtures": [
+    {
+      "name": "nextjs",
+      "framework": "Next.js",
+      "frameworkVersion": "15.4.6",
+      "buildTool": "Next.js compiler 15.4.6 / Node.js 22.18.0 / pnpm 10.14.0",
+      "dependencies": {
+        "next": "15.4.6",
+        "react": "19.1.1",
+        "react-dom": "19.1.1"
+      },
+      "generationCommand": "corepack pnpm --offline install --frozen-lockfile && corepack pnpm --offline next build",
+      "licenses": ["MIT:Next.js", "MIT:React"],
+      "sources": ["sources/nextjs/app/page.jsx"],
+      "artifacts": [
+        {"path": "fixtures/nextjs/app.css", "sha256": "998cf88c3c514e3b150779d8e8b1e43192f89dc3999670982d2a898bc091945f"},
+        {"path": "fixtures/nextjs/app.mjs", "sha256": "4ec741197a8b19e662a0b9b0c84f6c19b04021779b3b8046501550c9e1311ca6"},
+        {"path": "fixtures/nextjs/counter.chunk.mjs", "sha256": "45917193109f7ce57a63c568f042ff3d282b075bb926ddc7b97af1d83fc18e1f"},
+        {"path": "fixtures/nextjs/index.html", "sha256": "2851cbe42ecec65abec79e2a61f9dc17807c542cfad4f280637c70ac3d09bed2"}
+      ]
+    },
+    {
+      "name": "sveltekit",
+      "framework": "SvelteKit",
+      "frameworkVersion": "2.37.0",
+      "buildTool": "Svelte 5.38.2 / Vite 7.1.3 / Node.js 22.18.0 / pnpm 10.14.0",
+      "dependencies": {
+        "@sveltejs/kit": "2.37.0",
+        "svelte": "5.38.2",
+        "vite": "7.1.3"
+      },
+      "generationCommand": "corepack pnpm --offline install --frozen-lockfile && corepack pnpm --offline vite build",
+      "licenses": ["MIT:SvelteKit", "MIT:Svelte", "MIT:Vite"],
+      "sources": ["sources/sveltekit/src/routes/+page.svelte"],
+      "artifacts": [
+        {"path": "fixtures/sveltekit/app.css", "sha256": "a205946e5e6ec4b3731e7980d2367b62b9054173e2b7ebfb766d9001ba7d0b16"},
+        {"path": "fixtures/sveltekit/app.mjs", "sha256": "1e588fe84889ba5eefbc0eea6444aaf41fbf62b20b7a30f79466f074e2e5f440"},
+        {"path": "fixtures/sveltekit/index.html", "sha256": "81f303fd8772a35a085dcc051590e3b61273fb5f89b0c18284c5753ccb60bf00"},
+        {"path": "fixtures/sveltekit/start.mjs", "sha256": "de2a26d22df681a1065b7a2ec5046d701b1073c6f067bd2e86521f43c979a13c"}
+      ]
+    },
+    {
+      "name": "tailwind",
+      "framework": "Tailwind CSS",
+      "frameworkVersion": "4.1.12",
+      "buildTool": "Tailwind CLI 4.1.12 / Node.js 22.18.0 / pnpm 10.14.0",
+      "dependencies": {
+        "tailwindcss": "4.1.12",
+        "@tailwindcss/cli": "4.1.12"
+      },
+      "generationCommand": "corepack pnpm --offline exec @tailwindcss/cli -i sources/tailwind/input.css -o fixtures/tailwind/app.css",
+      "licenses": ["MIT:Tailwind CSS"],
+      "sources": ["sources/tailwind/input.css"],
+      "artifacts": [
+        {"path": "fixtures/tailwind/app.css", "sha256": "ee0e6b60a65236d2e38b16af09b318ed9857d19f98e7ec0e0a01a3798ac22efa"},
+        {"path": "fixtures/tailwind/index.html", "sha256": "66c069b60a901f47f2bb2874ee92c40da35afa324afdfbfe1f55dec52918ec17"}
+      ]
+    }
+  ]
+}
