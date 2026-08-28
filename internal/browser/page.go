@@ -51,6 +51,7 @@ type Page struct {
 	HoverTarget      dom.NodeID
 	HoverPath        []dom.NodeID
 	FocusTarget      dom.NodeID
+	FocusVisible     bool
 	Submitter        dom.NodeID
 	ViewportWidth    float32
 	ViewportHeight   float32

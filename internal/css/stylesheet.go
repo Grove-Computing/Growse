@@ -249,6 +249,14 @@ const (
 	PseudoChecked
 	PseudoValid
 	PseudoInvalid
+	PseudoDefined
+	PseudoPlaceholderShown
+	PseudoReadOnly
+	PseudoReadWrite
+	PseudoRequired
+	PseudoOptional
+	PseudoFocusVisible
+	PseudoFocusWithin
 )
 
 // PseudoClass stores a pseudo-class and its parsed arguments. Nth expressions

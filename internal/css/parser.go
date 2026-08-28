@@ -893,6 +893,22 @@ func parsePseudoClass(value string, start int) (*PseudoClass, int, bool) {
 		pseudo.Kind = PseudoValid
 	case "invalid":
 		pseudo.Kind = PseudoInvalid
+	case "defined":
+		pseudo.Kind = PseudoDefined
+	case "placeholder-shown":
+		pseudo.Kind = PseudoPlaceholderShown
+	case "read-only":
+		pseudo.Kind = PseudoReadOnly
+	case "read-write":
+		pseudo.Kind = PseudoReadWrite
+	case "required":
+		pseudo.Kind = PseudoRequired
+	case "optional":
+		pseudo.Kind = PseudoOptional
+	case "focus-visible":
+		pseudo.Kind = PseudoFocusVisible
+	case "focus-within":
+		pseudo.Kind = PseudoFocusWithin
 	default:
 		return nil, 0, false
 	}

@@ -668,6 +668,10 @@ func (b *Browser) ClearHover() bool {
 
 // UpdateFocus updates the element which matches the :focus pseudo-class.
 func (b *Browser) UpdateFocus(nodeID dom.NodeID) bool {
+	return b.updateFocus(nodeID, false)
+}
+
+func (b *Browser) updateFocus(nodeID dom.NodeID, visible bool) bool {
 	b.mu.Lock()
 	page := b.page
 	onMutation := b.onMutation
@@ -676,12 +680,14 @@ func (b *Browser) UpdateFocus(nodeID dom.NodeID) bool {
 		return false
 	}
 	target := validFocusTarget(page.Document, nodeID)
-	if page.FocusTarget == target {
+	visible = target != 0 && visible
+	if page.FocusTarget == target && page.FocusVisible == visible {
 		b.mu.Unlock()
 		return false
 	}
 	previous := page.FocusTarget
 	page.FocusTarget = target
+	page.FocusVisible = visible
 	recomputePageStyles(page, b.currentTime())
 	dispatcher := page.Events
 	b.mu.Unlock()
@@ -709,7 +715,7 @@ func (b *Browser) MoveFormFocus(reverse bool) bool {
 	}
 	target := forms.NextFocusable(page.Document, page.FocusTarget, reverse)
 	b.mu.RUnlock()
-	return b.UpdateFocus(target)
+	return b.updateFocus(target, true)
 }
 
 // UpdateViewport recomputes viewport-relative values when the content area changes.
@@ -1879,7 +1885,7 @@ func hoverPath(document *dom.Document, nodeID dom.NodeID) []dom.NodeID {
 
 func interactionState(page *Page) style.InteractionState {
 	state := style.InteractionState{
-		Hovered: make(map[dom.NodeID]bool, len(page.HoverPath)), Focused: page.FocusTarget,
+		Hovered: make(map[dom.NodeID]bool, len(page.HoverPath)), Focused: page.FocusTarget, FocusVisible: page.FocusVisible,
 	}
 	for _, nodeID := range page.HoverPath {
 		state.Hovered[nodeID] = true

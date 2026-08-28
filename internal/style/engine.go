@@ -1574,9 +1574,62 @@ func matchesPseudoClass(node *dom.Node, pseudo css.PseudoClass, state Interactio
 		return forms.WillValidate(node) && forms.ValidateControl(state.Document, node).Valid()
 	case css.PseudoInvalid:
 		return forms.WillValidate(node) && !forms.ValidateControl(state.Document, node).Valid()
+	case css.PseudoDefined:
+		return !strings.Contains(node.TagName, "-")
+	case css.PseudoPlaceholderShown:
+		_, placeholder := node.Attribute("placeholder")
+		return placeholder && (node.TagName == "textarea" || node.TagName == "input") && forms.CurrentValue(node) == ""
+	case css.PseudoReadOnly:
+		return !isReadWrite(node)
+	case css.PseudoReadWrite:
+		return isReadWrite(node)
+	case css.PseudoRequired:
+		_, required := node.Attribute("required")
+		return supportsRequired(node) && required
+	case css.PseudoOptional:
+		_, required := node.Attribute("required")
+		return supportsRequired(node) && !required
+	case css.PseudoFocusVisible:
+		return state.Focused == node.ID && (state.FocusVisible || forms.IsEditableTextControl(node))
+	case css.PseudoFocusWithin:
+		return focusWithin(node, state)
 	default:
 		return false
 	}
+}
+
+func isReadWrite(node *dom.Node) bool {
+	if node == nil || forms.Disabled(node) {
+		return false
+	}
+	if forms.IsEditableTextControl(node) {
+		return !forms.ReadOnly(node)
+	}
+	editable, exists := node.Attribute("contenteditable")
+	return exists && (strings.EqualFold(strings.TrimSpace(editable), "true") || editable == "")
+}
+
+func supportsRequired(node *dom.Node) bool {
+	if node == nil {
+		return false
+	}
+	return node.TagName == "input" || node.TagName == "select" || node.TagName == "textarea"
+}
+
+func focusWithin(node *dom.Node, state InteractionState) bool {
+	if node == nil || state.Focused == 0 || state.Document == nil {
+		return false
+	}
+	focused, ok := state.Document.NodeByID(state.Focused)
+	if !ok {
+		return false
+	}
+	for current := focused; current != nil; current = current.Parent {
+		if current == node {
+			return true
+		}
+	}
+	return false
 }
 
 func matchesHas(anchor *dom.Node, selectors []css.Selector, state InteractionState) bool {
