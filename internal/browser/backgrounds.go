@@ -69,7 +69,7 @@ func loadBackgroundImages(ctx context.Context, client ResourceLoader, computed s
 	return images, errors
 }
 
-func loadReplacedImages(ctx context.Context, client ResourceLoader, baseURL *url.URL, document *dom.Document) (map[dom.NodeID]layout.ImageResource, map[string]image.Image, []string) {
+func loadReplacedImages(ctx context.Context, client ResourceLoader, baseURL *url.URL, document *dom.Document, viewportWidth, deviceScale float32) (map[dom.NodeID]layout.ImageResource, map[string]image.Image, []string) {
 	resources := make(map[dom.NodeID]layout.ImageResource)
 	images := make(map[string]image.Image)
 	var errors []string
@@ -84,32 +84,46 @@ func loadReplacedImages(ctx context.Context, client ResourceLoader, baseURL *url
 		if node.Type == dom.NodeElement && node.TagName == "img" {
 			alt, _ := node.Attribute("alt")
 			resource := layout.ImageResource{Alt: alt}
-			source, exists := node.Attribute("src")
-			reference, err := url.Parse(source)
-			if !exists || err != nil {
+			candidates := imageCandidates(node, baseURL, viewportWidth, deviceScale)
+			if len(candidates) == 0 {
 				resource.Error = "image source is missing or invalid"
 				resources[node.ID] = resource
 			} else {
-				target := baseURL.ResolveReference(reference)
-				resource.URL = target.String()
-				if target.Scheme != "http" && target.Scheme != "https" {
-					resource.Error = "image URL is not a supported HTTP(S) URL"
-				} else if response, loadErr := client.Get(ctx, target); loadErr != nil || response == nil {
-					resource.Error = "image request failed"
-				} else if len(response.Body) > maxImageBytes || !isImageContentType(response.ContentType) {
-					resource.Error = "image response was rejected"
-				} else if config, _, decodeErr := image.DecodeConfig(bytes.NewReader(response.Body)); decodeErr != nil || config.Width <= 0 || config.Height <= 0 || config.Width > maxImagePixels/config.Height {
-					resource.Error = "image dimensions were rejected"
-				} else if decoded, _, decodeErr := image.Decode(bytes.NewReader(response.Body)); decodeErr != nil {
-					resource.Error = "image decode failed"
-				} else {
-					resource.Loaded = true
+				var lastTarget *url.URL
+				for _, target := range candidates {
+					lastTarget = target
+					resource.URL = target.String()
+					if target.Scheme != "http" && target.Scheme != "https" {
+						resource.Error = "image URL is not a supported HTTP(S) URL"
+						continue
+					}
+					response, loadErr := client.Get(ctx, target)
+					if loadErr != nil || response == nil {
+						resource.Error = "image request failed"
+						continue
+					}
+					if len(response.Body) > maxImageBytes || !isImageContentType(response.ContentType) {
+						resource.Error = "image response was rejected"
+						continue
+					}
+					config, _, decodeErr := image.DecodeConfig(bytes.NewReader(response.Body))
+					if decodeErr != nil || config.Width <= 0 || config.Height <= 0 || config.Width > maxImagePixels/config.Height {
+						resource.Error = "image dimensions were rejected"
+						continue
+					}
+					decoded, _, decodeErr := image.Decode(bytes.NewReader(response.Body))
+					if decodeErr != nil {
+						resource.Error = "image decode failed"
+						continue
+					}
+					resource.Loaded, resource.Error = true, ""
 					resource.IntrinsicWidth, resource.IntrinsicHeight = float32(config.Width), float32(config.Height)
 					images[resource.URL] = decoded
+					break
 				}
 				resources[node.ID] = resource
-				if resource.Error != "" {
-					errors = append(errors, resource.Error+": "+network.RedactedURL(target))
+				if resource.Error != "" && lastTarget != nil {
+					errors = append(errors, resource.Error+": "+network.RedactedURL(lastTarget))
 				}
 			}
 		}

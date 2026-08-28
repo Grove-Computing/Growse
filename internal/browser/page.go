@@ -66,6 +66,7 @@ type Page struct {
 	window           runtimemodel.WindowContext
 	windows          *windowRegistry
 	serviceWorkers   *serviceworker.Manager
+	imageLoader      ResourceLoader
 }
 
 // Frame is one nested browsing context owned by a parent Page.

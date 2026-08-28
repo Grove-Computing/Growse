@@ -61,7 +61,7 @@ func TestLoadReplacedImagesResolvesAndDecodesWebP(t *testing.T) {
 	loader := &routeLoader{responses: map[string]*network.Response{
 		imageURL: {URL: mustParseURL(t, imageURL), StatusCode: 200, ContentType: "image/webp", Body: encoded},
 	}}
-	resources, images, failures := loadReplacedImages(context.Background(), loader, pageURL, document)
+	resources, images, failures := loadReplacedImages(context.Background(), loader, pageURL, document, 1280, 1)
 	resource := resources[imageNode.ID]
 	if len(failures) != 0 || !resource.Loaded || resource.URL != imageURL || resource.IntrinsicWidth <= 0 || resource.IntrinsicHeight <= 0 || resource.Alt != "Avatar" || images[imageURL] == nil {
 		t.Fatalf("resource/images/failures = %#v / %#v / %#v", resource, images, failures)
@@ -78,7 +78,7 @@ func TestLoadReplacedImagesLocalizesDecodeFailure(t *testing.T) {
 	loader := &routeLoader{responses: map[string]*network.Response{
 		"https://example.com/broken.png": {URL: mustParseURL(t, "https://example.com/broken.png"), ContentType: "image/png", Body: []byte("not an image")},
 	}}
-	resources, images, failures := loadReplacedImages(context.Background(), loader, baseURL, document)
+	resources, images, failures := loadReplacedImages(context.Background(), loader, baseURL, document, 1280, 1)
 	if resources[broken.ID].Loaded || resources[broken.ID].Alt != "Fallback" || len(images) != 0 || len(failures) != 1 {
 		t.Fatalf("resource/images/failures = %#v / %#v / %#v", resources[broken.ID], images, failures)
 	}
@@ -118,6 +118,93 @@ func TestNavigateLoadsReplacedImagesOnlyForExplicitJavaScriptEngine(t *testing.T
 	}
 	if len(jsPage.ImageResources) != 1 || jsPage.Images[imageURL] == nil {
 		t.Fatalf("JavaScript page images = %#v / %#v", jsPage.ImageResources, jsPage.Images)
+	}
+}
+
+func TestImageCandidatesSelectPictureSourceByTypeMediaSizesAndScale(t *testing.T) {
+	document := dom.NewDocument()
+	picture := document.CreateElement("picture", nil)
+	unsupported := document.CreateElement("source", map[string]string{"type": "image/avif", "srcset": "hero.avif 1x"})
+	wide := document.CreateElement("source", map[string]string{"type": "image/webp", "media": "(min-width: 900px)", "srcset": "wide.webp 1x"})
+	matched := document.CreateElement("source", map[string]string{
+		"type": "image/png", "media": "(max-width: 899px)",
+		"srcset": "small.png 400w, large.png 800w", "sizes": "(max-width: 600px) 100vw, 50vw",
+	})
+	imageNode := document.CreateElement("img", map[string]string{"src": "fallback.jpg"})
+	appendNodes := [][2]*dom.Node{{document.Root, picture}, {picture, unsupported}, {picture, wide}, {picture, matched}, {picture, imageNode}}
+	for _, pair := range appendNodes {
+		if err := document.AppendChild(pair[0], pair[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	candidates := imageCandidates(imageNode, mustParseURL(t, "https://example.com/assets/"), 800, 1.5)
+	want := []string{"https://example.com/assets/large.png", "https://example.com/assets/small.png", "https://example.com/assets/fallback.jpg"}
+	if len(candidates) != len(want) {
+		t.Fatalf("candidates = %#v, want %#v", candidates, want)
+	}
+	for index := range want {
+		if candidates[index].String() != want[index] {
+			t.Fatalf("candidate[%d] = %q, want %q", index, candidates[index], want[index])
+		}
+	}
+}
+
+func TestLoadReplacedImagesFallsBackAfterPreferredCandidateFailure(t *testing.T) {
+	baseURL := mustParseURL(t, "https://example.com/")
+	document := dom.NewDocument()
+	imageNode := document.CreateElement("img", map[string]string{"srcset": "broken.webp 2x, fallback.png 1x", "src": "last.jpg", "alt": "Hero"})
+	if err := document.AppendChild(document.Root, imageNode); err != nil {
+		t.Fatal(err)
+	}
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, image.NewNRGBA(image.Rect(0, 0, 4, 2))); err != nil {
+		t.Fatal(err)
+	}
+	loader := &routeLoader{responses: map[string]*network.Response{
+		"https://example.com/broken.webp":  {URL: mustParseURL(t, "https://example.com/broken.webp"), ContentType: "image/webp", Body: []byte("broken")},
+		"https://example.com/fallback.png": {URL: mustParseURL(t, "https://example.com/fallback.png"), ContentType: "image/png", Body: encoded.Bytes()},
+	}}
+	resources, images, failures := loadReplacedImages(context.Background(), loader, baseURL, document, 800, 2)
+	resource := resources[imageNode.ID]
+	if len(failures) != 0 || !resource.Loaded || resource.URL != "https://example.com/fallback.png" || resource.IntrinsicWidth != 4 || images[resource.URL] == nil {
+		t.Fatalf("resource/images/failures = %#v / %#v / %#v", resource, images, failures)
+	}
+}
+
+func TestUpdateViewportReselectsResponsiveImageCandidate(t *testing.T) {
+	pageURL := "https://example.com/index.html"
+	desktopURL := "https://example.com/desktop.png"
+	mobileURL := "https://example.com/mobile.png"
+	encode := func(width int) []byte {
+		var output bytes.Buffer
+		if err := png.Encode(&output, image.NewNRGBA(image.Rect(0, 0, width, 1))); err != nil {
+			t.Fatal(err)
+		}
+		return output.Bytes()
+	}
+	loader := &routeLoader{responses: map[string]*network.Response{
+		pageURL:    {URL: mustParseURL(t, pageURL), StatusCode: 200, ContentType: "text/html", Body: []byte(`<picture><source media="(max-width: 600px)" srcset="mobile.png"><img src="desktop.png"></picture>`)},
+		desktopURL: {URL: mustParseURL(t, desktopURL), StatusCode: 200, ContentType: "image/png", Body: encode(4)},
+		mobileURL:  {URL: mustParseURL(t, mobileURL), StatusCode: 200, ContentType: "image/png", Body: encode(2)},
+	}}
+	browserState := NewWithEngineFactory(loader, func(runtimemodel.Engine) runtimemodel.Runtime { return &runtimeStub{} })
+	defer browserState.Close()
+	if _, err := browserState.SetEngine(context.Background(), runtimemodel.EngineJavaScript); err != nil {
+		t.Fatal(err)
+	}
+	page, err := browserState.Navigate(context.Background(), pageURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var imageID dom.NodeID
+	for id := range page.ImageResources {
+		imageID = id
+	}
+	if page.ImageResources[imageID].URL != desktopURL {
+		t.Fatalf("initial candidate = %q, want desktop", page.ImageResources[imageID].URL)
+	}
+	if !browserState.UpdateViewport(500, 700) || page.ImageResources[imageID].URL != mobileURL || page.ImageResources[imageID].IntrinsicWidth != 2 {
+		t.Fatalf("responsive candidate = %#v", page.ImageResources[imageID])
 	}
 }
 

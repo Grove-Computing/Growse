@@ -735,9 +735,25 @@ func (b *Browser) UpdateViewport(width, height float32) bool {
 	recomputePageStyles(page, b.currentTime())
 	activeRuntime := b.activeRuntime
 	media := pageMediaEnvironment(page)
+	imageLoader := page.imageLoader
+	baseURL := cloneURL(page.BaseURL)
+	engine := page.Engine
+	onMutation := b.onMutation
 	b.mu.Unlock()
 	if runtime, ok := activeRuntime.(mediaEnvironmentRuntime); ok {
 		runtime.UpdateMediaEnvironment(media)
+	}
+	if engine == runtimemodel.EngineJavaScript && imageLoader != nil {
+		resources, images, failures := loadReplacedImages(context.Background(), imageLoader, baseURL, page.Document, width, 1)
+		b.mu.Lock()
+		if b.page == page && page.Engine == runtimemodel.EngineJavaScript {
+			page.ImageResources, page.Images, page.ImageErrors = resources, images, failures
+			page.StyleRevision++
+		}
+		b.mu.Unlock()
+		if onMutation != nil {
+			onMutation()
+		}
 	}
 	return true
 }
@@ -1352,7 +1368,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	var decodedImages map[string]image.Image
 	var imageErrors []string
 	if engine == runtimemodel.EngineJavaScript {
-		replacedImages, decodedImages, imageErrors = loadReplacedImages(ctx, imageResources, baseURL, document)
+		replacedImages, decodedImages, imageErrors = loadReplacedImages(ctx, imageResources, baseURL, document, 1280, 1)
 	}
 	scripts, scriptErrors := loadScriptsForEngineWithBase(ctx, scriptResources, response.URL, baseURL, document, engine)
 	var importMap map[string]string
@@ -1389,6 +1405,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 		ScriptErrors:     scriptErrors,
 		DevTools:         pageStore,
 		serviceWorkers:   b.serviceWorkers,
+		imageLoader:      imageResources,
 	}
 	for _, scriptError := range scriptErrors {
 		page.DevTools.AddConsole(devtools.ConsoleError, "script", scriptError)
