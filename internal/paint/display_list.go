@@ -41,6 +41,12 @@ type DrawText struct {
 
 	FontSize        float32
 	Bold            bool
+	FontFamilies    []string
+	FontStyle       string
+	FontStretch     string
+	LetterSpacing   float32
+	WordSpacing     float32
+	VerticalOffset  float32
 	Color           uint32
 	Background      uint32
 	Decoration      stylemodel.TextDecorationLine
@@ -164,6 +170,12 @@ type TextRun struct {
 
 	FontSize        float32
 	Bold            bool
+	FontFamilies    []string
+	FontStyle       string
+	FontStretch     string
+	LetterSpacing   float32
+	WordSpacing     float32
+	VerticalOffset  float32
 	Color           uint32
 	Background      uint32
 	Baseline        float32
@@ -280,15 +292,17 @@ func Build(tree *layout.Tree) *DisplayList {
 			continue
 		}
 		command := DrawText{
-			NodeID:     box.NodeID,
-			Text:       box.Text,
-			X:          box.X,
-			Y:          box.Y,
-			Top:        top,
-			Width:      box.Width,
-			Height:     box.Height,
-			FontSize:   box.FontSize,
-			Bold:       box.Bold,
+			NodeID:       box.NodeID,
+			Text:         box.Text,
+			X:            box.X,
+			Y:            box.Y,
+			Top:          top,
+			Width:        box.Width,
+			Height:       box.Height,
+			FontSize:     box.FontSize,
+			Bold:         box.Bold,
+			FontFamilies: append([]string(nil), box.FontFamilies...), FontStyle: box.FontStyle, FontStretch: box.FontStretch,
+			LetterSpacing: box.LetterSpacing, WordSpacing: box.WordSpacing, VerticalOffset: box.VerticalOffset,
 			Color:      box.Color,
 			Background: box.Background,
 			Decoration: box.Decoration, DecorationColor: box.DecorationColor, Opacity: box.Opacity,
@@ -303,6 +317,8 @@ func Build(tree *layout.Tree) *DisplayList {
 			command.Runs = append(command.Runs, TextRun{
 				NodeID: run.NodeID, Tag: run.Tag, Text: run.Text, Width: run.Width,
 				FontSize: run.FontSize, Bold: run.Bold, Color: run.Color, Background: run.Background,
+				FontFamilies: append([]string(nil), run.FontFamilies...), FontStyle: run.FontStyle, FontStretch: run.FontStretch,
+				LetterSpacing: run.LetterSpacing, WordSpacing: run.WordSpacing, VerticalOffset: run.VerticalOffset,
 				Baseline: run.Baseline - box.Y, Decoration: run.Decoration,
 				DecorationColor: run.DecorationColor, Opacity: run.Opacity,
 				TextShadows: append([]stylemodel.Shadow(nil), run.TextShadows...),

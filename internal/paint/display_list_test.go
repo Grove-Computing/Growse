@@ -134,6 +134,19 @@ func TestBuildPreservesBorderRadiusDecorationAndOpacity(t *testing.T) {
 	}
 }
 
+func TestBuildPreservesTypographyForThePainter(t *testing.T) {
+	tree := &layout.Tree{Boxes: []layout.Box{{Order: 1, FontFamilies: []string{"Fixture", "sans-serif"}, FontStyle: "italic", FontStretch: "expanded", LetterSpacing: 2, WordSpacing: 3, Runs: []layout.TextRun{{
+		Text: "copy", FontFamilies: []string{"Fixture"}, FontStyle: "italic", FontStretch: "condensed", LetterSpacing: 1, WordSpacing: 4, VerticalOffset: 5,
+	}}}}}
+	command := Build(tree).Commands[0].(DrawText)
+	if command.FontFamilies[0] != "Fixture" || command.FontStyle != "italic" || command.FontStretch != "expanded" || command.LetterSpacing != 2 || command.WordSpacing != 3 {
+		t.Fatalf("line typography = %#v", command)
+	}
+	if command.Runs[0].FontStretch != "condensed" || command.Runs[0].VerticalOffset != 5 || command.Runs[0].LetterSpacing != 1 || command.Runs[0].WordSpacing != 4 {
+		t.Fatalf("run typography = %#v", command.Runs[0])
+	}
+}
+
 func TestBuildPreservesShadowsAndOutline(t *testing.T) {
 	shadow := style.Shadow{OffsetX: 2, OffsetY: 3, Blur: 4, Spread: 1, Color: 0x123456ff}
 	tree := &layout.Tree{

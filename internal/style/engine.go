@@ -158,6 +158,8 @@ func inheritedStyle(parent ComputedStyle) ComputedStyle {
 		Color: parent.Color, FontSize: parent.FontSize, FontWeight: parent.FontWeight,
 		FontFamilies: append([]string(nil), parent.FontFamilies...), FontStyle: parent.FontStyle, FontStretch: parent.FontStretch, FontFaceIndex: parent.FontFaceIndex,
 		LineHeight: parent.LineHeight, WhiteSpace: parent.WhiteSpace, Visibility: parent.Visibility,
+		TextAlign: parent.TextAlign, TextTransform: parent.TextTransform, TextIndent: parent.TextIndent,
+		LetterSpacing: parent.LetterSpacing, WordSpacing: parent.WordSpacing, WordBreak: parent.WordBreak, OverflowWrap: parent.OverflowWrap,
 		BackgroundColor: transparent, Display: DisplayInline,
 		BackgroundRepeat: BackgroundRepeat{X: true, Y: true},
 		DecorationColor:  parent.Color, Opacity: 1, FlexShrink: 1,
@@ -391,6 +393,7 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 	computed = applyBackgroundLayers(computed, parent, winners, computed.CustomProperties, fontContext)
 	if value, ok := winners["font-size"]; ok {
 		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
+			resolved = fontCandidateComponent(value, resolved, "font-size")
 			parseFontSize := func(value string) (float32, bool) {
 				length, valid := ResolveLength(value, fontContext)
 				resolved := length.Resolve(fontContext.PercentageBase)
@@ -403,27 +406,52 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 	}
 	if value, ok := winners["font-family"]; ok {
 		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
-			if parsed, valid := parseFontFamilies(resolved); valid {
-				computed.FontFamilies = parsed
+			resolved = fontCandidateComponent(value, resolved, "font-family")
+			switch parseGlobalKeyword(resolved) {
+			case globalInherit, globalUnset:
+				computed.FontFamilies = append([]string(nil), parent.FontFamilies...)
+			case globalInitial:
+				computed.FontFamilies = []string{"Growse Sans", "sans-serif"}
+			default:
+				if parsed, valid := parseFontFamilies(resolved); valid {
+					computed.FontFamilies = parsed
+				}
 			}
 		}
 	}
 	if value, ok := winners["font-style"]; ok {
 		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
-			if parsed, valid := parseFontStyle(resolved); valid {
-				computed.FontStyle = parsed
+			resolved = fontCandidateComponent(value, resolved, "font-style")
+			switch parseGlobalKeyword(resolved) {
+			case globalInherit, globalUnset:
+				computed.FontStyle = parent.FontStyle
+			case globalInitial:
+				computed.FontStyle = "normal"
+			default:
+				if parsed, valid := parseFontStyle(resolved); valid {
+					computed.FontStyle = parsed
+				}
 			}
 		}
 	}
 	if value, ok := winners["font-stretch"]; ok {
 		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
-			if parsed, valid := parseFontStretch(resolved); valid {
-				computed.FontStretch = parsed
+			resolved = fontCandidateComponent(value, resolved, "font-stretch")
+			switch parseGlobalKeyword(resolved) {
+			case globalInherit, globalUnset:
+				computed.FontStretch = parent.FontStretch
+			case globalInitial:
+				computed.FontStretch = "normal"
+			default:
+				if parsed, valid := parseFontStretch(resolved); valid {
+					computed.FontStretch = parsed
+				}
 			}
 		}
 	}
 	if value, ok := winners["font-weight"]; ok {
 		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
+			resolved = fontCandidateComponent(value, resolved, "font-weight")
 			if parsed, valid := resolveInt(resolved, parent.FontWeight, 400, true, parseFontWeight); valid {
 				computed.FontWeight = parsed
 			}
@@ -432,6 +460,7 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 	computed.FontFaceIndex = selectFontFace(stylesheet, computed.FontFamilies, computed.FontStyle, computed.FontWeight, computed.FontStretch)
 	if value, ok := winners["line-height"]; ok {
 		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
+			resolved = fontCandidateComponent(value, resolved, "line-height")
 			if parsed, valid := resolveLineHeight(resolved, parent.LineHeight, computed.FontSize, fontContext); valid {
 				computed.LineHeight = parsed
 			}
@@ -444,6 +473,7 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 			}
 		}
 	}
+	computed = applyTextProperties(computed, parent, winners, fontContext)
 	if value, ok := winners["overflow-x"]; ok {
 		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
 			if parsed, valid := resolveOverflow(resolved, parent.OverflowX); valid {
@@ -1094,6 +1124,8 @@ func expandedProperties(property string) []string {
 		return []string{"flex-direction", "flex-wrap"}
 	case "flex":
 		return []string{"flex-grow", "flex-shrink", "flex-basis"}
+	case "font":
+		return []string{"font-style", "font-weight", "font-stretch", "font-size", "line-height", "font-family"}
 	case "gap":
 		return []string{"row-gap", "column-gap"}
 	case "place-content":

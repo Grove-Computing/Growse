@@ -155,6 +155,12 @@ type Box struct {
 
 	FontSize        float32
 	Bold            bool
+	FontFamilies    []string
+	FontStyle       string
+	FontStretch     string
+	LetterSpacing   float32
+	WordSpacing     float32
+	VerticalOffset  float32
 	Color           uint32
 	Background      uint32
 	Decoration      stylemodel.TextDecorationLine
@@ -174,6 +180,12 @@ type TextRun struct {
 
 	FontSize        float32
 	Bold            bool
+	FontFamilies    []string
+	FontStyle       string
+	FontStretch     string
+	LetterSpacing   float32
+	WordSpacing     float32
+	VerticalOffset  float32
 	Color           uint32
 	Background      uint32
 	Baseline        float32

@@ -67,7 +67,13 @@ func supportsDeclaration(property, value string) bool {
 		_, ok := resolveColor(value, defaultTextColor, transparent, true, defaultTextColor)
 		return ok
 	case "font-size", "letter-spacing", "word-spacing", "text-indent":
+		if (property == "letter-spacing" || property == "word-spacing") && strings.EqualFold(value, "normal") {
+			return true
+		}
 		_, ok := ResolveLength(value, context)
+		return ok
+	case "font":
+		_, ok := parseFontShorthand(value)
 		return ok
 	case "line-height":
 		_, ok := resolveLineHeight(value, 16, 16, context)
@@ -135,6 +141,17 @@ func supportsDeclaration(property, value string) bool {
 		return ok
 	case "text-align":
 		return value == "start" || value == "end" || value == "left" || value == "right" || value == "center" || value == "justify"
+	case "text-transform":
+		return value == "none" || value == "uppercase" || value == "lowercase" || value == "capitalize"
+	case "word-break":
+		return value == "normal" || value == "break-all" || value == "keep-all"
+	case "overflow-wrap":
+		return value == "normal" || value == "break-word" || value == "anywhere"
+	case "vertical-align":
+		parsed := parseVerticalAlign(value, VerticalAlign{}, context)
+		return parsed.Kind != VerticalAlignBaseline || strings.EqualFold(strings.TrimSpace(value), "baseline") || parsed.Value != 0
+	case "text-overflow":
+		return value == "clip" || value == "ellipsis"
 	case "container-type":
 		return value == "normal" || value == "inline-size"
 	case "container-name":
@@ -146,7 +163,7 @@ func supportsDeclaration(property, value string) bool {
 
 func supportsProperty(property string) bool {
 	switch property {
-	case "display", "color", "background-color", "background-image", "font-size", "font-weight", "font-family", "font-style", "font-stretch", "line-height", "letter-spacing", "word-spacing", "text-indent", "text-align",
+	case "display", "color", "background-color", "background-image", "font", "font-size", "font-weight", "font-family", "font-style", "font-stretch", "line-height", "letter-spacing", "word-spacing", "text-indent", "text-align", "text-transform", "word-break", "overflow-wrap", "vertical-align", "text-overflow",
 		"width", "height", "min-width", "min-height", "max-width", "max-height", "box-sizing", "position", "top", "right", "bottom", "left", "z-index",
 		"margin", "margin-top", "margin-right", "margin-bottom", "margin-left", "padding", "padding-top", "padding-right", "padding-bottom", "padding-left",
 		"border", "border-width", "border-style", "border-color", "border-top", "border-right", "border-bottom", "border-left", "border-radius", "outline",

@@ -23,6 +23,9 @@ const (
 type blockStyle struct {
 	fontSize            float32
 	bold                bool
+	fontFamilies        []string
+	fontStyle           string
+	fontStretch         string
 	color               uint32
 	background          uint32
 	image               stylemodel.BackgroundImage
@@ -58,6 +61,15 @@ type blockStyle struct {
 	maxHeight           stylemodel.SizeValue
 	lineHeight          float32
 	whiteSpace          stylemodel.WhiteSpace
+	textAlign           stylemodel.TextAlign
+	textTransform       stylemodel.TextTransform
+	textIndent          stylemodel.LengthPercentage
+	letterSpacing       float32
+	wordSpacing         float32
+	wordBreak           stylemodel.WordBreak
+	overflowWrap        stylemodel.OverflowWrap
+	verticalAlign       stylemodel.VerticalAlign
+	textOverflow        stylemodel.TextOverflow
 	overflowX           stylemodel.Overflow
 	overflowY           stylemodel.Overflow
 	flexDirection       stylemodel.FlexDirection
@@ -342,7 +354,7 @@ func (e *engine) addSubmitButton(node *dom.Node, style blockStyle, x, width, con
 	if label == "" {
 		label = "Submit"
 	}
-	textWidth, textHeight, _ := measureText(label, style.fontSize, style.bold)
+	textWidth, textHeight, _ := measureStyledText(label, style)
 	naturalWidth := textWidth + style.padding.Left + style.padding.Right + style.border.Left.Width + style.border.Right.Width
 	naturalHeight := textHeight + style.padding.Top + style.padding.Bottom + style.border.Top.Width + style.border.Bottom.Width
 	usedWidth, usedHeight := max(buttonWidth, naturalWidth), max(inputHeight, naturalHeight)
@@ -840,19 +852,62 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 	var lineText strings.Builder
 	var usedWidth, lineHeight, lineAscent float32
 	var pendingSpace *inlineRun
+	lineX, lineWidth := x, width
+	firstLine := true
+	if indent := container.textIndent.Resolve(width); indent != 0 {
+		lineX += indent
+		lineWidth = max(width-indent, float32(1))
+	}
 
-	flushLine := func() {
+	flushLine := func(final bool) {
 		if len(lineRuns) == 0 {
 			return
+		}
+		if final && container.textOverflow == stylemodel.TextOverflowEllipsis &&
+			container.whiteSpace == stylemodel.WhiteSpaceNowrap && container.overflowX != stylemodel.OverflowVisible && usedWidth > lineWidth {
+			lineRuns, usedWidth = truncateTextRuns(lineRuns, lineWidth)
+			lineText.Reset()
+			for _, run := range lineRuns {
+				lineText.WriteString(run.Text)
+			}
 		}
 		if lineHeight == 0 {
 			lineHeight = container.fontSize * 1.4
 		}
+		for index := range lineRuns {
+			lineRuns[index].Baseline = e.y + lineAscent - lineRuns[index].VerticalOffset
+		}
+		alignmentOffset := float32(0)
+		free := max(lineWidth-usedWidth, float32(0))
+		switch container.textAlign {
+		case stylemodel.TextAlignEnd, stylemodel.TextAlignRight:
+			alignmentOffset = free
+		case stylemodel.TextAlignCenter:
+			alignmentOffset = free / 2
+		case stylemodel.TextAlignJustify:
+			if !final {
+				spaces := 0
+				for _, run := range lineRuns {
+					spaces += strings.Count(run.Text, " ")
+				}
+				if spaces > 0 {
+					extra := free / float32(spaces)
+					for index := range lineRuns {
+						count := strings.Count(lineRuns[index].Text, " ")
+						lineRuns[index].WordSpacing += extra
+						lineRuns[index].Width += float32(count) * extra
+					}
+					usedWidth = lineWidth
+				}
+			}
+		}
 		e.tree.Boxes = append(e.tree.Boxes, Box{
 			Order: e.nextOrder(), StackingID: e.stackingID,
 			NodeID: nodeID, Tag: tag, Text: lineText.String(),
-			X: x, Y: e.y, Width: width, Height: lineHeight,
+			X: lineX + alignmentOffset, Y: e.y, Width: max(lineWidth-alignmentOffset, usedWidth), Height: lineHeight,
 			FontSize: container.fontSize, Bold: container.bold, Color: container.color,
+			FontFamilies: append([]string(nil), container.fontFamilies...), FontStyle: container.fontStyle, FontStretch: container.fontStretch,
+			LetterSpacing: container.letterSpacing, WordSpacing: container.wordSpacing,
 			Opacity: e.opacity, Decoration: container.decoration, DecorationColor: container.decorationColor,
 			TextShadows: append([]stylemodel.Shadow(nil), container.textShadows...),
 			Transform:   stylemodel.IdentityMatrix(),
@@ -861,7 +916,7 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 			Baseline:    e.y + lineAscent, Clip: cloneRect(e.clip), Clips: cloneClipRegions(e.clips),
 		})
 		for _, placement := range flexPlacements {
-			placementX, placementY := x+placement.widthOffset, e.y+lineAscent-placement.baseline
+			placementX, placementY := lineX+alignmentOffset+placement.widthOffset, e.y+lineAscent-placement.baseline
 			if placement.grid {
 				e.renderInlineGrid(placement, placementX, placementY)
 			} else {
@@ -875,18 +930,24 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 		lineText.Reset()
 		usedWidth, lineHeight, lineAscent, pendingSpace = 0, 0, 0, nil
 		flexPlacements = flexPlacements[:0]
+		if firstLine {
+			firstLine = false
+			lineX, lineWidth = x, width
+		}
 	}
 
 	appendPiece := func(run inlineRun, text string, pieceWidth float32) {
 		textRun := TextRun{
 			NodeID: run.nodeID, Tag: run.tag, Text: text, Width: pieceWidth,
 			FontSize: run.style.fontSize, Bold: run.style.bold,
+			FontFamilies: append([]string(nil), run.style.fontFamilies...), FontStyle: run.style.fontStyle, FontStretch: run.style.fontStretch,
+			LetterSpacing: run.style.letterSpacing, WordSpacing: run.style.wordSpacing, VerticalOffset: verticalAlignOffset(run.style),
 			Color: run.style.color, Background: run.style.background,
 			Decoration: run.style.decoration, DecorationColor: run.style.decorationColor, Opacity: run.opacity,
 			TextShadows: append([]stylemodel.Shadow(nil), run.style.textShadows...),
 		}
 		runHeight, runAscent := usedLineMetrics(run)
-		textRun.Baseline = e.y + runAscent
+		textRun.Baseline = e.y + runAscent - textRun.VerticalOffset
 		if len(lineRuns) > 0 && sameTextStyle(lineRuns[len(lineRuns)-1], textRun) {
 			lineRuns[len(lineRuns)-1].Text += text
 			lineRuns[len(lineRuns)-1].Width += pieceWidth
@@ -895,16 +956,16 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 		}
 		lineText.WriteString(text)
 		usedWidth += pieceWidth
-		height := runHeight
+		height := runHeight + absFloat32(textRun.VerticalOffset)
 		if height > lineHeight {
 			lineHeight = height
 		}
-		if runAscent > lineAscent {
-			lineAscent = runAscent
+		if adjusted := runAscent + max(textRun.VerticalOffset, float32(0)); adjusted > lineAscent {
+			lineAscent = adjusted
 		}
 	}
 
-	for _, token := range tokenizeInlineRuns(runs) {
+	for _, token := range tokenizeInlineRuns(transformInlineRuns(runs)) {
 		if token.atomic {
 			if token.flex {
 				token.width, token.height, token.baseline = e.resolveInlineFlexSize(token.node, token.style, width)
@@ -913,8 +974,8 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 			} else {
 				token.width, token.height = resolveAtomicSize(token, width)
 			}
-			if usedWidth > 0 && usedWidth+token.width > width && wrapsWhitespace(token.style.whiteSpace) {
-				flushLine()
+			if usedWidth > 0 && usedWidth+token.width > lineWidth && wrapsWhitespace(token.style.whiteSpace) {
+				flushLine(false)
 			}
 			if token.flex || token.grid {
 				token.widthOffset = usedWidth
@@ -926,14 +987,14 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 			continue
 		}
 		if token.text == "\n" {
-			flushLine()
+			flushLine(false)
 			continue
 		}
 		if token.text == " " {
 			if preservesSpaces(token.style.whiteSpace) {
-				spaceWidth, _, _ := measureText(" ", token.style.fontSize, token.style.bold)
-				if usedWidth > 0 && usedWidth+spaceWidth > width && wrapsWhitespace(token.style.whiteSpace) {
-					flushLine()
+				spaceWidth, _, _ := measureStyledText(" ", token.style)
+				if usedWidth > 0 && usedWidth+spaceWidth > lineWidth && wrapsWhitespace(token.style.whiteSpace) {
+					flushLine(false)
 				}
 				appendPiece(token, " ", spaceWidth)
 				continue
@@ -947,11 +1008,11 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 
 		spaceWidth := float32(0)
 		if pendingSpace != nil {
-			spaceWidth, _, _ = measureText(" ", pendingSpace.style.fontSize, pendingSpace.style.bold)
+			spaceWidth, _, _ = measureStyledText(" ", pendingSpace.style)
 		}
-		wordWidth, _, _ := measureText(token.text, token.style.fontSize, token.style.bold)
-		if usedWidth > 0 && usedWidth+spaceWidth+wordWidth > width && wrapsWhitespace(token.style.whiteSpace) {
-			flushLine()
+		wordWidth, _, _ := measureStyledText(token.text, token.style)
+		if usedWidth > 0 && usedWidth+spaceWidth+wordWidth > lineWidth && wrapsWhitespace(token.style.whiteSpace) {
+			flushLine(false)
 			spaceWidth = 0
 		}
 		if pendingSpace != nil && usedWidth > 0 {
@@ -959,14 +1020,20 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 		}
 		pendingSpace = nil
 
+		breakInside := token.style.wordBreak == stylemodel.WordBreakBreakAll || token.style.overflowWrap == stylemodel.OverflowWrapAnywhere ||
+			token.style.overflowWrap == stylemodel.OverflowWrapBreakWord && wordWidth > lineWidth
+		if !breakInside || !wrapsWhitespace(token.style.whiteSpace) {
+			appendPiece(token, token.text, wordWidth)
+			continue
+		}
 		remaining := []rune(token.text)
 		for len(remaining) > 0 {
-			available := width - usedWidth
-			mWidth, _, _ := measureText("m", token.style.fontSize, token.style.bold)
+			available := lineWidth - usedWidth
+			mWidth, _, _ := measureStyledText("m", token.style)
 			characters := int(available / max(mWidth, float32(1)))
 			if characters < 1 {
 				if wrapsWhitespace(token.style.whiteSpace) && usedWidth > 0 {
-					flushLine()
+					flushLine(false)
 					continue
 				}
 				characters = 1
@@ -978,15 +1045,15 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 				characters = len(remaining)
 			}
 			piece := string(remaining[:characters])
-			pieceWidth, _, _ := measureText(piece, token.style.fontSize, token.style.bold)
+			pieceWidth, _, _ := measureStyledText(piece, token.style)
 			appendPiece(token, piece, pieceWidth)
 			remaining = remaining[characters:]
 			if len(remaining) > 0 && wrapsWhitespace(token.style.whiteSpace) {
-				flushLine()
+				flushLine(false)
 			}
 		}
 	}
-	flushLine()
+	flushLine(true)
 }
 
 func isBlockLevelDisplay(display stylemodel.Display) bool {
@@ -1041,7 +1108,7 @@ func tokenizeInlineRuns(runs []inlineRun) []inlineRun {
 func resolveAtomicSize(run inlineRun, containingWidth float32) (float32, float32) {
 	horizontal := run.style.padding.Left + run.style.padding.Right + run.style.border.Left.Width + run.style.border.Right.Width
 	vertical := run.style.padding.Top + run.style.padding.Bottom + run.style.border.Top.Width + run.style.border.Bottom.Width
-	width, _, _ := measureText(normalizeWhitespace(run.text), run.style.fontSize, run.style.bold)
+	width, _, _ := measureStyledText(normalizeWhitespace(run.text), run.style)
 	if resolved, ok := resolveSize(run.style.width, containingWidth, true); ok {
 		width = resolved
 	}
@@ -1061,7 +1128,110 @@ func resolveAtomicSize(run inlineRun, containingWidth float32) (float32, float32
 func sameTextStyle(left, right TextRun) bool {
 	return left.NodeID == right.NodeID && left.Tag == right.Tag && left.FontSize == right.FontSize &&
 		left.Bold == right.Bold && left.Color == right.Color && left.Background == right.Background &&
+		left.FontStyle == right.FontStyle && left.FontStretch == right.FontStretch && strings.Join(left.FontFamilies, "\x00") == strings.Join(right.FontFamilies, "\x00") &&
+		left.LetterSpacing == right.LetterSpacing && left.WordSpacing == right.WordSpacing && left.VerticalOffset == right.VerticalOffset &&
 		left.Decoration == right.Decoration && left.DecorationColor == right.DecorationColor && left.Opacity == right.Opacity
+}
+
+func transformInlineRuns(runs []inlineRun) []inlineRun {
+	result := append([]inlineRun(nil), runs...)
+	for index := range result {
+		switch result[index].style.textTransform {
+		case stylemodel.TextTransformUppercase:
+			result[index].text = strings.ToUpper(result[index].text)
+		case stylemodel.TextTransformLowercase:
+			result[index].text = strings.ToLower(result[index].text)
+		case stylemodel.TextTransformCapitalize:
+			start := true
+			result[index].text = strings.Map(func(character rune) rune {
+				if unicode.IsSpace(character) || unicode.IsPunct(character) {
+					start = true
+					return character
+				}
+				if start {
+					start = false
+					return unicode.ToUpper(character)
+				}
+				return character
+			}, result[index].text)
+		}
+	}
+	return result
+}
+
+func verticalAlignOffset(style blockStyle) float32 {
+	switch style.verticalAlign.Kind {
+	case stylemodel.VerticalAlignLength:
+		return style.verticalAlign.Value
+	case stylemodel.VerticalAlignSuper:
+		return style.fontSize * .35
+	case stylemodel.VerticalAlignSub:
+		return -style.fontSize * .2
+	case stylemodel.VerticalAlignMiddle:
+		return style.fontSize * .15
+	case stylemodel.VerticalAlignTextTop, stylemodel.VerticalAlignTop:
+		return style.fontSize * .2
+	case stylemodel.VerticalAlignTextBottom, stylemodel.VerticalAlignBottom:
+		return -style.fontSize * .2
+	default:
+		return 0
+	}
+}
+
+func truncateTextRuns(runs []TextRun, width float32) ([]TextRun, float32) {
+	if len(runs) == 0 {
+		return runs, 0
+	}
+	last := runs[len(runs)-1]
+	ellipsisWidth := measureTextRun("…", last)
+	limit := max(width-ellipsisWidth, float32(0))
+	result := make([]TextRun, 0, len(runs))
+	used := float32(0)
+	for _, run := range runs {
+		kept := run
+		kept.Text, kept.Width = "", 0
+		for _, character := range run.Text {
+			piece := string(character)
+			pieceWidth := measureTextRun(piece, run)
+			if kept.Text != "" {
+				pieceWidth += run.LetterSpacing
+			}
+			if used+pieceWidth > limit {
+				break
+			}
+			kept.Text += piece
+			kept.Width += pieceWidth
+			used += pieceWidth
+		}
+		if kept.Text != "" {
+			result = append(result, kept)
+		}
+		if kept.Text != run.Text {
+			break
+		}
+	}
+	marker := last
+	marker.Text, marker.Width = "…", ellipsisWidth
+	if len(result) > 0 && sameTextStyle(result[len(result)-1], marker) {
+		result[len(result)-1].Text += marker.Text
+		result[len(result)-1].Width += marker.Width
+	} else {
+		result = append(result, marker)
+	}
+	return result, min(used+ellipsisWidth, width)
+}
+
+func measureTextRun(text string, run TextRun) float32 {
+	style := blockStyle{fontSize: run.FontSize, bold: run.Bold, fontStretch: run.FontStretch, letterSpacing: run.LetterSpacing, wordSpacing: run.WordSpacing}
+	width, _, _ := measureStyledText(text, style)
+	return width
+}
+
+func absFloat32(value float32) float32 {
+	if value < 0 {
+		return -value
+	}
+	return value
 }
 
 func preservesSpaces(value stylemodel.WhiteSpace) bool {
@@ -1195,12 +1365,14 @@ func uaStyle(tag string) blockStyle {
 }
 
 func defaultStyle() blockStyle {
-	return blockStyle{fontSize: 16, color: textColor, decorationColor: textColor, opacity: 1, display: stylemodel.DisplayInline}
+	return blockStyle{fontSize: 16, fontFamilies: []string{"Growse Sans", "sans-serif"}, fontStyle: "normal", fontStretch: "normal", color: textColor, decorationColor: textColor, opacity: 1, display: stylemodel.DisplayInline}
 }
 
 func applyComputed(block blockStyle, computed stylemodel.ComputedStyle) blockStyle {
 	block.fontSize = computed.FontSize
 	block.bold = computed.Bold()
+	block.fontFamilies = append([]string(nil), computed.FontFamilies...)
+	block.fontStyle, block.fontStretch = computed.FontStyle, computed.FontStretch
 	block.color = computed.Color
 	block.background = computed.BackgroundColor
 	block.image = cloneBackgroundImage(computed.BackgroundImage)
@@ -1229,6 +1401,10 @@ func applyComputed(block blockStyle, computed stylemodel.ComputedStyle) blockSty
 	block.minWidth, block.minHeight = computed.MinWidth, computed.MinHeight
 	block.maxWidth, block.maxHeight = computed.MaxWidth, computed.MaxHeight
 	block.lineHeight, block.whiteSpace = computed.LineHeight, computed.WhiteSpace
+	block.textAlign, block.textTransform, block.textIndent = computed.TextAlign, computed.TextTransform, computed.TextIndent
+	block.letterSpacing, block.wordSpacing = computed.LetterSpacing, computed.WordSpacing
+	block.wordBreak, block.overflowWrap = computed.WordBreak, computed.OverflowWrap
+	block.verticalAlign, block.textOverflow = computed.VerticalAlign, computed.TextOverflow
 	block.overflowX, block.overflowY = computed.OverflowX, computed.OverflowY
 	block.flexDirection, block.flexWrap = computed.FlexDirection, computed.FlexWrap
 	block.justifyContent, block.alignItems, block.justifyItems, block.alignContent = computed.JustifyContent, computed.AlignItems, computed.JustifyItems, computed.AlignContent

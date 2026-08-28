@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"strconv"
+	"strings"
 
 	"github.com/Grove-Computing/Growse/internal/dom"
 	layoutengine "github.com/Grove-Computing/Growse/internal/layout"
@@ -63,7 +64,12 @@ func cssomProperties(computed stylemodel.ComputedStyle, width, height float32) m
 	result := map[string]string{
 		"display": displayCSS(computed.Display), "position": positionCSS(computed.Position),
 		"visibility": visibilityCSS(computed.Visibility), "box-sizing": boxSizingCSS(computed.BoxSizing),
-		"font-size": px(computed.FontSize), "font-weight": strconv.Itoa(computed.FontWeight), "line-height": px(computed.LineHeight),
+		"font-size": px(computed.FontSize), "font-weight": strconv.Itoa(computed.FontWeight), "font-family": strings.Join(computed.FontFamilies, ", "),
+		"font-style": computed.FontStyle, "font-stretch": computed.FontStretch, "line-height": px(computed.LineHeight),
+		"text-align": textAlignCSS(computed.TextAlign), "text-transform": textTransformCSS(computed.TextTransform), "text-indent": lengthPercentageCSS(computed.TextIndent),
+		"letter-spacing": spacingCSS(computed.LetterSpacing), "word-spacing": spacingCSS(computed.WordSpacing),
+		"word-break": wordBreakCSS(computed.WordBreak), "overflow-wrap": overflowWrapCSS(computed.OverflowWrap),
+		"vertical-align": verticalAlignCSS(computed.VerticalAlign), "text-overflow": textOverflowCSS(computed.TextOverflow),
 		"color": cssColor(computed.Color), "background-color": cssColor(computed.BackgroundColor),
 		"opacity": numberCSS(computed.Opacity), "z-index": strconv.Itoa(computed.ZIndex),
 		"width": px(computedWidth), "height": px(computedHeight), "overflow-x": overflowCSS(computed.OverflowX), "overflow-y": overflowCSS(computed.OverflowY),
@@ -78,6 +84,63 @@ func cssomProperties(computed stylemodel.ComputedStyle, width, height float32) m
 		result[name] = value
 	}
 	return result
+}
+
+func textAlignCSS(value stylemodel.TextAlign) string {
+	values := [...]string{"start", "end", "left", "right", "center", "justify"}
+	if int(value) < len(values) {
+		return values[value]
+	}
+	return "start"
+}
+
+func textTransformCSS(value stylemodel.TextTransform) string {
+	values := [...]string{"none", "uppercase", "lowercase", "capitalize"}
+	if int(value) < len(values) {
+		return values[value]
+	}
+	return "none"
+}
+
+func wordBreakCSS(value stylemodel.WordBreak) string {
+	values := [...]string{"normal", "break-all", "keep-all"}
+	if int(value) < len(values) {
+		return values[value]
+	}
+	return "normal"
+}
+
+func overflowWrapCSS(value stylemodel.OverflowWrap) string {
+	values := [...]string{"normal", "break-word", "anywhere"}
+	if int(value) < len(values) {
+		return values[value]
+	}
+	return "normal"
+}
+
+func spacingCSS(value float32) string {
+	if value == 0 {
+		return "normal"
+	}
+	return px(value)
+}
+
+func verticalAlignCSS(value stylemodel.VerticalAlign) string {
+	values := [...]string{"baseline", "sub", "super", "middle", "text-top", "text-bottom", "top", "bottom", ""}
+	if value.Kind == stylemodel.VerticalAlignLength {
+		return px(value.Value)
+	}
+	if int(value.Kind) < len(values) {
+		return values[value.Kind]
+	}
+	return "baseline"
+}
+
+func textOverflowCSS(value stylemodel.TextOverflow) string {
+	if value == stylemodel.TextOverflowEllipsis {
+		return "ellipsis"
+	}
+	return "clip"
 }
 
 func px(value float32) string { return numberCSS(value) + "px" }
@@ -138,10 +201,10 @@ func overflowCSS(value stylemodel.Overflow) string {
 
 func lengthPercentageCSS(value stylemodel.LengthPercentage) string {
 	if value.Percentage != 0 && value.Pixels != 0 {
-		return fmt.Sprintf("calc(%s%% + %s)", numberCSS(value.Percentage*100), px(value.Pixels))
+		return fmt.Sprintf("calc(%s%% + %s)", numberCSS(value.Percentage), px(value.Pixels))
 	}
 	if value.Percentage != 0 {
-		return numberCSS(value.Percentage*100) + "%"
+		return numberCSS(value.Percentage) + "%"
 	}
 	return px(value.Pixels)
 }

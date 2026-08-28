@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode"
 
 	"gioui.org/f32"
 	"gioui.org/font"
@@ -2619,7 +2620,7 @@ func (ui *BrowserUI) layoutDrawText(gtx layout.Context, command paintmodel.DrawT
 			defer paint.PushOpacity(gtx.Ops, max(command.Opacity, 0)).Pop()
 		}
 
-		return ui.layoutShadowedText(gtx, command.Text, command.FontSize, command.Bold, command.Color, command.Decoration, command.DecorationColor, command.Baseline, command.TextShadows)
+		return ui.layoutShadowedText(gtx, command.Text, command.FontSize, command.Bold, command.FontFamilies, command.FontStyle, command.LetterSpacing, command.WordSpacing, command.Color, command.Decoration, command.DecorationColor, command.Baseline, command.TextShadows)
 	})
 }
 
@@ -2659,8 +2660,11 @@ func (ui *BrowserUI) layoutTextRun(gtx layout.Context, run paintmodel.TextRun, h
 	if run.Opacity < 1 {
 		defer paint.PushOpacity(gtx.Ops, max(run.Opacity, 0)).Pop()
 	}
+	if run.VerticalOffset != 0 {
+		defer op.Offset(image.Pt(0, -gtx.Dp(unit.Dp(run.VerticalOffset)))).Push(gtx.Ops).Pop()
+	}
 	text := func(gtx layout.Context) layout.Dimensions {
-		return ui.layoutShadowedText(gtx, run.Text, run.FontSize, run.Bold, run.Color, run.Decoration, run.DecorationColor, run.Baseline, run.TextShadows)
+		return ui.layoutShadowedText(gtx, run.Text, run.FontSize, run.Bold, run.FontFamilies, run.FontStyle, run.LetterSpacing, run.WordSpacing, run.Color, run.Decoration, run.DecorationColor, run.Baseline, run.TextShadows)
 	}
 	if run.Background == 0 {
 		return text(gtx)
@@ -2674,11 +2678,38 @@ func (ui *BrowserUI) layoutTextRun(gtx layout.Context, run paintmodel.TextRun, h
 	)
 }
 
-func (ui *BrowserUI) layoutShadowedText(gtx layout.Context, text string, size float32, bold bool, color uint32, decoration stylemodel.TextDecorationLine, decorationColor uint32, baseline float32, shadows []stylemodel.Shadow) layout.Dimensions {
+func (ui *BrowserUI) layoutShadowedText(gtx layout.Context, text string, size float32, bold bool, families []string, fontStyle string, letterSpacing, wordSpacing float32, color uint32, decoration stylemodel.TextDecorationLine, decorationColor uint32, baseline float32, shadows []stylemodel.Shadow) layout.Dimensions {
+	if (letterSpacing != 0 || wordSpacing != 0) && len([]rune(text)) > 1 {
+		children := make([]layout.FlexChild, 0, len([]rune(text))*2)
+		runes := []rune(text)
+		for index, character := range runes {
+			character := character
+			children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return ui.layoutShadowedText(gtx, string(character), size, bold, families, fontStyle, 0, 0, color, decoration, decorationColor, baseline, shadows)
+			}))
+			spacing := letterSpacing
+			if unicode.IsSpace(character) {
+				spacing += wordSpacing
+			}
+			if index < len(runes)-1 && spacing != 0 {
+				spacing := spacing
+				children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					return layout.Spacer{Width: unit.Dp(spacing)}.Layout(gtx)
+				}))
+			}
+		}
+		return layout.Flex{Alignment: layout.Baseline}.Layout(gtx, children...)
+	}
 	labelLayout := func(color uint32) layout.Widget {
 		return func(gtx layout.Context) layout.Dimensions {
 			label := material.Label(ui.theme, unit.Sp(size), text)
 			label.Color, label.MaxLines = rgba(color), 1
+			if len(families) != 0 {
+				label.Font.Typeface = font.Typeface(families[0])
+			}
+			if fontStyle == "italic" || strings.HasPrefix(fontStyle, "oblique") {
+				label.Font.Style = font.Italic
+			}
 			if bold {
 				label.Font.Weight = font.Bold
 			}

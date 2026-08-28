@@ -291,6 +291,76 @@ const (
 	WhiteSpacePreLine
 )
 
+// TextAlign controls inline content alignment in a line box.
+type TextAlign uint8
+
+const (
+	TextAlignStart TextAlign = iota
+	TextAlignEnd
+	TextAlignLeft
+	TextAlignRight
+	TextAlignCenter
+	TextAlignJustify
+)
+
+// TextTransform controls the case transformation applied before shaping.
+type TextTransform uint8
+
+const (
+	TextTransformNone TextTransform = iota
+	TextTransformUppercase
+	TextTransformLowercase
+	TextTransformCapitalize
+)
+
+// WordBreak controls emergency break opportunities inside words.
+type WordBreak uint8
+
+const (
+	WordBreakNormal WordBreak = iota
+	WordBreakBreakAll
+	WordBreakKeepAll
+)
+
+// OverflowWrap controls whether an otherwise unbreakable word may wrap.
+type OverflowWrap uint8
+
+const (
+	OverflowWrapNormal OverflowWrap = iota
+	OverflowWrapBreakWord
+	OverflowWrapAnywhere
+)
+
+// VerticalAlignKind identifies the inline-axis alignment mode.
+type VerticalAlignKind uint8
+
+const (
+	VerticalAlignBaseline VerticalAlignKind = iota
+	VerticalAlignSub
+	VerticalAlignSuper
+	VerticalAlignMiddle
+	VerticalAlignTextTop
+	VerticalAlignTextBottom
+	VerticalAlignTop
+	VerticalAlignBottom
+	VerticalAlignLength
+)
+
+// VerticalAlign stores either a keyword or a computed length. Positive
+// lengths raise the inline box, as defined by CSS vertical-align.
+type VerticalAlign struct {
+	Kind  VerticalAlignKind
+	Value float32
+}
+
+// TextOverflow controls the marker painted for clipped single-line text.
+type TextOverflow uint8
+
+const (
+	TextOverflowClip TextOverflow = iota
+	TextOverflowEllipsis
+)
+
 // Overflow controls clipping and scroll-container creation on one axis.
 type Overflow uint8
 
@@ -382,6 +452,15 @@ type ComputedStyle struct {
 	FontFaceIndex       int
 	LineHeight          float32
 	WhiteSpace          WhiteSpace
+	TextAlign           TextAlign
+	TextTransform       TextTransform
+	TextIndent          LengthPercentage
+	LetterSpacing       float32
+	WordSpacing         float32
+	WordBreak           WordBreak
+	OverflowWrap        OverflowWrap
+	VerticalAlign       VerticalAlign
+	TextOverflow        TextOverflow
 	OverflowX           Overflow
 	OverflowY           Overflow
 	Display             Display
