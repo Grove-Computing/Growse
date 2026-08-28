@@ -450,6 +450,12 @@ func applyMargins(edges Edges, automatic AutoEdges, parent Edges, parentAuto Aut
 				continue
 			}
 			part = edgePart(parts, index)
+		} else {
+			var valid bool
+			part, valid = logicalEdgeComponent(candidate.source, resolved, index, "margin")
+			if !valid {
+				continue
+			}
 		}
 		if strings.EqualFold(strings.TrimSpace(part), "auto") {
 			*values[index], *autos[index] = 0, true
