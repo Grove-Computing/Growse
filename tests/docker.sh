@@ -26,6 +26,7 @@ require_file_value Dockerfile "https://archive.ubuntu.com"
 require_file_value Dockerfile "COPY --from=build /out/growse /usr/local/bin/growse"
 require_file_value Dockerfile "COPY --from=build /out/growse-smoke /usr/local/bin/growse-smoke"
 require_file_value Dockerfile "COPY --from=build /src/examples/external-web-platform /usr/local/share/growse/examples/external-web-platform"
+require_file_value Dockerfile "COPY --from=build /src/examples/modern-web-compat /usr/local/share/growse/examples/modern-web-compat"
 require_file_value Dockerfile "rm -rf /usr/bin/pebble /var/lib/pebble"
 require_file_value Dockerfile "USER growse"
 require_file_value Dockerfile 'ENTRYPOINT ["growse"]'
@@ -70,19 +71,22 @@ for value in \
 done
 
 ci_workflow=.github/workflows/ci.yml
-require_file_value "$ci_workflow" "Docker package (v0.14.0)"
+require_file_value "$ci_workflow" "Docker package (v0.15.0)"
 require_file_value "$ci_workflow" "docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e"
 require_file_value "$ci_workflow" "docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a"
 require_file_value "$ci_workflow" "load: true"
 require_file_value "$ci_workflow" "push: false"
-require_file_value "$ci_workflow" "growse:v0.14.0"
+require_file_value "$ci_workflow" "growse:v0.15.0"
 require_file_value "$ci_workflow" "Verify unused Pebble runtime is absent"
 require_file_value "$ci_workflow" "Run sandbox Web Platform smoke"
 require_file_value "$ci_workflow" "--entrypoint growse-smoke"
 require_file_value "$ci_workflow" "/usr/local/share/growse/examples/external-web-platform"
+require_file_value "$ci_workflow" "Run Modern Web Compatibility smoke"
+require_file_value "$ci_workflow" "/usr/local/share/growse/examples/modern-web-compat"
 require_file_value "$ci_workflow" "anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2"
 require_file_value "$ci_workflow" "severity-cutoff: high"
 require_file_value "$ci_workflow" "fail-build: true"
 require_file_value "$workflow" "Run sandbox Web Platform smoke by digest"
+require_file_value "$workflow" "Run Modern Web Compatibility smoke by digest"
 
 echo "Docker検証成功: PR build, pinned base, digest scan, SBOM, provenance"
