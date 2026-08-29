@@ -1525,11 +1525,15 @@ div { width: 100px; height: 100px; animation: fade 1s linear infinite; }
 	}
 
 	ui.layoutDocument(gtx, page)
+	displayList := ui.layoutCache.displayList
 	gtx.Reset()
 	gtx.Now = start.Add(500 * time.Millisecond)
 	ui.layoutDocument(gtx, page)
 	if builds != 1 {
 		t.Fatalf("layout builds across animation frames = %d, want 1", builds)
+	}
+	if displayList == nil || ui.layoutCache.displayList != displayList {
+		t.Fatal("static display list was rebuilt across composite frames")
 	}
 }
 

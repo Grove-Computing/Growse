@@ -146,6 +146,7 @@ type documentLayoutCache struct {
 	viewportHeight        float32
 	listFirst, listOffset int
 	tree                  *layoutengine.Tree
+	displayList           *paintmodel.DisplayList
 }
 
 type browserChromeGeometry struct {
@@ -1812,12 +1813,15 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 		ui.navigator.UpdateViewport(viewportWidth, viewportHeight)
 	}
 	frameStyles, animationDamage := page.AnimationFrame(gtx.Now)
-	tree := ui.cachedDocumentTree(page, viewportWidth, viewportHeight, gtx.Metric.PxPerDp)
+	tree, displayList := ui.cachedDocumentFrame(page, viewportWidth, viewportHeight, gtx.Metric.PxPerDp)
 	if animationDamage == stylemodel.AnimationDamageLayout {
 		tree = ui.buildDocumentTree(page, frameStyles, viewportWidth, viewportHeight, gtx.Metric.PxPerDp)
+		displayList = paintmodel.Build(tree)
 	}
 	layoutengine.ApplyAnimatedStyles(tree, frameStyles)
-	displayList := paintmodel.Build(tree)
+	if animationDamage != stylemodel.AnimationDamageLayout {
+		paintmodel.ApplyAnimatedLayout(displayList, tree)
+	}
 	paint.Fill(gtx.Ops, rgba(displayList.Background))
 	ui.updateViewportHover(gtx, page, tree, displayList)
 	ui.handleViewportClicks(gtx, page, tree, displayList)
@@ -1864,20 +1868,26 @@ func (ui *BrowserUI) persistHistoryScroll() {
 }
 
 func (ui *BrowserUI) cachedDocumentTree(page *browser.Page, viewportWidth, viewportHeight, pxPerDp float32) *layoutengine.Tree {
+	tree, _ := ui.cachedDocumentFrame(page, viewportWidth, viewportHeight, pxPerDp)
+	return tree
+}
+
+func (ui *BrowserUI) cachedDocumentFrame(page *browser.Page, viewportWidth, viewportHeight, pxPerDp float32) (*layoutengine.Tree, *paintmodel.DisplayList) {
 	position := ui.pageList.Position
 	cache := &ui.layoutCache
 	if cache.tree != nil && cache.page == page && cache.revision == page.StyleRevision &&
 		cache.viewportWidth == viewportWidth && cache.viewportHeight == viewportHeight &&
 		cache.listFirst == position.First && cache.listOffset == position.Offset {
-		return layoutengine.Clone(cache.tree)
+		return layoutengine.Clone(cache.tree), cache.displayList
 	}
 
 	tree := ui.buildDocumentTree(page, page.ComputedStyles, viewportWidth, viewportHeight, pxPerDp)
+	displayList := paintmodel.Build(tree)
 	*cache = documentLayoutCache{
 		page: page, revision: page.StyleRevision, viewportWidth: viewportWidth, viewportHeight: viewportHeight,
-		listFirst: position.First, listOffset: position.Offset, tree: tree,
+		listFirst: position.First, listOffset: position.Offset, tree: tree, displayList: displayList,
 	}
-	return layoutengine.Clone(tree)
+	return layoutengine.Clone(tree), displayList
 }
 
 func (ui *BrowserUI) buildDocumentTree(page *browser.Page, styles stylemodel.Map, viewportWidth, viewportHeight, pxPerDp float32) *layoutengine.Tree {
