@@ -929,6 +929,8 @@ func parsePseudoClassDepth(value string, start, depth int) (*PseudoClass, int, b
 		// document. Keep it in selector lists so a sibling :root selector is
 		// not discarded; without Shadow DOM it deliberately never matches.
 		pseudo.Kind = PseudoHost
+	case "open":
+		pseudo.Kind = PseudoOpen
 	case "empty":
 		pseudo.Kind = PseudoEmpty
 	case "first-child":

@@ -227,6 +227,7 @@ type PseudoClassKind uint8
 const (
 	PseudoRoot PseudoClassKind = iota
 	PseudoHost
+	PseudoOpen
 	PseudoEmpty
 	PseudoFirstChild
 	PseudoLastChild

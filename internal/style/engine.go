@@ -1706,6 +1706,9 @@ func matchesPseudoClass(node *dom.Node, pseudo css.PseudoClass, state Interactio
 		// Shadow DOM is outside the supported model. :host remains valid CSS
 		// syntax but has no matching element in a Document tree.
 		return false
+	case css.PseudoOpen:
+		_, open := node.Attribute("open")
+		return open && (node.TagName == "details" || node.TagName == "dialog")
 	case css.PseudoEmpty:
 		for _, child := range node.Children {
 			if child.Type == dom.NodeElement || child.Type == dom.NodeText && child.Text != "" {

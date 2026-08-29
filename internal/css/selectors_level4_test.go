@@ -85,3 +85,28 @@ func TestParseTailwindEscapedUtilityClassNames(t *testing.T) {
 		}
 	}
 }
+
+func TestSelectorFailuresStayLocalToTheirRuleOrForgivingEntry(t *testing.T) {
+	stylesheet, err := Parse(strings.NewReader(`
+.discarded:future-state { color:red }
+.kept:is(.active,:future-state) { color:green }
+details:open { display:block }
+.after { color:blue }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stylesheet.Rules) != 3 {
+		t.Fatalf("surviving rules = %#v", stylesheet.Rules)
+	}
+	forgiving := stylesheet.Rules[0].Selectors[0].Compounds[0].Pseudos[0]
+	if forgiving.Kind != PseudoIs || len(forgiving.Selectors) != 1 || forgiving.Selectors[0].Class != "active" {
+		t.Fatalf("forgiving selector = %#v", forgiving)
+	}
+	if got := stylesheet.Rules[1].Selectors[0].Compounds[0].Pseudos[0].Kind; got != PseudoOpen {
+		t.Fatalf("details pseudo = %v, want :open", got)
+	}
+	if got := stylesheet.Rules[2].Selectors[0].Class; got != "after" {
+		t.Fatalf("rule following invalid selectors = %q", got)
+	}
+}

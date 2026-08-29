@@ -324,6 +324,30 @@ func TestTailwindEscapedUtilityClassMatchesDOMClass(t *testing.T) {
 	}
 }
 
+func TestOpenPseudoAndInvalidCustomPropertyAreLocalized(t *testing.T) {
+	document := dom.NewDocument()
+	details := document.CreateElement("details", map[string]string{"open": "", "class": "card"})
+	closed := document.CreateElement("details", map[string]string{"class": "card"})
+	appendNode(t, document, document.Root, details)
+	appendNode(t, document, document.Root, closed)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.card { --a:var(--b); --b:var(--a); color:var(--a); background-color:#fff }
+details:open { border-radius:8px }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	computed := Compute(document, stylesheet)
+	openedStyle, _ := computed.For(details)
+	closedStyle, _ := computed.For(closed)
+	if openedStyle.Color != defaultTextColor || openedStyle.BackgroundColor != 0xffffffff {
+		t.Fatalf("custom property failure leaked = %#v", openedStyle)
+	}
+	if openedStyle.BorderRadius.TopLeft.X.Pixels != 8 || closedStyle.BorderRadius.TopLeft.X.Pixels != 0 {
+		t.Fatalf(":open styles = opened:%#v closed:%#v", openedStyle.BorderRadius, closedStyle.BorderRadius)
+	}
+}
+
 func TestMatchesInteractionAndFormStatePseudoClasses(t *testing.T) {
 	document := dom.NewDocument()
 	link := document.CreateElement("a", map[string]string{"href": "/next"})
