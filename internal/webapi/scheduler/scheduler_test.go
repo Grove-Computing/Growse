@@ -240,6 +240,41 @@ func TestSchedulerBoundsCallbacksDeliveredPerTurn(t *testing.T) {
 	}
 }
 
+func TestSchedulerBudgetsAnimationFrameCallbacksAcrossTicks(t *testing.T) {
+	start := time.Unix(100, 0)
+	clock := &fakeClock{current: start}
+	frameRequests := 0
+	api := newAPI(context.Background(), clock, func(func()) bool { return true }, func() { frameRequests++ }, false)
+	t.Cleanup(api.Close)
+	delivered := make([]int, 0, MaxFrameCallbacksPerTick+3)
+	for index := 0; index < MaxFrameCallbacksPerTick+3; index++ {
+		value := index
+		if _, err := api.RequestAnimationFrame(func(Timestamp) { delivered = append(delivered, value) }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !api.RunAnimationFrame(start.Add(16 * time.Millisecond)) {
+		t.Fatal("first budgeted frame did not run")
+	}
+	if len(delivered) != MaxFrameCallbacksPerTick || !api.HasAnimationFrameCallbacks() {
+		t.Fatalf("first frame delivered=%d pending=%t", len(delivered), api.HasAnimationFrameCallbacks())
+	}
+	if !api.RunAnimationFrame(start.Add(32*time.Millisecond)) || api.HasAnimationFrameCallbacks() {
+		t.Fatal("overflow callbacks were not drained on the next frame")
+	}
+	if len(delivered) != MaxFrameCallbacksPerTick+3 {
+		t.Fatalf("total delivered callbacks = %d", len(delivered))
+	}
+	for index, value := range delivered {
+		if value != index {
+			t.Fatalf("callback order[%d] = %d", index, value)
+		}
+	}
+	if frameRequests < MaxFrameCallbacksPerTick+4 {
+		t.Fatalf("frame requests = %d, overflow did not request another frame", frameRequests)
+	}
+}
+
 func TestSchedulerRecoversCallbackPanicsWithoutLoggingPayload(t *testing.T) {
 	var logs bytes.Buffer
 	previous := slog.Default()
