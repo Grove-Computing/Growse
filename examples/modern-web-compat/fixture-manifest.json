@@ -62,7 +62,7 @@
       "artifacts": [
         {"path": "fixtures/real-site/app.css", "sha256": "b9b7c1ed27b41c402f85be6e94e3eaf00c89325fa3854f5fdf40219be95e6a88"},
         {"path": "fixtures/real-site/app.mjs", "sha256": "428ab55f9ed206b1177bbc76b9fab1386c083ee39bf84139df1a649d2b31ca2d"},
-        {"path": "fixtures/real-site/index.html", "sha256": "8583c2aed90d58fb633795fbb3109980495aa96e32f12ae2dea07c80a06c5286"}
+        {"path": "fixtures/real-site/index.html", "sha256": "749061b1ac9d087ec27eaa9cb2787a8d6f88500abb705b27af48497372426868"}
       ]
     },
     {
