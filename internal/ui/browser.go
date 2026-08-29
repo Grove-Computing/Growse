@@ -1918,6 +1918,10 @@ func (ui *BrowserUI) documentTheme() *material.Theme {
 }
 
 func (ui *BrowserUI) installPageFonts(page *browser.Page) {
+	// A Gio Shaper owns bounded LRUs for shaped layouts and glyph operations.
+	// Reuse it only within the same Page generation and Style revision; replacing
+	// the pointer here drops every cached face and glyph on Navigation or font
+	// revision without sharing it with Browser chrome.
 	if page == nil || ui.fontPage == page && ui.fontRevision == page.StyleRevision {
 		return
 	}

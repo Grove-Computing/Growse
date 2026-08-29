@@ -102,3 +102,31 @@ func TestPageFontShapersAreIsolatedAcrossBrowserUIInstances(t *testing.T) {
 		t.Fatal("Page shaper installation changed a chrome shaper")
 	}
 }
+
+func TestPageShaperCacheFollowsPageGenerationAndFontRevision(t *testing.T) {
+	ui := &BrowserUI{theme: material.NewTheme()}
+	firstPage := &browser.Page{
+		Engine: runtimemodel.EngineJavaScript, Compatibility: browser.CompatibilityProfileModernWeb, StyleRevision: 7,
+	}
+	ui.installPageFonts(firstPage)
+	firstShaper := ui.pageTheme.Shaper
+	ui.installPageFonts(firstPage)
+	if ui.pageTheme.Shaper != firstShaper {
+		t.Fatal("same Page generation and font revision replaced the bounded Gio shaping cache")
+	}
+
+	firstPage.StyleRevision++
+	ui.installPageFonts(firstPage)
+	revisedShaper := ui.pageTheme.Shaper
+	if revisedShaper == firstShaper {
+		t.Fatal("font-affecting Style revision retained a stale shaping cache")
+	}
+
+	secondPage := &browser.Page{
+		Engine: runtimemodel.EngineJavaScript, Compatibility: browser.CompatibilityProfileModernWeb, StyleRevision: firstPage.StyleRevision,
+	}
+	ui.installPageFonts(secondPage)
+	if ui.pageTheme.Shaper == revisedShaper || ui.fontPage != secondPage {
+		t.Fatal("Navigation reused the previous Page generation shaping cache")
+	}
+}
