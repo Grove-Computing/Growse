@@ -12,6 +12,7 @@ import (
 	"github.com/Grove-Computing/Growse/internal/devtools"
 	htmlparser "github.com/Grove-Computing/Growse/internal/html"
 	"github.com/Grove-Computing/Growse/internal/network"
+	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 	stylemodel "github.com/Grove-Computing/Growse/internal/style"
 )
 
@@ -82,6 +83,8 @@ func TestCompatibilityDiagnosticsExplainResourcesStylesFallbacksAndRuntimeErrors
 
 func TestCompatibilityDiagnosticsExposeFontChainImageCacheAndFrameReasons(t *testing.T) {
 	page := NewPage(nil)
+	page.Engine = runtimemodel.EngineJavaScript
+	page.Compatibility = CompatibilityProfileModernWeb
 	page.Fonts = []FontResource{{Family: "Missing UI", Error: "font decode failed"}}
 	page.FontErrors = []string{"font decode failed: Missing UI"}
 	page.ComputedStyles = stylemodel.Map{1: {

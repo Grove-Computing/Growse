@@ -125,6 +125,9 @@ func appendFontDiagnostics(page *Page, appendDiagnostic func(devtools.Compatibil
 		}
 		appendDiagnostic(devtools.CompatibilityDiagnostic{Category: "font", Subject: family, State: "fallback", Reason: reason})
 	}
+	if !page.UsesModernWebCompatibility() {
+		return
+	}
 	chains := make(map[string]bool)
 	for _, computed := range page.ComputedStyles {
 		if len(computed.FontFamilies) == 0 {
