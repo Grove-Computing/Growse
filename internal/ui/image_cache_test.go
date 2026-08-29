@@ -59,3 +59,26 @@ func TestPageImagePaintCacheDropsPreviousGeneration(t *testing.T) {
 		t.Fatalf("page generation reset = first:%p second:%p allocations:%d entries:%d", first.raster, second.raster, cache.allocations, len(cache.scaled))
 	}
 }
+
+func TestPageImagePaintCacheUsesBoundedLRUAndClearsOnClose(t *testing.T) {
+	page := &browser.Page{}
+	cache := pageImagePaintCache{maxBytes: 801, maxEntries: 2}
+	cache.prepare(page)
+	sources := []*image.NRGBA{
+		image.NewNRGBA(image.Rect(0, 0, 2, 2)),
+		image.NewNRGBA(image.Rect(0, 0, 3, 3)),
+		image.NewNRGBA(image.Rect(0, 0, 4, 4)),
+	}
+	cache.scale("a", sources[0], 10, 10)
+	cache.scale("b", sources[1], 10, 10)
+	cache.scale("a", sources[0], 10, 10)
+	cache.scale("c", sources[2], 10, 10)
+	bKey := scaledImageKey{url: "b", source: imagePointer(sources[1]), sourceBounds: sources[1].Bounds(), width: 10, height: 10}
+	if _, exists := cache.scaled[bKey]; exists || len(cache.scaled) != 2 || cache.bytes > cache.maxBytes {
+		t.Fatalf("paint LRU entries/bytes = %#v / %d", cache.scaled, cache.bytes)
+	}
+	cache.prepare(nil)
+	if cache.page != nil || len(cache.scaled) != 0 || len(cache.backgrounds) != 0 || cache.bytes != 0 {
+		t.Fatalf("closed page paint cache = page:%p scaled:%d backgrounds:%d bytes:%d", cache.page, len(cache.scaled), len(cache.backgrounds), cache.bytes)
+	}
+}

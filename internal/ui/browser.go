@@ -1744,6 +1744,7 @@ func (ui *BrowserUI) layoutViewport(gtx layout.Context) layout.Dimensions {
 			return ui.layoutDocument(gtx, page)
 		}
 	}
+	ui.imagePaintCache.prepare(nil)
 
 	paint.Fill(gtx.Ops, color.NRGBA{R: 238, G: 243, B: 248, A: 255})
 

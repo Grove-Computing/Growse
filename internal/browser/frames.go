@@ -459,6 +459,7 @@ func (frame *Frame) navigateReserved(ctx context.Context, target *url.URL) error
 		frame.lifecycleMu.Unlock()
 		_ = closePageFrames(page)
 		page.closeDevTools()
+		page.releaseImageResources()
 		return context.Canceled
 	}
 	oldPage, oldRuntime, oldCancel := frame.Page, frame.runtime, frame.cancel
@@ -478,6 +479,7 @@ func (frame *Frame) navigateReserved(ctx context.Context, target *url.URL) error
 		}
 		_ = closePageFrames(page)
 		page.closeDevTools()
+		page.releaseImageResources()
 		return context.Canceled
 	}
 	frame.runtime = newRuntime
@@ -492,6 +494,7 @@ func (frame *Frame) navigateReserved(ctx context.Context, target *url.URL) error
 	}
 	_ = closePageFrames(oldPage)
 	if oldPage != nil {
+		oldPage.releaseImageResources()
 		oldPage.closeDevTools()
 	}
 	if state.onMutation != nil {
@@ -778,6 +781,7 @@ func (frame *Frame) Close() error {
 			page.Transitions.Clear()
 		}
 		page.closeDevTools()
+		page.releaseImageResources()
 		if page.windows != nil {
 			page.windows.unregister(page.window.Self)
 		}

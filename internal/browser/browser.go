@@ -294,6 +294,7 @@ func (b *Browser) SetEngine(ctx context.Context, engine runtimemodel.Engine) (*P
 		if page.Transitions != nil {
 			page.Transitions.Clear()
 		}
+		page.releaseImageResources()
 	}
 	if teardownErr != nil {
 		return nil, teardownErr
@@ -850,6 +851,7 @@ func (b *Browser) SetPage(page *Page) {
 	}
 	if previousPage != nil && previousPage != page {
 		_ = closePageFrames(previousPage)
+		previousPage.releaseImageResources()
 	}
 }
 
@@ -876,6 +878,7 @@ func (b *Browser) Close() error {
 	}
 	if page != nil {
 		page.closeDevTools()
+		page.releaseImageResources()
 	}
 	b.page = nil
 	b.client = nil
@@ -1478,6 +1481,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 		}
 		_ = closePageFrames(page)
 		page.closeDevTools()
+		page.releaseImageResources()
 		return nil, err
 	}
 	b.mu.Lock()
@@ -1491,6 +1495,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 		}
 		_ = closePageFrames(page)
 		page.closeDevTools()
+		page.releaseImageResources()
 		return nil, context.Canceled
 	}
 	previousRuntime := b.activeRuntime
@@ -1557,6 +1562,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	}
 	if previousPage != nil && previousPage != page {
 		_ = closePageFrames(previousPage)
+		previousPage.releaseImageResources()
 	}
 	if engine == runtimemodel.EngineJavaScript {
 		dispatchImageResourceEvents(b, page)

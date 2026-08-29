@@ -159,6 +159,25 @@ func (p *Page) cancelImageLoads() {
 	p.imageMu.Unlock()
 }
 
+func (p *Page) releaseImageResources() {
+	if p == nil {
+		return
+	}
+	p.cancelImageLoads()
+	if p.imageCache != nil {
+		p.imageCache.clear()
+	}
+	p.imageMu.Lock()
+	p.ImageResources = nil
+	p.Images = nil
+	p.ImageErrors = nil
+	p.imageEvents = nil
+	p.imageCache = nil
+	p.imageMu.Unlock()
+	p.BackgroundImages = nil
+	p.BackgroundErrors = nil
+}
+
 func (p *Page) imageState(nodeID dom.NodeID) runtimemodel.ImageState {
 	if p == nil {
 		return runtimemodel.ImageState{}

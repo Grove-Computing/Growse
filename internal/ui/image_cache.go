@@ -14,6 +14,11 @@ import (
 	xdraw "golang.org/x/image/draw"
 )
 
+const (
+	maxPagePaintCacheBytes   = 128 << 20
+	maxPagePaintCacheEntries = 256
+)
+
 type scaledImageKey struct {
 	url          string
 	source       uintptr
@@ -23,8 +28,10 @@ type scaledImageKey struct {
 }
 
 type cachedScaledImage struct {
-	raster *image.NRGBA
-	op     paint.ImageOp
+	raster   *image.NRGBA
+	op       paint.ImageOp
+	bytes    int64
+	lastUsed uint64
 }
 
 type backgroundRasterKey struct {
@@ -43,6 +50,10 @@ type pageImagePaintCache struct {
 	scaled      map[scaledImageKey]cachedScaledImage
 	backgrounds map[backgroundRasterKey]cachedScaledImage
 	allocations uint64
+	bytes       int64
+	tick        uint64
+	maxBytes    int64
+	maxEntries  int
 }
 
 func (cache *pageImagePaintCache) prepare(page *browser.Page) {
@@ -53,6 +64,14 @@ func (cache *pageImagePaintCache) prepare(page *browser.Page) {
 	cache.scaled = make(map[scaledImageKey]cachedScaledImage)
 	cache.backgrounds = make(map[backgroundRasterKey]cachedScaledImage)
 	cache.allocations = 0
+	cache.bytes = 0
+	cache.tick = 0
+	if cache.maxBytes == 0 {
+		cache.maxBytes = maxPagePaintCacheBytes
+	}
+	if cache.maxEntries == 0 {
+		cache.maxEntries = maxPagePaintCacheEntries
+	}
 }
 
 func (cache *pageImagePaintCache) background(command paintmodel.DrawBox, layer stylemodel.BackgroundLayer, layerIndex int, source image.Image, width, height int, pixelsPerDP float32, styleRevision uint64) cachedScaledImage {
@@ -67,6 +86,9 @@ func (cache *pageImagePaintCache) background(command paintmodel.DrawBox, layer s
 		key.source, key.sourceBounds = imagePointer(source), source.Bounds()
 	}
 	if cached, ok := cache.backgrounds[key]; ok {
+		cache.tick++
+		cached.lastUsed = cache.tick
+		cache.backgrounds[key] = cached
 		return cached
 	}
 	var raster image.Image
@@ -86,7 +108,7 @@ func (cache *pageImagePaintCache) background(command paintmodel.DrawBox, layer s
 		return cachedScaledImage{}
 	}
 	raster = rasterFilterImage(raster, command.Filters)
-	result := cachedScaledImage{op: paint.NewImageOp(raster)}
+	result := cachedScaledImage{op: paint.NewImageOp(raster), bytes: int64(width) * int64(height) * 4}
 	if typed, ok := raster.(*image.NRGBA); ok {
 		result.raster = typed
 	} else {
@@ -95,8 +117,12 @@ func (cache *pageImagePaintCache) background(command paintmodel.DrawBox, layer s
 		result.raster = copy
 		result.op = paint.NewImageOp(copy)
 	}
+	cache.tick++
+	result.lastUsed = cache.tick
 	cache.backgrounds[key] = result
+	cache.bytes += result.bytes
 	cache.allocations++
+	cache.evict()
 	return result
 }
 
@@ -108,17 +134,52 @@ func (cache *pageImagePaintCache) scale(url string, source image.Image, width, h
 	key := scaledImageKey{url: url, source: identity, sourceBounds: source.Bounds(), width: width, height: height}
 	if identity != 0 {
 		if cached, ok := cache.scaled[key]; ok {
+			cache.tick++
+			cached.lastUsed = cache.tick
+			cache.scaled[key] = cached
 			return cached
 		}
 	}
 	raster := image.NewNRGBA(image.Rect(0, 0, width, height))
 	xdraw.CatmullRom.Scale(raster, raster.Bounds(), source, source.Bounds(), imagedraw.Src, nil)
-	result := cachedScaledImage{raster: raster, op: paint.NewImageOp(raster)}
+	result := cachedScaledImage{raster: raster, op: paint.NewImageOp(raster), bytes: int64(width) * int64(height) * 4}
 	cache.allocations++
 	if identity != 0 {
+		cache.tick++
+		result.lastUsed = cache.tick
 		cache.scaled[key] = result
+		cache.bytes += result.bytes
+		cache.evict()
 	}
 	return result
+}
+
+func (cache *pageImagePaintCache) evict() {
+	for cache.bytes > cache.maxBytes || len(cache.scaled)+len(cache.backgrounds) > cache.maxEntries {
+		oldestScaled, oldestBackground := scaledImageKey{}, backgroundRasterKey{}
+		oldestTick := ^uint64(0)
+		kind := uint8(0)
+		for key, entry := range cache.scaled {
+			if entry.lastUsed < oldestTick {
+				oldestScaled, oldestTick, kind = key, entry.lastUsed, 1
+			}
+		}
+		for key, entry := range cache.backgrounds {
+			if entry.lastUsed < oldestTick {
+				oldestBackground, oldestTick, kind = key, entry.lastUsed, 2
+			}
+		}
+		switch kind {
+		case 1:
+			cache.bytes -= cache.scaled[oldestScaled].bytes
+			delete(cache.scaled, oldestScaled)
+		case 2:
+			cache.bytes -= cache.backgrounds[oldestBackground].bytes
+			delete(cache.backgrounds, oldestBackground)
+		default:
+			return
+		}
+	}
 }
 
 func imagePointer(source image.Image) uintptr {
