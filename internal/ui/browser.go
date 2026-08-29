@@ -1875,11 +1875,6 @@ func (ui *BrowserUI) persistHistoryScroll() {
 	}
 }
 
-func (ui *BrowserUI) cachedDocumentTree(page *browser.Page, viewportWidth, viewportHeight, pxPerDp float32) *layoutengine.Tree {
-	tree, _ := ui.cachedDocumentFrame(page, viewportWidth, viewportHeight, pxPerDp)
-	return tree
-}
-
 func (ui *BrowserUI) cachedDocumentFrame(page *browser.Page, viewportWidth, viewportHeight, pxPerDp float32) (*layoutengine.Tree, *paintmodel.DisplayList) {
 	position := ui.pageList.Position
 	cache := &ui.layoutCache
