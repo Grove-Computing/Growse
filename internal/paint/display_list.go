@@ -18,6 +18,12 @@ type DisplayList struct {
 	Background        uint32
 	Commands          []Command
 	CompositingLayers []layout.StackingContext
+	sources           []displaySource
+}
+
+type displaySource struct {
+	decoration int
+	box        int
 }
 
 // Command is implemented by every display-list operation.
@@ -242,6 +248,7 @@ func Build(tree *layout.Tree) *DisplayList {
 		order      int
 		decoration *layout.Decoration
 		box        *layout.Box
+		source     displaySource
 	}
 	entries := tree.OrderedPaintEntries()
 	items := make([]orderedItem, 0, len(entries))
@@ -250,18 +257,19 @@ func Build(tree *layout.Tree) *DisplayList {
 			if tree.Decorations[entry.DecorationIndex].Hidden {
 				continue
 			}
-			items = append(items, orderedItem{order: entry.Order, decoration: &tree.Decorations[entry.DecorationIndex]})
+			items = append(items, orderedItem{order: entry.Order, decoration: &tree.Decorations[entry.DecorationIndex], source: displaySource{decoration: entry.DecorationIndex, box: -1}})
 		} else {
 			if tree.Boxes[entry.BoxIndex].Hidden {
 				continue
 			}
-			items = append(items, orderedItem{order: entry.Order, box: &tree.Boxes[entry.BoxIndex]})
+			items = append(items, orderedItem{order: entry.Order, box: &tree.Boxes[entry.BoxIndex], source: displaySource{decoration: -1, box: entry.BoxIndex}})
 		}
 	}
 
 	list.Commands = make([]Command, 0, len(items))
 	previousBottom := float32(0)
 	for _, item := range items {
+		list.sources = append(list.sources, item.source)
 		if item.decoration != nil {
 			decoration := item.decoration
 			top := max(decoration.Y-previousBottom, float32(0))
@@ -390,6 +398,80 @@ func Build(tree *layout.Tree) *DisplayList {
 		previousBottom = box.Y + box.Height
 	}
 	return list
+}
+
+// ApplyAnimatedLayout copies only frame-varying paint and composite state from
+// a geometry-compatible tree into an existing display list. The command slice,
+// static visual resources, and text metrics remain allocated once.
+func ApplyAnimatedLayout(list *DisplayList, tree *layout.Tree) {
+	if list == nil || tree == nil || len(list.sources) != len(list.Commands) {
+		return
+	}
+	list.Background = tree.Background
+	if len(list.CompositingLayers) == len(tree.StackingContexts) {
+		copy(list.CompositingLayers, tree.StackingContexts)
+	}
+	for index, source := range list.sources {
+		if source.decoration >= 0 && source.decoration < len(tree.Decorations) {
+			decoration := tree.Decorations[source.decoration]
+			command, ok := list.Commands[index].(DrawBox)
+			if !ok {
+				continue
+			}
+			backdrop := stylemodel.ApplyColorFilters(tree.Background, decoration.BackdropFilters)
+			background := stylemodel.ApplyColorFilters(decoration.Background, decoration.Filters)
+			if decoration.BlendMode != stylemodel.BlendNormal {
+				background = stylemodel.BlendColors(background, backdrop, decoration.BlendMode)
+			}
+			command.Color, command.BackdropColor = background, backdrop
+			command.Border, command.Outline = decoration.Border, decoration.Outline
+			command.Opacity, command.Transform = decoration.Opacity, decoration.Transform
+			if decoration.Hidden {
+				command.Opacity = 0
+			}
+			list.Commands[index] = command
+			continue
+		}
+		if source.box < 0 || source.box >= len(tree.Boxes) {
+			continue
+		}
+		box := tree.Boxes[source.box]
+		opacity := box.Opacity
+		if box.Hidden {
+			opacity = 0
+		}
+		switch command := list.Commands[index].(type) {
+		case DrawText:
+			command.Color, command.Background = box.Color, box.Background
+			command.DecorationColor, command.Opacity, command.Transform = box.DecorationColor, opacity, box.Transform
+			for runIndex := range command.Runs {
+				if runIndex >= len(box.Runs) {
+					break
+				}
+				command.Runs[runIndex].Color = box.Runs[runIndex].Color
+				command.Runs[runIndex].Background = box.Runs[runIndex].Background
+				command.Runs[runIndex].DecorationColor = box.Runs[runIndex].DecorationColor
+				command.Runs[runIndex].Opacity = box.Runs[runIndex].Opacity
+			}
+			list.Commands[index] = command
+		case DrawImage:
+			command.Color, command.Background, command.Opacity = box.Color, box.Background, opacity
+			command.Transform = box.Transform
+			list.Commands[index] = command
+		case DrawInput:
+			command.Color, command.Opacity = box.Color, opacity
+			list.Commands[index] = command
+		case DrawSelect:
+			command.Color, command.Opacity = box.Color, opacity
+			list.Commands[index] = command
+		case DrawCheckable:
+			command.Color, command.Opacity = box.Color, opacity
+			list.Commands[index] = command
+		case DrawButton:
+			command.Color, command.Opacity = box.Color, opacity
+			list.Commands[index] = command
+		}
+	}
 }
 
 // ApplyAnimatedStyles updates paint-only properties on an existing display
