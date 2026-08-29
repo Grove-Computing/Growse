@@ -18,6 +18,7 @@ const (
 	TransitionNumber TransitionValueKind = iota
 	TransitionColor
 	TransitionTransform
+	TransitionLength
 )
 
 // TransitionValue is one supported computed value captured at a style change.
@@ -26,6 +27,7 @@ type TransitionValue struct {
 	Number    float32
 	Color     uint32
 	Transform []TransformFunction
+	Length    LengthPercentage
 }
 
 // StartedTransition describes a transition created by a computed-style change.
@@ -104,6 +106,13 @@ func interpolateTransitionValue(from, to TransitionValue, progress float64) Tran
 		return TransitionValue{Kind: TransitionColor, Color: InterpolateColor(from.Color, to.Color, progress)}
 	case TransitionTransform:
 		return TransitionValue{Kind: TransitionTransform, Transform: InterpolateTransform(from.Transform, to.Transform, progress, 0, 0)}
+	case TransitionLength:
+		progress = min(max(progress, 0), 1)
+		return TransitionValue{Kind: TransitionLength, Length: LengthPercentage{
+			Pixels: from.Length.Pixels + (to.Length.Pixels-from.Length.Pixels)*float32(progress),
+			Percentage: from.Length.Percentage +
+				(to.Length.Percentage-from.Length.Percentage)*float32(progress),
+		}}
 	default:
 		if progress >= 1 {
 			return cloneTransitionValue(to)
@@ -183,6 +192,7 @@ type transitionLists struct {
 var transitionableProperties = []string{
 	"opacity", "transform", "color", "background-color",
 	"border-top-color", "border-right-color", "border-bottom-color", "border-left-color", "outline-color",
+	"width", "height",
 }
 
 // StartTransitions compares two computed-style snapshots and creates the
@@ -243,9 +253,20 @@ func computedTransitionValue(computed ComputedStyle, property string) (Transitio
 		return TransitionValue{Kind: TransitionColor, Color: computed.Border.Left.Color}, true
 	case "outline-color":
 		return TransitionValue{Kind: TransitionColor, Color: computed.Outline.Color}, true
+	case "width":
+		return sizeTransitionValue(computed.Width)
+	case "height":
+		return sizeTransitionValue(computed.Height)
 	default:
 		return TransitionValue{}, false
 	}
+}
+
+func sizeTransitionValue(value SizeValue) (TransitionValue, bool) {
+	if value.Kind != SizeLength {
+		return TransitionValue{}, false
+	}
+	return TransitionValue{Kind: TransitionLength, Length: value.Value}, true
 }
 
 func defaultTransitions() []Transition {

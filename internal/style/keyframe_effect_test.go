@@ -61,3 +61,27 @@ div { opacity: .2; animation: 1s linear forwards partial; }
 		t.Fatalf("partial keyframes = first:%v last:%v, want 0.6", firstQuarter.Opacity, lastQuarter.Opacity)
 	}
 }
+
+func TestLayoutKeyframeInterpolatesLengthAndReportsLayoutDamage(t *testing.T) {
+	document := dom.NewDocument()
+	target := document.CreateElement("div", nil)
+	appendNode(t, document, document.Root, target)
+	stylesheet, err := css.Parse(strings.NewReader(`
+div { width: 100px; animation: 1s linear infinite grow; }
+@keyframes grow { from { width: 100px; } to { width: 200px; } }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	underlying := Compute(document, stylesheet)
+	start := time.Unix(100, 0)
+	registry := NewAnimationRegistry()
+	registry.Reconcile(underlying, start)
+	animated := registry.AnimatedStyles(underlying, stylesheet, start.Add(500*time.Millisecond))
+	if got := animated[target.ID].Width.Value.Pixels; got != 150 {
+		t.Fatalf("animated width = %v, want 150", got)
+	}
+	if got := ClassifyAnimationDamage(underlying, animated); got != AnimationDamageLayout {
+		t.Fatalf("width animation damage = %v, want layout", got)
+	}
+}

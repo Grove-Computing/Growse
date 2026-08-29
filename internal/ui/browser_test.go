@@ -1537,6 +1537,43 @@ div { width: 100px; height: 100px; animation: fade 1s linear infinite; }
 	}
 }
 
+func TestLayoutAnimationFramesRebuildLayoutAndDisplayList(t *testing.T) {
+	document := dom.NewDocument()
+	target := document.CreateElement("div", nil)
+	if err := document.AppendChild(document.Root, target); err != nil {
+		t.Fatal(err)
+	}
+	stylesheet, err := css.Parse(strings.NewReader(`
+@keyframes grow { from { width: 100px; } to { width: 200px; } }
+div { height: 40px; animation: grow 1s linear infinite; }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Date(2026, time.August, 14, 12, 0, 0, 0, time.UTC)
+	computed := style.Compute(document, stylesheet)
+	page := &browser.Page{Document: document, Stylesheet: stylesheet, ComputedStyles: computed, Animations: style.NewAnimationRegistry(), StyleRevision: 1}
+	page.Animations.Reconcile(computed, start)
+	ui := NewBrowserUI(&stubNavigator{page: page}, nil)
+	builds := 0
+	ui.layoutBuild = func(document *dom.Document, styles style.Map, width, height, scrollX, scrollY float32) *layoutengine.Tree {
+		builds++
+		return layoutengine.BuildWithScroll(document, styles, width, height, scrollX, scrollY)
+	}
+	gtx := layout.Context{Now: start, Ops: new(op.Ops), Constraints: layout.Exact(image.Pt(800, 600)), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}}
+
+	ui.layoutDocument(gtx, page)
+	gtx.Reset()
+	gtx.Now = start.Add(500 * time.Millisecond)
+	if sampled, damage := page.AnimationFrame(gtx.Now); damage != style.AnimationDamageLayout || sampled[target.ID].Width.Value.Pixels != 150 {
+		t.Fatalf("sampled layout frame = width:%v damage:%v", sampled[target.ID].Width.Value.Pixels, damage)
+	}
+	ui.layoutDocument(gtx, page)
+	if builds != 3 {
+		t.Fatalf("layout builds across layout animation frames = %d, want 3 (one base plus two sampled frames)", builds)
+	}
+}
+
 func TestFocusableNodeIDFindsInteractiveAncestor(t *testing.T) {
 	document := dom.NewDocument()
 	link := document.CreateElement("a", map[string]string{"href": "/next"})
