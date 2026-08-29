@@ -1811,8 +1811,11 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 	if ui.navigator != nil {
 		ui.navigator.UpdateViewport(viewportWidth, viewportHeight)
 	}
-	frameStyles := page.AnimatedStyles(gtx.Now)
+	frameStyles, animationDamage := page.AnimationFrame(gtx.Now)
 	tree := ui.cachedDocumentTree(page, viewportWidth, viewportHeight, gtx.Metric.PxPerDp)
+	if animationDamage == stylemodel.AnimationDamageLayout {
+		tree = ui.buildDocumentTree(page, frameStyles, viewportWidth, viewportHeight, gtx.Metric.PxPerDp)
+	}
 	layoutengine.ApplyAnimatedStyles(tree, frameStyles)
 	displayList := paintmodel.Build(tree)
 	paint.Fill(gtx.Ops, rgba(displayList.Background))
@@ -1869,18 +1872,28 @@ func (ui *BrowserUI) cachedDocumentTree(page *browser.Page, viewportWidth, viewp
 		return layoutengine.Clone(cache.tree)
 	}
 
+	tree := ui.buildDocumentTree(page, page.ComputedStyles, viewportWidth, viewportHeight, pxPerDp)
+	*cache = documentLayoutCache{
+		page: page, revision: page.StyleRevision, viewportWidth: viewportWidth, viewportHeight: viewportHeight,
+		listFirst: position.First, listOffset: position.Offset, tree: tree,
+	}
+	return layoutengine.Clone(tree)
+}
+
+func (ui *BrowserUI) buildDocumentTree(page *browser.Page, styles stylemodel.Map, viewportWidth, viewportHeight, pxPerDp float32) *layoutengine.Tree {
+	position := ui.pageList.Position
 	build := ui.layoutBuild
 	if build == nil {
 		build = layoutengine.BuildWithScroll
 	}
 	buildTree := func(scrollY float32) *layoutengine.Tree {
 		if ui.layoutBuildFonts != nil && (page.ImageResources != nil || page.WebFonts != nil) {
-			return ui.layoutBuildFonts(page.Document, page.ComputedStyles, page.ImageResources, page.WebFonts, viewportWidth, viewportHeight, 0, scrollY)
+			return ui.layoutBuildFonts(page.Document, styles, page.ImageResources, page.WebFonts, viewportWidth, viewportHeight, 0, scrollY)
 		}
 		if page.ImageResources != nil && ui.layoutBuildImages != nil {
-			return ui.layoutBuildImages(page.Document, page.ComputedStyles, page.ImageResources, viewportWidth, viewportHeight, 0, scrollY)
+			return ui.layoutBuildImages(page.Document, styles, page.ImageResources, viewportWidth, viewportHeight, 0, scrollY)
 		}
-		return build(page.Document, page.ComputedStyles, viewportWidth, viewportHeight, 0, scrollY)
+		return build(page.Document, styles, viewportWidth, viewportHeight, 0, scrollY)
 	}
 	tree := buildTree(0)
 	tree.Revision = page.StyleRevision
@@ -1896,11 +1909,7 @@ func (ui *BrowserUI) cachedDocumentTree(page *browser.Page, viewportWidth, viewp
 			}
 		}
 	}
-	*cache = documentLayoutCache{
-		page: page, revision: page.StyleRevision, viewportWidth: viewportWidth, viewportHeight: viewportHeight,
-		listFirst: position.First, listOffset: position.Offset, tree: tree,
-	}
-	return layoutengine.Clone(tree)
+	return tree
 }
 
 type pageFontFace struct{ face *textfont.Face }

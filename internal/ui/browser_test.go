@@ -1510,6 +1510,9 @@ div { width: 100px; height: 100px; animation: fade 1s linear infinite; }
 		Animations: style.NewAnimationRegistry(), StyleRevision: 1,
 	}
 	page.Animations.Reconcile(computed, start)
+	if _, damage := page.AnimationFrame(start.Add(500 * time.Millisecond)); damage != style.AnimationDamageComposite {
+		t.Fatalf("animation damage = %v, want composite", damage)
+	}
 	ui := NewBrowserUI(&stubNavigator{page: page}, nil)
 	builds := 0
 	ui.layoutBuild = func(document *dom.Document, styles style.Map, width, height, scrollX, scrollY float32) *layoutengine.Tree {

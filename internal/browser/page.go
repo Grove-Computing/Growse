@@ -265,6 +265,16 @@ func (p *Page) AnimatedStyles(current time.Time) style.Map {
 	return result
 }
 
+// AnimationFrame samples the page animation state and classifies the most
+// expensive renderer stage that must be updated for this frame.
+func (p *Page) AnimationFrame(current time.Time) (style.Map, style.AnimationDamage) {
+	if p == nil {
+		return nil, style.AnimationDamageNone
+	}
+	sampled := p.AnimatedStyles(current)
+	return sampled, style.ClassifyAnimationDamage(p.ComputedStyles, sampled)
+}
+
 // ActiveAnimations reports whether this page needs another animation frame.
 func (p *Page) ActiveAnimations(current time.Time) bool {
 	return p != nil && ((p.Animations != nil && p.Animations.Active(current)) ||
