@@ -47,3 +47,27 @@ func TestApplyAnimatedStylesChangesPaintWithoutLayoutGeometry(t *testing.T) {
 		t.Fatal("paint-only animation mutated the cached layout tree")
 	}
 }
+
+func TestApplyAnimatedLayoutReusesStaticDisplayListStorage(t *testing.T) {
+	nodeID := dom.NodeID(9)
+	tree := &layout.Tree{
+		Width: 320, Height: 240, Parents: map[dom.NodeID]dom.NodeID{nodeID: 0},
+		Decorations: []layout.Decoration{{Order: 1, NodeID: nodeID, Rect: layout.Rect{X: 10, Y: 20, Width: 100, Height: 40}, Opacity: 1, Transform: style.IdentityMatrix()}},
+		Boxes:       []layout.Box{{Order: 2, NodeID: nodeID, Text: "animated", X: 10, Y: 20, Width: 100, Height: 40, Opacity: 1, Transform: style.IdentityMatrix()}},
+	}
+	list := Build(tree)
+	commands := &list.Commands[0]
+	animatedTree := layout.Clone(tree)
+	animated := style.Map{nodeID: {Opacity: 0.4, Transform: []style.TransformFunction{{Kind: style.TransformTranslate, X: style.LengthPercentage{Pixels: 30}}}}}
+	layout.ApplyAnimatedStyles(animatedTree, animated)
+	ApplyAnimatedLayout(list, animatedTree)
+
+	if commands != &list.Commands[0] {
+		t.Fatal("animation frame replaced static display-list storage")
+	}
+	box := list.Commands[0].(DrawBox)
+	text := list.Commands[1].(DrawText)
+	if box.Opacity != 0.4 || text.Opacity != 0.4 || box.Transform.E != 30 || text.Transform.E != 30 {
+		t.Fatalf("composited display list = box:%#v text:%#v", box, text)
+	}
+}

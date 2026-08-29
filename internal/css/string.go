@@ -66,3 +66,42 @@ func isHexDigit(value byte) bool {
 func isCSSWhitespace(value byte) bool {
 	return value == ' ' || value == '\t' || value == '\n' || value == '\r' || value == '\f'
 }
+
+// decodeIdentifierEscape decodes one CSS escape starting at a backslash. The
+// returned offset includes the optional whitespace terminating a hexadecimal
+// escape, so that whitespace is not mistaken for a selector combinator.
+func decodeIdentifierEscape(value string, start int) (rune, int, bool) {
+	if start < 0 || start >= len(value) || value[start] != '\\' || start+1 >= len(value) {
+		return 0, start, false
+	}
+	position := start + 1
+	if value[position] == '\n' || value[position] == '\r' || value[position] == '\f' {
+		return 0, start, false
+	}
+	hexStart := position
+	for position < len(value) && position-hexStart < 6 && isHexDigit(value[position]) {
+		position++
+	}
+	if position > hexStart {
+		codePoint, err := strconv.ParseInt(value[hexStart:position], 16, 32)
+		decoded := rune(codePoint)
+		if err != nil || decoded == 0 || decoded > utf8.MaxRune || decoded >= 0xd800 && decoded <= 0xdfff {
+			decoded = utf8.RuneError
+		}
+		if position < len(value) && isCSSWhitespace(value[position]) {
+			if value[position] == '\r' && position+1 < len(value) && value[position+1] == '\n' {
+				position++
+			}
+			position++
+		}
+		return decoded, position, true
+	}
+	decoded, size := utf8.DecodeRuneInString(value[position:])
+	if decoded == utf8.RuneError && size == 1 {
+		return utf8.RuneError, position + 1, true
+	}
+	if decoded == 0 {
+		decoded = utf8.RuneError
+	}
+	return decoded, position + size, true
+}

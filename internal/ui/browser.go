@@ -64,6 +64,7 @@ const (
 // BrowserUI owns the widgets displayed around the page viewport.
 type BrowserUI struct {
 	theme            *material.Theme
+	pageTheme        *material.Theme
 	navigator        Navigator
 	invalidate       func()
 	results          chan navigationResult
@@ -124,6 +125,7 @@ type BrowserUI struct {
 	layoutBuildImages func(*dom.Document, stylemodel.Map, map[dom.NodeID]layoutengine.ImageResource, float32, float32, float32, float32) *layoutengine.Tree
 	layoutBuildFonts  func(*dom.Document, stylemodel.Map, map[dom.NodeID]layoutengine.ImageResource, *layoutengine.FontSet, float32, float32, float32, float32) *layoutengine.Tree
 	layoutCache       documentLayoutCache
+	imagePaintCache   pageImagePaintCache
 	fontPage          *browser.Page
 	fontRevision      uint64
 	scrollRevision    uint64
@@ -144,6 +146,7 @@ type documentLayoutCache struct {
 	viewportHeight        float32
 	listFirst, listOffset int
 	tree                  *layoutengine.Tree
+	displayList           *paintmodel.DisplayList
 }
 
 type browserChromeGeometry struct {
@@ -241,6 +244,10 @@ type tabNavigationStateSink interface {
 type animationFrameNavigator interface {
 	RunAnimationFrame(time.Time) bool
 	HasAnimationFrameCallbacks() bool
+}
+
+type pageLifecycleNavigator interface {
+	IsPageVisible(*browser.Page) bool
 }
 
 type historyScrollNavigator interface {
@@ -1348,6 +1355,9 @@ func runtimeContextLabel(context devtoolsmodel.RuntimeContext) string {
 			break
 		}
 		label := fmt.Sprintf("%s:%s/%s %s", diagnostic.Category, diagnostic.State, diagnostic.Reason, diagnostic.Subject)
+		if diagnostic.Count > 1 {
+			label += fmt.Sprintf(" x%d", diagnostic.Count)
+		}
 		if diagnostic.Initiator != "" || diagnostic.Schedule != "" {
 			label += fmt.Sprintf(" [%s/%s]", diagnostic.Initiator, diagnostic.Schedule)
 		}
@@ -1742,6 +1752,7 @@ func (ui *BrowserUI) layoutViewport(gtx layout.Context) layout.Dimensions {
 			return ui.layoutDocument(gtx, page)
 		}
 	}
+	ui.imagePaintCache.prepare(nil)
 
 	paint.Fill(gtx.Ops, color.NRGBA{R: 238, G: 243, B: 248, A: 255})
 
@@ -1791,6 +1802,7 @@ func (ui *BrowserUI) layoutViewport(gtx layout.Context) layout.Dimensions {
 func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layout.Dimensions {
 	paint.Fill(gtx.Ops, color.NRGBA{R: 255, G: 255, B: 255, A: 255})
 	ui.installPageFonts(page)
+	ui.imagePaintCache.prepare(page)
 	if ui.scrollRevision != page.ScrollRevision {
 		ui.pageList.Position = layout.Position{First: page.ScrollFirst, Offset: page.ScrollOffset}
 		ui.scrollRevision = page.ScrollRevision
@@ -1807,16 +1819,35 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 	if ui.navigator != nil {
 		ui.navigator.UpdateViewport(viewportWidth, viewportHeight)
 	}
-	frameStyles := page.AnimatedStyles(gtx.Now)
-	tree := ui.cachedDocumentTree(page, viewportWidth, viewportHeight, gtx.Metric.PxPerDp)
+	frameStyles, animationDamage := page.AnimationFrame(gtx.Now)
+	switch animationDamage {
+	case stylemodel.AnimationDamageComposite:
+		page.RecordRenderEvent(browser.RenderCompositeFrame)
+	case stylemodel.AnimationDamagePaint:
+		page.RecordRenderEvent(browser.RenderPaintFrame)
+	case stylemodel.AnimationDamageLayout:
+		page.RecordRenderEvent(browser.RenderLayoutFrame)
+	}
+	tree, displayList, reusedDisplayList := ui.cachedDocumentFrame(page, viewportWidth, viewportHeight, gtx.Metric.PxPerDp)
+	if animationDamage == stylemodel.AnimationDamageLayout {
+		page.RecordRenderRebuild(browser.RenderRebuildAnimation)
+		tree = ui.buildDocumentTree(page, frameStyles, viewportWidth, viewportHeight, gtx.Metric.PxPerDp)
+		displayList = paintmodel.Build(tree)
+		page.RecordRenderEvent(browser.RenderDisplayListBuild)
+	}
 	layoutengine.ApplyAnimatedStyles(tree, frameStyles)
-	displayList := paintmodel.Build(tree)
+	if animationDamage != stylemodel.AnimationDamageLayout {
+		paintmodel.ApplyAnimatedLayout(displayList, tree)
+		if reusedDisplayList {
+			page.RecordRenderEvent(browser.RenderDisplayListReuse)
+		}
+	}
 	paint.Fill(gtx.Ops, rgba(displayList.Background))
 	ui.updateViewportHover(gtx, page, tree, displayList)
 	ui.handleViewportClicks(gtx, page, tree, displayList)
 
 	area := clip.Rect{Max: gtx.Constraints.Max}.Push(gtx.Ops)
-	dimensions := material.List(ui.theme, &ui.pageList).Layout(gtx, len(displayList.Commands), func(gtx layout.Context, index int) layout.Dimensions {
+	dimensions := material.List(ui.documentTheme(), &ui.pageList).Layout(gtx, len(displayList.Commands), func(gtx layout.Context, index int) layout.Dimensions {
 		switch command := displayList.Commands[index].(type) {
 		case paintmodel.DrawText:
 			return ui.layoutDrawText(gtx, command)
@@ -1829,7 +1860,7 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 		case paintmodel.DrawButton:
 			return ui.layoutDrawButton(gtx, command)
 		case paintmodel.DrawBox:
-			return layoutDrawBox(gtx, command, page.BackgroundImages)
+			return ui.layoutDrawBox(gtx, command, page.BackgroundImages, page.StyleRevision)
 		case paintmodel.DrawImage:
 			return ui.layoutDrawImage(gtx, command, page.Images)
 		default:
@@ -1840,10 +1871,14 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 	ui.viewportClick.Add(gtx.Ops)
 	pass.Pop()
 	area.Pop()
-	if page.ActiveAnimations(gtx.Now) && ui.invalidate != nil {
+	pageVisible := true
+	if lifecycle, ok := ui.navigator.(pageLifecycleNavigator); ok {
+		pageVisible = lifecycle.IsPageVisible(page)
+	}
+	if pageVisible && page.ActiveAnimationsInViewport(gtx.Now, tree) && ui.invalidate != nil {
 		ui.invalidate()
 	}
-	if navigator, ok := ui.navigator.(animationFrameNavigator); ok && navigator.HasAnimationFrameCallbacks() && ui.invalidate != nil {
+	if navigator, ok := ui.navigator.(animationFrameNavigator); pageVisible && ok && navigator.HasAnimationFrameCallbacks() && ui.invalidate != nil {
 		ui.invalidate()
 	}
 	ui.persistHistoryScroll()
@@ -1856,32 +1891,60 @@ func (ui *BrowserUI) persistHistoryScroll() {
 	}
 }
 
-func (ui *BrowserUI) cachedDocumentTree(page *browser.Page, viewportWidth, viewportHeight, pxPerDp float32) *layoutengine.Tree {
+func (ui *BrowserUI) cachedDocumentFrame(page *browser.Page, viewportWidth, viewportHeight, pxPerDp float32) (*layoutengine.Tree, *paintmodel.DisplayList, bool) {
 	position := ui.pageList.Position
 	cache := &ui.layoutCache
 	if cache.tree != nil && cache.page == page && cache.revision == page.StyleRevision &&
 		cache.viewportWidth == viewportWidth && cache.viewportHeight == viewportHeight &&
 		cache.listFirst == position.First && cache.listOffset == position.Offset {
-		return layoutengine.Clone(cache.tree)
+		return layoutengine.Clone(cache.tree), cache.displayList, true
 	}
+	reason := browser.RenderRebuildInitial
+	if cache.tree != nil {
+		switch {
+		case cache.page != page:
+			reason = browser.RenderRebuildPage
+		case cache.revision != page.StyleRevision:
+			reason = browser.RenderRebuildStyle
+		case cache.viewportWidth != viewportWidth || cache.viewportHeight != viewportHeight:
+			reason = browser.RenderRebuildViewport
+		case cache.listFirst != position.First || cache.listOffset != position.Offset:
+			reason = browser.RenderRebuildScroll
+		}
+	}
+	page.RecordRenderRebuild(reason)
 
+	tree := ui.buildDocumentTree(page, page.ComputedStyles, viewportWidth, viewportHeight, pxPerDp)
+	displayList := paintmodel.Build(tree)
+	page.RecordRenderEvent(browser.RenderDisplayListBuild)
+	*cache = documentLayoutCache{
+		page: page, revision: page.StyleRevision, viewportWidth: viewportWidth, viewportHeight: viewportHeight,
+		listFirst: position.First, listOffset: position.Offset, tree: tree, displayList: displayList,
+	}
+	return layoutengine.Clone(tree), displayList, false
+}
+
+func (ui *BrowserUI) buildDocumentTree(page *browser.Page, styles stylemodel.Map, viewportWidth, viewportHeight, pxPerDp float32) *layoutengine.Tree {
+	position := ui.pageList.Position
 	build := ui.layoutBuild
 	if build == nil {
 		build = layoutengine.BuildWithScroll
 	}
 	buildTree := func(scrollY float32) *layoutengine.Tree {
+		page.RecordRenderEvent(browser.RenderLayoutBuild)
 		if ui.layoutBuildFonts != nil && (page.ImageResources != nil || page.WebFonts != nil) {
-			return ui.layoutBuildFonts(page.Document, page.ComputedStyles, page.ImageResources, page.WebFonts, viewportWidth, viewportHeight, 0, scrollY)
+			return ui.layoutBuildFonts(page.Document, styles, page.ImageResources, page.WebFonts, viewportWidth, viewportHeight, 0, scrollY)
 		}
 		if page.ImageResources != nil && ui.layoutBuildImages != nil {
-			return ui.layoutBuildImages(page.Document, page.ComputedStyles, page.ImageResources, viewportWidth, viewportHeight, 0, scrollY)
+			return ui.layoutBuildImages(page.Document, styles, page.ImageResources, viewportWidth, viewportHeight, 0, scrollY)
 		}
-		return build(page.Document, page.ComputedStyles, viewportWidth, viewportHeight, 0, scrollY)
+		return build(page.Document, styles, viewportWidth, viewportHeight, 0, scrollY)
 	}
 	tree := buildTree(0)
 	tree.Revision = page.StyleRevision
 	page.SyncFrameViewports(tree)
 	displayList := paintmodel.Build(tree)
+	page.RecordRenderEvent(browser.RenderDisplayListBuild)
 	if position.First >= 0 && position.First < len(displayList.Commands) {
 		if firstY, ok := commandDocumentY(displayList.Commands[position.First]); ok {
 			scrollY := max(firstY+float32(position.Offset)/pxPerDp, float32(0))
@@ -1892,23 +1955,36 @@ func (ui *BrowserUI) cachedDocumentTree(page *browser.Page, viewportWidth, viewp
 			}
 		}
 	}
-	*cache = documentLayoutCache{
-		page: page, revision: page.StyleRevision, viewportWidth: viewportWidth, viewportHeight: viewportHeight,
-		listFirst: position.First, listOffset: position.Offset, tree: tree,
-	}
-	return layoutengine.Clone(tree)
+	return tree
 }
 
 type pageFontFace struct{ face *textfont.Face }
 
 func (face pageFontFace) Face() *textfont.Face { return face.face }
 
+func (ui *BrowserUI) documentTheme() *material.Theme {
+	if ui.pageTheme != nil {
+		return ui.pageTheme
+	}
+	if ui.theme == nil {
+		ui.theme = material.NewTheme()
+	}
+	pageTheme := *ui.theme
+	pageTheme.Shaper = &text.Shaper{}
+	ui.pageTheme = &pageTheme
+	return ui.pageTheme
+}
+
 func (ui *BrowserUI) installPageFonts(page *browser.Page) {
+	// A Gio Shaper owns bounded LRUs for shaped layouts and glyph operations.
+	// Reuse it only within the same Page generation and Style revision; replacing
+	// the pointer here drops every cached face and glyph on Navigation or font
+	// revision without sharing it with Browser chrome.
 	if page == nil || ui.fontPage == page && ui.fontRevision == page.StyleRevision {
 		return
 	}
-	if page.Engine != runtimemodel.EngineJavaScript {
-		ui.theme.Shaper = &text.Shaper{}
+	if !page.UsesModernWebCompatibility() {
+		ui.documentTheme().Shaper = &text.Shaper{}
 		ui.fontPage, ui.fontRevision = page, page.StyleRevision
 		return
 	}
@@ -1924,8 +2000,19 @@ func (ui *BrowserUI) installPageFonts(page *browser.Page) {
 		collection = append(collection, font.FontFace{Font: description, Face: pageFontFace{face: resource.Face}})
 	}
 	collection = append(collection, gofont.Collection()...)
-	ui.theme.Shaper = text.NewShaper(text.NoSystemFonts(), text.WithCollection(collection))
+	// Keep decoded Web Fonts and the deterministic Go collection first, then
+	// let Gio resolve glyphs they do not cover from the operating system. This
+	// path belongs only to an explicitly selected modern-web JavaScript Page.
+	ui.documentTheme().Shaper = newPageTextShaper(collection, true)
 	ui.fontPage, ui.fontRevision = page, page.StyleRevision
+}
+
+func newPageTextShaper(collection []font.FontFace, systemFonts bool) *text.Shaper {
+	options := []text.ShaperOption{text.WithCollection(collection)}
+	if !systemFonts {
+		options = append(options, text.NoSystemFonts())
+	}
+	return text.NewShaper(options...)
 }
 
 func pageFontWeight(value string) font.Weight {
@@ -2167,21 +2254,20 @@ func (ui *BrowserUI) layoutDrawImage(gtx layout.Context, command paintmodel.Draw
 		if source := images[command.URL]; source != nil && !command.Failed {
 			targetWidth := max(gtx.Dp(unit.Dp(command.ImageRect.Width)), 1)
 			targetHeight := max(gtx.Dp(unit.Dp(command.ImageRect.Height)), 1)
-			raster := image.NewNRGBA(image.Rect(0, 0, targetWidth, targetHeight))
-			xdraw.CatmullRom.Scale(raster, raster.Bounds(), source, source.Bounds(), imagedraw.Src, nil)
+			cached := ui.imagePaintCache.scale(command.URL, source, targetWidth, targetHeight)
 			clipMin := image.Pt(gtx.Dp(unit.Dp(command.ImageClip.X-command.X)), gtx.Dp(unit.Dp(command.ImageClip.Y-command.Y)))
 			clipMax := clipMin.Add(image.Pt(gtx.Dp(unit.Dp(command.ImageClip.Width)), gtx.Dp(unit.Dp(command.ImageClip.Height))))
 			area := clip.Rect{Min: clipMin, Max: clipMax}.Push(gtx.Ops)
 			offset := op.Offset(image.Pt(gtx.Dp(unit.Dp(command.ImageRect.X-command.X)), gtx.Dp(unit.Dp(command.ImageRect.Y-command.Y)))).Push(gtx.Ops)
 			imageGTX := gtx
-			imageGTX.Constraints = layout.Exact(raster.Bounds().Size())
-			widget.Image{Src: paint.NewImageOp(raster), Fit: widget.Unscaled, Scale: 1 / gtx.Metric.PxPerDp}.Layout(imageGTX)
+			imageGTX.Constraints = layout.Exact(cached.raster.Bounds().Size())
+			widget.Image{Src: cached.op, Fit: widget.Unscaled, Scale: 1 / gtx.Metric.PxPerDp}.Layout(imageGTX)
 			offset.Pop()
 			area.Pop()
 		} else if command.Alt != "" {
 			inset := layout.UniformInset(unit.Dp(4))
 			inset.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-				label := material.Label(ui.theme, unit.Sp(14), command.Alt)
+				label := material.Label(ui.documentTheme(), unit.Sp(14), command.Alt)
 				label.Color = rgba(command.Color)
 				return label.Layout(gtx)
 			})
@@ -2191,7 +2277,7 @@ func (ui *BrowserUI) layoutDrawImage(gtx layout.Context, command paintmodel.Draw
 	})
 }
 
-func layoutDrawBox(gtx layout.Context, command paintmodel.DrawBox, backgroundImages map[string]image.Image) layout.Dimensions {
+func (ui *BrowserUI) layoutDrawBox(gtx layout.Context, command paintmodel.DrawBox, backgroundImages map[string]image.Image, styleRevision uint64) layout.Dimensions {
 	return layout.Inset{Top: unit.Dp(command.Top), Left: unit.Dp(command.X)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		if command.Transform != (stylemodel.Matrix{}) && command.Transform != stylemodel.IdentityMatrix() {
 			defer pushCSSMatrix(gtx, command.Transform, command.X, command.Y).Pop()
@@ -2249,20 +2335,10 @@ func layoutDrawBox(gtx layout.Context, command paintmodel.DrawBox, backgroundIma
 		}
 		for index := len(layers) - 1; index >= 0; index-- {
 			layer := layers[index]
-			var raster image.Image
-			if layer.Image.Kind == stylemodel.BackgroundImageLinearGradient && width > 0 && height > 0 {
-				raster = rasterLinearGradient(width, height, layer.Image)
-			} else if layer.Image.Kind == stylemodel.BackgroundImageRadialGradient && width > 0 && height > 0 {
-				raster = rasterRadialGradient(width, height, layer.Image)
-			} else if layer.Image.Kind == stylemodel.BackgroundImageURL && backgroundImages[layer.Image.URL] != nil && width > 0 && height > 0 {
-				layerCommand := command
-				layerCommand.Image, layerCommand.Repeat, layerCommand.Position, layerCommand.Size = layer.Image, layer.Repeat, layer.Position, layer.Size
-				raster = rasterBackgroundImage(width, height, backgroundImages[layer.Image.URL], layerCommand, gtx.Metric.PxPerDp)
-			}
-			if raster != nil {
-				raster = rasterFilterImage(raster, command.Filters)
+			cached := ui.imagePaintCache.background(command, layer, index, backgroundImages[layer.Image.URL], width, height, gtx.Metric.PxPerDp, styleRevision)
+			if cached.raster != nil {
 				area := bounds.Push(gtx.Ops)
-				widget.Image{Src: paint.NewImageOp(raster), Fit: widget.Unscaled, Scale: 1 / gtx.Metric.PxPerDp}.Layout(gtx)
+				widget.Image{Src: cached.op, Fit: widget.Unscaled, Scale: 1 / gtx.Metric.PxPerDp}.Layout(gtx)
 				area.Pop()
 			}
 		}
@@ -2623,7 +2699,7 @@ func (ui *BrowserUI) layoutDrawInput(gtx layout.Context, command paintmodel.Draw
 		}
 		ui.inputFocused[command.NodeID] = focused
 		content := func(gtx layout.Context) layout.Dimensions {
-			style := material.Editor(ui.theme, editor, "")
+			style := material.Editor(ui.documentTheme(), editor, "")
 			style.Color = rgba(command.Color)
 			return layout.UniformInset(unit.Dp(8)).Layout(gtx, style.Layout)
 		}
@@ -2675,7 +2751,7 @@ func (ui *BrowserUI) layoutDrawSelect(gtx layout.Context, command paintmodel.Dra
 		if label == "" {
 			label = "選択してください"
 		}
-		style := material.Button(ui.theme, button, label+" ▾")
+		style := material.Button(ui.documentTheme(), button, label+" ▾")
 		style.Color = rgba(command.Color)
 		style.Background = rgba(command.AccentColor)
 		if command.Appearance == stylemodel.AppearanceNone {
@@ -2725,7 +2801,7 @@ func (ui *BrowserUI) layoutDrawCheckable(gtx layout.Context, command paintmodel.
 				label = "●"
 			}
 		}
-		style := material.Button(ui.theme, button, label)
+		style := material.Button(ui.documentTheme(), button, label)
 		style.Color = rgba(command.Color)
 		if command.Checked {
 			style.Background = rgba(command.AccentColor)
@@ -2767,7 +2843,7 @@ func (ui *BrowserUI) layoutDrawButton(gtx layout.Context, command paintmodel.Dra
 		}
 		gtx.Constraints.Min.Y = gtx.Dp(unit.Dp(command.Height))
 		gtx.Constraints.Max.Y = gtx.Constraints.Min.Y
-		style := material.Button(ui.theme, button, command.Label)
+		style := material.Button(ui.documentTheme(), button, command.Label)
 		style.Color = rgba(command.Color)
 		style.Background = rgba(command.AccentColor)
 		if command.Appearance == stylemodel.AppearanceNone {
@@ -2943,7 +3019,7 @@ func (ui *BrowserUI) layoutShadowedText(gtx layout.Context, text string, size fl
 	}
 	labelLayout := func(color uint32) layout.Widget {
 		return func(gtx layout.Context) layout.Dimensions {
-			label := material.Label(ui.theme, unit.Sp(size), text)
+			label := material.Label(ui.documentTheme(), unit.Sp(size), text)
 			label.Color, label.MaxLines = rgba(color), 1
 			if len(families) != 0 {
 				label.Font.Typeface = font.Typeface(families[0])

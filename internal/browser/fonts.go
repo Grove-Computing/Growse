@@ -135,7 +135,7 @@ func fontLoadTimeout(display string) time.Duration {
 	}
 }
 
-func layoutWebFonts(resources []FontResource) *layoutmodel.FontSet {
+func layoutPageFonts(resources []FontResource, systemFallback bool) *layoutmodel.FontSet {
 	faces := make([]layoutmodel.WebFontFace, 0, len(resources))
 	for _, resource := range resources {
 		if !resource.Decoded || resource.Face == nil {
@@ -149,6 +149,9 @@ func layoutWebFonts(resources []FontResource) *layoutmodel.FontSet {
 			Family: resource.Family, Style: resource.Style, Weight: resource.Weight,
 			UnicodeRanges: ranges, Face: resource.Face,
 		})
+	}
+	if systemFallback {
+		return layoutmodel.NewFontSetWithSystemFallback(faces)
 	}
 	return layoutmodel.NewFontSet(faces)
 }

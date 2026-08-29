@@ -294,6 +294,7 @@ func (b *Browser) SetEngine(ctx context.Context, engine runtimemodel.Engine) (*P
 		if page.Transitions != nil {
 			page.Transitions.Clear()
 		}
+		page.releaseImageResources()
 	}
 	if teardownErr != nil {
 		return nil, teardownErr
@@ -376,6 +377,17 @@ func (b *Browser) HasAnimationFrameCallbacks() bool {
 		}
 	}
 	return false
+}
+
+// IsPageVisible reports whether page is still the selected generation of an
+// active Tab. Renderers use it to reject stale invalidation requests.
+func (b *Browser) IsPageVisible(page *Page) bool {
+	if b == nil || page == nil {
+		return false
+	}
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.active && b.page == page
 }
 
 func (b *Browser) dispatchPageEvent(page *Page, event events.Event) bool {
@@ -750,7 +762,7 @@ func (b *Browser) UpdateViewport(width, height float32) bool {
 		loadContext, generation := page.beginImageLoad(context.Background())
 		policy := imageViewportPolicy(page.Document, page.ComputedStyles, baseURL, width, height)
 		budget := newImageDecodeBudgetWithImages(page.BackgroundImages)
-		resources, images, failures := loadReplacedImagesWithPolicyAndBudget(loadContext, imageLoader, baseURL, page.Document, width, 1, policy, budget)
+		resources, images, failures := loadReplacedImagesWithCache(loadContext, imageLoader, baseURL, page.Document, width, 1, policy, budget, page.imageCache)
 		inlineResources, inlineImages, inlineFailures := loadInlineSVGImagesWithBudget(page.Document, budget)
 		mergeImageResources(resources, images, inlineResources, inlineImages)
 		failures = append(failures, inlineFailures...)
@@ -850,6 +862,7 @@ func (b *Browser) SetPage(page *Page) {
 	}
 	if previousPage != nil && previousPage != page {
 		_ = closePageFrames(previousPage)
+		previousPage.releaseImageResources()
 	}
 }
 
@@ -876,6 +889,7 @@ func (b *Browser) Close() error {
 	}
 	if page != nil {
 		page.closeDevTools()
+		page.releaseImageResources()
 	}
 	b.page = nil
 	b.client = nil
@@ -1388,7 +1402,8 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	}
 	computedStyles := computeStableStyles(document, stylesheet, style.InteractionState{}, 1280, 720, reducedMotion)
 	imageBudget := newImageDecodeBudget()
-	backgroundImages, backgroundErrors := loadBackgroundImagesWithBudget(ctx, imageResources, computedStyles, imageBudget)
+	imageCache := newImageResourceCache()
+	backgroundImages, backgroundErrors := loadBackgroundImagesWithCache(ctx, imageResources, computedStyles, imageBudget, imageCache)
 	var replacedImages map[dom.NodeID]layoutengine.ImageResource
 	var decodedImages map[string]image.Image
 	var imageErrors []string
@@ -1396,7 +1411,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	var fontErrors []string
 	if engine == runtimemodel.EngineJavaScript {
 		imagePolicy := imageViewportPolicy(document, computedStyles, baseURL, 1280, 720)
-		replacedImages, decodedImages, imageErrors = loadReplacedImagesWithPolicyAndBudget(ctx, imageResources, baseURL, document, 1280, 1, imagePolicy, imageBudget)
+		replacedImages, decodedImages, imageErrors = loadReplacedImagesWithCache(ctx, imageResources, baseURL, document, 1280, 1, imagePolicy, imageBudget, imageCache)
 		inlineResources, inlineImages, inlineErrors := loadInlineSVGImagesWithBudget(document, imageBudget)
 		mergeImageResources(replacedImages, decodedImages, inlineResources, inlineImages)
 		imageErrors = append(imageErrors, inlineErrors...)
@@ -1433,14 +1448,16 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 		ImageErrors:      imageErrors,
 		Fonts:            fonts,
 		FontErrors:       fontErrors,
-		WebFonts:         layoutWebFonts(fonts),
+		WebFonts:         layoutPageFonts(fonts, engine == runtimemodel.EngineJavaScript),
 		Engine:           engine,
+		Compatibility:    compatibilityProfileForEngine(engine),
 		Scripts:          scripts,
 		ImportMap:        importMap,
 		ScriptErrors:     scriptErrors,
 		DevTools:         pageStore,
 		serviceWorkers:   b.serviceWorkers,
 		imageLoader:      imageResources,
+		imageCache:       imageCache,
 	}
 	for _, scriptError := range scriptErrors {
 		page.DevTools.AddConsole(devtools.ConsoleError, "script", scriptError)
@@ -1475,6 +1492,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 		}
 		_ = closePageFrames(page)
 		page.closeDevTools()
+		page.releaseImageResources()
 		return nil, err
 	}
 	b.mu.Lock()
@@ -1488,6 +1506,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 		}
 		_ = closePageFrames(page)
 		page.closeDevTools()
+		page.releaseImageResources()
 		return nil, context.Canceled
 	}
 	previousRuntime := b.activeRuntime
@@ -1554,6 +1573,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	}
 	if previousPage != nil && previousPage != page {
 		_ = closePageFrames(previousPage)
+		previousPage.releaseImageResources()
 	}
 	if engine == runtimemodel.EngineJavaScript {
 		dispatchImageResourceEvents(b, page)
@@ -1824,11 +1844,12 @@ func startRuntime(ctx context.Context, factory runtimemodel.EngineFactory, engin
 			generationContext, generation := page.beginImageLoad(loadContext)
 			policy := imageViewportPolicy(page.Document, page.ComputedStyles, pageBaseURL(page), page.ViewportWidth, page.ViewportHeight)
 			budget := newImageDecodeBudgetWithImages(page.BackgroundImages)
-			resources, images, failures := loadReplacedImagesWithPolicyAndBudget(generationContext, page.imageLoader, pageBaseURL(page), page.Document, page.ViewportWidth, 1, policy, budget)
-			inlineResources, inlineImages, inlineFailures := loadInlineSVGImagesWithBudget(page.Document, budget)
-			mergeImageResources(resources, images, inlineResources, inlineImages)
-			failures = append(failures, inlineFailures...)
-			if generationContext.Err() != nil || !page.commitImageLoad(generation, resources, images, failures) {
+			node, exists := page.Document.NodeByID(nodeID)
+			if !exists {
+				return runtimemodel.ImageState{}, errors.New("image element is disconnected")
+			}
+			resource, decoded, failure := loadReplacedImageNodeWithCache(generationContext, page.imageLoader, pageBaseURL(page), node, page.ViewportWidth, 1, policy[nodeID], budget, page.imageCache)
+			if generationContext.Err() != nil || !page.commitImageResourceLoad(generation, nodeID, resource, decoded, failure) {
 				return runtimemodel.ImageState{}, context.Canceled
 			}
 			if onMutation != nil {

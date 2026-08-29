@@ -18,6 +18,22 @@ import (
 	"github.com/Grove-Computing/Growse/internal/style"
 )
 
+// CompatibilityProfile selects page-owned rendering and lifecycle behavior.
+// It is fixed when a Page is built and never shared across Engine reloads.
+type CompatibilityProfile string
+
+const (
+	CompatibilityProfileGo        CompatibilityProfile = "go"
+	CompatibilityProfileModernWeb CompatibilityProfile = "modern-web"
+)
+
+func compatibilityProfileForEngine(engine runtimemodel.Engine) CompatibilityProfile {
+	if runtimemodel.NormalizeEngine(engine) == runtimemodel.EngineJavaScript {
+		return CompatibilityProfileModernWeb
+	}
+	return CompatibilityProfileGo
+}
+
 // Page holds the state of one loaded document.
 //
 // Runtimeの状態はスクリプト取得エラーと分けて保持し、Goコードを実行できない場合も
@@ -48,6 +64,7 @@ type Page struct {
 	FontErrors       []string
 	WebFonts         *layoutmodel.FontSet
 	Engine           runtimemodel.Engine
+	Compatibility    CompatibilityProfile
 	Scripts          []Script
 	ImportMap        map[string]string
 	ScriptErrors     []string
@@ -74,6 +91,9 @@ type Page struct {
 	imageCancel      context.CancelFunc
 	imageGeneration  uint64
 	imageEvents      map[dom.NodeID]string
+	imageCache       *imageResourceCache
+	renderMu         sync.Mutex
+	renderMetrics    RenderMetrics
 }
 
 func (p *Page) beginImageLoad(parent context.Context) (context.Context, uint64) {
@@ -102,6 +122,32 @@ func (p *Page) commitImageLoad(generation uint64, resources map[dom.NodeID]layou
 	return true
 }
 
+func (p *Page) commitImageResourceLoad(generation uint64, nodeID dom.NodeID, resource layoutmodel.ImageResource, decoded image.Image, failure string) bool {
+	p.imageMu.Lock()
+	defer p.imageMu.Unlock()
+	if generation != p.imageGeneration {
+		return false
+	}
+	resources := make(map[dom.NodeID]layoutmodel.ImageResource, len(p.ImageResources)+1)
+	for currentID, current := range p.ImageResources {
+		resources[currentID] = current
+	}
+	resources[nodeID] = resource
+	images := make(map[string]image.Image, len(p.Images)+1)
+	for currentURL, current := range p.Images {
+		images[currentURL] = current
+	}
+	if decoded != nil && resource.URL != "" {
+		images[resource.URL] = decoded
+	}
+	p.ImageResources, p.Images = resources, images
+	if failure != "" {
+		p.ImageErrors = append(append([]string(nil), p.ImageErrors...), failure)
+	}
+	p.StyleRevision++
+	return true
+}
+
 func (p *Page) cancelImageLoads() {
 	if p == nil {
 		return
@@ -113,6 +159,25 @@ func (p *Page) cancelImageLoads() {
 	}
 	p.imageGeneration++
 	p.imageMu.Unlock()
+}
+
+func (p *Page) releaseImageResources() {
+	if p == nil {
+		return
+	}
+	p.cancelImageLoads()
+	if p.imageCache != nil {
+		p.imageCache.clear()
+	}
+	p.imageMu.Lock()
+	p.ImageResources = nil
+	p.Images = nil
+	p.ImageErrors = nil
+	p.imageEvents = nil
+	p.imageCache = nil
+	p.imageMu.Unlock()
+	p.BackgroundImages = nil
+	p.BackgroundErrors = nil
 }
 
 func (p *Page) imageState(nodeID dom.NodeID) runtimemodel.ImageState {
@@ -202,16 +267,71 @@ func (p *Page) AnimatedStyles(current time.Time) style.Map {
 	return result
 }
 
+// AnimationFrame samples the page animation state and classifies the most
+// expensive renderer stage that must be updated for this frame.
+func (p *Page) AnimationFrame(current time.Time) (style.Map, style.AnimationDamage) {
+	if p == nil {
+		return nil, style.AnimationDamageNone
+	}
+	sampled := p.AnimatedStyles(current)
+	return sampled, style.ClassifyAnimationDamage(p.ComputedStyles, sampled)
+}
+
 // ActiveAnimations reports whether this page needs another animation frame.
 func (p *Page) ActiveAnimations(current time.Time) bool {
 	return p != nil && ((p.Animations != nil && p.Animations.Active(current)) ||
 		(p.Transitions != nil && p.Transitions.Active(current)))
 }
 
+// ActiveAnimationsInViewport reports whether a live CSS animation can affect
+// the visible viewport. Unknown geometry stays conservative and requests a
+// frame; known offscreen or visibility:hidden elements do not.
+func (p *Page) ActiveAnimationsInViewport(current time.Time, tree *layoutmodel.Tree) bool {
+	if p == nil || tree == nil {
+		return p != nil && p.ActiveAnimations(current)
+	}
+	nodes := make([]dom.NodeID, 0)
+	if p.Animations != nil {
+		nodes = append(nodes, p.Animations.ActiveNodes(current)...)
+	}
+	if p.Transitions != nil {
+		nodes = append(nodes, p.Transitions.ActiveNodes(current)...)
+	}
+	viewportWidth, viewportHeight := p.ViewportWidth, p.ViewportHeight
+	if viewportWidth <= 0 {
+		viewportWidth = tree.Width
+	}
+	if viewportHeight <= 0 {
+		viewportHeight = tree.Height
+	}
+	for _, nodeID := range nodes {
+		if computed, ok := p.ComputedStyles[nodeID]; ok && computed.Visibility == style.VisibilityHidden {
+			continue
+		}
+		bounds, known := tree.Bounds[nodeID]
+		if !known {
+			return true
+		}
+		if bounds.X < viewportWidth && bounds.Y < viewportHeight && bounds.X+bounds.Width > 0 && bounds.Y+bounds.Height > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// UsesModernWebCompatibility reports whether JS-only real-site rendering and
+// lifecycle features may run for this Page generation.
+func (p *Page) UsesModernWebCompatibility() bool {
+	return p != nil && p.Engine == runtimemodel.EngineJavaScript && p.Compatibility == CompatibilityProfileModernWeb
+}
+
 // NewPage creates a page for pageURL. A nil URL is allowed for documents such
 // as an in-memory error page that do not have a network location.
 func NewPage(pageURL *url.URL) *Page {
-	return &Page{URL: cloneURL(pageURL), BaseURL: cloneURL(pageURL), DevTools: devtools.NewPageStore()}
+	return &Page{
+		URL: cloneURL(pageURL), BaseURL: cloneURL(pageURL), DevTools: devtools.NewPageStore(),
+		Engine: runtimemodel.EngineGo, Compatibility: CompatibilityProfileGo,
+	}
 }
 
 func (p *Page) ensureDevTools() *devtools.PageStore {

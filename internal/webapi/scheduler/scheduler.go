@@ -30,6 +30,9 @@ const (
 	MaxTimersPerPage = 10000
 	// MaxFrameCallbacksPerPage bounds callbacks retained until the next frame.
 	MaxFrameCallbacksPerPage = 10000
+	// MaxFrameCallbacksPerTick returns control to input and Navigation work even
+	// when one page schedules an animation-frame storm. Overflow remains FIFO.
+	MaxFrameCallbacksPerTick = 256
 	// MaxCallbacksPerTurn prevents one deadline from starving the Page queue.
 	MaxCallbacksPerTurn = 1000
 	// MaxBackgroundCallbacksPerTurn limits work queued by a hidden tab.
@@ -261,12 +264,32 @@ func (api *API) RunAnimationFrame(current time.Time) bool {
 	if elapsed < 0 {
 		elapsed = 0
 	}
-	order := api.frameOrder
-	callbacks := api.frameCallbacks
+	queuedOrder := api.frameOrder
+	queuedCallbacks := api.frameCallbacks
 	frameScope := api.frameScope
 	api.frameOrder = nil
 	api.frameCallbacks = make(map[FrameID]func(Timestamp))
+	order := make([]FrameID, 0, min(len(queuedOrder), MaxFrameCallbacksPerTick))
+	callbacks := make(map[FrameID]func(Timestamp), min(len(queuedCallbacks), MaxFrameCallbacksPerTick))
+	for _, id := range queuedOrder {
+		callback := queuedCallbacks[id]
+		if callback == nil {
+			continue
+		}
+		if len(order) < MaxFrameCallbacksPerTick {
+			order = append(order, id)
+			callbacks[id] = callback
+			continue
+		}
+		api.frameOrder = append(api.frameOrder, id)
+		api.frameCallbacks[id] = callback
+	}
+	hasOverflow := len(api.frameCallbacks) != 0
+	requestFrame := api.requestFrame
 	api.mu.Unlock()
+	if hasOverflow && requestFrame != nil {
+		requestFrame()
+	}
 
 	deliver := func() {
 		for _, id := range order {
@@ -280,7 +303,7 @@ func (api *API) RunAnimationFrame(current time.Time) bool {
 	} else {
 		deliver()
 	}
-	return true
+	return len(order) != 0
 }
 
 // HasAnimationFrameCallbacks reports whether another rendered frame is needed.

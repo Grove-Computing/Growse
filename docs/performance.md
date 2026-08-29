@@ -99,3 +99,17 @@ go test ./internal/browser ./internal/storage ./internal/network \
 | `BenchmarkSharedHTTPCacheHitAcross64Tabs-16` | 64 Tab相当のfresh Cache hit | 35,966 ns/op | 51,200 B/op | 576 allocs/op |
 
 Tab lifecycleはNetworkやPage parseを含まないSession model、Storage Eventは16 subscriberを持つmemory Area、HTTP Cacheは共有memory frontを使用する。baselineは同一machine上のrelease間比較に使い、異なるhostの合否判定には使用しない。
+
+## v0.16.0 Real-site image / animation budget
+
+v0.16.0はhost間で不安定なwall-clock閾値ではなく、Page単位の決定的なwork counterをrelease gateにする。`RenderMetricsSnapshot`はresource / paint image cacheのhit・miss・eviction、Layout / Display List build・reuse、composite / paint / layout frame、initial / Page / Style / Viewport / Scroll / Animation別のrebuild件数だけを保持し、DOM、resource body、decoded pixelを保持しない。
+
+```sh
+go test ./internal/browser ./internal/ui \
+  -run 'Test(PageImageCacheSharesFetchBodyAndDecodeAcrossBackgroundAndElement|PageImagePaintCacheReusesWarmResizeAndImageOp|PaintOnlyAnimationFramesReuseLayoutTree|LayoutAnimationFramesRebuildLayoutAndDisplayList)$'
+bash tests/v016-security.sh
+```
+
+合格条件は、同じURLの2画像が1 fetch / decodeへ集約されること、同じtargetのwarm paintが既存rasterへhitすること、transform / opacity frameでLayout Treeと静的Display Listを再構築しないこと、width / height frameだけが`animation`理由のrebuildになることとする。cacheは256 MiB / 512 resourceおよびpaint側のbyte / entry上限でLRU evictionし、Navigation、Page close、Engine切替後にゼロへ戻る。Animation Frame callbackは1 tick 256件のFIFO budgetを使い、残りを次tickへ繰り越す。
+
+実サイトfixtureのCSS、hydration、画像、animationを含む統合回帰は`bash tests/v016-framework.sh`で実行する。異なるGPU / system font環境の経過時間を合否判定には使わず、reuse counterと固定timestampのvisual stateを比較する。

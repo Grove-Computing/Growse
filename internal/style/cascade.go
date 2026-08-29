@@ -68,6 +68,14 @@ func applyAnimatedValue(computed ComputedStyle, property string, value Transitio
 		if value.Kind == TransitionColor {
 			computed.Outline.Color = value.Color
 		}
+	case "width":
+		if value.Kind == TransitionLength {
+			computed.Width = SizeValue{Kind: SizeLength, Value: value.Length}
+		}
+	case "height":
+		if value.Kind == TransitionLength {
+			computed.Height = SizeValue{Kind: SizeLength, Value: value.Length}
+		}
 	}
 	return computed
 }

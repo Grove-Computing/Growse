@@ -4,11 +4,15 @@ import (
 	"bytes"
 	"testing"
 
+	"gioui.org/font"
+	"gioui.org/font/gofont"
+	"gioui.org/text"
 	"gioui.org/widget/material"
 	"github.com/Grove-Computing/Growse/internal/browser"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 	textfont "github.com/go-text/typesetting/font"
 	"golang.org/x/image/font/gofont/goregular"
+	"golang.org/x/image/math/fixed"
 )
 
 func TestInstallPageFontsUsesDecodedFaceAndKeepsBundledFallback(t *testing.T) {
@@ -17,28 +21,136 @@ func TestInstallPageFontsUsesDecodedFaceAndKeepsBundledFallback(t *testing.T) {
 		t.Fatal(err)
 	}
 	ui := &BrowserUI{theme: material.NewTheme()}
-	original := ui.theme.Shaper
-	page := &browser.Page{Engine: runtimemodel.EngineJavaScript, StyleRevision: 1, Fonts: []browser.FontResource{{
+	chromeShaper := ui.theme.Shaper
+	page := &browser.Page{Engine: runtimemodel.EngineJavaScript, Compatibility: browser.CompatibilityProfileModernWeb, StyleRevision: 1, Fonts: []browser.FontResource{{
 		Family: "Fixture", Style: "normal", Weight: "normal", Decoded: true, Face: face,
 	}}}
 	ui.installPageFonts(page)
-	if ui.theme.Shaper == nil || ui.theme.Shaper == original || ui.fontPage != page || ui.fontRevision != 1 {
-		t.Fatalf("font shaper state = shaper:%p page:%p revision:%d", ui.theme.Shaper, ui.fontPage, ui.fontRevision)
+	if ui.pageTheme == nil || ui.pageTheme.Shaper == nil || ui.pageTheme.Shaper == chromeShaper || ui.fontPage != page || ui.fontRevision != 1 {
+		t.Fatalf("font shaper state = page theme:%p shaper:%p page:%p revision:%d", ui.pageTheme, ui.pageTheme.Shaper, ui.fontPage, ui.fontRevision)
 	}
-	installed := ui.theme.Shaper
+	if ui.theme.Shaper != chromeShaper {
+		t.Fatal("installing Page fonts replaced the Browser chrome shaper")
+	}
+	installed := ui.pageTheme.Shaper
 	ui.installPageFonts(page)
-	if ui.theme.Shaper != installed {
+	if ui.pageTheme.Shaper != installed {
 		t.Fatal("unchanged font revision rebuilt the shaper")
 	}
 
-	fallbackPage := &browser.Page{Engine: runtimemodel.EngineJavaScript, StyleRevision: 1, Fonts: []browser.FontResource{{Family: "Broken", Error: "font load timed out"}}}
+	fallbackPage := &browser.Page{Engine: runtimemodel.EngineJavaScript, Compatibility: browser.CompatibilityProfileModernWeb, StyleRevision: 1, Fonts: []browser.FontResource{{Family: "Broken", Error: "font load timed out"}}}
 	ui.installPageFonts(fallbackPage)
-	if ui.theme.Shaper == nil || ui.theme.Shaper == installed {
+	if ui.pageTheme.Shaper == nil || ui.pageTheme.Shaper == installed {
 		t.Fatal("font failure did not install the bundled fallback collection")
 	}
+	pageFallback := ui.pageTheme.Shaper
 	goPage := &browser.Page{Engine: runtimemodel.EngineGo, StyleRevision: 1}
 	ui.installPageFonts(goPage)
-	if ui.theme.Shaper == nil || ui.theme.Shaper == installed || ui.fontPage != goPage {
+	if ui.pageTheme.Shaper == nil || ui.pageTheme.Shaper == pageFallback || ui.fontPage != goPage {
 		t.Fatal("Go Engine did not retain its independent default font path")
+	}
+	if ui.theme.Shaper != chromeShaper {
+		t.Fatal("Engine switching mutated the Browser chrome shaper")
+	}
+}
+
+func TestModernWebPageShaperUsesSystemCJKGlyphFallback(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	ui := &BrowserUI{theme: material.NewTheme()}
+	chromeShaper := ui.theme.Shaper
+	page := &browser.Page{
+		Engine: runtimemodel.EngineJavaScript, Compatibility: browser.CompatibilityProfileModernWeb, StyleRevision: 1,
+	}
+	ui.installPageFonts(page)
+	ui.pageTheme.Shaper.LayoutString(text.Parameters{
+		Font: font.Font{Typeface: "system-ui"}, PxPerEm: fixed.I(16), MaxLines: 1, MaxWidth: 4096,
+	}, "日本語")
+	glyphs := make(map[text.GlyphID]bool)
+	for {
+		glyph, ok := ui.pageTheme.Shaper.NextGlyph()
+		if !ok {
+			break
+		}
+		if glyph.Runes != 0 {
+			glyphs[glyph.ID] = true
+		}
+	}
+	if len(glyphs) < 3 {
+		t.Skipf("system does not provide distinct Japanese glyphs: %#v", glyphs)
+	}
+	if ui.theme.Shaper != chromeShaper {
+		t.Fatal("CJK Page shaping mutated the Browser chrome shaper")
+	}
+
+	goPage := &browser.Page{Engine: runtimemodel.EngineGo, Compatibility: browser.CompatibilityProfileGo, StyleRevision: 1}
+	ui.installPageFonts(goPage)
+	if ui.pageTheme.Shaper == nil || ui.theme.Shaper != chromeShaper {
+		t.Fatal("Go Page did not return to its isolated default shaper")
+	}
+}
+
+func TestPageFontShapersAreIsolatedAcrossBrowserUIInstances(t *testing.T) {
+	first := &BrowserUI{theme: material.NewTheme()}
+	second := &BrowserUI{theme: material.NewTheme()}
+	firstChrome, secondChrome := first.theme.Shaper, second.theme.Shaper
+	page := &browser.Page{Engine: runtimemodel.EngineJavaScript, Compatibility: browser.CompatibilityProfileModernWeb, StyleRevision: 1}
+	first.installPageFonts(page)
+	second.installPageFonts(page)
+	if first.pageTheme == second.pageTheme || first.pageTheme.Shaper == second.pageTheme.Shaper {
+		t.Fatal("Browser UI instances shared a Page theme or shaper")
+	}
+	if first.theme.Shaper != firstChrome || second.theme.Shaper != secondChrome {
+		t.Fatal("Page shaper installation changed a chrome shaper")
+	}
+}
+
+func TestPageShaperCacheFollowsPageGenerationAndFontRevision(t *testing.T) {
+	ui := &BrowserUI{theme: material.NewTheme()}
+	firstPage := &browser.Page{
+		Engine: runtimemodel.EngineJavaScript, Compatibility: browser.CompatibilityProfileModernWeb, StyleRevision: 7,
+	}
+	ui.installPageFonts(firstPage)
+	firstShaper := ui.pageTheme.Shaper
+	ui.installPageFonts(firstPage)
+	if ui.pageTheme.Shaper != firstShaper {
+		t.Fatal("same Page generation and font revision replaced the bounded Gio shaping cache")
+	}
+
+	firstPage.StyleRevision++
+	ui.installPageFonts(firstPage)
+	revisedShaper := ui.pageTheme.Shaper
+	if revisedShaper == firstShaper {
+		t.Fatal("font-affecting Style revision retained a stale shaping cache")
+	}
+
+	secondPage := &browser.Page{
+		Engine: runtimemodel.EngineJavaScript, Compatibility: browser.CompatibilityProfileModernWeb, StyleRevision: firstPage.StyleRevision,
+	}
+	ui.installPageFonts(secondPage)
+	if ui.pageTheme.Shaper == revisedShaper || ui.fontPage != secondPage {
+		t.Fatal("Navigation reused the previous Page generation shaping cache")
+	}
+}
+
+func TestPageShaperTerminatesWithBundledFallbackWhenSystemFontsAreUnavailable(t *testing.T) {
+	shaper := newPageTextShaper(gofont.Collection(), false)
+	textValue := "日本語\U0010ffff"
+	shaper.LayoutString(text.Parameters{
+		Font: font.Font{Typeface: "system-ui"}, PxPerEm: fixed.I(16), MaxLines: 1, MaxWidth: 4096,
+	}, textValue)
+	runes, glyphs := 0, 0
+	for {
+		glyph, ok := shaper.NextGlyph()
+		if !ok {
+			break
+		}
+		glyphs++
+		runes += int(glyph.Runes)
+		if glyphs > len([]rune(textValue))*4+8 {
+			t.Fatal("missing-glyph fallback did not terminate")
+		}
+	}
+	if runes != len([]rune(textValue)) || glyphs == 0 {
+		t.Fatalf("finite fallback = runes:%d glyphs:%d", runes, glyphs)
 	}
 }

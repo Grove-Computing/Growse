@@ -34,6 +34,7 @@ RUN apt-get update \
     && sed -i 's|http://archive.ubuntu.com|https://archive.ubuntu.com|g; s|http://security.ubuntu.com|https://security.ubuntu.com|g' /etc/apt/sources.list.d/ubuntu.sources \
     && apt-get update \
     && apt-get install --no-install-recommends -y \
+        fonts-noto-cjk \
         libegl1 \
         libffi8 \
         libgles2 \

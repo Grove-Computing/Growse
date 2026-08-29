@@ -124,6 +124,26 @@ func (registry *TransitionRegistry) Count(nodeID dom.NodeID) int {
 	return count
 }
 
+// ActiveNodes returns elements with a transition that can change later.
+func (registry *TransitionRegistry) ActiveNodes(current time.Time) []dom.NodeID {
+	if registry == nil {
+		return nil
+	}
+	seen := make(map[dom.NodeID]bool)
+	nodes := make([]dom.NodeID, 0, min(len(registry.items), MaxActiveAnimations))
+	for key, running := range registry.items {
+		if seen[key.nodeID] || running.Timing.Sample(running.StartTime, current).Phase == animationmodel.PhaseAfter {
+			continue
+		}
+		seen[key.nodeID] = true
+		nodes = append(nodes, key.nodeID)
+		if len(nodes) >= MaxActiveAnimations {
+			break
+		}
+	}
+	return nodes
+}
+
 // Clear discards every running transition owned by the page.
 func (registry *TransitionRegistry) Clear() {
 	if registry != nil {

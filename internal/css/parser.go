@@ -6,6 +6,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	parse "github.com/tdewolff/parse/v2"
 	parser "github.com/tdewolff/parse/v2/css"
@@ -644,11 +645,11 @@ func parseCompoundSelectorDepth(value string, depth int) (CompoundSelector, bool
 		compound.Universal = true
 		position++
 	} else if value[0] != '.' && value[0] != '#' && value[0] != '[' && value[0] != ':' {
-		end := selectorNameEnd(value, position)
-		if end == position || !validName(value[position:end]) {
+		name, end, ok := parseSelectorName(value, position)
+		if !ok {
 			return CompoundSelector{}, false
 		}
-		compound.Type = strings.ToLower(value[position:end])
+		compound.Type = strings.ToLower(name)
 		position = end
 	}
 	for position < len(value) {
@@ -659,11 +660,10 @@ func parseCompoundSelectorDepth(value string, depth int) (CompoundSelector, bool
 		switch prefix {
 		case '.', '#':
 			position++
-			end := selectorNameEnd(value, position)
-			if end == position || !validName(value[position:end]) {
+			name, end, ok := parseSelectorName(value, position)
+			if !ok {
 				return CompoundSelector{}, false
 			}
-			name := value[position:end]
 			if prefix == '.' {
 				compound.Classes = append(compound.Classes, name)
 			} else {
@@ -716,14 +716,11 @@ func parsePseudoElement(value string, start int) (PseudoElementKind, int, bool) 
 	if nameStart >= len(value) {
 		return PseudoElementNone, 0, false
 	}
-	nameEnd := nameStart
-	for nameEnd < len(value) && value[nameEnd] != '.' && value[nameEnd] != '#' && value[nameEnd] != '[' && value[nameEnd] != ':' && value[nameEnd] != '(' {
-		nameEnd++
-	}
-	if nameEnd == nameStart || !validName(value[nameStart:nameEnd]) {
+	name, nameEnd, ok := parseSelectorName(value, nameStart)
+	if !ok {
 		return PseudoElementNone, 0, false
 	}
-	switch strings.ToLower(value[nameStart:nameEnd]) {
+	switch strings.ToLower(name) {
 	case "before":
 		return PseudoElementBefore, nameEnd, true
 	case "after":
@@ -753,6 +750,14 @@ func splitComplexSelector(value string) ([]string, []Combinator, bool) {
 			} else if character == quote {
 				quote = 0
 			}
+			continue
+		}
+		if character == '\\' {
+			_, next, valid := decodeIdentifierEscape(value, position)
+			if !valid {
+				return nil, nil, false
+			}
+			position = next - 1
 			continue
 		}
 		switch character {
@@ -841,12 +846,54 @@ func explicitCombinator(character byte) (Combinator, bool) {
 	}
 }
 
-func selectorNameEnd(value string, start int) int {
-	position := start
-	for position < len(value) && value[position] != '.' && value[position] != '#' && value[position] != '[' && value[position] != ':' {
-		position++
+func parseSelectorName(value string, start int) (string, int, bool) {
+	if start >= len(value) {
+		return "", start, false
 	}
-	return position
+	var result strings.Builder
+	position := start
+	for position < len(value) {
+		character := value[position]
+		if character == '.' || character == '#' || character == '[' || character == ':' || character == '(' ||
+			character == ')' || character == ',' || character == '>' || character == '+' || character == '~' ||
+			character == '{' || character == '}' || isSelectorWhitespace(character) {
+			break
+		}
+		if character == '\\' {
+			decoded, next, ok := decodeIdentifierEscape(value, position)
+			if !ok {
+				return "", start, false
+			}
+			result.WriteRune(decoded)
+			position = next
+			continue
+		}
+		decoded, size := utf8.DecodeRuneInString(value[position:])
+		if decoded == utf8.RuneError && size == 1 || !validIdentifierRune(decoded) {
+			return "", start, false
+		}
+		result.WriteRune(decoded)
+		position += size
+	}
+	return result.String(), position, position > start && result.Len() != 0
+}
+
+func validIdentifierRune(character rune) bool {
+	return character == '-' || character == '_' ||
+		character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' ||
+		character >= '0' && character <= '9' || character >= 0x80
+}
+
+func validName(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, character := range value {
+		if !validIdentifierRune(character) {
+			return false
+		}
+	}
+	return true
 }
 
 func parsePseudoClassDepth(value string, start, depth int) (*PseudoClass, int, bool) {
@@ -854,14 +901,11 @@ func parsePseudoClassDepth(value string, start, depth int) (*PseudoClass, int, b
 		return nil, 0, false
 	}
 	nameStart := start + 1
-	nameEnd := nameStart
-	for nameEnd < len(value) && value[nameEnd] != '(' && value[nameEnd] != '.' && value[nameEnd] != '#' && value[nameEnd] != '[' && value[nameEnd] != ':' {
-		nameEnd++
-	}
-	if nameEnd == nameStart || !validName(value[nameStart:nameEnd]) {
+	parsedName, nameEnd, ok := parseSelectorName(value, nameStart)
+	if !ok {
 		return nil, 0, false
 	}
-	name := strings.ToLower(value[nameStart:nameEnd])
+	name := strings.ToLower(parsedName)
 	var argument *string
 	next := nameEnd
 	if nameEnd < len(value) && value[nameEnd] == '(' {
@@ -880,6 +924,13 @@ func parsePseudoClassDepth(value string, start, depth int) (*PseudoClass, int, b
 	switch name {
 	case "root":
 		pseudo.Kind = PseudoRoot
+	case "host":
+		// :host is valid selector syntax even when matching a light-DOM
+		// document. Keep it in selector lists so a sibling :root selector is
+		// not discarded; without Shadow DOM it deliberately never matches.
+		pseudo.Kind = PseudoHost
+	case "open":
+		pseudo.Kind = PseudoOpen
 	case "empty":
 		pseudo.Kind = PseudoEmpty
 	case "first-child":
@@ -1059,6 +1110,14 @@ func parenthesisEnd(value string, start int) (int, bool) {
 			}
 			continue
 		}
+		if character == '\\' {
+			_, next, valid := decodeIdentifierEscape(value, position)
+			if !valid {
+				return 0, false
+			}
+			position = next - 1
+			continue
+		}
 		switch character {
 		case '\'', '"':
 			quote = character
@@ -1139,6 +1198,14 @@ func splitSelectorList(value string) ([]string, bool) {
 			}
 			continue
 		}
+		if character == '\\' {
+			_, next, valid := decodeIdentifierEscape(value, position)
+			if !valid {
+				return nil, false
+			}
+			position = next - 1
+			continue
+		}
 		switch character {
 		case '\'', '"':
 			quote = character
@@ -1179,6 +1246,14 @@ func attributeEnd(value string, start int) (int, bool) {
 			} else if character == quote {
 				quote = 0
 			}
+			continue
+		}
+		if character == '\\' {
+			_, next, valid := decodeIdentifierEscape(value, position)
+			if !valid {
+				return 0, false
+			}
+			position = next - 1
 			continue
 		}
 		switch character {
@@ -1242,21 +1317,6 @@ func unquoteCSSString(value string) string {
 		return decoded
 	}
 	return value
-}
-
-func validName(value string) bool {
-	if value == "" {
-		return false
-	}
-	for _, character := range value {
-		if character != '-' && character != '_' &&
-			(character < 'a' || character > 'z') &&
-			(character < 'A' || character > 'Z') &&
-			(character < '0' || character > '9') {
-			return false
-		}
-	}
-	return true
 }
 
 func stripImportant(value string) (string, bool) {

@@ -92,7 +92,10 @@ func TestFrameworkFixtureVisualRegression(t *testing.T) {
 }
 
 func visualFixtureState(name string, page *browser.Page, rootID string, textIDs ...string) string {
-	tree := layoutmodel.BuildWithScrollAndResources(page.Document, page.ComputedStyles, page.ImageResources, page.WebFonts, page.ViewportWidth, page.ViewportHeight, 0, 0)
+	// Visual bounds must not depend on the runner's operating-system fonts.
+	// CJK system fallback has dedicated glyph and measurement tests; this golden
+	// intentionally records the embedded fixture Web Font / Go font baseline.
+	tree := layoutmodel.BuildWithScrollAndResources(page.Document, page.ComputedStyles, page.ImageResources, deterministicFixtureFonts(page.Fonts), page.ViewportWidth, page.ViewportHeight, 0, 0)
 	display := paintmodel.Build(tree)
 	root, _ := page.Document.GetElementByID(rootID)
 	bounds := tree.Bounds[root.ID]
@@ -114,4 +117,22 @@ func visualFixtureState(name string, page *browser.Page, rootID string, textIDs 
 	return fmt.Sprintf("%s engine=%s root=%.0f,%.0f %.0fx%.0f boxes=%d paint=%d fonts=%d images=%d revision=%d text=[%s] diagnostics=[%s]",
 		name, page.Engine, bounds.X, bounds.Y, bounds.Width, bounds.Height, len(tree.Boxes), len(display.Commands), len(page.Fonts), len(page.ImageResources), page.StyleRevision,
 		strings.Join(texts, ";"), strings.Join(reasons, ","))
+}
+
+func deterministicFixtureFonts(resources []browser.FontResource) *layoutmodel.FontSet {
+	faces := make([]layoutmodel.WebFontFace, 0, len(resources))
+	for _, resource := range resources {
+		if !resource.Decoded || resource.Face == nil {
+			continue
+		}
+		ranges := make([]layoutmodel.FontRange, len(resource.UnicodeRanges))
+		for index, interval := range resource.UnicodeRanges {
+			ranges[index] = layoutmodel.FontRange{Start: interval.Start, End: interval.End}
+		}
+		faces = append(faces, layoutmodel.WebFontFace{
+			Family: resource.Family, Style: resource.Style, Weight: resource.Weight,
+			UnicodeRanges: ranges, Face: resource.Face,
+		})
+	}
+	return layoutmodel.NewFontSet(faces)
 }

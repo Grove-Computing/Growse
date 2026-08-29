@@ -1,6 +1,6 @@
 # Runtime / Web API対応表
 
-この表はGrowse v0.15.0の実装を基準とする。GrowseはGoを既定Engineとし、Tab単位でJavaScriptへ切り替えられる。切り替えはtop-level、Frame、WASM、dynamic resource、observer、pending hydration callbackを停止する完全なPage reloadであり、両Engineのobjectを共有しない。
+この表はGrowse v0.16.0の実装を基準とする。GrowseはGoを既定Engineとし、Tab単位でJavaScriptへ切り替えられる。切り替えはtop-level、Frame、WASM、dynamic resource、observer、pending hydration / animation callbackを停止する完全なPage reloadであり、両Engineのobject、Page shaper、image cacheを共有しない。
 
 ## EngineとScript
 
@@ -20,21 +20,21 @@ classic / module sourceは1件2 MiB、Pageのinitial / dynamic script合計256�
 
 ## Web API
 
-| API | Go | JavaScript | v0.15.0の範囲 |
+| API | Go | JavaScript | v0.16.0の範囲 |
 | --- | --- | --- | --- |
 | Console | `growse/console` | `console.log`、`info`、`warn`、`error` | Engine / context付きrecord、1件4 KiB、Page 1,000件 |
 | DOM検索・生成 | `growse/dom` | `getElementById`、`querySelector(All)`、`getElementsBy*`、`createElement`、`createTextNode` | 対応selectorとBrowser所有Node wrapperに限定 |
 | DOM interface | `growse/dom` | `EventTarget` / `Node` / `Document` / `DocumentFragment` / `Element` / HTML element prototype | 同一RealmのNode identityとprototype chainを保持 |
 | Element | `growse/dom` | text / value / attribute、append / prepend / before / after / remove / replace / clone、template、`innerHTML` / `outerHTML`、`classList` / `dataset` | 同じDOM mutation経路でStyle、Layout、Paint、Hit Testを更新 |
 | Event | `growse/dom` | add / remove listener、target / phase / cancel / propagation | click、input、change、submit、reset、focus、blur、mouseenter、mouseleave、message、lifecycle |
-| Scheduler | `growse/scheduler` | timeout、interval、Animation Frame、microtask | 文字列callbackを拒否し、Page終了時に解除 |
+| Scheduler | `growse/scheduler` | timeout、interval、Animation Frame、microtask | 文字列callbackを拒否し、1 frame 256 callbackのFIFO budget、Page終了時に解除 |
 | Fetch | `growse/fetch` callback | Promise形式`fetch`、`AbortController` | credentials、CORS、timeout、abort、buffered Response |
 | Storage | `growse/storage` | `localStorage`、`sessionStorage` | Origin分離、quota、same-origin `storage` Event |
 | Navigation | `growse/navigation` | `location`、`history` | assign、back / forward / go、push / replace state、event |
 | Dynamic resource | 非公開 | DOM挿入script / Module / stylesheet、modulepreload、load / error | snapshot、単一prepare、Page queue、generation cancel |
 | CSSOM / media | 非公開 | `element.style`、`getComputedStyle()`、geometry、`matchMedia()` | 同一Style / Layout revisionのsnapshot、対応propertyだけを公開 |
 | Observer | 非公開 | Mutation / Resize / Intersection Observer | record / callback / loop上限、Page closeとEngine切替で解除 |
-| Image / Font | 非公開 | `HTMLImageElement` state、resource load / error | picture / srcset / sizes、PNG / JPEG / GIF / WebP / static SVG、CORS WOFF / WOFF2 |
+| Image / Font | 静的SSR resource | `HTMLImageElement` state、resource load / error | picture / srcset / sizes、PNG / JPEG / GIF / WebP / static SVG、Page単位decode / raster cache、CORS WOFF / WOFF2、CJK system fallback |
 | Frame | 非公開 | iframe、parent / top / frames、same-origin access、`postMessage` | sandbox token、opaque cross-origin proxy、structured clone subset |
 | Service Worker | 非公開 | register / update / unregister / ready / controller | install / waiting / activate、fetch、Cache Storage、idle restart |
 
@@ -73,7 +73,7 @@ Request 1 MiB、Response 4 MiB、Header 100件 / 64 KiB、redirect 10回、Page 
 - Service Worker Background Sync、Push、Notification、navigation preload、module worker
 - DevTools REPL、source debugger、breakpoint、heap profiler
 
-goja、WASM、HTML、CSS、Web API、Next.js、SvelteKit、Tailwindの仕様全体や任意公開サイトの完全互換は保証しない。対応範囲は本書、v0.15.0定義、offline framework fixture、Showcase、選定WPTで観測できるsubsetである。
+goja、WASM、HTML、CSS、Web API、Next.js、SvelteKit、Tailwindの仕様全体や任意公開サイトの完全互換は保証しない。対応範囲は本書、v0.16.0定義、Tailwind CSS v4実artifactを含むoffline fixture、Showcase、選定WPT / Integration Testで観測できるsubsetである。
 
 ## Security Boundary
 

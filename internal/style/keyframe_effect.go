@@ -96,14 +96,17 @@ func sampleKeyframeRule(rule css.KeyframesRule, progress float64, underlying Com
 	}
 	result := AnimatedValues{}
 	for property, byOffset := range properties {
-		base, ok := computedTransitionValue(underlying, property)
-		if !ok {
-			continue
-		}
+		base, hasBase := computedTransitionValue(underlying, property)
 		if _, exists := byOffset[0]; !exists {
+			if !hasBase {
+				continue
+			}
 			byOffset[0] = base
 		}
 		if _, exists := byOffset[1]; !exists {
+			if !hasBase {
+				continue
+			}
 			byOffset[1] = base
 		}
 		stops := make([]keyframeStop, 0, len(byOffset))
@@ -141,6 +144,9 @@ func keyframeTransitionValue(property, raw string, underlying ComputedStyle) (Tr
 	case "color", "background-color", "border-top-color", "border-right-color", "border-bottom-color", "border-left-color", "outline-color":
 		value, ok := parseColor(raw, underlying.Color)
 		return TransitionValue{Kind: TransitionColor, Color: value}, ok
+	case "width", "height":
+		value, ok := ResolveLength(strings.TrimSpace(raw), LengthContext{FontSize: underlying.FontSize, RootFontSize: 16})
+		return TransitionValue{Kind: TransitionLength, Length: value}, ok
 	default:
 		return TransitionValue{}, false
 	}

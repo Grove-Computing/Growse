@@ -35,3 +35,78 @@ section:has(> .badge, :future-pseudo) { color: purple }
 		t.Fatalf(":has relative selector = %#v", hasPseudo.Selectors)
 	}
 }
+
+func TestParseRootHostSelectorListKeepsTailwindThemeRule(t *testing.T) {
+	stylesheet, err := Parse(strings.NewReader(`
+:root,:host { --spacing: .25rem; --color-slate-900: #0f172a }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stylesheet.Rules) != 1 {
+		t.Fatalf("rules = %d, want 1", len(stylesheet.Rules))
+	}
+	rule := stylesheet.Rules[0]
+	if len(rule.Selectors) != 2 {
+		t.Fatalf("selectors = %#v, want :root and :host", rule.Selectors)
+	}
+	if got := rule.Selectors[0].Compounds[0].Pseudos[0].Kind; got != PseudoRoot {
+		t.Fatalf("first pseudo = %v, want :root", got)
+	}
+	if got := rule.Selectors[1].Compounds[0].Pseudos[0].Kind; got != PseudoHost {
+		t.Fatalf("second pseudo = %v, want :host", got)
+	}
+}
+
+func TestParseTailwindEscapedUtilityClassNames(t *testing.T) {
+	tests := []struct {
+		selector string
+		want     string
+	}{
+		{`.sm\:grid-cols-2`, `sm:grid-cols-2`},
+		{`.hover\:bg-slate-900:hover`, `hover:bg-slate-900`},
+		{`.w-\[calc\(100\%-1rem\)\]`, `w-[calc(100%-1rem)]`},
+		{`.\31 0\/12`, `10/12`},
+	}
+	for _, test := range tests {
+		t.Run(test.want, func(t *testing.T) {
+			selectors := ParseSelectorList(test.selector)
+			if len(selectors) != 1 || len(selectors[0].Compounds) != 1 || len(selectors[0].Compounds[0].Classes) != 1 {
+				t.Fatalf("ParseSelectorList(%q) = %#v", test.selector, selectors)
+			}
+			if got := selectors[0].Compounds[0].Classes[0]; got != test.want {
+				t.Fatalf("class = %q, want %q", got, test.want)
+			}
+		})
+	}
+	for _, invalid := range []string{`.broken\`, ".broken\\\nclass"} {
+		if got := ParseSelectorList(invalid); len(got) != 0 {
+			t.Fatalf("invalid escape %q parsed as %#v", invalid, got)
+		}
+	}
+}
+
+func TestSelectorFailuresStayLocalToTheirRuleOrForgivingEntry(t *testing.T) {
+	stylesheet, err := Parse(strings.NewReader(`
+.discarded:future-state { color:red }
+.kept:is(.active,:future-state) { color:green }
+details:open { display:block }
+.after { color:blue }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stylesheet.Rules) != 3 {
+		t.Fatalf("surviving rules = %#v", stylesheet.Rules)
+	}
+	forgiving := stylesheet.Rules[0].Selectors[0].Compounds[0].Pseudos[0]
+	if forgiving.Kind != PseudoIs || len(forgiving.Selectors) != 1 || forgiving.Selectors[0].Class != "active" {
+		t.Fatalf("forgiving selector = %#v", forgiving)
+	}
+	if got := stylesheet.Rules[1].Selectors[0].Compounds[0].Pseudos[0].Kind; got != PseudoOpen {
+		t.Fatalf("details pseudo = %v, want :open", got)
+	}
+	if got := stylesheet.Rules[2].Selectors[0].Class; got != "after" {
+		t.Fatalf("rule following invalid selectors = %q", got)
+	}
+}

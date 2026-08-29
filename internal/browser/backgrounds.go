@@ -11,6 +11,7 @@ import (
 	_ "image/png"
 	"mime"
 	"net/url"
+	"sort"
 	"strings"
 
 	"github.com/Grove-Computing/Growse/internal/dom"
@@ -83,6 +84,10 @@ func loadBackgroundImages(ctx context.Context, client ResourceLoader, computed s
 }
 
 func loadBackgroundImagesWithBudget(ctx context.Context, client ResourceLoader, computed style.Map, budget *imageDecodeBudget) (map[string]image.Image, []string) {
+	return loadBackgroundImagesWithCache(ctx, client, computed, budget, newImageResourceCache())
+}
+
+func loadBackgroundImagesWithCache(ctx context.Context, client ResourceLoader, computed style.Map, budget *imageDecodeBudget, cache *imageResourceCache) (map[string]image.Image, []string) {
 	images := make(map[string]image.Image)
 	var errors []string
 	if client == nil {
@@ -99,30 +104,27 @@ func loadBackgroundImagesWithBudget(ctx context.Context, client ResourceLoader, 
 				continue
 			}
 			seen[background.URL] = true
-			if !budget.claim("background:" + background.URL) {
-				errors = append(errors, "background image resource limit exceeded")
-				continue
-			}
 			resourceURL, err := url.Parse(background.URL)
 			if err != nil || resourceURL.Scheme != "http" && resourceURL.Scheme != "https" {
 				errors = append(errors, "background image URL is not a supported HTTP(S) URL")
 				continue
 			}
-			response, err := client.Get(ctx, resourceURL)
-			if err != nil || response == nil {
+			resource := cache.load(ctx, client, resourceURL, budget)
+			switch resource.failure {
+			case imageLoadRequestFailure:
 				errors = append(errors, "background image request failed: "+network.RedactedURL(resourceURL))
 				continue
-			}
-			if len(response.Body) > maxImageBytes || !isImageContentType(response.ContentType) {
+			case imageLoadResponseFailure:
 				errors = append(errors, "background image response was rejected: "+network.RedactedURL(resourceURL))
 				continue
-			}
-			decoded, _, _, err := decodeImageResponseWithBudget(response.Body, response.ContentType, budget)
-			if err != nil {
+			case imageLoadDecodeFailure:
 				errors = append(errors, "background image decode failed: "+network.RedactedURL(resourceURL))
 				continue
+			case imageLoadResourceLimit:
+				errors = append(errors, "background image resource limit exceeded")
+				continue
 			}
-			images[background.URL] = decoded
+			images[background.URL] = resource.decoded
 		}
 	}
 	return images, errors
@@ -137,6 +139,10 @@ func loadReplacedImagesWithPolicy(ctx context.Context, client ResourceLoader, ba
 }
 
 func loadReplacedImagesWithPolicyAndBudget(ctx context.Context, client ResourceLoader, baseURL *url.URL, document *dom.Document, viewportWidth, deviceScale float32, eligible map[dom.NodeID]bool, budget *imageDecodeBudget) (map[dom.NodeID]layout.ImageResource, map[string]image.Image, []string) {
+	return loadReplacedImagesWithCache(ctx, client, baseURL, document, viewportWidth, deviceScale, eligible, budget, newImageResourceCache())
+}
+
+func loadReplacedImagesWithCache(ctx context.Context, client ResourceLoader, baseURL *url.URL, document *dom.Document, viewportWidth, deviceScale float32, eligible map[dom.NodeID]bool, budget *imageDecodeBudget, cache *imageResourceCache) (map[dom.NodeID]layout.ImageResource, map[string]image.Image, []string) {
 	resources := make(map[dom.NodeID]layout.ImageResource)
 	images := make(map[string]image.Image)
 	var errors []string
@@ -149,59 +155,14 @@ func loadReplacedImagesWithPolicyAndBudget(ctx context.Context, client ResourceL
 			return
 		}
 		if node.Type == dom.NodeElement && node.TagName == "img" {
-			alt, _ := node.Attribute("alt")
-			resource := layout.ImageResource{Alt: alt}
-			candidates := imageCandidates(node, baseURL, viewportWidth, deviceScale)
-			if len(candidates) == 0 {
-				resource.Error = "image source is missing or invalid"
-				resources[node.ID] = resource
-			} else {
-				if loading, _ := node.Attribute("loading"); strings.EqualFold(strings.TrimSpace(loading), "lazy") && eligible != nil && !eligible[node.ID] {
-					resource.URL, resource.Deferred = candidates[0].String(), true
-					resources[node.ID] = resource
-					for _, child := range node.Children {
-						visit(child)
-					}
-					return
-				}
-				var lastTarget *url.URL
-				for _, target := range candidates {
-					if ctx.Err() != nil {
-						return
-					}
-					lastTarget = target
-					resource.URL = target.String()
-					if !budget.claim("image:" + resource.URL) {
-						resource.Error = "image resource limit exceeded"
-						continue
-					}
-					if target.Scheme != "http" && target.Scheme != "https" {
-						resource.Error = "image URL is not a supported HTTP(S) URL"
-						continue
-					}
-					response, loadErr := client.Get(ctx, target)
-					if loadErr != nil || response == nil {
-						resource.Error = "image request failed"
-						continue
-					}
-					if len(response.Body) > maxImageBytes || !isImageContentType(response.ContentType) {
-						resource.Error = "image response was rejected"
-						continue
-					}
-					decoded, decodedWidth, decodedHeight, decodeErr := decodeImageResponseWithBudget(response.Body, response.ContentType, budget)
-					if decodeErr != nil {
-						resource.Error = "image dimensions were rejected"
-						continue
-					}
-					resource.Loaded, resource.Error = true, ""
-					resource.IntrinsicWidth, resource.IntrinsicHeight = float32(decodedWidth), float32(decodedHeight)
-					images[resource.URL] = decoded
-					break
-				}
-				resources[node.ID] = resource
-				if resource.Error != "" && lastTarget != nil {
-					errors = append(errors, resource.Error+": "+network.RedactedURL(lastTarget))
-				}
+			load := eligible == nil || eligible[node.ID]
+			resource, decoded, failure := loadReplacedImageNodeWithCache(ctx, client, baseURL, node, viewportWidth, deviceScale, load, budget, cache)
+			resources[node.ID] = resource
+			if decoded != nil {
+				images[resource.URL] = decoded
+			}
+			if failure != "" {
+				errors = append(errors, failure)
 			}
 		}
 		for _, child := range node.Children {
@@ -210,6 +171,58 @@ func loadReplacedImagesWithPolicyAndBudget(ctx context.Context, client ResourceL
 	}
 	visit(document.Root)
 	return resources, images, errors
+}
+
+func loadReplacedImageNodeWithCache(ctx context.Context, client ResourceLoader, baseURL *url.URL, node *dom.Node, viewportWidth, deviceScale float32, eligible bool, budget *imageDecodeBudget, cache *imageResourceCache) (layout.ImageResource, image.Image, string) {
+	resource := layout.ImageResource{}
+	if node == nil || node.Type != dom.NodeElement || node.TagName != "img" {
+		resource.Error = "image element is invalid"
+		return resource, nil, resource.Error
+	}
+	resource.Alt, _ = node.Attribute("alt")
+	candidates := imageCandidates(node, baseURL, viewportWidth, deviceScale)
+	if len(candidates) == 0 {
+		resource.Error = "image source is missing or invalid"
+		return resource, nil, ""
+	}
+	if loading, _ := node.Attribute("loading"); strings.EqualFold(strings.TrimSpace(loading), "lazy") && !eligible {
+		resource.URL, resource.Deferred = candidates[0].String(), true
+		return resource, nil, ""
+	}
+	var lastTarget *url.URL
+	for _, target := range candidates {
+		if ctx.Err() != nil {
+			return resource, nil, ""
+		}
+		lastTarget = target
+		resource.URL = target.String()
+		if target.Scheme != "http" && target.Scheme != "https" {
+			resource.Error = "image URL is not a supported HTTP(S) URL"
+			continue
+		}
+		cached := cache.load(ctx, client, target, budget)
+		switch cached.failure {
+		case imageLoadRequestFailure:
+			resource.Error = "image request failed"
+			continue
+		case imageLoadResponseFailure:
+			resource.Error = "image response was rejected"
+			continue
+		case imageLoadDecodeFailure:
+			resource.Error = "image dimensions were rejected"
+			continue
+		case imageLoadResourceLimit:
+			resource.Error = "image resource limit exceeded"
+			continue
+		}
+		resource.Loaded, resource.Error = true, ""
+		resource.IntrinsicWidth, resource.IntrinsicHeight = float32(cached.width), float32(cached.height)
+		return resource, cached.decoded, ""
+	}
+	if resource.Error != "" && lastTarget != nil {
+		return resource, nil, resource.Error + ": " + network.RedactedURL(lastTarget)
+	}
+	return resource, nil, ""
 }
 
 func isImageContentType(contentType string) bool {
@@ -304,7 +317,7 @@ func imageViewportPolicy(document *dom.Document, computed style.Map, baseURL *ur
 }
 
 func dispatchImageResourceEvents(browserState *Browser, page *Page) {
-	if browserState == nil || page == nil || page.Document == nil {
+	if browserState == nil || page == nil {
 		return
 	}
 	var pending []events.Event
@@ -312,33 +325,35 @@ func dispatchImageResourceEvents(browserState *Browser, page *Page) {
 	if page.imageEvents == nil {
 		page.imageEvents = make(map[dom.NodeID]string)
 	}
-	var visit func(*dom.Node)
-	visit = func(node *dom.Node) {
-		if node == nil {
-			return
-		}
-		if node.Type == dom.NodeElement && node.TagName == "img" {
-			resource, exists := page.ImageResources[node.ID]
-			if exists && !resource.Deferred {
-				signature := resource.URL + "\x00" + resource.Error
-				if resource.Loaded {
-					signature += "\x00loaded"
-				}
-				if page.imageEvents[node.ID] != signature {
-					page.imageEvents[node.ID] = signature
-					eventType := events.Error
-					if resource.Loaded {
-						eventType = events.Load
-					}
-					pending = append(pending, events.New(eventType, node.ID, false, false))
-				}
-			}
-		}
-		for _, child := range node.Children {
-			visit(child)
+	// Resource IDs preserve document order without walking the live DOM while
+	// the JavaScript runtime may be replacing subtrees. Inline SVG resources do
+	// not dispatch HTMLImageElement load/error events.
+	nodeIDs := make([]dom.NodeID, 0, len(page.ImageResources))
+	for nodeID, resource := range page.ImageResources {
+		if !strings.HasPrefix(resource.URL, "growse:inline-svg/") {
+			nodeIDs = append(nodeIDs, nodeID)
 		}
 	}
-	visit(page.Document.Root)
+	sort.Slice(nodeIDs, func(left, right int) bool { return nodeIDs[left] < nodeIDs[right] })
+	for _, nodeID := range nodeIDs {
+		resource := page.ImageResources[nodeID]
+		if resource.Deferred {
+			continue
+		}
+		signature := resource.URL + "\x00" + resource.Error
+		if resource.Loaded {
+			signature += "\x00loaded"
+		}
+		if page.imageEvents[nodeID] == signature {
+			continue
+		}
+		page.imageEvents[nodeID] = signature
+		eventType := events.Error
+		if resource.Loaded {
+			eventType = events.Load
+		}
+		pending = append(pending, events.New(eventType, nodeID, false, false))
+	}
 	page.imageMu.Unlock()
 	for _, event := range pending {
 		browserState.dispatchPageEvent(page, event)

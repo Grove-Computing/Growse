@@ -133,6 +133,27 @@ func (registry *AnimationRegistry) Total() int {
 	return total
 }
 
+// ActiveNodes returns elements whose animation can change on a future frame.
+// The result is bounded even if a corrupted registry bypasses reconciliation.
+func (registry *AnimationRegistry) ActiveNodes(current time.Time) []dom.NodeID {
+	if registry == nil {
+		return nil
+	}
+	nodes := make([]dom.NodeID, 0, min(len(registry.stacks), MaxActiveAnimations))
+	for nodeID, stack := range registry.stacks {
+		for _, running := range stack.items {
+			if !running.Paused() && running.Sample(current).Phase != animationmodel.PhaseAfter {
+				nodes = append(nodes, nodeID)
+				break
+			}
+		}
+		if len(nodes) >= MaxActiveAnimations {
+			break
+		}
+	}
+	return nodes
+}
+
 // Clear discards every running animation owned by the page.
 func (registry *AnimationRegistry) Clear() {
 	if registry == nil {

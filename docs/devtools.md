@@ -1,6 +1,6 @@
 # Growse DevTools
 
-Growse v0.15.0は、active TabのPageを観測するread-only DevToolsを提供する。ツールバーの`DevTools`または`F12`で開閉し、Console、Inspector、Network、Runtimeを切り替える。panel、Console filter、Inspector選択はTabごとに分離する。Headerには選択中のGo / JavaScript EngineとRuntimeのidle / running / stopped / error状態を表示する。
+Growse v0.16.0は、active TabのPageを観測するread-only DevToolsを提供する。ツールバーの`DevTools`または`F12`で開閉し、Console、Inspector、Network、Runtimeを切り替える。panel、Console filter、Inspector選択はTabごとに分離する。Headerには選択中のGo / JavaScript EngineとRuntimeのidle / running / stopped / error状態を表示する。
 
 ## Console
 
@@ -37,7 +37,7 @@ Runtime panelはtop-level Page、再帰的なFrame、same-originのService Worke
 
 Module / chunk / hydration / observer / stale generation / host API / WASM / sandbox / runtime / frame errorはcategoryだけを表示し、raw messageやsourceを保持しない。URLはuserinfoとquery value、fragmentを除去する。inline source、module namespace、WASM binary / memory、Service Worker Cache body、IPC payload、environment、filesystem pathは診断modelへ入れない。
 
-Runtime contextのcompatibility diagnosticsはdynamic resourceのinitiator / schedule、Styles ruleのlayerと適用状態、selector / media / supports / containerによる無視理由、font / image fallbackの有限categoryを表示する。診断はrule番号やresource metadataだけを参照し、CSS source body、font bytes、decoded image、raw exceptionを複製しない。
+Runtime contextのcompatibility diagnosticsはdynamic resourceのinitiator / schedule、Styles ruleのlayerと適用状態、selector / media / supports / containerによる局所的な無視理由、実際のCSS font fallback chain、font / image failureの有限categoryを表示する。v0.16.0ではresource / paint image cacheのhit・miss・eviction、Layout / Display Listのinitial / Page / Style / Viewport / Scroll / Animation別frame rebuild理由、静的Display List reuseも件数として表示する。診断はrule番号、family名、固定counter、resource metadataだけを参照し、CSS source body、font bytes、decoded image / raster、raw exceptionを複製しない。
 
 - compatibility diagnostics: Page 2,000種類、同一category / subject / state / reason / initiator / scheduleは`count`へ集約
 - diagnostic string: 各field 4 KiB、invalid UTF-8を置換して切り詰め

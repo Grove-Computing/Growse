@@ -1,12 +1,12 @@
 # CSS対応表
 
-この表はGrowse v0.15.0の実装を基準とする。「部分対応」は一般的な値を扱えるが、仕様全体を実装していない機能を表す。document、initial / dynamic stylesheet、`@import`、image、font resourceは最初の有効な`<base href>`から解決する。
+この表はGrowse v0.16.0の実装を基準とする。「部分対応」は一般的な値を扱えるが、仕様全体を実装していない機能を表す。document、initial / dynamic stylesheet、`@import`、image、font resourceは最初の有効な`<base href>`から解決する。
 
 ## SelectorとCascade
 
 | 機能 | 状態 | 制限 |
 |---|---|---|
-| Type、Universal、Class、ID、Compound | 対応 | Namespace Selectorは未対応 |
+| Type、Universal、Class、ID、Compound | 対応 | CSS escape付きTailwind utility classとforgiving selector listを含む。Namespace Selectorは未対応 |
 | Attribute Selector | 対応 | `i`、`s`などのModifierは未対応 |
 | Descendant、Child、Adjacent、General Sibling | 対応 | Column Combinatorは未対応 |
 | Structural Pseudo-class | 対応 | `:root`、`:empty`、child/of-type系、`an+b` |
@@ -48,7 +48,7 @@
 | `background-color` | 対応 | alpha合成を含む |
 | `background-image` | 部分対応 | 複数HTTP(S) PNG/JPEG/GIF、`linear-gradient()`、`radial-gradient()`。`data:`、conic gradientは未対応 |
 | `background-repeat/position/size` | 部分対応 | 複数Layer、主要Keyword、1〜2値、length/percentage、cover/contain。origin/clipの独立指定は未対応 |
-| `font`、family / size / style / weight / stretch、`line-height` | 対応 | CORSを通過したWOFF / WOFF2と同梱Go Font fallback。可変font axisは未対応 |
+| `font`、family / size / style / weight / stretch、`line-height` | 対応 | CORSを通過したWOFF / WOFF2、同梱Go Font、JS Page専用system font fallback。日本語・Latin・記号をglyph coverageでfallback。可変font axisは未対応 |
 | `white-space` | 対応 | normal、nowrap、pre、pre-wrap、pre-line |
 | `color` | 対応 | 上記CSS Color Level 4 subset |
 | `text-decoration-line/color` | 対応 | underline、overline、line-through |
@@ -68,7 +68,7 @@
 | `box-shadow`、`text-shadow` | 対応 | 複数shadow、blur/spread、inset、alpha color |
 | `outline`、`outline-offset` | 対応 | width/style/colorとoffset |
 | `transform`、`transform-origin` | 対応 | 2D translate/scale/rotate/skew/matrixと複数function。3D、perspectiveは未対応 |
-| `transition-*`、`transition` | 部分対応 | opacity、transform、主要Color。複数Transition、list matching、delay、Easing、中断・反転 |
+| `transition-*`、`transition` | 部分対応 | opacity、transform、width / height、主要Color。複数Transition、list matching、delay、Easing、中断・反転 |
 | `animation-*`、`animation` | 部分対応 | 複数Keyframes Animation、delay、iteration、direction、fill、play-state。加算・累積合成は未対応 |
 | `visibility` | 対応 | `visible`、`hidden`。`display:none`とは別にLayout geometryを保持 |
 | `text-align/transform/indent`、letter / word spacing | 対応 | horizontal writing modeのText layout / paintへ反映 |
@@ -88,7 +88,7 @@ Gridはexplicit/implicit track、intrinsic/flexible sizing、line/span/area plac
 
 PaintとHit Testingは同じStacking Context順、nested rounded clip、group opacity、2D transformを参照する。Hit Testingは逆Paint順とTransform逆行列を使い、`visibility:hidden`とclip外を除外する。通常alphaのsource-overを扱い、Blend Mode、Filter、Backdrop Filter、3D Transformは未対応である。
 
-TransitionとKeyframes AnimationはOpacity、Color、Background Color、Border Color、Outline Color、2D Transformを補間する。Duration、正負のDelay、cubic-bezier/stepsを含むEasing、Iteration、Direction、Fill Mode、Pauseを扱い、active Animationがある間だけFrameを更新する。Layoutを変更するProperty、Discrete Animation、Animation Event、Web Animations API、Scroll-driven Animationは未対応である。
+TransitionとKeyframes AnimationはOpacity、Color、Background Color、Border Color、Outline Color、2D Transform、width / heightを補間する。Duration、正負のDelay、cubic-bezier/stepsを含むEasing、Iteration、Direction、Fill Mode、Pauseを扱う。transform / opacityだけのframeは基準Layout Treeと静的Display Listを再利用し、width / heightなどlayoutへ影響するsampleだけを再構築する。終了、非表示、offscreen、cancel、stale Pageではinvalidationを停止する。Discrete Animation、Animation Event、Web Animations API、Scroll-driven Animationは未対応である。
 
 Float、Multi-columnは未対応である。
 
@@ -100,6 +100,6 @@ top-level documentとiframeはsame / cross-origin stylesheetを取得できる�
 
 JavaScriptによるattribute、class、tree、`innerHTML` mutation後はStyle revisionを増やし、Computed Style、Layout Tree、Display List、Hit Test、Inspector snapshotを同じrevisionから再生成する。iframeは親Layoutの置換要素としてborder box、clip、scrollを持ち、子DocumentのPaintを親のclip内へ合成する。
 
-Imageは`picture` / `source` / `srcset` / `sizes`、PNG / JPEG / GIF静止Frame / WebP、安全な静的SVG subset、load / error、alt fallback、late relayoutを扱う。Web FontはCORSを通過したWOFF / WOFF2をdecodeし、完了時に影響Textを再計測する。SVG内script、event handler、external resource、`foreignObject`、animation、filter、font load、Navigationは実行しない。
+Imageは`picture` / `source` / `srcset` / `sizes`、PNG / JPEG / GIF静止Frame / WebP、安全な静的SVG subset、load / error、alt fallback、late relayoutを扱う。同じURLのfetch body / decodeをPage generation内で共有し、target size、DPR、object-fit、filterごとのrasterとbackground / gradient / filter resultをbounded LRUで再利用する。image mutationは対象resourceだけを更新し、Navigation、close、Engine切替でcacheを破棄する。Web FontはCORSを通過したWOFF / WOFF2をdecodeし、完了時に影響Textを再計測する。JS PageのshaperはBrowser chromeから分離し、system font discoveryでCJK glyphへfallbackする。SVG内script、event handler、external resource、`foreignObject`、animation、filter、font load、Navigationは実行しない。
 
-v0.15.0の「Modern Web Compatibility」は[Modern Web Compatibility Showcase](../examples/modern-web-compat)、Next.js / SvelteKit / Tailwindのoffline artifact、Visual Regression、選定WPTで固定した範囲を指す。未知の公開サイトとのpixel完全一致、framework / React全API、Shadow DOM、Canvas、video、Vertical Writing Mode、全CSS仕様への適合は保証しない。CSSとimage / fontの静的resource改善はGo Pageにも適用するが、dynamic resourceとhydrationは`JS`を明示選択したTabだけで実行する。
+v0.16.0の「Real-site Rendering & Performance」は[Modern Web Compatibility Showcase](../examples/modern-web-compat)のTailwind CSS v4.1.12実build artifact、SvelteKit SSR相当HTML、Next.js / SvelteKit fixture、Visual Regression、選定Unit / Integration Testで固定した範囲を指す。未知の公開サイトとのpixel完全一致、framework / React全API、Shadow DOM、Canvas、video、Vertical Writing Mode、全CSS仕様への適合は保証しない。今回のsystem font discovery、hydration、JavaScript animation state、image lifecycleは`JS`を明示選択したTabだけで有効にし、Go Runtimeの実行経路とobjectを共有しない。

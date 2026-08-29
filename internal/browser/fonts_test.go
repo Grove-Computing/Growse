@@ -87,7 +87,7 @@ func TestWebFontTimeoutKeepsPageVisibleWithBundledFallback(t *testing.T) {
 	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
 		t.Fatalf("optional font timeout took %v", elapsed)
 	}
-	if page.Document == nil || page.WebFonts != nil || len(page.FontErrors) != 1 || page.Fonts[0].Error != "font load timed out" {
+	if page.Document == nil || page.WebFonts == nil || len(page.FontErrors) != 1 || page.Fonts[0].Error != "font load timed out" {
 		t.Fatalf("page font fallback state = fonts:%#v errors:%#v", page.Fonts, page.FontErrors)
 	}
 	tree := layoutmodel.BuildWithScrollAndResources(page.Document, page.ComputedStyles, page.ImageResources, page.WebFonts, 800, 600, 0, 0)

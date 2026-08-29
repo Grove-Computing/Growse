@@ -12,6 +12,8 @@ import (
 	"github.com/Grove-Computing/Growse/internal/devtools"
 	htmlparser "github.com/Grove-Computing/Growse/internal/html"
 	"github.com/Grove-Computing/Growse/internal/network"
+	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
+	stylemodel "github.com/Grove-Computing/Growse/internal/style"
 )
 
 func TestCompatibilityDiagnosticsExplainResourcesStylesFallbacksAndRuntimeErrors(t *testing.T) {
@@ -61,7 +63,13 @@ func TestCompatibilityDiagnosticsExplainResourcesStylesFallbacksAndRuntimeErrors
 			t.Errorf("missing diagnostic %v in %+v", expected, diagnostics)
 		}
 	}
-	resource := diagnostics[0]
+	var resource devtools.CompatibilityDiagnostic
+	for _, diagnostic := range diagnostics {
+		if diagnostic.Category == "resource/module" {
+			resource = diagnostic
+			break
+		}
+	}
 	if resource.Initiator != "module-graph" || resource.Schedule != "module" || !strings.Contains(resource.Subject, "chunk-v2.mjs") {
 		t.Fatalf("dynamic resource diagnostic = %+v", resource)
 	}
@@ -69,6 +77,42 @@ func TestCompatibilityDiagnosticsExplainResourcesStylesFallbacksAndRuntimeErrors
 	for _, secret := range []string{"password", "secret", "/private/"} {
 		if strings.Contains(encoded, secret) {
 			t.Fatalf("compatibility diagnostics leaked %q: %s", secret, encoded)
+		}
+	}
+}
+
+func TestCompatibilityDiagnosticsExposeFontChainImageCacheAndFrameReasons(t *testing.T) {
+	page := NewPage(nil)
+	page.Engine = runtimemodel.EngineJavaScript
+	page.Compatibility = CompatibilityProfileModernWeb
+	page.Fonts = []FontResource{{Family: "Missing UI", Error: "font decode failed"}}
+	page.FontErrors = []string{"font decode failed: Missing UI"}
+	page.ComputedStyles = stylemodel.Map{1: {
+		FontFamilies: []string{"Missing UI", "system-ui", "sans-serif"},
+	}}
+	page.renderMetrics = RenderMetrics{
+		ImageResourceHits: maxCompatibilityDiagnosticCount + 42,
+		ImagePaintHits:    7,
+		InitialRebuilds:   1,
+		StyleRebuilds:     3,
+		DisplayListReuses: 9,
+	}
+
+	diagnostics := compatibilityDiagnostics(page)
+	for _, expected := range []struct {
+		category, subject, state, reason string
+		count                            int
+	}{
+		{"font", "Missing UI", "fallback", "decode", 1},
+		{"font", "Missing UI -> system-ui -> sans-serif", "fallback", "decode", 1},
+		{"image-cache", "resource", "hit", "decoded-resource", maxCompatibilityDiagnosticCount},
+		{"image-cache", "paint", "hit", "target-raster", 7},
+		{"frame", "layout/display-list", "rebuild", "initial", 1},
+		{"frame", "layout/display-list", "rebuild", "style", 3},
+		{"frame", "display-list", "reuse", "static", 9},
+	} {
+		if !hasExactCompatibilityDiagnostic(diagnostics, expected.category, expected.subject, expected.state, expected.reason, expected.count) {
+			t.Errorf("missing bounded diagnostic %+v in %+v", expected, diagnostics)
 		}
 	}
 }
@@ -117,6 +161,15 @@ func TestCompatibilityDiagnosticsAggregateAndBoundMetadataWithoutPayloadCopies(t
 func hasCompatibilityDiagnostic(diagnostics []devtools.CompatibilityDiagnostic, category, state, reason string) bool {
 	for _, diagnostic := range diagnostics {
 		if diagnostic.Category == category && diagnostic.State == state && diagnostic.Reason == reason {
+			return true
+		}
+	}
+	return false
+}
+
+func hasExactCompatibilityDiagnostic(diagnostics []devtools.CompatibilityDiagnostic, category, subject, state, reason string, count int) bool {
+	for _, diagnostic := range diagnostics {
+		if diagnostic.Category == category && diagnostic.Subject == subject && diagnostic.State == state && diagnostic.Reason == reason && diagnostic.Count == count {
 			return true
 		}
 	}

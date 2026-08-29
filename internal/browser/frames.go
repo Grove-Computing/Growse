@@ -234,7 +234,8 @@ func (state *frameLoadState) buildPage(ctx context.Context, response *network.Re
 	}
 	computed := computeStableStyles(document, stylesheet, style.InteractionState{}, defaultFrameWidth, defaultFrameHeight, state.reducedMotion)
 	imageBudget := newImageDecodeBudget()
-	backgroundImages, backgroundErrors := loadBackgroundImagesWithBudget(ctx, imageResources, computed, imageBudget)
+	imageCache := newImageResourceCache()
+	backgroundImages, backgroundErrors := loadBackgroundImagesWithCache(ctx, imageResources, computed, imageBudget, imageCache)
 	var replacedImages map[dom.NodeID]layoutmodel.ImageResource
 	var decodedImages map[string]image.Image
 	var imageErrors []string
@@ -242,7 +243,7 @@ func (state *frameLoadState) buildPage(ctx context.Context, response *network.Re
 	var fontErrors []string
 	if state.engine == runtimemodel.EngineJavaScript {
 		imagePolicy := imageViewportPolicy(document, computed, baseURL, defaultFrameWidth, defaultFrameHeight)
-		replacedImages, decodedImages, imageErrors = loadReplacedImagesWithPolicyAndBudget(ctx, imageResources, baseURL, document, defaultFrameWidth, 1, imagePolicy, imageBudget)
+		replacedImages, decodedImages, imageErrors = loadReplacedImagesWithCache(ctx, imageResources, baseURL, document, defaultFrameWidth, 1, imagePolicy, imageBudget, imageCache)
 		inlineResources, inlineImages, inlineFailures := loadInlineSVGImagesWithBudget(document, imageBudget)
 		mergeImageResources(replacedImages, decodedImages, inlineResources, inlineImages)
 		imageErrors = append(imageErrors, inlineFailures...)
@@ -263,11 +264,12 @@ func (state *frameLoadState) buildPage(ctx context.Context, response *network.Re
 		URL: cloneURL(response.URL), BaseURL: cloneURL(baseURL), StatusCode: response.StatusCode, ContentType: response.ContentType, Source: append([]byte(nil), response.Body...),
 		Document: document, Events: events.NewDispatcher(), Stylesheet: stylesheet, ComputedStyles: computed,
 		Animations: style.NewAnimationRegistry(), Transitions: style.NewTransitionRegistry(), BackgroundImages: backgroundImages,
-		BackgroundErrors: backgroundErrors, Engine: state.engine, Scripts: scripts, ImportMap: importMap, ScriptErrors: scriptErrors,
+		BackgroundErrors: backgroundErrors, Engine: state.engine, Compatibility: compatibilityProfileForEngine(state.engine), Scripts: scripts, ImportMap: importMap, ScriptErrors: scriptErrors,
 		ImageResources: replacedImages, Images: decodedImages, ImageErrors: imageErrors,
-		Fonts: fonts, FontErrors: fontErrors, WebFonts: layoutWebFonts(fonts),
+		Fonts: fonts, FontErrors: fontErrors, WebFonts: layoutPageFonts(fonts, state.engine == runtimemodel.EngineJavaScript),
 		StyleRevision: 1, ReducedMotion: state.reducedMotion, ViewportWidth: defaultFrameWidth, ViewportHeight: defaultFrameHeight, DevTools: pageStore,
 		FramePolicy:    policy,
+		imageCache:     imageCache,
 		serviceWorkers: state.rootPage.serviceWorkers,
 		imageLoader:    imageResources,
 	}
@@ -457,6 +459,7 @@ func (frame *Frame) navigateReserved(ctx context.Context, target *url.URL) error
 		frame.lifecycleMu.Unlock()
 		_ = closePageFrames(page)
 		page.closeDevTools()
+		page.releaseImageResources()
 		return context.Canceled
 	}
 	oldPage, oldRuntime, oldCancel := frame.Page, frame.runtime, frame.cancel
@@ -476,6 +479,7 @@ func (frame *Frame) navigateReserved(ctx context.Context, target *url.URL) error
 		}
 		_ = closePageFrames(page)
 		page.closeDevTools()
+		page.releaseImageResources()
 		return context.Canceled
 	}
 	frame.runtime = newRuntime
@@ -490,6 +494,7 @@ func (frame *Frame) navigateReserved(ctx context.Context, target *url.URL) error
 	}
 	_ = closePageFrames(oldPage)
 	if oldPage != nil {
+		oldPage.releaseImageResources()
 		oldPage.closeDevTools()
 	}
 	if state.onMutation != nil {
@@ -776,6 +781,7 @@ func (frame *Frame) Close() error {
 			page.Transitions.Clear()
 		}
 		page.closeDevTools()
+		page.releaseImageResources()
 		if page.windows != nil {
 			page.windows.unregister(page.window.Self)
 		}

@@ -44,6 +44,10 @@ func compatibilityDiagnostics(page *Page) []devtools.CompatibilityDiagnostic {
 		indexes[key] = len(diagnostics)
 		diagnostics = append(diagnostics, diagnostic)
 	}
+	// Keep fallback and performance summaries ahead of potentially large
+	// resource/rule lists so the bounded DevTools preview remains actionable.
+	appendFontDiagnostics(page, appendDiagnostic)
+	appendRenderDiagnostics(page.RenderMetricsSnapshot(), appendDiagnostic)
 
 	if page.DevTools != nil {
 		for _, record := range page.DevTools.Network() {
@@ -69,9 +73,6 @@ func compatibilityDiagnostics(page *Page) []devtools.CompatibilityDiagnostic {
 	}
 
 	appendStyleDiagnostics(page, appendDiagnostic)
-	for _, failure := range page.FontErrors {
-		appendDiagnostic(devtools.CompatibilityDiagnostic{Category: "font", Subject: "font", State: "fallback", Reason: fallbackCategory(failure)})
-	}
 	for _, failure := range append(append([]string(nil), page.ImageErrors...), page.BackgroundErrors...) {
 		appendDiagnostic(devtools.CompatibilityDiagnostic{Category: "image", Subject: "image", State: "fallback", Reason: fallbackCategory(failure)})
 	}
@@ -96,6 +97,103 @@ func compatibilityDiagnostics(page *Page) []devtools.CompatibilityDiagnostic {
 		}
 	}
 	return diagnostics
+}
+
+func appendFontDiagnostics(page *Page, appendDiagnostic func(devtools.CompatibilityDiagnostic)) {
+	failed := make(map[string]string)
+	loaded := make(map[string]bool)
+	for _, resource := range page.Fonts {
+		family := strings.TrimSpace(resource.Family)
+		if family == "" {
+			family = "unnamed"
+		}
+		if resource.Decoded && resource.Loaded {
+			loaded[strings.ToLower(family)] = true
+			continue
+		}
+		if resource.Error != "" {
+			failed[strings.ToLower(family)] = fallbackCategory(resource.Error)
+		}
+	}
+	for _, failure := range page.FontErrors {
+		family, reason := "font", fallbackCategory(failure)
+		for _, resource := range page.Fonts {
+			if resource.Family != "" && strings.Contains(failure, resource.Family) {
+				family = resource.Family
+				break
+			}
+		}
+		appendDiagnostic(devtools.CompatibilityDiagnostic{Category: "font", Subject: family, State: "fallback", Reason: reason})
+	}
+	if !page.UsesModernWebCompatibility() {
+		return
+	}
+	chains := make(map[string]bool)
+	for _, computed := range page.ComputedStyles {
+		if len(computed.FontFamilies) == 0 {
+			continue
+		}
+		families := make([]string, 0, len(computed.FontFamilies))
+		for _, family := range computed.FontFamilies {
+			family = strings.Trim(strings.TrimSpace(family), `"'`)
+			if family != "" {
+				families = append(families, family)
+			}
+		}
+		if len(families) == 0 {
+			continue
+		}
+		chain := strings.Join(families, " -> ")
+		if chains[chain] {
+			continue
+		}
+		chains[chain] = true
+		primary := strings.ToLower(families[0])
+		if loaded[primary] {
+			continue
+		}
+		reason := "system-family"
+		if failure, exists := failed[primary]; exists {
+			reason = failure
+		}
+		appendDiagnostic(devtools.CompatibilityDiagnostic{Category: "font", Subject: chain, State: "fallback", Reason: reason})
+	}
+}
+
+func appendRenderDiagnostics(metrics RenderMetrics, appendDiagnostic func(devtools.CompatibilityDiagnostic)) {
+	for _, counter := range []struct {
+		category, subject, state, reason string
+		count                            uint64
+	}{
+		{"image-cache", "resource", "hit", "decoded-resource", metrics.ImageResourceHits},
+		{"image-cache", "resource", "miss", "decoded-resource", metrics.ImageResourceMisses},
+		{"image-cache", "resource", "eviction", "byte-lru", metrics.ImageResourceEvictions},
+		{"image-cache", "paint", "hit", "target-raster", metrics.ImagePaintHits},
+		{"image-cache", "paint", "miss", "target-raster", metrics.ImagePaintMisses},
+		{"image-cache", "paint", "eviction", "byte-lru", metrics.ImagePaintEvictions},
+		{"frame", "layout/display-list", "rebuild", "initial", metrics.InitialRebuilds},
+		{"frame", "layout/display-list", "rebuild", "page", metrics.PageRebuilds},
+		{"frame", "layout/display-list", "rebuild", "style", metrics.StyleRebuilds},
+		{"frame", "layout/display-list", "rebuild", "viewport", metrics.ViewportRebuilds},
+		{"frame", "layout/display-list", "rebuild", "scroll", metrics.ScrollRebuilds},
+		{"frame", "layout/display-list", "rebuild", "animation", metrics.AnimationRebuilds},
+		{"frame", "display-list", "reuse", "static", metrics.DisplayListReuses},
+	} {
+		if counter.count == 0 {
+			continue
+		}
+		appendDiagnostic(devtools.CompatibilityDiagnostic{
+			Category: counter.category, Subject: counter.subject, State: counter.state, Reason: counter.reason, Count: boundedCompatibilityDiagnosticCount(counter.count),
+		})
+	}
+}
+
+func boundedCompatibilityDiagnosticCount(count uint64) int {
+	if count >= uint64(maxCompatibilityDiagnosticCount) {
+		return maxCompatibilityDiagnosticCount
+	}
+	// #nosec G115 -- the preceding comparison proves count fits this bounded int.
+	return int(count)
 }
 
 func diagnosticSourceCategory(value string) string {

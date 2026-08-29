@@ -428,6 +428,27 @@ func TestParseMediaQueriesAndNestedRules(t *testing.T) {
 	}
 }
 
+func TestParseMediaRangeSyntaxUsedByTailwindV4(t *testing.T) {
+	stylesheet, err := Parse(strings.NewReader(`
+@media (width >= 40rem) { .sm\:grid-cols-2 { display: grid } }
+@media (64rem <= width) { .lg\:block { display: block } }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stylesheet.Rules) != 2 {
+		t.Fatalf("rules = %#v", stylesheet.Rules)
+	}
+	first := stylesheet.Rules[0].Media[0][0].Features[0]
+	if first.Name != "width" || first.Value != "40rem" || first.Comparator != ">=" {
+		t.Fatalf("forward range = %#v", first)
+	}
+	second := stylesheet.Rules[1].Media[0][0].Features[0]
+	if second.Name != "width" || second.Value != "64rem" || second.Comparator != ">=" {
+		t.Fatalf("reversed range = %#v", second)
+	}
+}
+
 func TestParseImportsOnlyAtStylesheetStart(t *testing.T) {
 	stylesheet, err := Parse(strings.NewReader(`
 @charset "utf-8";
