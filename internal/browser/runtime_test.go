@@ -212,6 +212,51 @@ func TestEngineSelectionReloadsSelectedScriptsAndRemainsTabScoped(t *testing.T) 
 	}
 }
 
+func TestCompatibilityProfileIsFixedPerEngineReloadAndTab(t *testing.T) {
+	pageURL := mustParseURL(t, "http://localhost/profile.html")
+	loader := stubLoader{response: &network.Response{
+		URL: pageURL, StatusCode: 200, ContentType: "text/html",
+		Body: []byte(`<main>profile</main>`),
+	}}
+	first := NewWithEngineFactory(loader, func(runtimemodel.Engine) runtimemodel.Runtime { return &runtimeStub{} })
+	second := NewWithEngineFactory(loader, func(runtimemodel.Engine) runtimemodel.Runtime { return &runtimeStub{} })
+	t.Cleanup(func() {
+		_ = first.Close()
+		_ = second.Close()
+	})
+	goPage, err := first.Navigate(context.Background(), pageURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherGoPage, err := second.Navigate(context.Background(), pageURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if goPage.Compatibility != CompatibilityProfileGo || goPage.UsesModernWebCompatibility() ||
+		otherGoPage.Compatibility != CompatibilityProfileGo || otherGoPage.UsesModernWebCompatibility() {
+		t.Fatalf("default profiles = first:%q second:%q", goPage.Compatibility, otherGoPage.Compatibility)
+	}
+	javaScriptPage, err := first.SetEngine(context.Background(), runtimemodel.EngineJavaScript)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if javaScriptPage == goPage || javaScriptPage.Document == goPage.Document ||
+		javaScriptPage.Compatibility != CompatibilityProfileModernWeb || !javaScriptPage.UsesModernWebCompatibility() {
+		t.Fatalf("JavaScript profile reload = page:%p old:%p profile:%q", javaScriptPage, goPage, javaScriptPage.Compatibility)
+	}
+	if second.Page() != otherGoPage || second.Engine() != runtimemodel.EngineGo || otherGoPage.UsesModernWebCompatibility() {
+		t.Fatal("JavaScript compatibility profile leaked to another tab")
+	}
+	secondGoPage, err := first.SetEngine(context.Background(), runtimemodel.EngineGo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secondGoPage == javaScriptPage || secondGoPage.Document == javaScriptPage.Document ||
+		secondGoPage.Compatibility != CompatibilityProfileGo || secondGoPage.UsesModernWebCompatibility() {
+		t.Fatalf("Go profile reload = %#v", secondGoPage)
+	}
+}
+
 func TestJavaScriptResourcesRemainGatedUntilExplicitEngineSwitch(t *testing.T) {
 	pageURL := mustParseURL(t, "http://localhost/engine-gate.html")
 	goURL := mustParseURL(t, "http://localhost/app.go")

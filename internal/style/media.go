@@ -54,8 +54,14 @@ func matchesMediaFeature(feature css.MediaFeature, environment Environment) bool
 	name, value := feature.Name, strings.ToLower(strings.TrimSpace(feature.Value))
 	switch name {
 	case "width", "min-width", "max-width":
+		if feature.Comparator != "" {
+			return compareMediaLengthRange(environment.ViewportWidth, value, feature.Comparator, environment)
+		}
 		return compareMediaLength(name, environment.ViewportWidth, value, environment)
 	case "height", "min-height", "max-height":
+		if feature.Comparator != "" {
+			return compareMediaLengthRange(environment.ViewportHeight, value, feature.Comparator, environment)
+		}
 		return compareMediaLength(name, environment.ViewportHeight, value, environment)
 	case "orientation":
 		if value == "portrait" {
@@ -67,6 +73,9 @@ func matchesMediaFeature(feature css.MediaFeature, environment Environment) bool
 		return false
 	case "resolution", "min-resolution", "max-resolution":
 		expected, ok := parseResolution(value)
+		if feature.Comparator != "" {
+			return ok && compareMediaRange(environment.ResolutionDPI, expected, feature.Comparator)
+		}
 		return ok && compareMediaNumber(name, environment.ResolutionDPI, expected)
 	case "prefers-color-scheme":
 		return (value == "light" || value == "dark") && value == strings.ToLower(environment.ColorScheme)
@@ -85,6 +94,31 @@ func matchesMediaFeature(feature css.MediaFeature, environment Environment) bool
 			return environment.Pointer != "none"
 		}
 		return value == strings.ToLower(environment.Pointer) && (value == "none" || value == "coarse" || value == "fine")
+	default:
+		return false
+	}
+}
+
+func compareMediaLengthRange(actual float32, value, comparator string, environment Environment) bool {
+	length, ok := ResolveLength(value, LengthContext{
+		FontSize: 16, RootFontSize: 16,
+		ViewportWidth: environment.ViewportWidth, ViewportHeight: environment.ViewportHeight,
+	})
+	return ok && length.Percentage == 0 && compareMediaRange(actual, length.Pixels, comparator)
+}
+
+func compareMediaRange(actual, expected float32, comparator string) bool {
+	switch comparator {
+	case "<":
+		return actual < expected
+	case "<=":
+		return actual <= expected
+	case ">":
+		return actual > expected
+	case ">=":
+		return actual >= expected
+	case "=":
+		return math.Abs(float64(actual-expected)) < 0.001
 	default:
 		return false
 	}

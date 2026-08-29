@@ -142,8 +142,9 @@ type MediaQuery struct {
 
 // MediaFeature is a media feature name and its optional value.
 type MediaFeature struct {
-	Name  string
-	Value string
+	Name       string
+	Value      string
+	Comparator string
 }
 
 // Declaration is one CSS property/value pair.
@@ -225,6 +226,8 @@ type PseudoClassKind uint8
 
 const (
 	PseudoRoot PseudoClassKind = iota
+	PseudoHost
+	PseudoOpen
 	PseudoEmpty
 	PseudoFirstChild
 	PseudoLastChild

@@ -278,6 +278,76 @@ func TestMatchesStructuralPseudoClasses(t *testing.T) {
 	}
 }
 
+func TestRootHostThemeRuleAppliesOnlyThroughDocumentRoot(t *testing.T) {
+	document := dom.NewDocument()
+	html := document.CreateElement("html", nil)
+	body := document.CreateElement("body", nil)
+	appendNode(t, document, document.Root, html)
+	appendNode(t, document, html, body)
+
+	stylesheet, err := css.Parse(strings.NewReader(`
+:root,:host { --spacing: 4px; color: #0f172a }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	computed := Compute(document, stylesheet)
+	htmlStyle, _ := computed.For(html)
+	bodyStyle, _ := computed.For(body)
+	if got := htmlStyle.CustomProperties["--spacing"]; got != "4px" {
+		t.Fatalf("root --spacing = %q, want 4px", got)
+	}
+	if htmlStyle.Color != 0x0f172aff || bodyStyle.Color != 0x0f172aff {
+		t.Fatalf("theme color = root:%08x body:%08x", htmlStyle.Color, bodyStyle.Color)
+	}
+	if matches(body, stylesheet.Rules[0].Selectors[1], InteractionState{}) {
+		t.Fatal(":host unexpectedly matched a light-DOM element")
+	}
+}
+
+func TestTailwindEscapedUtilityClassMatchesDOMClass(t *testing.T) {
+	document := dom.NewDocument()
+	card := document.CreateElement("section", map[string]string{
+		"class": "sm:grid-cols-2 w-[calc(100%-1rem)]",
+	})
+	appendNode(t, document, document.Root, card)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.sm\:grid-cols-2 { display: grid }
+.w-\[calc\(100\%-1rem\)\] { color: #0f172a }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	computed, _ := Compute(document, stylesheet).For(card)
+	if computed.Display != DisplayGrid || computed.Color != 0x0f172aff {
+		t.Fatalf("escaped utility style = %#v", computed)
+	}
+}
+
+func TestOpenPseudoAndInvalidCustomPropertyAreLocalized(t *testing.T) {
+	document := dom.NewDocument()
+	details := document.CreateElement("details", map[string]string{"open": "", "class": "card"})
+	closed := document.CreateElement("details", map[string]string{"class": "card"})
+	appendNode(t, document, document.Root, details)
+	appendNode(t, document, document.Root, closed)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.card { --a:var(--b); --b:var(--a); color:var(--a); background-color:#fff }
+details:open { border-radius:8px }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	computed := Compute(document, stylesheet)
+	openedStyle, _ := computed.For(details)
+	closedStyle, _ := computed.For(closed)
+	if openedStyle.Color != defaultTextColor || openedStyle.BackgroundColor != 0xffffffff {
+		t.Fatalf("custom property failure leaked = %#v", openedStyle)
+	}
+	if openedStyle.BorderRadius.TopLeft.X.Pixels != 8 || closedStyle.BorderRadius.TopLeft.X.Pixels != 0 {
+		t.Fatalf(":open styles = opened:%#v closed:%#v", openedStyle.BorderRadius, closedStyle.BorderRadius)
+	}
+}
+
 func TestMatchesInteractionAndFormStatePseudoClasses(t *testing.T) {
 	document := dom.NewDocument()
 	link := document.CreateElement("a", map[string]string{"href": "/next"})
@@ -618,6 +688,28 @@ p { color: black; }
 	}).For(paragraph)
 	if unmatched.Color != 0x000000ff || unmatched.FontSize == 20 || unmatched.BackgroundColor == 0x0000ffff {
 		t.Fatalf("unmatched media style = %#v", unmatched)
+	}
+}
+
+func TestTailwindResponsiveUtilityFollowsMediaRangeViewport(t *testing.T) {
+	document := dom.NewDocument()
+	card := document.CreateElement("section", map[string]string{"class": "sm:grid-cols-2"})
+	appendNode(t, document, document.Root, card)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.sm\:grid-cols-2 { display: block }
+@media (width >= 40rem) { .sm\:grid-cols-2 { display: grid } }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	narrow, _ := ComputeWithEnvironment(document, stylesheet, InteractionState{}, Environment{
+		ViewportWidth: 500, ViewportHeight: 600,
+	}).For(card)
+	wide, _ := ComputeWithEnvironment(document, stylesheet, InteractionState{}, Environment{
+		ViewportWidth: 800, ViewportHeight: 600,
+	}).For(card)
+	if narrow.Display != DisplayBlock || wide.Display != DisplayGrid {
+		t.Fatalf("responsive display = narrow:%v wide:%v", narrow.Display, wide.Display)
 	}
 }
 
