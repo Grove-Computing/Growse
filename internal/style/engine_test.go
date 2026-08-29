@@ -667,6 +667,28 @@ p { color: black; }
 	}
 }
 
+func TestTailwindResponsiveUtilityFollowsMediaRangeViewport(t *testing.T) {
+	document := dom.NewDocument()
+	card := document.CreateElement("section", map[string]string{"class": "sm:grid-cols-2"})
+	appendNode(t, document, document.Root, card)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.sm\:grid-cols-2 { display: block }
+@media (width >= 40rem) { .sm\:grid-cols-2 { display: grid } }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	narrow, _ := ComputeWithEnvironment(document, stylesheet, InteractionState{}, Environment{
+		ViewportWidth: 500, ViewportHeight: 600,
+	}).For(card)
+	wide, _ := ComputeWithEnvironment(document, stylesheet, InteractionState{}, Environment{
+		ViewportWidth: 800, ViewportHeight: 600,
+	}).For(card)
+	if narrow.Display != DisplayBlock || wide.Display != DisplayGrid {
+		t.Fatalf("responsive display = narrow:%v wide:%v", narrow.Display, wide.Display)
+	}
+}
+
 func TestComputeEvaluatesPrefersReducedMotion(t *testing.T) {
 	document := dom.NewDocument()
 	target := document.CreateElement("div", nil)
