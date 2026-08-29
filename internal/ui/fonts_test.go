@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"testing"
 
+	"gioui.org/font"
+	"gioui.org/text"
 	"gioui.org/widget/material"
 	"github.com/Grove-Computing/Growse/internal/browser"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 	textfont "github.com/go-text/typesetting/font"
 	"golang.org/x/image/font/gofont/goregular"
+	"golang.org/x/image/math/fixed"
 )
 
 func TestInstallPageFontsUsesDecodedFaceAndKeepsBundledFallback(t *testing.T) {
@@ -47,6 +50,41 @@ func TestInstallPageFontsUsesDecodedFaceAndKeepsBundledFallback(t *testing.T) {
 	}
 	if ui.theme.Shaper != chromeShaper {
 		t.Fatal("Engine switching mutated the Browser chrome shaper")
+	}
+}
+
+func TestModernWebPageShaperUsesSystemCJKGlyphFallback(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	ui := &BrowserUI{theme: material.NewTheme()}
+	chromeShaper := ui.theme.Shaper
+	page := &browser.Page{
+		Engine: runtimemodel.EngineJavaScript, Compatibility: browser.CompatibilityProfileModernWeb, StyleRevision: 1,
+	}
+	ui.installPageFonts(page)
+	ui.pageTheme.Shaper.LayoutString(text.Parameters{
+		Font: font.Font{Typeface: "system-ui"}, PxPerEm: fixed.I(16), MaxLines: 1, MaxWidth: 4096,
+	}, "日本語")
+	glyphs := make(map[text.GlyphID]bool)
+	for {
+		glyph, ok := ui.pageTheme.Shaper.NextGlyph()
+		if !ok {
+			break
+		}
+		if glyph.Runes != 0 {
+			glyphs[glyph.ID] = true
+		}
+	}
+	if len(glyphs) < 3 {
+		t.Skipf("system does not provide distinct Japanese glyphs: %#v", glyphs)
+	}
+	if ui.theme.Shaper != chromeShaper {
+		t.Fatal("CJK Page shaping mutated the Browser chrome shaper")
+	}
+
+	goPage := &browser.Page{Engine: runtimemodel.EngineGo, Compatibility: browser.CompatibilityProfileGo, StyleRevision: 1}
+	ui.installPageFonts(goPage)
+	if ui.pageTheme.Shaper == nil || ui.theme.Shaper != chromeShaper {
+		t.Fatal("Go Page did not return to its isolated default shaper")
 	}
 }
 

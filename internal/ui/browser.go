@@ -1921,7 +1921,7 @@ func (ui *BrowserUI) installPageFonts(page *browser.Page) {
 	if page == nil || ui.fontPage == page && ui.fontRevision == page.StyleRevision {
 		return
 	}
-	if page.Engine != runtimemodel.EngineJavaScript {
+	if !page.UsesModernWebCompatibility() {
 		ui.documentTheme().Shaper = &text.Shaper{}
 		ui.fontPage, ui.fontRevision = page, page.StyleRevision
 		return
@@ -1938,7 +1938,10 @@ func (ui *BrowserUI) installPageFonts(page *browser.Page) {
 		collection = append(collection, font.FontFace{Font: description, Face: pageFontFace{face: resource.Face}})
 	}
 	collection = append(collection, gofont.Collection()...)
-	ui.documentTheme().Shaper = text.NewShaper(text.NoSystemFonts(), text.WithCollection(collection))
+	// Keep decoded Web Fonts and the deterministic Go collection first, then
+	// let Gio resolve glyphs they do not cover from the operating system. This
+	// path belongs only to an explicitly selected modern-web JavaScript Page.
+	ui.documentTheme().Shaper = text.NewShaper(text.WithCollection(collection))
 	ui.fontPage, ui.fontRevision = page, page.StyleRevision
 }
 
