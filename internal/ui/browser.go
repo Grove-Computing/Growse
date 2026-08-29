@@ -1945,8 +1945,16 @@ func (ui *BrowserUI) installPageFonts(page *browser.Page) {
 	// Keep decoded Web Fonts and the deterministic Go collection first, then
 	// let Gio resolve glyphs they do not cover from the operating system. This
 	// path belongs only to an explicitly selected modern-web JavaScript Page.
-	ui.documentTheme().Shaper = text.NewShaper(text.WithCollection(collection))
+	ui.documentTheme().Shaper = newPageTextShaper(collection, true)
 	ui.fontPage, ui.fontRevision = page, page.StyleRevision
+}
+
+func newPageTextShaper(collection []font.FontFace, systemFonts bool) *text.Shaper {
+	options := []text.ShaperOption{text.WithCollection(collection)}
+	if !systemFonts {
+		options = append(options, text.NoSystemFonts())
+	}
+	return text.NewShaper(options...)
 }
 
 func pageFontWeight(value string) font.Weight {

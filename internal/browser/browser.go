@@ -1433,7 +1433,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 		ImageErrors:      imageErrors,
 		Fonts:            fonts,
 		FontErrors:       fontErrors,
-		WebFonts:         layoutWebFonts(fonts),
+		WebFonts:         layoutPageFonts(fonts, engine == runtimemodel.EngineJavaScript),
 		Engine:           engine,
 		Compatibility:    compatibilityProfileForEngine(engine),
 		Scripts:          scripts,

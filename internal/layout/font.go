@@ -6,6 +6,9 @@ import (
 	"sync"
 	"unicode"
 
+	giofont "gioui.org/font"
+	giogofont "gioui.org/font/gofont"
+	"gioui.org/text"
 	"github.com/go-text/typesetting/di"
 	textfont "github.com/go-text/typesetting/font"
 	"github.com/go-text/typesetting/language"
@@ -36,13 +39,42 @@ type WebFontFace struct {
 // FontSet is an immutable page-scoped collection of decoded web fonts.
 // Shaping is serialized because HarfbuzzShaper retains reusable buffers.
 type FontSet struct {
-	faces  []WebFontFace
-	mu     sync.Mutex
-	shaper shaping.HarfbuzzShaper
+	faces        []WebFontFace
+	mu           sync.Mutex
+	shaper       shaping.HarfbuzzShaper
+	systemShaper *text.Shaper
 }
 
 // NewFontSet creates a page-scoped font collection. Invalid faces are omitted.
 func NewFontSet(faces []WebFontFace) *FontSet {
+	filtered := filterWebFontFaces(faces)
+	if len(filtered) == 0 {
+		return nil
+	}
+	return &FontSet{faces: filtered}
+}
+
+// NewFontSetWithSystemFallback creates a page-scoped font set whose shaping
+// falls back from decoded Web Fonts and bundled Go fonts to operating-system
+// glyph coverage. The set remains usable when system discovery fails.
+func NewFontSetWithSystemFallback(faces []WebFontFace) *FontSet {
+	return newFontSetWithSystemFallback(faces, true)
+}
+
+func newFontSetWithSystemFallback(faces []WebFontFace, systemFonts bool) *FontSet {
+	filtered := filterWebFontFaces(faces)
+	// Web Font selection remains in selectFace so unicode-range descriptors are
+	// honored. The fallback shaper owns only deterministic bundled faces plus
+	// system faces for text not fully covered by the selected Web Font.
+	collection := append([]giofont.FontFace(nil), giogofont.Collection()...)
+	options := []text.ShaperOption{text.WithCollection(collection)}
+	if !systemFonts {
+		options = append(options, text.NoSystemFonts())
+	}
+	return &FontSet{faces: filtered, systemShaper: text.NewShaper(options...)}
+}
+
+func filterWebFontFaces(faces []WebFontFace) []WebFontFace {
 	filtered := make([]WebFontFace, 0, len(faces))
 	for _, face := range faces {
 		if face.Face == nil || strings.TrimSpace(face.Family) == "" {
@@ -51,14 +83,24 @@ func NewFontSet(faces []WebFontFace) *FontSet {
 		face.UnicodeRanges = append([]FontRange(nil), face.UnicodeRanges...)
 		filtered = append(filtered, face)
 	}
-	if len(filtered) == 0 {
-		return nil
-	}
-	return &FontSet{faces: filtered}
+	return filtered
 }
 
 func (fonts *FontSet) measure(text string, style blockStyle) (width, height, ascent float32, ok bool) {
+	if fonts != nil && fonts.systemShaper != nil {
+		if face := fonts.selectFace(text, style); face != nil {
+			return fonts.measureFace(text, style, face)
+		}
+		return fonts.measureWithSystemFallback(text, style)
+	}
 	face := fonts.selectFace(text, style)
+	if face == nil || text == "" || style.fontSize <= 0 {
+		return 0, 0, 0, false
+	}
+	return fonts.measureFace(text, style, face)
+}
+
+func (fonts *FontSet) measureFace(text string, style blockStyle, face *textfont.Face) (width, height, ascent float32, ok bool) {
 	if face == nil || text == "" || style.fontSize <= 0 {
 		return 0, 0, 0, false
 	}
@@ -88,6 +130,55 @@ func (fonts *FontSet) measure(text string, style blockStyle) (width, height, asc
 		height, ascent = style.fontSize*1.2, style.fontSize*.9
 	}
 	return float32(output.Advance) / 64, height, ascent, true
+}
+
+func (fonts *FontSet) measureWithSystemFallback(value string, style blockStyle) (width, height, ascent float32, ok bool) {
+	if value == "" || style.fontSize <= 0 {
+		return 0, 0, 0, false
+	}
+	description := giofont.Font{Weight: giofont.Normal}
+	if len(style.fontFamilies) != 0 {
+		description.Typeface = giofont.Typeface(strings.Trim(strings.TrimSpace(style.fontFamilies[0]), `"'`))
+	}
+	if style.bold {
+		description.Weight = giofont.Bold
+	}
+	if style.fontStyle == "italic" || strings.HasPrefix(style.fontStyle, "oblique") {
+		description.Style = giofont.Italic
+	}
+	fonts.mu.Lock()
+	fonts.systemShaper.LayoutString(text.Parameters{
+		Font: description, PxPerEm: fixed.Int26_6(style.fontSize * 64), MaxLines: 1,
+		MaxWidth: 1 << 30, DisableSpaceTrim: true,
+	}, value)
+	count, runeCount := 0, 0
+	for {
+		glyph, exists := fonts.systemShaper.NextGlyph()
+		if !exists {
+			break
+		}
+		count++
+		runeCount += int(glyph.Runes)
+		width = max(width, float32(glyph.X+glyph.Advance)/64)
+		ascent = max(ascent, float32(glyph.Ascent)/64)
+		height = max(height, float32(glyph.Ascent+glyph.Descent)/64)
+		if count > len([]rune(value))*4+8 {
+			fonts.mu.Unlock()
+			return 0, 0, 0, false
+		}
+	}
+	fonts.mu.Unlock()
+	if count == 0 || runeCount != len([]rune(value)) || !finiteFontMetric(width) || !finiteFontMetric(height) || !finiteFontMetric(ascent) {
+		return 0, 0, 0, false
+	}
+	if height <= 0 || ascent <= 0 {
+		height, ascent = style.fontSize*1.2, style.fontSize*.9
+	}
+	return width, height, ascent, true
+}
+
+func finiteFontMetric(value float32) bool {
+	return !math.IsNaN(float64(value)) && !math.IsInf(float64(value), 0) && value >= 0
 }
 
 func (fonts *FontSet) selectFace(text string, style blockStyle) *textfont.Face {

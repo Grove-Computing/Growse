@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"gioui.org/font"
+	"gioui.org/font/gofont"
 	"gioui.org/text"
 	"gioui.org/widget/material"
 	"github.com/Grove-Computing/Growse/internal/browser"
@@ -128,5 +129,28 @@ func TestPageShaperCacheFollowsPageGenerationAndFontRevision(t *testing.T) {
 	ui.installPageFonts(secondPage)
 	if ui.pageTheme.Shaper == revisedShaper || ui.fontPage != secondPage {
 		t.Fatal("Navigation reused the previous Page generation shaping cache")
+	}
+}
+
+func TestPageShaperTerminatesWithBundledFallbackWhenSystemFontsAreUnavailable(t *testing.T) {
+	shaper := newPageTextShaper(gofont.Collection(), false)
+	textValue := "日本語\U0010ffff"
+	shaper.LayoutString(text.Parameters{
+		Font: font.Font{Typeface: "system-ui"}, PxPerEm: fixed.I(16), MaxLines: 1, MaxWidth: 4096,
+	}, textValue)
+	runes, glyphs := 0, 0
+	for {
+		glyph, ok := shaper.NextGlyph()
+		if !ok {
+			break
+		}
+		glyphs++
+		runes += int(glyph.Runes)
+		if glyphs > len([]rune(textValue))*4+8 {
+			t.Fatal("missing-glyph fallback did not terminate")
+		}
+	}
+	if runes != len([]rune(textValue)) || glyphs == 0 {
+		t.Fatalf("finite fallback = runes:%d glyphs:%d", runes, glyphs)
 	}
 }
