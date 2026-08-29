@@ -15,6 +15,20 @@ const (
 	RenderLayoutFrame
 )
 
+// RenderRebuildReason classifies why the cached layout/display list could not
+// be reused. Values are deliberately fixed-size so diagnostics never retain a
+// DOM node, stylesheet, or animation payload.
+type RenderRebuildReason uint8
+
+const (
+	RenderRebuildInitial RenderRebuildReason = iota
+	RenderRebuildPage
+	RenderRebuildStyle
+	RenderRebuildViewport
+	RenderRebuildScroll
+	RenderRebuildAnimation
+)
+
 // RenderMetrics is a payload-free snapshot for performance regression tests
 // and DevTools. Counters are monotonic within one Page generation.
 type RenderMetrics struct {
@@ -30,6 +44,12 @@ type RenderMetrics struct {
 	CompositeFrames        uint64
 	PaintFrames            uint64
 	LayoutFrames           uint64
+	InitialRebuilds        uint64
+	PageRebuilds           uint64
+	StyleRebuilds          uint64
+	ViewportRebuilds       uint64
+	ScrollRebuilds         uint64
+	AnimationRebuilds      uint64
 }
 
 // RecordRenderEvent records UI-owned work without retaining DOM or resource
@@ -59,6 +79,33 @@ func (p *Page) RecordRenderEvent(event RenderEvent) {
 		target = &p.renderMetrics.PaintFrames
 	case RenderLayoutFrame:
 		target = &p.renderMetrics.LayoutFrames
+	}
+	if target != nil && *target != ^uint64(0) {
+		*target++
+	}
+	p.renderMu.Unlock()
+}
+
+// RecordRenderRebuild records one cache miss without retaining its input.
+func (p *Page) RecordRenderRebuild(reason RenderRebuildReason) {
+	if p == nil {
+		return
+	}
+	p.renderMu.Lock()
+	target := (*uint64)(nil)
+	switch reason {
+	case RenderRebuildInitial:
+		target = &p.renderMetrics.InitialRebuilds
+	case RenderRebuildPage:
+		target = &p.renderMetrics.PageRebuilds
+	case RenderRebuildStyle:
+		target = &p.renderMetrics.StyleRebuilds
+	case RenderRebuildViewport:
+		target = &p.renderMetrics.ViewportRebuilds
+	case RenderRebuildScroll:
+		target = &p.renderMetrics.ScrollRebuilds
+	case RenderRebuildAnimation:
+		target = &p.renderMetrics.AnimationRebuilds
 	}
 	if target != nil && *target != ^uint64(0) {
 		*target++

@@ -1355,6 +1355,9 @@ func runtimeContextLabel(context devtoolsmodel.RuntimeContext) string {
 			break
 		}
 		label := fmt.Sprintf("%s:%s/%s %s", diagnostic.Category, diagnostic.State, diagnostic.Reason, diagnostic.Subject)
+		if diagnostic.Count > 1 {
+			label += fmt.Sprintf(" x%d", diagnostic.Count)
+		}
 		if diagnostic.Initiator != "" || diagnostic.Schedule != "" {
 			label += fmt.Sprintf(" [%s/%s]", diagnostic.Initiator, diagnostic.Schedule)
 		}
@@ -1827,6 +1830,7 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 	}
 	tree, displayList, reusedDisplayList := ui.cachedDocumentFrame(page, viewportWidth, viewportHeight, gtx.Metric.PxPerDp)
 	if animationDamage == stylemodel.AnimationDamageLayout {
+		page.RecordRenderRebuild(browser.RenderRebuildAnimation)
 		tree = ui.buildDocumentTree(page, frameStyles, viewportWidth, viewportHeight, gtx.Metric.PxPerDp)
 		displayList = paintmodel.Build(tree)
 		page.RecordRenderEvent(browser.RenderDisplayListBuild)
@@ -1895,6 +1899,20 @@ func (ui *BrowserUI) cachedDocumentFrame(page *browser.Page, viewportWidth, view
 		cache.listFirst == position.First && cache.listOffset == position.Offset {
 		return layoutengine.Clone(cache.tree), cache.displayList, true
 	}
+	reason := browser.RenderRebuildInitial
+	if cache.tree != nil {
+		switch {
+		case cache.page != page:
+			reason = browser.RenderRebuildPage
+		case cache.revision != page.StyleRevision:
+			reason = browser.RenderRebuildStyle
+		case cache.viewportWidth != viewportWidth || cache.viewportHeight != viewportHeight:
+			reason = browser.RenderRebuildViewport
+		case cache.listFirst != position.First || cache.listOffset != position.Offset:
+			reason = browser.RenderRebuildScroll
+		}
+	}
+	page.RecordRenderRebuild(reason)
 
 	tree := ui.buildDocumentTree(page, page.ComputedStyles, viewportWidth, viewportHeight, pxPerDp)
 	displayList := paintmodel.Build(tree)
