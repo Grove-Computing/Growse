@@ -1,6 +1,6 @@
 # Runtime worker / Web Platform設計
 
-本書はGrowse v0.15.0の実行・閲覧context設計を示す。v0.1.0時点の歴史的な詳細設計は[旧MVP詳細設計](details-design.md)に残すが、Runtime、JavaScript、Frame、Service Worker、dynamic resource、hydrationについては本書を現行仕様とする。
+本書はGrowse v0.16.0の実行・閲覧context設計を示す。v0.1.0時点の歴史的な詳細設計は[旧MVP詳細設計](details-design.md)に残すが、Runtime、JavaScript、Frame、Service Worker、dynamic resource、hydrationについては本書を現行仕様とする。
 
 ## 所有境界
 
@@ -49,4 +49,4 @@ DevTools Runtime panelはPage / Frame / Service Workerのcontext ID、browsing /
 
 ## 非対象
 
-既存browser engineの埋め込み、Node.js互換、npm resolution、WASI、Web Worker / Shared Worker、Shadow DOM、custom elements、Service Worker Push / Background Sync、完全なPermissions Policy、BFCache、全WPTおよび任意frameworkへの完全適合はv0.15.0の対象外である。
+既存browser engineの埋め込み、Node.js互換、npm resolution、WASI、Web Worker / Shared Worker、Shadow DOM、custom elements、Service Worker Push / Background Sync、完全なPermissions Policy、BFCache、全WPTおよび任意frameworkへの完全適合はv0.16.0の対象外である。

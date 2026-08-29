@@ -8,21 +8,22 @@
 </head>
 <body>
   <main>
-    <p class="eyebrow">Growse v0.15.0</p>
-    <h1>Modern Web Compatibility</h1>
-    <p>GoでSSR初期状態を確認し、ツールバーのJS selectorへ明示的に切り替えてhydrationと操作を試せます。</p>
-    <p>このoffline縮約fixtureは対応範囲を再現するTest contractです。Next.js、SvelteKit、Tailwind、React、HTML / CSS / DOM全体や任意公開サイトとの完全互換を示すものではありません。</p>
+    <p class="eyebrow">Growse v0.16.0</p>
+    <h1>Real-site Rendering &amp; Performance</h1>
+    <p>GoでSSR初期状態を確認し、ツールバーのJS selectorへ明示的に切り替えてTailwind CSS v4、CJK、画像cache、hydration、差分animationを試せます。</p>
+    <p>このoffline fixtureは対応範囲を再現するTest contractです。Next.js、SvelteKit、Tailwind、React、HTML / CSS / DOM全体や任意公開サイトとの完全互換を示すものではありません。</p>
     <nav class="routes">
       <a href="/next/">Next.js SSR</a>
       <a href="/svelte/">SvelteKit SSR</a>
       <a href="/tailwind/">Tailwind CSS</a>
+      <a href="/real-site/">Tailwind v4 real-site</a>
       <a href="/diagnostics/">Failure diagnostics</a>
     </nav>
     <ol>
       <li>Go EngineでSSR markerとJavaScript非実行を確認する</li>
       <li>JS selectorで完全reloadしhydration markerを確認する</li>
-      <li>Counter、form、Navigation、responsive表示を操作する</li>
-      <li>DevToolsのNetwork / Runtimeでresourceとfailure理由を確認する</li>
+      <li>Real-siteで日本語、重複画像、responsive grid、filter操作を確認する</li>
+      <li>DevToolsのRuntimeでCSS、font fallback、image cache、frame rebuild理由を確認する</li>
     </ol>
   </main>
 </body>

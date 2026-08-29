@@ -6,7 +6,8 @@
 
 | Version | Supported |
 | --- | --- |
-| 0.15.x | Yes |
+| 0.16.x | Yes |
+| 0.15.x | No |
 | 0.14.x | No |
 | 0.13.x | No |
 | 0.12.x | No |
@@ -43,7 +44,7 @@ GitHub Releaseの各Archiveには、同名の`.sha256`と、`growse_<version>_<p
 たとえばLinux amd64のArchiveを検証する場合は、次を実行します。
 
 ```sh
-VERSION=v0.15.0
+VERSION=v0.16.0
 ASSET="growse_${VERSION}_linux_amd64.tar.gz"
 gh release download "$VERSION" --repo Grove-Computing/Growse \
   --pattern "$ASSET" --pattern "$ASSET.sha256" \
@@ -72,7 +73,7 @@ Developer workstationからのCredential窃取、不可視Unicode、未承認Bin
 
 ## Go / JavaScript Runtime Security Boundary
 
-Growse v0.15.0はPage / FrameのYaegi・goja・WASMとService WorkerをBrowser UIとは別の専用worker processで実行します。workerはversion / length制限付きの型付きIPCを通して、BrowserがbrokerするDOM、Event、Timer、Frame、Fetch、Storage、Navigation、Console、Module、dynamic resource、CSSOM、observer、WASM操作だけを要求できます。Browser credential、任意filesystem、直接socket / DNS、subprocess、dynamic library、OS shell、Go reflection、Node.js APIをhost surfaceとして公開しません。
+Growse v0.16.0はPage / FrameのYaegi・goja・WASMとService WorkerをBrowser UIとは別の専用worker processで実行します。workerはversion / length制限付きの型付きIPCを通して、BrowserがbrokerするDOM、Event、Timer、Frame、Fetch、Storage、Navigation、Console、Module、dynamic resource、CSSOM、observer、WASM操作だけを要求できます。Browser credential、任意filesystem、直接socket / DNS、subprocess、dynamic library、OS shell、Go reflection、Node.js APIをhost surfaceとして公開しません。
 
 Browserはcodeを渡す前に、別PID、worker executable / protocol、brokered host I/O、最小environment、parent lifecycle、memory上限を検証します。Linuxでは`no-new-privileges`とparent-death signal、macOS / Windowsでは専用process group、全platformではparent IPC EOFによる終了を適用します。必須条件が欠ける、workerがtimeout / crashする、protocolに違反する場合は対象contextだけをfail closedし、停止済みgenerationのcallbackを拒否します。
 
@@ -94,9 +95,9 @@ HTTP CacheはOSのUser Cache Directory配下にprivate cacheとして保存し�
 
 Service Worker registrationとCache StorageはOrigin profileへ保存します。registration 64件、Originあたりactive worker 1件、Cache 32件、entry 4,096件、1 response 4 MiB、Origin合計128 MiBを上限とします。scriptはsame-origin Secure Contextに限定し、scope、update redirect / MIME、fetch interceptionをBrowser側で検証します。Cacheへcredentialを永続化せず、破損dataはOrigin単位で隔離します。
 
-DevToolsはPageごとのread-only診断境界です。Consoleは1件4 KiB・Page 1,000件、DOM snapshotは2,000 node・深さ128・attribute 64件・文字列4 KiB、NetworkはPage 500件・Browser Session 4,000件を上限とします。Runtime panelはPage / Frame / Service WorkerのID、generation、Engine、state、script種別、有限error category、sandbox capabilityだけを表示します。Request / Response body、Header、Cookie、Authorization、Service Worker Cache body、IPC payload、raw error本文を保持せず、diagnostic URLからuserinfo、query、fragmentを除去します。Inspectorはpassword inputのvalue、WebGo callback、Runtime objectを公開しません。
+DevToolsはPageごとのread-only診断境界です。Consoleは1件4 KiB・Page 1,000件、DOM snapshotは2,000 node・深さ128・attribute 64件・文字列4 KiB、NetworkはPage 2,000件・Browser Session 4,000件を上限とします。Runtime panelはPage / Frame / Service WorkerのID、generation、Engine、state、script種別に加え、CSS局所無視、font fallback chain、image cache counter、frame rebuild理由をbody-free metadataとして表示します。同一診断はcountへ集約し、1 Page 2,000種類・1 field 4 KiB・count 1,000,000で飽和します。Request / Response body、Header、Cookie、Authorization、Service Worker Cache body、decoded pixel、font bytes、IPC payload、raw error本文を保持せず、diagnostic URLからuserinfo、query、fragmentを除去します。Inspectorはpassword inputのvalue、WebGo callback、Runtime objectを公開しません。
 
-外部Go sourceを信頼しないでください。外部JavaScriptはv0.15.0 sandbox boundary内で扱いますが、未知の実装脆弱性を想定し、機密情報を持つ高権限環境では実行しないでください。
+外部Go sourceを信頼しないでください。外部JavaScriptはv0.16.0 sandbox boundary内で扱いますが、未知の実装脆弱性を想定し、機密情報を持つ高権限環境では実行しないでください。
 
 ## Hoverとカーソル表示
 
@@ -112,4 +113,6 @@ inline / external SVGはpath、basic shape、text、gradient、clip、2D transfo
 
 Gradient、Shadow、Transform、Clip、Opacityは取得したコードを実行せず、型付きのStyle値からLayout TreeとDisplay Listを生成します。極端に大きいGridや深いStacking Contextを含む信頼できないページはCPU・メモリを消費し得るため、WebGoと同様に高い権限で実行しないでください。
 
-CSS Animationは、1要素あたり32件、Page全体で4096件、Stylesheetあたり256個の`@keyframes`に制限します。各`@keyframes`のFrame数、Declaration数、Selector数にも上限を設け、極端なDuration、Iteration、Easingを非有限値やbusy loopへ発展させないよう検証します。
+CSS Animationは、1要素あたり32件、Page全体で4096件、Stylesheetあたり256個の`@keyframes`に制限します。各`@keyframes`のFrame数、Declaration数、Selector数にも上限を設け、極端なDuration、Iteration、Easingを非有限値やbusy loopへ発展させないよう検証します。`requestAnimationFrame()`はPage 10,000件、1 frame 256 callbackのFIFO budgetを持ち、残りを次frameへ送って入力やNavigationへ制御を戻します。
+
+JavaScript compatibility profileの画像は、URLごとのfetch bodyとdecode結果をPage generation内だけで共有し、256 MiB・512 resourceのLRU上限を適用します。target raster、background、gradient、filter cacheもbyte / entry上限を持ち、Page close、Navigation、Engine切替で破棄します。stale generationやcancel後のresource completionを新Pageへcommitせず、診断にはbody、decoded pixel、rasterを複製しません。

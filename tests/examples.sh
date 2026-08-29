@@ -39,4 +39,4 @@ go test \
   ./examples/persistent-app \
   ./examples/todo
 
-echo "v0.15.0 Demo回帰検証成功: ${examples[*]} multi-tab-workspace"
+echo "v0.16.0 Demo回帰検証成功: ${examples[*]} multi-tab-workspace"
