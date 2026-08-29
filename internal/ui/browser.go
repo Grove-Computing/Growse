@@ -125,6 +125,7 @@ type BrowserUI struct {
 	layoutBuildImages func(*dom.Document, stylemodel.Map, map[dom.NodeID]layoutengine.ImageResource, float32, float32, float32, float32) *layoutengine.Tree
 	layoutBuildFonts  func(*dom.Document, stylemodel.Map, map[dom.NodeID]layoutengine.ImageResource, *layoutengine.FontSet, float32, float32, float32, float32) *layoutengine.Tree
 	layoutCache       documentLayoutCache
+	imagePaintCache   pageImagePaintCache
 	fontPage          *browser.Page
 	fontRevision      uint64
 	scrollRevision    uint64
@@ -1792,6 +1793,7 @@ func (ui *BrowserUI) layoutViewport(gtx layout.Context) layout.Dimensions {
 func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layout.Dimensions {
 	paint.Fill(gtx.Ops, color.NRGBA{R: 255, G: 255, B: 255, A: 255})
 	ui.installPageFonts(page)
+	ui.imagePaintCache.prepare(page)
 	if ui.scrollRevision != page.ScrollRevision {
 		ui.pageList.Position = layout.Position{First: page.ScrollFirst, Offset: page.ScrollOffset}
 		ui.scrollRevision = page.ScrollRevision
@@ -2196,15 +2198,14 @@ func (ui *BrowserUI) layoutDrawImage(gtx layout.Context, command paintmodel.Draw
 		if source := images[command.URL]; source != nil && !command.Failed {
 			targetWidth := max(gtx.Dp(unit.Dp(command.ImageRect.Width)), 1)
 			targetHeight := max(gtx.Dp(unit.Dp(command.ImageRect.Height)), 1)
-			raster := image.NewNRGBA(image.Rect(0, 0, targetWidth, targetHeight))
-			xdraw.CatmullRom.Scale(raster, raster.Bounds(), source, source.Bounds(), imagedraw.Src, nil)
+			cached := ui.imagePaintCache.scale(command.URL, source, targetWidth, targetHeight)
 			clipMin := image.Pt(gtx.Dp(unit.Dp(command.ImageClip.X-command.X)), gtx.Dp(unit.Dp(command.ImageClip.Y-command.Y)))
 			clipMax := clipMin.Add(image.Pt(gtx.Dp(unit.Dp(command.ImageClip.Width)), gtx.Dp(unit.Dp(command.ImageClip.Height))))
 			area := clip.Rect{Min: clipMin, Max: clipMax}.Push(gtx.Ops)
 			offset := op.Offset(image.Pt(gtx.Dp(unit.Dp(command.ImageRect.X-command.X)), gtx.Dp(unit.Dp(command.ImageRect.Y-command.Y)))).Push(gtx.Ops)
 			imageGTX := gtx
-			imageGTX.Constraints = layout.Exact(raster.Bounds().Size())
-			widget.Image{Src: paint.NewImageOp(raster), Fit: widget.Unscaled, Scale: 1 / gtx.Metric.PxPerDp}.Layout(imageGTX)
+			imageGTX.Constraints = layout.Exact(cached.raster.Bounds().Size())
+			widget.Image{Src: cached.op, Fit: widget.Unscaled, Scale: 1 / gtx.Metric.PxPerDp}.Layout(imageGTX)
 			offset.Pop()
 			area.Pop()
 		} else if command.Alt != "" {
