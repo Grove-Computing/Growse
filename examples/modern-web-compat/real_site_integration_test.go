@@ -36,13 +36,13 @@ func TestRealSiteFixtureLoadsGeneratedCSSImagesAnimationAndHydration(t *testing.
 		}
 	})
 
-	page, err := engine.Navigate(context.Background(), server.URL+"/real-site/")
+	_, err := engine.Navigate(context.Background(), server.URL+"/real-site/")
 	if err != nil {
 		t.Fatal(err)
 	}
 	engine.UpdateViewport(1024, 720)
 	waitForFixtureText(t, engine, mutations, "real-site-hydration", "hydrated")
-	page = engine.Page()
+	page := engine.Page()
 	if page.Engine != runtimemodel.EngineJavaScript || page.Compatibility != browser.CompatibilityProfileModernWeb {
 		t.Fatalf("real-site compatibility profile = engine:%s profile:%s", page.Engine, page.Compatibility)
 	}
