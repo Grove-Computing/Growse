@@ -1,0 +1,9 @@
+{
+  "name": "growse-modern-web-fixtures",
+  "private": true,
+  "packageManager": "pnpm@11.21.0",
+  "devDependencies": {
+    "@tailwindcss/cli": "4.1.12",
+    "tailwindcss": "4.1.12"
+  }
+}

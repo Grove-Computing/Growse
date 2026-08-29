@@ -42,3 +42,23 @@ bash tests/v015-visual.sh
 ```
 
 差分が出た場合はSSR Node identity、hydration state、responsive query、fallback resource、DevTools categoryのどれが変化したかを先に確認する。環境identityまたはgoldenだけを先に更新せず、意図したStyle / Layout / Paint変更を対応するUnit / Framework Testでも固定する。
+
+## v0.16.0 Real-site Rendering & Performance
+
+`examples/modern-web-compat/TestRealSiteVisualRegression`はTailwind CSS v4.1.12で実buildした`fixtures/real-site/app.css`とSvelteKit SSR相当HTMLを使用し、次の6状態を`testdata/real-site-visual.golden.json`へ固定する。
+
+- Go Engineの初期SSR
+- 日本語を含むcard text
+- 640×720のresponsive grid
+- JS Engineで重複画像を読み込んだ状態
+- hydration後のfilter操作
+- 固定timestampのtransform / opacity animation sample
+
+snapshotはroot geometry、box / paint / image件数、主要computed style、diagnostic category、animation damage、opacity、translateを比較する。system fontのplatform差をpixel hashへ固定せず、CJK glyph coverageはLinux / macOS / Windowsのplatform testで別に検証する。
+
+```sh
+go test ./examples/modern-web-compat -run 'TestRealSite(VisualRegression|Fixture)' -count=1
+bash tests/v016-framework.sh
+```
+
+golden更新時はTailwind artifactのversion / offline generation command / SHA-256 digest、SSR marker、image request集約、hydration interaction、animation damage classifierの個別assertionも同時に通す。Go Engine側のsnapshotへhydration callbackやJavaScript animation stateを追加しない。

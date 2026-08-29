@@ -25,6 +25,9 @@ func TestPageImagePaintCacheReusesWarmResizeAndImageOp(t *testing.T) {
 	if resized.raster == first.raster || cache.allocations != 2 {
 		t.Fatalf("target-specific resize = raster:%p allocations:%d", resized.raster, cache.allocations)
 	}
+	if metrics := page.RenderMetricsSnapshot(); metrics.ImagePaintHits != 1 || metrics.ImagePaintMisses != 2 {
+		t.Fatalf("warm image metrics = %+v", metrics)
+	}
 }
 
 func TestPageImagePaintCacheReusesBackgroundRasterByStyleAndGeometryRevision(t *testing.T) {

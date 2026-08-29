@@ -71,12 +71,12 @@ for value in \
 done
 
 ci_workflow=.github/workflows/ci.yml
-require_file_value "$ci_workflow" "Docker package (v0.15.0)"
+require_file_value "$ci_workflow" "Docker package (v0.16.0)"
 require_file_value "$ci_workflow" "docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e"
 require_file_value "$ci_workflow" "docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a"
 require_file_value "$ci_workflow" "load: true"
 require_file_value "$ci_workflow" "push: false"
-require_file_value "$ci_workflow" "growse:v0.15.0"
+require_file_value "$ci_workflow" "growse:v0.16.0"
 require_file_value "$ci_workflow" "Verify unused Pebble runtime is absent"
 require_file_value "$ci_workflow" "Run sandbox Web Platform smoke"
 require_file_value "$ci_workflow" "--entrypoint growse-smoke"

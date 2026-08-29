@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "release": "v0.15.0",
-  "artifactPolicy": "checked-in reduced HTTP contracts",
+  "release": "v0.16.0",
+  "artifactPolicy": "checked-in deterministic build artifacts",
   "publicInternetRequired": false,
   "verificationCommand": "go test ./examples/modern-web-compat -run TestFixtureManifestIsCompleteAndUntampered",
   "fixtures": [
@@ -43,6 +43,26 @@
         {"path": "fixtures/sveltekit/app.mjs", "sha256": "1e588fe84889ba5eefbc0eea6444aaf41fbf62b20b7a30f79466f074e2e5f440"},
         {"path": "fixtures/sveltekit/index.html", "sha256": "81f303fd8772a35a085dcc051590e3b61273fb5f89b0c18284c5753ccb60bf00"},
         {"path": "fixtures/sveltekit/start.mjs", "sha256": "de2a26d22df681a1065b7a2ec5046d701b1073c6f067bd2e86521f43c979a13c"}
+      ]
+    },
+    {
+      "name": "real-site",
+      "framework": "SvelteKit + Tailwind CSS",
+      "frameworkVersion": "2.37.0",
+      "buildTool": "Tailwind CLI 4.1.12 / SvelteKit 2.37.0 SSR source / Node.js 24.18.0 / pnpm 11.21.0",
+      "dependencies": {
+        "@sveltejs/kit": "2.37.0",
+        "svelte": "5.38.2",
+        "tailwindcss": "4.1.12",
+        "@tailwindcss/cli": "4.1.12"
+      },
+      "generationCommand": "pnpm install --offline --frozen-lockfile --ignore-scripts && pnpm exec tailwindcss -i sources/real-site/input.css -o fixtures/real-site/app.css --minify",
+      "licenses": ["MIT:SvelteKit", "MIT:Svelte", "MIT:Tailwind CSS"],
+      "sources": ["sources/real-site/input.css", "sources/real-site/src/routes/+page.svelte"],
+      "artifacts": [
+        {"path": "fixtures/real-site/app.css", "sha256": "b9b7c1ed27b41c402f85be6e94e3eaf00c89325fa3854f5fdf40219be95e6a88"},
+        {"path": "fixtures/real-site/app.mjs", "sha256": "428ab55f9ed206b1177bbc76b9fab1386c083ee39bf84139df1a649d2b31ca2d"},
+        {"path": "fixtures/real-site/index.html", "sha256": "749061b1ac9d087ec27eaa9cb2787a8d6f88500abb705b27af48497372426868"}
       ]
     },
     {

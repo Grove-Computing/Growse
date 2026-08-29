@@ -27,7 +27,7 @@ func TestModernWebCompatibilityShowcaseRunsEntirelyLocally(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, route := range []string{"/next/", "/svelte/", "/tailwind/", "/diagnostics/"} {
+	for _, route := range []string{"/next/", "/svelte/", "/tailwind/", "/real-site/", "/diagnostics/"} {
 		if !strings.Contains(string(landing), route) {
 			t.Fatalf("showcase landing is missing route %s", route)
 		}

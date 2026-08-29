@@ -86,6 +86,7 @@ func (cache *pageImagePaintCache) background(command paintmodel.DrawBox, layer s
 		key.source, key.sourceBounds = imagePointer(source), source.Bounds()
 	}
 	if cached, ok := cache.backgrounds[key]; ok {
+		cache.page.RecordRenderEvent(browser.RenderImagePaintHit)
 		cache.tick++
 		cached.lastUsed = cache.tick
 		cache.backgrounds[key] = cached
@@ -107,6 +108,7 @@ func (cache *pageImagePaintCache) background(command paintmodel.DrawBox, layer s
 	if raster == nil {
 		return cachedScaledImage{}
 	}
+	cache.page.RecordRenderEvent(browser.RenderImagePaintMiss)
 	raster = rasterFilterImage(raster, command.Filters)
 	result := cachedScaledImage{op: paint.NewImageOp(raster), bytes: int64(width) * int64(height) * 4}
 	if typed, ok := raster.(*image.NRGBA); ok {
@@ -134,12 +136,14 @@ func (cache *pageImagePaintCache) scale(url string, source image.Image, width, h
 	key := scaledImageKey{url: url, source: identity, sourceBounds: source.Bounds(), width: width, height: height}
 	if identity != 0 {
 		if cached, ok := cache.scaled[key]; ok {
+			cache.page.RecordRenderEvent(browser.RenderImagePaintHit)
 			cache.tick++
 			cached.lastUsed = cache.tick
 			cache.scaled[key] = cached
 			return cached
 		}
 	}
+	cache.page.RecordRenderEvent(browser.RenderImagePaintMiss)
 	raster := image.NewNRGBA(image.Rect(0, 0, width, height))
 	xdraw.CatmullRom.Scale(raster, raster.Bounds(), source, source.Bounds(), imagedraw.Src, nil)
 	result := cachedScaledImage{raster: raster, op: paint.NewImageOp(raster), bytes: int64(width) * int64(height) * 4}
@@ -173,9 +177,11 @@ func (cache *pageImagePaintCache) evict() {
 		case 1:
 			cache.bytes -= cache.scaled[oldestScaled].bytes
 			delete(cache.scaled, oldestScaled)
+			cache.page.RecordRenderEvent(browser.RenderImagePaintEviction)
 		case 2:
 			cache.bytes -= cache.backgrounds[oldestBackground].bytes
 			delete(cache.backgrounds, oldestBackground)
+			cache.page.RecordRenderEvent(browser.RenderImagePaintEviction)
 		default:
 			return
 		}

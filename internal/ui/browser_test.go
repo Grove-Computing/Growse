@@ -1535,6 +1535,10 @@ div { width: 100px; height: 100px; animation: fade 1s linear infinite; }
 	if displayList == nil || ui.layoutCache.displayList != displayList {
 		t.Fatal("static display list was rebuilt across composite frames")
 	}
+	metrics := page.RenderMetricsSnapshot()
+	if metrics.LayoutBuilds != 1 || metrics.DisplayListBuilds != 2 || metrics.DisplayListReuses != 1 || metrics.CompositeFrames != 2 || metrics.InitialRebuilds != 1 {
+		t.Fatalf("warm composite frame metrics = %+v", metrics)
+	}
 }
 
 func TestLayoutAnimationFramesRebuildLayoutAndDisplayList(t *testing.T) {
@@ -1571,6 +1575,9 @@ div { height: 40px; animation: grow 1s linear infinite; }
 	ui.layoutDocument(gtx, page)
 	if builds != 3 {
 		t.Fatalf("layout builds across layout animation frames = %d, want 3 (one base plus two sampled frames)", builds)
+	}
+	if metrics := page.RenderMetricsSnapshot(); metrics.InitialRebuilds != 1 || metrics.AnimationRebuilds != 2 {
+		t.Fatalf("layout animation rebuild reasons = %+v", metrics)
 	}
 }
 

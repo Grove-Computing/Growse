@@ -41,6 +41,9 @@ func TestImageResourceCacheEvictsLeastRecentlyUsedEntryWithinLimits(t *testing.T
 	if cache.entries[urls[0]] == nil || cache.entries[urls[1]] != nil || cache.entries[urls[2]] == nil || len(cache.entries) != 2 || cache.bytes > cache.maxBytes {
 		t.Fatalf("LRU entries/bytes = %#v / %d", cache.entries, cache.bytes)
 	}
+	if stats := cache.statsSnapshot(); stats.hits != 1 || stats.misses != 3 || stats.evictions != 1 {
+		t.Fatalf("image resource cache stats = %+v", stats)
+	}
 }
 
 func TestImageResourceCacheIsReleasedOnEngineSwitch(t *testing.T) {
