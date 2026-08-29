@@ -91,6 +91,7 @@ type Page struct {
 	imageCancel      context.CancelFunc
 	imageGeneration  uint64
 	imageEvents      map[dom.NodeID]string
+	imageCache       *imageResourceCache
 }
 
 func (p *Page) beginImageLoad(parent context.Context) (context.Context, uint64) {

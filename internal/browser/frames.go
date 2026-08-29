@@ -234,7 +234,8 @@ func (state *frameLoadState) buildPage(ctx context.Context, response *network.Re
 	}
 	computed := computeStableStyles(document, stylesheet, style.InteractionState{}, defaultFrameWidth, defaultFrameHeight, state.reducedMotion)
 	imageBudget := newImageDecodeBudget()
-	backgroundImages, backgroundErrors := loadBackgroundImagesWithBudget(ctx, imageResources, computed, imageBudget)
+	imageCache := newImageResourceCache()
+	backgroundImages, backgroundErrors := loadBackgroundImagesWithCache(ctx, imageResources, computed, imageBudget, imageCache)
 	var replacedImages map[dom.NodeID]layoutmodel.ImageResource
 	var decodedImages map[string]image.Image
 	var imageErrors []string
@@ -242,7 +243,7 @@ func (state *frameLoadState) buildPage(ctx context.Context, response *network.Re
 	var fontErrors []string
 	if state.engine == runtimemodel.EngineJavaScript {
 		imagePolicy := imageViewportPolicy(document, computed, baseURL, defaultFrameWidth, defaultFrameHeight)
-		replacedImages, decodedImages, imageErrors = loadReplacedImagesWithPolicyAndBudget(ctx, imageResources, baseURL, document, defaultFrameWidth, 1, imagePolicy, imageBudget)
+		replacedImages, decodedImages, imageErrors = loadReplacedImagesWithCache(ctx, imageResources, baseURL, document, defaultFrameWidth, 1, imagePolicy, imageBudget, imageCache)
 		inlineResources, inlineImages, inlineFailures := loadInlineSVGImagesWithBudget(document, imageBudget)
 		mergeImageResources(replacedImages, decodedImages, inlineResources, inlineImages)
 		imageErrors = append(imageErrors, inlineFailures...)
@@ -268,6 +269,7 @@ func (state *frameLoadState) buildPage(ctx context.Context, response *network.Re
 		Fonts: fonts, FontErrors: fontErrors, WebFonts: layoutPageFonts(fonts, state.engine == runtimemodel.EngineJavaScript),
 		StyleRevision: 1, ReducedMotion: state.reducedMotion, ViewportWidth: defaultFrameWidth, ViewportHeight: defaultFrameHeight, DevTools: pageStore,
 		FramePolicy:    policy,
+		imageCache:     imageCache,
 		serviceWorkers: state.rootPage.serviceWorkers,
 		imageLoader:    imageResources,
 	}

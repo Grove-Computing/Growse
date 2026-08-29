@@ -84,6 +84,10 @@ func loadBackgroundImages(ctx context.Context, client ResourceLoader, computed s
 }
 
 func loadBackgroundImagesWithBudget(ctx context.Context, client ResourceLoader, computed style.Map, budget *imageDecodeBudget) (map[string]image.Image, []string) {
+	return loadBackgroundImagesWithCache(ctx, client, computed, budget, newImageResourceCache())
+}
+
+func loadBackgroundImagesWithCache(ctx context.Context, client ResourceLoader, computed style.Map, budget *imageDecodeBudget, cache *imageResourceCache) (map[string]image.Image, []string) {
 	images := make(map[string]image.Image)
 	var errors []string
 	if client == nil {
@@ -100,30 +104,27 @@ func loadBackgroundImagesWithBudget(ctx context.Context, client ResourceLoader, 
 				continue
 			}
 			seen[background.URL] = true
-			if !budget.claim("background:" + background.URL) {
-				errors = append(errors, "background image resource limit exceeded")
-				continue
-			}
 			resourceURL, err := url.Parse(background.URL)
 			if err != nil || resourceURL.Scheme != "http" && resourceURL.Scheme != "https" {
 				errors = append(errors, "background image URL is not a supported HTTP(S) URL")
 				continue
 			}
-			response, err := client.Get(ctx, resourceURL)
-			if err != nil || response == nil {
+			resource := cache.load(ctx, client, resourceURL, budget)
+			switch resource.failure {
+			case imageLoadRequestFailure:
 				errors = append(errors, "background image request failed: "+network.RedactedURL(resourceURL))
 				continue
-			}
-			if len(response.Body) > maxImageBytes || !isImageContentType(response.ContentType) {
+			case imageLoadResponseFailure:
 				errors = append(errors, "background image response was rejected: "+network.RedactedURL(resourceURL))
 				continue
-			}
-			decoded, _, _, err := decodeImageResponseWithBudget(response.Body, response.ContentType, budget)
-			if err != nil {
+			case imageLoadDecodeFailure:
 				errors = append(errors, "background image decode failed: "+network.RedactedURL(resourceURL))
 				continue
+			case imageLoadResourceLimit:
+				errors = append(errors, "background image resource limit exceeded")
+				continue
 			}
-			images[background.URL] = decoded
+			images[background.URL] = resource.decoded
 		}
 	}
 	return images, errors
@@ -138,6 +139,10 @@ func loadReplacedImagesWithPolicy(ctx context.Context, client ResourceLoader, ba
 }
 
 func loadReplacedImagesWithPolicyAndBudget(ctx context.Context, client ResourceLoader, baseURL *url.URL, document *dom.Document, viewportWidth, deviceScale float32, eligible map[dom.NodeID]bool, budget *imageDecodeBudget) (map[dom.NodeID]layout.ImageResource, map[string]image.Image, []string) {
+	return loadReplacedImagesWithCache(ctx, client, baseURL, document, viewportWidth, deviceScale, eligible, budget, newImageResourceCache())
+}
+
+func loadReplacedImagesWithCache(ctx context.Context, client ResourceLoader, baseURL *url.URL, document *dom.Document, viewportWidth, deviceScale float32, eligible map[dom.NodeID]bool, budget *imageDecodeBudget, cache *imageResourceCache) (map[dom.NodeID]layout.ImageResource, map[string]image.Image, []string) {
 	resources := make(map[dom.NodeID]layout.ImageResource)
 	images := make(map[string]image.Image)
 	var errors []string
@@ -172,31 +177,28 @@ func loadReplacedImagesWithPolicyAndBudget(ctx context.Context, client ResourceL
 					}
 					lastTarget = target
 					resource.URL = target.String()
-					if !budget.claim("image:" + resource.URL) {
-						resource.Error = "image resource limit exceeded"
-						continue
-					}
 					if target.Scheme != "http" && target.Scheme != "https" {
 						resource.Error = "image URL is not a supported HTTP(S) URL"
 						continue
 					}
-					response, loadErr := client.Get(ctx, target)
-					if loadErr != nil || response == nil {
+					cached := cache.load(ctx, client, target, budget)
+					switch cached.failure {
+					case imageLoadRequestFailure:
 						resource.Error = "image request failed"
 						continue
-					}
-					if len(response.Body) > maxImageBytes || !isImageContentType(response.ContentType) {
+					case imageLoadResponseFailure:
 						resource.Error = "image response was rejected"
 						continue
-					}
-					decoded, decodedWidth, decodedHeight, decodeErr := decodeImageResponseWithBudget(response.Body, response.ContentType, budget)
-					if decodeErr != nil {
+					case imageLoadDecodeFailure:
 						resource.Error = "image dimensions were rejected"
+						continue
+					case imageLoadResourceLimit:
+						resource.Error = "image resource limit exceeded"
 						continue
 					}
 					resource.Loaded, resource.Error = true, ""
-					resource.IntrinsicWidth, resource.IntrinsicHeight = float32(decodedWidth), float32(decodedHeight)
-					images[resource.URL] = decoded
+					resource.IntrinsicWidth, resource.IntrinsicHeight = float32(cached.width), float32(cached.height)
+					images[resource.URL] = cached.decoded
 					break
 				}
 				resources[node.ID] = resource

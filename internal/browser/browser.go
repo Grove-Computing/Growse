@@ -750,7 +750,7 @@ func (b *Browser) UpdateViewport(width, height float32) bool {
 		loadContext, generation := page.beginImageLoad(context.Background())
 		policy := imageViewportPolicy(page.Document, page.ComputedStyles, baseURL, width, height)
 		budget := newImageDecodeBudgetWithImages(page.BackgroundImages)
-		resources, images, failures := loadReplacedImagesWithPolicyAndBudget(loadContext, imageLoader, baseURL, page.Document, width, 1, policy, budget)
+		resources, images, failures := loadReplacedImagesWithCache(loadContext, imageLoader, baseURL, page.Document, width, 1, policy, budget, page.imageCache)
 		inlineResources, inlineImages, inlineFailures := loadInlineSVGImagesWithBudget(page.Document, budget)
 		mergeImageResources(resources, images, inlineResources, inlineImages)
 		failures = append(failures, inlineFailures...)
@@ -1388,7 +1388,8 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	}
 	computedStyles := computeStableStyles(document, stylesheet, style.InteractionState{}, 1280, 720, reducedMotion)
 	imageBudget := newImageDecodeBudget()
-	backgroundImages, backgroundErrors := loadBackgroundImagesWithBudget(ctx, imageResources, computedStyles, imageBudget)
+	imageCache := newImageResourceCache()
+	backgroundImages, backgroundErrors := loadBackgroundImagesWithCache(ctx, imageResources, computedStyles, imageBudget, imageCache)
 	var replacedImages map[dom.NodeID]layoutengine.ImageResource
 	var decodedImages map[string]image.Image
 	var imageErrors []string
@@ -1396,7 +1397,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	var fontErrors []string
 	if engine == runtimemodel.EngineJavaScript {
 		imagePolicy := imageViewportPolicy(document, computedStyles, baseURL, 1280, 720)
-		replacedImages, decodedImages, imageErrors = loadReplacedImagesWithPolicyAndBudget(ctx, imageResources, baseURL, document, 1280, 1, imagePolicy, imageBudget)
+		replacedImages, decodedImages, imageErrors = loadReplacedImagesWithCache(ctx, imageResources, baseURL, document, 1280, 1, imagePolicy, imageBudget, imageCache)
 		inlineResources, inlineImages, inlineErrors := loadInlineSVGImagesWithBudget(document, imageBudget)
 		mergeImageResources(replacedImages, decodedImages, inlineResources, inlineImages)
 		imageErrors = append(imageErrors, inlineErrors...)
@@ -1442,6 +1443,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 		DevTools:         pageStore,
 		serviceWorkers:   b.serviceWorkers,
 		imageLoader:      imageResources,
+		imageCache:       imageCache,
 	}
 	for _, scriptError := range scriptErrors {
 		page.DevTools.AddConsole(devtools.ConsoleError, "script", scriptError)
@@ -1825,7 +1827,7 @@ func startRuntime(ctx context.Context, factory runtimemodel.EngineFactory, engin
 			generationContext, generation := page.beginImageLoad(loadContext)
 			policy := imageViewportPolicy(page.Document, page.ComputedStyles, pageBaseURL(page), page.ViewportWidth, page.ViewportHeight)
 			budget := newImageDecodeBudgetWithImages(page.BackgroundImages)
-			resources, images, failures := loadReplacedImagesWithPolicyAndBudget(generationContext, page.imageLoader, pageBaseURL(page), page.Document, page.ViewportWidth, 1, policy, budget)
+			resources, images, failures := loadReplacedImagesWithCache(generationContext, page.imageLoader, pageBaseURL(page), page.Document, page.ViewportWidth, 1, policy, budget, page.imageCache)
 			inlineResources, inlineImages, inlineFailures := loadInlineSVGImagesWithBudget(page.Document, budget)
 			mergeImageResources(resources, images, inlineResources, inlineImages)
 			failures = append(failures, inlineFailures...)

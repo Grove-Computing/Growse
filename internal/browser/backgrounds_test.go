@@ -36,6 +36,39 @@ func TestLoadBackgroundImagesDecodesSafeImage(t *testing.T) {
 	}
 }
 
+func TestPageImageCacheSharesFetchBodyAndDecodeAcrossBackgroundAndElement(t *testing.T) {
+	resourceURL := "https://example.com/assets/shared.png"
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, image.NewNRGBA(image.Rect(0, 0, 3, 2))); err != nil {
+		t.Fatal(err)
+	}
+	loader := &routeLoader{responses: map[string]*network.Response{
+		resourceURL: {URL: mustParseURL(t, resourceURL), ContentType: "image/png", Body: encoded.Bytes()},
+	}}
+	cache, budget := newImageResourceCache(), newImageDecodeBudget()
+	computed := style.Map{dom.NodeID(1): {BackgroundImage: style.BackgroundImage{Kind: style.BackgroundImageURL, URL: resourceURL}}}
+	backgrounds, backgroundErrors := loadBackgroundImagesWithCache(context.Background(), loader, computed, budget, cache)
+	document := dom.NewDocument()
+	imageNode := document.CreateElement("img", map[string]string{"src": resourceURL})
+	if err := document.AppendChild(document.Root, imageNode); err != nil {
+		t.Fatal(err)
+	}
+	resources, images, imageErrors := loadReplacedImagesWithCache(context.Background(), loader, mustParseURL(t, "https://example.com/"), document, 1280, 1, nil, budget, cache)
+	if len(backgroundErrors) != 0 || len(imageErrors) != 0 || !resources[imageNode.ID].Loaded {
+		t.Fatalf("shared load errors = background:%v image:%v resource:%#v", backgroundErrors, imageErrors, resources[imageNode.ID])
+	}
+	if len(loader.requested) != 1 {
+		t.Fatalf("shared resource fetches = %d, want 1: %v", len(loader.requested), loader.requested)
+	}
+	if backgrounds[resourceURL] != images[resourceURL] {
+		t.Fatal("background and replaced image did not share the decoded result")
+	}
+	entry := cache.entries[resourceURL]
+	if entry == nil || !bytes.Equal(entry.body, encoded.Bytes()) || entry.decoded != images[resourceURL] {
+		t.Fatalf("cached body/decode = %#v", entry)
+	}
+}
+
 func TestLoadBackgroundImagesRejectsUnsafeContentTypeWithoutFailingPage(t *testing.T) {
 	resourceURL, _ := url.Parse("https://example.com/not-image")
 	loader := &routeLoader{responses: map[string]*network.Response{
