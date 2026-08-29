@@ -18,6 +18,22 @@ import (
 	"github.com/Grove-Computing/Growse/internal/style"
 )
 
+// CompatibilityProfile selects page-owned rendering and lifecycle behavior.
+// It is fixed when a Page is built and never shared across Engine reloads.
+type CompatibilityProfile string
+
+const (
+	CompatibilityProfileGo        CompatibilityProfile = "go"
+	CompatibilityProfileModernWeb CompatibilityProfile = "modern-web"
+)
+
+func compatibilityProfileForEngine(engine runtimemodel.Engine) CompatibilityProfile {
+	if runtimemodel.NormalizeEngine(engine) == runtimemodel.EngineJavaScript {
+		return CompatibilityProfileModernWeb
+	}
+	return CompatibilityProfileGo
+}
+
 // Page holds the state of one loaded document.
 //
 // Runtimeの状態はスクリプト取得エラーと分けて保持し、Goコードを実行できない場合も
@@ -48,6 +64,7 @@ type Page struct {
 	FontErrors       []string
 	WebFonts         *layoutmodel.FontSet
 	Engine           runtimemodel.Engine
+	Compatibility    CompatibilityProfile
 	Scripts          []Script
 	ImportMap        map[string]string
 	ScriptErrors     []string
@@ -208,10 +225,19 @@ func (p *Page) ActiveAnimations(current time.Time) bool {
 		(p.Transitions != nil && p.Transitions.Active(current)))
 }
 
+// UsesModernWebCompatibility reports whether JS-only real-site rendering and
+// lifecycle features may run for this Page generation.
+func (p *Page) UsesModernWebCompatibility() bool {
+	return p != nil && p.Engine == runtimemodel.EngineJavaScript && p.Compatibility == CompatibilityProfileModernWeb
+}
+
 // NewPage creates a page for pageURL. A nil URL is allowed for documents such
 // as an in-memory error page that do not have a network location.
 func NewPage(pageURL *url.URL) *Page {
-	return &Page{URL: cloneURL(pageURL), BaseURL: cloneURL(pageURL), DevTools: devtools.NewPageStore()}
+	return &Page{
+		URL: cloneURL(pageURL), BaseURL: cloneURL(pageURL), DevTools: devtools.NewPageStore(),
+		Engine: runtimemodel.EngineGo, Compatibility: CompatibilityProfileGo,
+	}
 }
 
 func (p *Page) ensureDevTools() *devtools.PageStore {
