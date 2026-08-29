@@ -36,6 +36,7 @@ type fixtureArtifact struct {
 }
 
 var semanticVersion = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
+var publicResourceReference = regexp.MustCompile(`(?i)(?:src|href)=["']https?://|url\(\s*["']?https?://`)
 
 func TestFixtureManifestIsCompleteAndUntampered(t *testing.T) {
 	attributes, err := os.ReadFile("../../.gitattributes")
@@ -50,10 +51,10 @@ func TestFixtureManifestIsCompleteAndUntampered(t *testing.T) {
 	if err := json.Unmarshal(encoded, &manifest); err != nil {
 		t.Fatal(err)
 	}
-	if manifest.SchemaVersion != 1 || manifest.Release != "v0.15.0" || manifest.PublicInternetRequired {
+	if manifest.SchemaVersion != 1 || manifest.Release != "v0.16.0" || manifest.PublicInternetRequired || manifest.ArtifactPolicy != "checked-in deterministic build artifacts" {
 		t.Fatalf("offline fixture manifest header = %#v", manifest)
 	}
-	if manifest.VerificationCommand == "" || len(manifest.Fixtures) != 3 {
+	if manifest.VerificationCommand == "" || len(manifest.Fixtures) != 4 {
 		t.Fatalf("fixture manifest verification/count = %q / %d", manifest.VerificationCommand, len(manifest.Fixtures))
 	}
 
@@ -65,6 +66,9 @@ func TestFixtureManifestIsCompleteAndUntampered(t *testing.T) {
 		seen[fixture.Name] = true
 		if fixture.BuildTool == "" || len(fixture.Dependencies) == 0 || fixture.GenerationCommand == "" || len(fixture.Licenses) == 0 {
 			t.Fatalf("incomplete provenance for %s", fixture.Name)
+		}
+		if fixture.Name == "real-site" && !strings.Contains(fixture.GenerationCommand, "--offline") {
+			t.Fatalf("real-site generation is not offline reproducible: %q", fixture.GenerationCommand)
 		}
 		for _, license := range fixture.Licenses {
 			if !strings.HasPrefix(license, "MIT:") {
@@ -90,14 +94,40 @@ func TestFixtureManifestIsCompleteAndUntampered(t *testing.T) {
 			if got := hex.EncodeToString(digest[:]); got != artifact.SHA256 {
 				t.Fatalf("fixture %s artifact %q digest = %s, want %s", fixture.Name, artifact.Path, got, artifact.SHA256)
 			}
-			if strings.Contains(string(content), "https://") || strings.Contains(string(content), "http://") {
+			if publicResourceReference.Match(content) {
 				t.Fatalf("fixture %s artifact %q requires a public URL", fixture.Name, artifact.Path)
 			}
 		}
 	}
-	for _, name := range []string{"nextjs", "sveltekit", "tailwind"} {
+	for _, name := range []string{"nextjs", "sveltekit", "tailwind", "real-site"} {
 		if !seen[name] {
 			t.Fatalf("fixture manifest is missing %s", name)
+		}
+	}
+}
+
+func TestRealSiteFixtureContainsGeneratedTailwindAndSSRContracts(t *testing.T) {
+	stylesheet, err := os.ReadFile("fixtures/real-site/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"tailwindcss v4.1.12", ":root,:host", `.md\:grid-cols-2`, "@keyframes fixture-float", "--spacing-card"} {
+		if !strings.Contains(string(stylesheet), want) {
+			t.Fatalf("generated Tailwind artifact is missing %q", want)
+		}
+	}
+	html, err := os.ReadFile("fixtures/real-site/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"脆弱性報告", "data-ssr-token=", "md:grid-cols-2", "/assets/pixel.png", "animate-fixture-float", "/real-site/app.mjs"} {
+		if !strings.Contains(string(html), want) {
+			t.Fatalf("real-site SSR artifact is missing %q", want)
+		}
+	}
+	for _, path := range []string{"package.json", "pnpm-lock.yaml"} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("offline toolchain file %s: %v", path, err)
 		}
 	}
 }
@@ -111,6 +141,8 @@ func TestFixtureServerUsesPlatformIndependentContentTypes(t *testing.T) {
 		"/diagnostics/failures.mjs":       "text/javascript; charset=utf-8",
 		"/_next/static/css/app.css":       "text/css; charset=utf-8",
 		"/_app/immutable/assets/app.css":  "text/css; charset=utf-8",
+		"/real-site/app.css":              "text/css; charset=utf-8",
+		"/real-site/app.mjs":              "text/javascript; charset=utf-8",
 	} {
 		response, err := server.Client().Get(server.URL + path)
 		if err != nil {

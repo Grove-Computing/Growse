@@ -15,7 +15,7 @@ import (
 	"golang.org/x/image/font/gofont/goregular"
 )
 
-//go:embed index.html style.css fixtures/nextjs/* fixtures/sveltekit/* fixtures/tailwind/* fixtures/diagnostics/*
+//go:embed index.html style.css fixtures/nextjs/* fixtures/sveltekit/* fixtures/tailwind/* fixtures/real-site/* fixtures/diagnostics/*
 var modernWebCompatibilityAssets embed.FS
 
 var (
@@ -30,6 +30,7 @@ func modernWebCompatibilityHandler() http.Handler {
 	mux.Handle("/svelte/", svelteKitFixtureHandler())
 	mux.Handle("/_app/immutable/", svelteKitFixtureHandler())
 	mux.Handle("/tailwind/", tailwindFixtureHandler())
+	mux.Handle("/real-site/", realSiteFixtureHandler())
 	mux.Handle("/diagnostics/", diagnosticsFixtureHandler())
 	mux.HandleFunc("/assets/growse-regular.woff2", func(response http.ResponseWriter, _ *http.Request) {
 		response.Header().Set("Content-Type", "font/woff2")
@@ -41,6 +42,30 @@ func modernWebCompatibilityHandler() http.Handler {
 	})
 	mux.Handle("/", http.FileServer(http.FS(modernWebCompatibilityAssets)))
 	return mux
+}
+
+func realSiteFixtureHandler() http.Handler {
+	assets, err := fs.Sub(modernWebCompatibilityAssets, "fixtures/real-site")
+	if err != nil {
+		panic(err)
+	}
+	files := http.FileServer(http.FS(assets))
+	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/real-site/":
+			request.URL.Path = "/"
+		case "/real-site/app.css":
+			request.URL.Path = "/app.css"
+			response.Header().Set("Content-Type", "text/css; charset=utf-8")
+		case "/real-site/app.mjs":
+			request.URL.Path = "/app.mjs"
+			response.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		default:
+			http.NotFound(response, request)
+			return
+		}
+		files.ServeHTTP(response, request)
+	})
 }
 
 func nextJSFixtureHandler() http.Handler {
