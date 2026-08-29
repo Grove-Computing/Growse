@@ -107,6 +107,9 @@ jobs:
       - name: Run v0.16.0 real-site framework tests
         run: bash tests/v016-framework.sh
 
+      - name: Run v0.16.0 rendering safety tests
+        run: bash tests/v016-security.sh
+
       - name: Run race tests with coverage
         run: go test -race -covermode=atomic -coverprofile=coverage.out ./...
 
