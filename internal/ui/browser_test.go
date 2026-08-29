@@ -1535,6 +1535,10 @@ div { width: 100px; height: 100px; animation: fade 1s linear infinite; }
 	if displayList == nil || ui.layoutCache.displayList != displayList {
 		t.Fatal("static display list was rebuilt across composite frames")
 	}
+	metrics := page.RenderMetricsSnapshot()
+	if metrics.LayoutBuilds != 1 || metrics.DisplayListBuilds != 2 || metrics.DisplayListReuses != 1 || metrics.CompositeFrames != 2 {
+		t.Fatalf("warm composite frame metrics = %+v", metrics)
+	}
 }
 
 func TestLayoutAnimationFramesRebuildLayoutAndDisplayList(t *testing.T) {

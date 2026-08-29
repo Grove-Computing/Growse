@@ -43,7 +43,12 @@ type imageResourceCache struct {
 	tick       uint64
 	maxBytes   int64
 	maxEntries int
+	hits       uint64
+	misses     uint64
+	evictions  uint64
 }
+
+type imageResourceCacheStats struct{ hits, misses, evictions uint64 }
 
 func newImageResourceCache() *imageResourceCache {
 	return newImageResourceCacheWithLimits(maxPageImageCacheBytes, maxPageImageResources)
@@ -60,6 +65,7 @@ func (cache *imageResourceCache) load(ctx context.Context, client ResourceLoader
 	key := target.String()
 	cache.mu.Lock()
 	if existing := cache.entries[key]; existing != nil {
+		cache.hits++
 		cache.tick++
 		existing.lastUsed = cache.tick
 		ready := existing.ready
@@ -71,6 +77,7 @@ func (cache *imageResourceCache) load(ctx context.Context, client ResourceLoader
 			return cachedImageResource{failure: imageLoadRequestFailure, err: ctx.Err()}
 		}
 	}
+	cache.misses++
 	cache.evictLocked(0, 1)
 	if cache.maxEntries <= 0 || len(cache.entries) >= cache.maxEntries {
 		cache.mu.Unlock()
@@ -139,6 +146,7 @@ func (cache *imageResourceCache) evictLocked(targetBytes int64, reserveEntries i
 		entry := cache.entries[oldestKey]
 		cache.bytes -= entry.bytes
 		delete(cache.entries, oldestKey)
+		cache.evictions++
 	}
 }
 
@@ -150,7 +158,19 @@ func (cache *imageResourceCache) clear() {
 	cache.entries = make(map[string]*cachedImageResource)
 	cache.bytes = 0
 	cache.tick = 0
+	cache.hits = 0
+	cache.misses = 0
+	cache.evictions = 0
 	cache.mu.Unlock()
+}
+
+func (cache *imageResourceCache) statsSnapshot() imageResourceCacheStats {
+	if cache == nil {
+		return imageResourceCacheStats{}
+	}
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	return imageResourceCacheStats{hits: cache.hits, misses: cache.misses, evictions: cache.evictions}
 }
 
 func cloneCachedImageResource(entry *cachedImageResource) cachedImageResource {

@@ -92,6 +92,8 @@ type Page struct {
 	imageGeneration  uint64
 	imageEvents      map[dom.NodeID]string
 	imageCache       *imageResourceCache
+	renderMu         sync.Mutex
+	renderMetrics    RenderMetrics
 }
 
 func (p *Page) beginImageLoad(parent context.Context) (context.Context, uint64) {
