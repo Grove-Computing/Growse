@@ -1400,7 +1400,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	if err != nil {
 		return nil, fmt.Errorf("load styles for %s: %w", network.RedactedURL(pageURL), err)
 	}
-	computedStyles := computeStableStyles(document, stylesheet, style.InteractionState{}, 1280, 720, reducedMotion)
+	computedStyles := computeStableStyles(document, stylesheet, style.InteractionState{}, 1280, 720, reducedMotion, engine == runtimemodel.EngineJavaScript)
 	imageBudget := newImageDecodeBudget()
 	imageCache := newImageResourceCache()
 	backgroundImages, backgroundErrors := loadBackgroundImagesWithCache(ctx, imageResources, computedStyles, imageBudget, imageCache)
@@ -2001,19 +2001,19 @@ func computePageStyles(page *Page) style.Map {
 	if page == nil {
 		return nil
 	}
-	return computeStableStyles(page.Document, page.Stylesheet, interactionState(page), page.ViewportWidth, page.ViewportHeight, page.ReducedMotion)
+	return computeStableStyles(page.Document, page.Stylesheet, interactionState(page), page.ViewportWidth, page.ViewportHeight, page.ReducedMotion, page.UsesModernWebCompatibility())
 }
 
 const maxContainerQueryIterations = 16
 
-func computeStableStyles(document *dom.Document, stylesheet *css.Stylesheet, state style.InteractionState, width, height float32, reducedMotion bool) style.Map {
+func computeStableStyles(document *dom.Document, stylesheet *css.Stylesheet, state style.InteractionState, width, height float32, reducedMotion, browserDefaults bool) style.Map {
 	var computed style.Map
 	sizes := make(map[dom.NodeID]style.ContainerSize)
 	for iteration := 0; iteration < maxContainerQueryIterations; iteration++ {
 		computed = style.ComputeWithEnvironment(document, stylesheet, state, style.Environment{
 			ViewportWidth: width, ViewportHeight: height, RootFontSize: 16, ResolutionDPI: 96,
 			ColorScheme: "light", Hover: true, Pointer: "fine", ReducedMotion: reducedMotion,
-			ContainerSizes: sizes,
+			ContainerSizes: sizes, BrowserDefaults: browserDefaults,
 		})
 		tree := layoutengine.BuildWithViewport(document, computed, width, height)
 		next := make(map[dom.NodeID]style.ContainerSize)

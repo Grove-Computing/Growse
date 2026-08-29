@@ -171,8 +171,12 @@ func BuildWithScrollAtRevision(document *dom.Document, computed stylemodel.Map, 
 }
 
 func build(document *dom.Document, computed stylemodel.Map, images map[dom.NodeID]ImageResource, fonts *FontSet, viewportWidth, viewportHeight, scrollX, scrollY float32) *Tree {
-	if viewportWidth < pagePadding*2+1 {
-		viewportWidth = pagePadding*2 + 1
+	pageInset := pagePadding
+	if usesBrowserViewport(document, computed) {
+		pageInset = 0
+	}
+	if viewportWidth < pageInset*2+1 {
+		viewportWidth = pageInset*2 + 1
 	}
 
 	tree := &Tree{
@@ -185,7 +189,7 @@ func build(document *dom.Document, computed stylemodel.Map, images map[dom.NodeI
 		computed:       computed,
 		images:         images,
 		fonts:          fonts,
-		y:              pagePadding,
+		y:              pageInset,
 		opacity:        1,
 		viewportWidth:  viewportWidth,
 		viewportHeight: viewportHeight,
@@ -198,9 +202,9 @@ func build(document *dom.Document, computed stylemodel.Map, images map[dom.NodeI
 				tree.Background = bodyStyle.BackgroundColor
 			}
 		}
-		state.walk(document.Root, pagePadding, viewportWidth-pagePadding*2, viewportHeight, viewportHeight > 0)
+		state.walk(document.Root, pageInset, viewportWidth-pageInset*2, viewportHeight, viewportHeight > 0)
 	}
-	tree.Height = state.y + pagePadding
+	tree.Height = state.y + pageInset
 	tree.ScrollWidth, tree.ScrollHeight = tree.Width, tree.Height
 	for _, box := range tree.Boxes {
 		contentWidth := box.Width
@@ -210,14 +214,26 @@ func build(document *dom.Document, computed stylemodel.Map, images map[dom.NodeI
 				contentWidth += run.Width
 			}
 		}
-		tree.ScrollWidth = max(tree.ScrollWidth, box.X+contentWidth+pagePadding)
-		tree.ScrollHeight = max(tree.ScrollHeight, box.Y+box.Height+pagePadding)
+		tree.ScrollWidth = max(tree.ScrollWidth, box.X+contentWidth+pageInset)
+		tree.ScrollHeight = max(tree.ScrollHeight, box.Y+box.Height+pageInset)
 	}
 	for _, decoration := range tree.Decorations {
-		tree.ScrollWidth = max(tree.ScrollWidth, decoration.X+decoration.Width+pagePadding)
-		tree.ScrollHeight = max(tree.ScrollHeight, decoration.Y+decoration.Height+pagePadding)
+		tree.ScrollWidth = max(tree.ScrollWidth, decoration.X+decoration.Width+pageInset)
+		tree.ScrollHeight = max(tree.ScrollHeight, decoration.Y+decoration.Height+pageInset)
 	}
 	return tree
+}
+
+func usesBrowserViewport(document *dom.Document, computed stylemodel.Map) bool {
+	if document == nil {
+		return false
+	}
+	html := findElement(document.Root, "html")
+	if html == nil {
+		return false
+	}
+	computedStyle, ok := computed.For(html)
+	return ok && computedStyle.BrowserDefaults
 }
 
 type engine struct {

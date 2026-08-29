@@ -468,6 +468,69 @@ p { display: none; }
 	}
 }
 
+func TestBrowserUAStylesheetProvidesDefaultsBelowAuthorOrigin(t *testing.T) {
+	document := dom.NewDocument()
+	html := document.CreateElement("html", nil)
+	body := document.CreateElement("body", nil)
+	heading := document.CreateElement("h1", nil)
+	input := document.CreateElement("input", nil)
+	hidden := document.CreateElement("section", map[string]string{"hidden": ""})
+	for _, edge := range [][2]*dom.Node{
+		{document.Root, html}, {html, body}, {body, heading}, {body, input}, {body, hidden},
+	} {
+		appendNode(t, document, edge[0], edge[1])
+	}
+
+	browserStyles := ComputeWithEnvironment(document, nil, InteractionState{}, Environment{BrowserDefaults: true})
+	bodyStyle, _ := browserStyles.For(body)
+	headingStyle, _ := browserStyles.For(heading)
+	inputStyle, _ := browserStyles.For(input)
+	hiddenStyle, _ := browserStyles.For(hidden)
+	if bodyStyle.Margin != (Edges{Top: 8, Right: 8, Bottom: 8, Left: 8}) || bodyStyle.Color != 0x000000ff {
+		t.Fatalf("browser body defaults = %#v", bodyStyle)
+	}
+	if headingStyle.Display != DisplayBlock || headingStyle.FontSize != 32 || headingStyle.Margin.Top < 21 || headingStyle.Margin.Bottom < 21 {
+		t.Fatalf("browser h1 defaults = %#v", headingStyle)
+	}
+	if inputStyle.Display != DisplayInlineBlock || inputStyle.BoxSizing != BoxSizingBorderBox || inputStyle.Appearance != AppearanceAuto {
+		t.Fatalf("browser input defaults = %#v", inputStyle)
+	}
+	if hiddenStyle.Display != DisplayNone {
+		t.Fatalf("browser hidden display = %v, want none", hiddenStyle.Display)
+	}
+
+	author, err := css.Parse(strings.NewReader(`
+* { margin: 0; }
+h1 { display: inline; color: red; font-size: 20px; }
+input { display: flex; }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	overridden := ComputeWithEnvironment(document, author, InteractionState{}, Environment{BrowserDefaults: true})
+	bodyStyle, _ = overridden.For(body)
+	headingStyle, _ = overridden.For(heading)
+	inputStyle, _ = overridden.For(input)
+	if bodyStyle.Margin != (Edges{}) || headingStyle.Display != DisplayInline || headingStyle.FontSize != 20 || headingStyle.Color != 0xff0000ff || inputStyle.Display != DisplayFlex {
+		t.Fatalf("author origin did not override browser UA defaults: body=%#v h1=%#v input=%#v", bodyStyle, headingStyle, inputStyle)
+	}
+}
+
+func TestLegacyDefaultsRemainUnchangedWithoutBrowserUAProfile(t *testing.T) {
+	document := dom.NewDocument()
+	input := document.CreateElement("input", nil)
+	appendNode(t, document, document.Root, input)
+
+	legacy, _ := Compute(document, nil).For(input)
+	browser, _ := ComputeWithEnvironment(document, nil, InteractionState{}, Environment{BrowserDefaults: true}).For(input)
+	if legacy.Display != DisplayBlock || browser.Display != DisplayInlineBlock {
+		t.Fatalf("input display legacy=%v browser=%v", legacy.Display, browser.Display)
+	}
+	if legacy.BrowserDefaults || !browser.BrowserDefaults {
+		t.Fatalf("browser profile marker legacy=%v browser=%v", legacy.BrowserDefaults, browser.BrowserDefaults)
+	}
+}
+
 func TestComputeAppliesInlineStyleWithoutStylesheet(t *testing.T) {
 	document := dom.NewDocument()
 	paragraph := document.CreateElement("p", map[string]string{"style": "color: blue; font-size: 20px"})

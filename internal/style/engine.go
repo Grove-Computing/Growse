@@ -43,6 +43,9 @@ type Environment struct {
 	ContainerSizes  map[dom.NodeID]ContainerSize
 	ContainerWidth  float32
 	ContainerHeight float32
+	// BrowserDefaults enables the versioned browser-compatible UA stylesheet.
+	// Browser callers only set this for an explicitly selected JavaScript Engine.
+	BrowserDefaults bool
 }
 
 // ContainerSize is the previous layout iteration's content-box size.
@@ -97,10 +100,15 @@ func computeNode(node *dom.Node, parent ComputedStyle, stylesheet *css.Styleshee
 	if node.Type == dom.NodeDocument {
 		computed = initialStyle()
 	} else if node.Type == dom.NodeElement {
-		computed = applyUADefaults(node.TagName, computed)
+		if environment.BrowserDefaults {
+			computed = applyAuthorRules(node, computed, parent, browserUAStylesheet(), state, environment, result, false)
+		} else {
+			computed = applyUADefaults(node.TagName, computed)
+		}
 		computed = applyPresentationalHints(node, computed)
-		computed = applyAuthorRules(node, computed, parent, stylesheet, state, environment, result)
+		computed = applyAuthorRules(node, computed, parent, stylesheet, state, environment, result, true)
 		computed = applyGeneratedContent(node, computed, stylesheet, state, environment, result)
+		computed.BrowserDefaults = environment.BrowserDefaults
 		result[node.ID] = computed
 	} else if node.Type == dom.NodeText {
 		result[node.ID] = computed
@@ -226,7 +234,7 @@ func applyUADefaults(tag string, computed ComputedStyle) ComputedStyle {
 	return computed
 }
 
-func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet *css.Stylesheet, state InteractionState, environment Environment, computedAncestors Map) ComputedStyle {
+func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet *css.Stylesheet, state InteractionState, environment Environment, computedAncestors Map, includeInline bool) ComputedStyle {
 	if stylesheet == nil {
 		stylesheet = &css.Stylesheet{}
 	}
@@ -250,32 +258,42 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 		}
 		candidates[property] = append(candidates[property], candidate)
 	}
-	for _, rule := range stylesheet.Rules {
-		if !matchesMediaGroups(rule.Media, environment) || !matchesSupportsGroups(rule.Supports) || !matchesContainerGroups(node, rule.Containers, computedAncestors, environment) {
-			continue
+	appendStylesheet := func(candidateStylesheet *css.Stylesheet) {
+		if candidateStylesheet == nil {
+			return
 		}
-		for _, selector := range rule.Selectors {
-			if selectorPseudoElement(selector) != css.PseudoElementNone {
+		candidateLayerOrders := make(map[string]int, len(candidateStylesheet.LayerOrder))
+		for index, layer := range candidateStylesheet.LayerOrder {
+			candidateLayerOrders[layer] = index
+		}
+		for _, rule := range candidateStylesheet.Rules {
+			if !matchesMediaGroups(rule.Media, environment) || !matchesSupportsGroups(rule.Supports) || !matchesContainerGroups(node, rule.Containers, computedAncestors, environment) {
 				continue
 			}
-			if !matches(node, selector, state) {
-				continue
-			}
-			for declarationIndex, declaration := range rule.Declarations {
-				for _, property := range expandedProperties(declaration.Property) {
-					candidate := winner{
-						value: declaration.Value.Raw, source: declaration.Property, important: declaration.Important,
-						specificity: selector.Specificity(), order: [2]int{rule.Order, declarationIndex}, layer: rule.Layer,
+			for _, selector := range rule.Selectors {
+				if selectorPseudoElement(selector) != css.PseudoElementNone {
+					continue
+				}
+				if !matches(node, selector, state) {
+					continue
+				}
+				for declarationIndex, declaration := range rule.Declarations {
+					for _, property := range expandedProperties(declaration.Property) {
+						candidate := winner{
+							value: declaration.Value.Raw, source: declaration.Property, important: declaration.Important,
+							specificity: selector.Specificity(), order: [2]int{rule.Order, declarationIndex}, layer: rule.Layer,
+						}
+						if rule.Layer != "" {
+							candidate.layerOrder = candidateLayerOrders[rule.Layer]
+						}
+						appendCandidate(property, candidate)
 					}
-					if rule.Layer != "" {
-						candidate.layerOrder = layerOrders[rule.Layer]
-					}
-					appendCandidate(property, candidate)
 				}
 			}
 		}
 	}
-	if inlineValue, ok := node.Attribute("style"); ok {
+	appendStylesheet(stylesheet)
+	if inlineValue, ok := node.Attribute("style"); ok && includeInline {
 		declarations, _ := css.ParseDeclarations(inlineValue)
 		for declarationIndex, declaration := range declarations {
 			for _, property := range expandedProperties(declaration.Property) {

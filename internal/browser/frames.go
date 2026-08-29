@@ -232,7 +232,7 @@ func (state *frameLoadState) buildPage(ctx context.Context, response *network.Re
 		pageStore.Close()
 		return nil, fmt.Errorf("load iframe styles: %w", err)
 	}
-	computed := computeStableStyles(document, stylesheet, style.InteractionState{}, defaultFrameWidth, defaultFrameHeight, state.reducedMotion)
+	computed := computeStableStyles(document, stylesheet, style.InteractionState{}, defaultFrameWidth, defaultFrameHeight, state.reducedMotion, state.engine == runtimemodel.EngineJavaScript)
 	imageBudget := newImageDecodeBudget()
 	imageCache := newImageResourceCache()
 	backgroundImages, backgroundErrors := loadBackgroundImagesWithCache(ctx, imageResources, computed, imageBudget, imageCache)

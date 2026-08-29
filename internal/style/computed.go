@@ -532,6 +532,10 @@ type BackgroundSize struct {
 
 // ComputedStyle contains the MVP properties consumed by layout and paint.
 type ComputedStyle struct {
+	// BrowserDefaults marks styles computed with the JavaScript-only browser
+	// compatibility UA profile. Layout uses it to select the initial
+	// containing-block behavior without changing the Go Engine defaults.
+	BrowserDefaults     bool
 	Color               uint32
 	BackgroundColor     uint32
 	BackgroundImage     BackgroundImage
