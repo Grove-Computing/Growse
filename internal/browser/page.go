@@ -281,6 +281,42 @@ func (p *Page) ActiveAnimations(current time.Time) bool {
 		(p.Transitions != nil && p.Transitions.Active(current)))
 }
 
+// ActiveAnimationsInViewport reports whether a live CSS animation can affect
+// the visible viewport. Unknown geometry stays conservative and requests a
+// frame; known offscreen or visibility:hidden elements do not.
+func (p *Page) ActiveAnimationsInViewport(current time.Time, tree *layoutmodel.Tree) bool {
+	if p == nil || tree == nil {
+		return p != nil && p.ActiveAnimations(current)
+	}
+	nodes := make([]dom.NodeID, 0)
+	if p.Animations != nil {
+		nodes = append(nodes, p.Animations.ActiveNodes(current)...)
+	}
+	if p.Transitions != nil {
+		nodes = append(nodes, p.Transitions.ActiveNodes(current)...)
+	}
+	viewportWidth, viewportHeight := p.ViewportWidth, p.ViewportHeight
+	if viewportWidth <= 0 {
+		viewportWidth = tree.Width
+	}
+	if viewportHeight <= 0 {
+		viewportHeight = tree.Height
+	}
+	for _, nodeID := range nodes {
+		if computed, ok := p.ComputedStyles[nodeID]; ok && computed.Visibility == style.VisibilityHidden {
+			continue
+		}
+		bounds, known := tree.Bounds[nodeID]
+		if !known {
+			return true
+		}
+		if bounds.X < viewportWidth && bounds.Y < viewportHeight && bounds.X+bounds.Width > 0 && bounds.Y+bounds.Height > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // UsesModernWebCompatibility reports whether JS-only real-site rendering and
 // lifecycle features may run for this Page generation.
 func (p *Page) UsesModernWebCompatibility() bool {

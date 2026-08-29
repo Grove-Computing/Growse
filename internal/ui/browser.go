@@ -246,6 +246,10 @@ type animationFrameNavigator interface {
 	HasAnimationFrameCallbacks() bool
 }
 
+type pageLifecycleNavigator interface {
+	IsPageVisible(*browser.Page) bool
+}
+
 type historyScrollNavigator interface {
 	UpdateHistoryScroll(first, offset int)
 }
@@ -1851,10 +1855,14 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 	ui.viewportClick.Add(gtx.Ops)
 	pass.Pop()
 	area.Pop()
-	if page.ActiveAnimations(gtx.Now) && ui.invalidate != nil {
+	pageVisible := true
+	if lifecycle, ok := ui.navigator.(pageLifecycleNavigator); ok {
+		pageVisible = lifecycle.IsPageVisible(page)
+	}
+	if pageVisible && page.ActiveAnimationsInViewport(gtx.Now, tree) && ui.invalidate != nil {
 		ui.invalidate()
 	}
-	if navigator, ok := ui.navigator.(animationFrameNavigator); ok && navigator.HasAnimationFrameCallbacks() && ui.invalidate != nil {
+	if navigator, ok := ui.navigator.(animationFrameNavigator); pageVisible && ok && navigator.HasAnimationFrameCallbacks() && ui.invalidate != nil {
 		ui.invalidate()
 	}
 	ui.persistHistoryScroll()

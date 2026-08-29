@@ -379,6 +379,17 @@ func (b *Browser) HasAnimationFrameCallbacks() bool {
 	return false
 }
 
+// IsPageVisible reports whether page is still the selected generation of an
+// active Tab. Renderers use it to reject stale invalidation requests.
+func (b *Browser) IsPageVisible(page *Page) bool {
+	if b == nil || page == nil {
+		return false
+	}
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.active && b.page == page
+}
+
 func (b *Browser) dispatchPageEvent(page *Page, event events.Event) bool {
 	if page == nil || page.Events == nil {
 		return false
