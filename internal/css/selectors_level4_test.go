@@ -57,3 +57,31 @@ func TestParseRootHostSelectorListKeepsTailwindThemeRule(t *testing.T) {
 		t.Fatalf("second pseudo = %v, want :host", got)
 	}
 }
+
+func TestParseTailwindEscapedUtilityClassNames(t *testing.T) {
+	tests := []struct {
+		selector string
+		want     string
+	}{
+		{`.sm\:grid-cols-2`, `sm:grid-cols-2`},
+		{`.hover\:bg-slate-900:hover`, `hover:bg-slate-900`},
+		{`.w-\[calc\(100\%-1rem\)\]`, `w-[calc(100%-1rem)]`},
+		{`.\31 0\/12`, `10/12`},
+	}
+	for _, test := range tests {
+		t.Run(test.want, func(t *testing.T) {
+			selectors := ParseSelectorList(test.selector)
+			if len(selectors) != 1 || len(selectors[0].Compounds) != 1 || len(selectors[0].Compounds[0].Classes) != 1 {
+				t.Fatalf("ParseSelectorList(%q) = %#v", test.selector, selectors)
+			}
+			if got := selectors[0].Compounds[0].Classes[0]; got != test.want {
+				t.Fatalf("class = %q, want %q", got, test.want)
+			}
+		})
+	}
+	for _, invalid := range []string{`.broken\`, ".broken\\\nclass"} {
+		if got := ParseSelectorList(invalid); len(got) != 0 {
+			t.Fatalf("invalid escape %q parsed as %#v", invalid, got)
+		}
+	}
+}

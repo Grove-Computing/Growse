@@ -305,6 +305,25 @@ func TestRootHostThemeRuleAppliesOnlyThroughDocumentRoot(t *testing.T) {
 	}
 }
 
+func TestTailwindEscapedUtilityClassMatchesDOMClass(t *testing.T) {
+	document := dom.NewDocument()
+	card := document.CreateElement("section", map[string]string{
+		"class": "sm:grid-cols-2 w-[calc(100%-1rem)]",
+	})
+	appendNode(t, document, document.Root, card)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.sm\:grid-cols-2 { display: grid }
+.w-\[calc\(100\%-1rem\)\] { color: #0f172a }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	computed, _ := Compute(document, stylesheet).For(card)
+	if computed.Display != DisplayGrid || computed.Color != 0x0f172aff {
+		t.Fatalf("escaped utility style = %#v", computed)
+	}
+}
+
 func TestMatchesInteractionAndFormStatePseudoClasses(t *testing.T) {
 	document := dom.NewDocument()
 	link := document.CreateElement("a", map[string]string{"href": "/next"})
