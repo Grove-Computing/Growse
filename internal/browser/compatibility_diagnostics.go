@@ -182,14 +182,18 @@ func appendRenderDiagnostics(metrics RenderMetrics, appendDiagnostic func(devtoo
 		if counter.count == 0 {
 			continue
 		}
-		count := maxCompatibilityDiagnosticCount
-		if counter.count < uint64(count) {
-			count = int(counter.count)
-		}
 		appendDiagnostic(devtools.CompatibilityDiagnostic{
-			Category: counter.category, Subject: counter.subject, State: counter.state, Reason: counter.reason, Count: count,
+			Category: counter.category, Subject: counter.subject, State: counter.state, Reason: counter.reason, Count: boundedCompatibilityDiagnosticCount(counter.count),
 		})
 	}
+}
+
+func boundedCompatibilityDiagnosticCount(count uint64) int {
+	if count >= uint64(maxCompatibilityDiagnosticCount) {
+		return maxCompatibilityDiagnosticCount
+	}
+	// #nosec G115 -- the preceding comparison proves count fits this bounded int.
+	return int(count)
 }
 
 func diagnosticSourceCategory(value string) string {
