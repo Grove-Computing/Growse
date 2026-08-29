@@ -64,6 +64,7 @@ const (
 // BrowserUI owns the widgets displayed around the page viewport.
 type BrowserUI struct {
 	theme            *material.Theme
+	pageTheme        *material.Theme
 	navigator        Navigator
 	invalidate       func()
 	results          chan navigationResult
@@ -1816,7 +1817,7 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 	ui.handleViewportClicks(gtx, page, tree, displayList)
 
 	area := clip.Rect{Max: gtx.Constraints.Max}.Push(gtx.Ops)
-	dimensions := material.List(ui.theme, &ui.pageList).Layout(gtx, len(displayList.Commands), func(gtx layout.Context, index int) layout.Dimensions {
+	dimensions := material.List(ui.documentTheme(), &ui.pageList).Layout(gtx, len(displayList.Commands), func(gtx layout.Context, index int) layout.Dimensions {
 		switch command := displayList.Commands[index].(type) {
 		case paintmodel.DrawText:
 			return ui.layoutDrawText(gtx, command)
@@ -1903,12 +1904,29 @@ type pageFontFace struct{ face *textfont.Face }
 
 func (face pageFontFace) Face() *textfont.Face { return face.face }
 
+func (ui *BrowserUI) documentTheme() *material.Theme {
+	if ui.pageTheme != nil {
+		return ui.pageTheme
+	}
+	if ui.theme == nil {
+		ui.theme = material.NewTheme()
+	}
+	pageTheme := *ui.theme
+	pageTheme.Shaper = &text.Shaper{}
+	ui.pageTheme = &pageTheme
+	return ui.pageTheme
+}
+
 func (ui *BrowserUI) installPageFonts(page *browser.Page) {
+	// A Gio Shaper owns bounded LRUs for shaped layouts and glyph operations.
+	// Reuse it only within the same Page generation and Style revision; replacing
+	// the pointer here drops every cached face and glyph on Navigation or font
+	// revision without sharing it with Browser chrome.
 	if page == nil || ui.fontPage == page && ui.fontRevision == page.StyleRevision {
 		return
 	}
-	if page.Engine != runtimemodel.EngineJavaScript {
-		ui.theme.Shaper = &text.Shaper{}
+	if !page.UsesModernWebCompatibility() {
+		ui.documentTheme().Shaper = &text.Shaper{}
 		ui.fontPage, ui.fontRevision = page, page.StyleRevision
 		return
 	}
@@ -1924,8 +1942,19 @@ func (ui *BrowserUI) installPageFonts(page *browser.Page) {
 		collection = append(collection, font.FontFace{Font: description, Face: pageFontFace{face: resource.Face}})
 	}
 	collection = append(collection, gofont.Collection()...)
-	ui.theme.Shaper = text.NewShaper(text.NoSystemFonts(), text.WithCollection(collection))
+	// Keep decoded Web Fonts and the deterministic Go collection first, then
+	// let Gio resolve glyphs they do not cover from the operating system. This
+	// path belongs only to an explicitly selected modern-web JavaScript Page.
+	ui.documentTheme().Shaper = newPageTextShaper(collection, true)
 	ui.fontPage, ui.fontRevision = page, page.StyleRevision
+}
+
+func newPageTextShaper(collection []font.FontFace, systemFonts bool) *text.Shaper {
+	options := []text.ShaperOption{text.WithCollection(collection)}
+	if !systemFonts {
+		options = append(options, text.NoSystemFonts())
+	}
+	return text.NewShaper(options...)
 }
 
 func pageFontWeight(value string) font.Weight {
@@ -2181,7 +2210,7 @@ func (ui *BrowserUI) layoutDrawImage(gtx layout.Context, command paintmodel.Draw
 		} else if command.Alt != "" {
 			inset := layout.UniformInset(unit.Dp(4))
 			inset.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-				label := material.Label(ui.theme, unit.Sp(14), command.Alt)
+				label := material.Label(ui.documentTheme(), unit.Sp(14), command.Alt)
 				label.Color = rgba(command.Color)
 				return label.Layout(gtx)
 			})
@@ -2623,7 +2652,7 @@ func (ui *BrowserUI) layoutDrawInput(gtx layout.Context, command paintmodel.Draw
 		}
 		ui.inputFocused[command.NodeID] = focused
 		content := func(gtx layout.Context) layout.Dimensions {
-			style := material.Editor(ui.theme, editor, "")
+			style := material.Editor(ui.documentTheme(), editor, "")
 			style.Color = rgba(command.Color)
 			return layout.UniformInset(unit.Dp(8)).Layout(gtx, style.Layout)
 		}
@@ -2675,7 +2704,7 @@ func (ui *BrowserUI) layoutDrawSelect(gtx layout.Context, command paintmodel.Dra
 		if label == "" {
 			label = "選択してください"
 		}
-		style := material.Button(ui.theme, button, label+" ▾")
+		style := material.Button(ui.documentTheme(), button, label+" ▾")
 		style.Color = rgba(command.Color)
 		style.Background = rgba(command.AccentColor)
 		if command.Appearance == stylemodel.AppearanceNone {
@@ -2725,7 +2754,7 @@ func (ui *BrowserUI) layoutDrawCheckable(gtx layout.Context, command paintmodel.
 				label = "●"
 			}
 		}
-		style := material.Button(ui.theme, button, label)
+		style := material.Button(ui.documentTheme(), button, label)
 		style.Color = rgba(command.Color)
 		if command.Checked {
 			style.Background = rgba(command.AccentColor)
@@ -2767,7 +2796,7 @@ func (ui *BrowserUI) layoutDrawButton(gtx layout.Context, command paintmodel.Dra
 		}
 		gtx.Constraints.Min.Y = gtx.Dp(unit.Dp(command.Height))
 		gtx.Constraints.Max.Y = gtx.Constraints.Min.Y
-		style := material.Button(ui.theme, button, command.Label)
+		style := material.Button(ui.documentTheme(), button, command.Label)
 		style.Color = rgba(command.Color)
 		style.Background = rgba(command.AccentColor)
 		if command.Appearance == stylemodel.AppearanceNone {
@@ -2943,7 +2972,7 @@ func (ui *BrowserUI) layoutShadowedText(gtx layout.Context, text string, size fl
 	}
 	labelLayout := func(color uint32) layout.Widget {
 		return func(gtx layout.Context) layout.Dimensions {
-			label := material.Label(ui.theme, unit.Sp(size), text)
+			label := material.Label(ui.documentTheme(), unit.Sp(size), text)
 			label.Color, label.MaxLines = rgba(color), 1
 			if len(families) != 0 {
 				label.Font.Typeface = font.Typeface(families[0])

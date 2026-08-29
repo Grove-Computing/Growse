@@ -11,6 +11,7 @@ import (
 	_ "image/png"
 	"mime"
 	"net/url"
+	"sort"
 	"strings"
 
 	"github.com/Grove-Computing/Growse/internal/dom"
@@ -304,7 +305,7 @@ func imageViewportPolicy(document *dom.Document, computed style.Map, baseURL *ur
 }
 
 func dispatchImageResourceEvents(browserState *Browser, page *Page) {
-	if browserState == nil || page == nil || page.Document == nil {
+	if browserState == nil || page == nil {
 		return
 	}
 	var pending []events.Event
@@ -312,33 +313,35 @@ func dispatchImageResourceEvents(browserState *Browser, page *Page) {
 	if page.imageEvents == nil {
 		page.imageEvents = make(map[dom.NodeID]string)
 	}
-	var visit func(*dom.Node)
-	visit = func(node *dom.Node) {
-		if node == nil {
-			return
-		}
-		if node.Type == dom.NodeElement && node.TagName == "img" {
-			resource, exists := page.ImageResources[node.ID]
-			if exists && !resource.Deferred {
-				signature := resource.URL + "\x00" + resource.Error
-				if resource.Loaded {
-					signature += "\x00loaded"
-				}
-				if page.imageEvents[node.ID] != signature {
-					page.imageEvents[node.ID] = signature
-					eventType := events.Error
-					if resource.Loaded {
-						eventType = events.Load
-					}
-					pending = append(pending, events.New(eventType, node.ID, false, false))
-				}
-			}
-		}
-		for _, child := range node.Children {
-			visit(child)
+	// Resource IDs preserve document order without walking the live DOM while
+	// the JavaScript runtime may be replacing subtrees. Inline SVG resources do
+	// not dispatch HTMLImageElement load/error events.
+	nodeIDs := make([]dom.NodeID, 0, len(page.ImageResources))
+	for nodeID, resource := range page.ImageResources {
+		if !strings.HasPrefix(resource.URL, "growse:inline-svg/") {
+			nodeIDs = append(nodeIDs, nodeID)
 		}
 	}
-	visit(page.Document.Root)
+	sort.Slice(nodeIDs, func(left, right int) bool { return nodeIDs[left] < nodeIDs[right] })
+	for _, nodeID := range nodeIDs {
+		resource := page.ImageResources[nodeID]
+		if resource.Deferred {
+			continue
+		}
+		signature := resource.URL + "\x00" + resource.Error
+		if resource.Loaded {
+			signature += "\x00loaded"
+		}
+		if page.imageEvents[nodeID] == signature {
+			continue
+		}
+		page.imageEvents[nodeID] = signature
+		eventType := events.Error
+		if resource.Loaded {
+			eventType = events.Load
+		}
+		pending = append(pending, events.New(eventType, nodeID, false, false))
+	}
 	page.imageMu.Unlock()
 	for _, event := range pending {
 		browserState.dispatchPageEvent(page, event)
