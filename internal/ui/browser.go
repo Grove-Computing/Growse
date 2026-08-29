@@ -125,6 +125,7 @@ type BrowserUI struct {
 	layoutBuildImages func(*dom.Document, stylemodel.Map, map[dom.NodeID]layoutengine.ImageResource, float32, float32, float32, float32) *layoutengine.Tree
 	layoutBuildFonts  func(*dom.Document, stylemodel.Map, map[dom.NodeID]layoutengine.ImageResource, *layoutengine.FontSet, float32, float32, float32, float32) *layoutengine.Tree
 	layoutCache       documentLayoutCache
+	imagePaintCache   pageImagePaintCache
 	fontPage          *browser.Page
 	fontRevision      uint64
 	scrollRevision    uint64
@@ -1743,6 +1744,7 @@ func (ui *BrowserUI) layoutViewport(gtx layout.Context) layout.Dimensions {
 			return ui.layoutDocument(gtx, page)
 		}
 	}
+	ui.imagePaintCache.prepare(nil)
 
 	paint.Fill(gtx.Ops, color.NRGBA{R: 238, G: 243, B: 248, A: 255})
 
@@ -1792,6 +1794,7 @@ func (ui *BrowserUI) layoutViewport(gtx layout.Context) layout.Dimensions {
 func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layout.Dimensions {
 	paint.Fill(gtx.Ops, color.NRGBA{R: 255, G: 255, B: 255, A: 255})
 	ui.installPageFonts(page)
+	ui.imagePaintCache.prepare(page)
 	if ui.scrollRevision != page.ScrollRevision {
 		ui.pageList.Position = layout.Position{First: page.ScrollFirst, Offset: page.ScrollOffset}
 		ui.scrollRevision = page.ScrollRevision
@@ -1830,7 +1833,7 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 		case paintmodel.DrawButton:
 			return ui.layoutDrawButton(gtx, command)
 		case paintmodel.DrawBox:
-			return layoutDrawBox(gtx, command, page.BackgroundImages)
+			return ui.layoutDrawBox(gtx, command, page.BackgroundImages, page.StyleRevision)
 		case paintmodel.DrawImage:
 			return ui.layoutDrawImage(gtx, command, page.Images)
 		default:
@@ -2196,15 +2199,14 @@ func (ui *BrowserUI) layoutDrawImage(gtx layout.Context, command paintmodel.Draw
 		if source := images[command.URL]; source != nil && !command.Failed {
 			targetWidth := max(gtx.Dp(unit.Dp(command.ImageRect.Width)), 1)
 			targetHeight := max(gtx.Dp(unit.Dp(command.ImageRect.Height)), 1)
-			raster := image.NewNRGBA(image.Rect(0, 0, targetWidth, targetHeight))
-			xdraw.CatmullRom.Scale(raster, raster.Bounds(), source, source.Bounds(), imagedraw.Src, nil)
+			cached := ui.imagePaintCache.scale(command.URL, source, targetWidth, targetHeight)
 			clipMin := image.Pt(gtx.Dp(unit.Dp(command.ImageClip.X-command.X)), gtx.Dp(unit.Dp(command.ImageClip.Y-command.Y)))
 			clipMax := clipMin.Add(image.Pt(gtx.Dp(unit.Dp(command.ImageClip.Width)), gtx.Dp(unit.Dp(command.ImageClip.Height))))
 			area := clip.Rect{Min: clipMin, Max: clipMax}.Push(gtx.Ops)
 			offset := op.Offset(image.Pt(gtx.Dp(unit.Dp(command.ImageRect.X-command.X)), gtx.Dp(unit.Dp(command.ImageRect.Y-command.Y)))).Push(gtx.Ops)
 			imageGTX := gtx
-			imageGTX.Constraints = layout.Exact(raster.Bounds().Size())
-			widget.Image{Src: paint.NewImageOp(raster), Fit: widget.Unscaled, Scale: 1 / gtx.Metric.PxPerDp}.Layout(imageGTX)
+			imageGTX.Constraints = layout.Exact(cached.raster.Bounds().Size())
+			widget.Image{Src: cached.op, Fit: widget.Unscaled, Scale: 1 / gtx.Metric.PxPerDp}.Layout(imageGTX)
 			offset.Pop()
 			area.Pop()
 		} else if command.Alt != "" {
@@ -2220,7 +2222,7 @@ func (ui *BrowserUI) layoutDrawImage(gtx layout.Context, command paintmodel.Draw
 	})
 }
 
-func layoutDrawBox(gtx layout.Context, command paintmodel.DrawBox, backgroundImages map[string]image.Image) layout.Dimensions {
+func (ui *BrowserUI) layoutDrawBox(gtx layout.Context, command paintmodel.DrawBox, backgroundImages map[string]image.Image, styleRevision uint64) layout.Dimensions {
 	return layout.Inset{Top: unit.Dp(command.Top), Left: unit.Dp(command.X)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		if command.Transform != (stylemodel.Matrix{}) && command.Transform != stylemodel.IdentityMatrix() {
 			defer pushCSSMatrix(gtx, command.Transform, command.X, command.Y).Pop()
@@ -2278,20 +2280,10 @@ func layoutDrawBox(gtx layout.Context, command paintmodel.DrawBox, backgroundIma
 		}
 		for index := len(layers) - 1; index >= 0; index-- {
 			layer := layers[index]
-			var raster image.Image
-			if layer.Image.Kind == stylemodel.BackgroundImageLinearGradient && width > 0 && height > 0 {
-				raster = rasterLinearGradient(width, height, layer.Image)
-			} else if layer.Image.Kind == stylemodel.BackgroundImageRadialGradient && width > 0 && height > 0 {
-				raster = rasterRadialGradient(width, height, layer.Image)
-			} else if layer.Image.Kind == stylemodel.BackgroundImageURL && backgroundImages[layer.Image.URL] != nil && width > 0 && height > 0 {
-				layerCommand := command
-				layerCommand.Image, layerCommand.Repeat, layerCommand.Position, layerCommand.Size = layer.Image, layer.Repeat, layer.Position, layer.Size
-				raster = rasterBackgroundImage(width, height, backgroundImages[layer.Image.URL], layerCommand, gtx.Metric.PxPerDp)
-			}
-			if raster != nil {
-				raster = rasterFilterImage(raster, command.Filters)
+			cached := ui.imagePaintCache.background(command, layer, index, backgroundImages[layer.Image.URL], width, height, gtx.Metric.PxPerDp, styleRevision)
+			if cached.raster != nil {
 				area := bounds.Push(gtx.Ops)
-				widget.Image{Src: paint.NewImageOp(raster), Fit: widget.Unscaled, Scale: 1 / gtx.Metric.PxPerDp}.Layout(gtx)
+				widget.Image{Src: cached.op, Fit: widget.Unscaled, Scale: 1 / gtx.Metric.PxPerDp}.Layout(gtx)
 				area.Pop()
 			}
 		}
