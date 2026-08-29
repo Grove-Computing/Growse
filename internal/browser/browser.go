@@ -1827,11 +1827,12 @@ func startRuntime(ctx context.Context, factory runtimemodel.EngineFactory, engin
 			generationContext, generation := page.beginImageLoad(loadContext)
 			policy := imageViewportPolicy(page.Document, page.ComputedStyles, pageBaseURL(page), page.ViewportWidth, page.ViewportHeight)
 			budget := newImageDecodeBudgetWithImages(page.BackgroundImages)
-			resources, images, failures := loadReplacedImagesWithCache(generationContext, page.imageLoader, pageBaseURL(page), page.Document, page.ViewportWidth, 1, policy, budget, page.imageCache)
-			inlineResources, inlineImages, inlineFailures := loadInlineSVGImagesWithBudget(page.Document, budget)
-			mergeImageResources(resources, images, inlineResources, inlineImages)
-			failures = append(failures, inlineFailures...)
-			if generationContext.Err() != nil || !page.commitImageLoad(generation, resources, images, failures) {
+			node, exists := page.Document.NodeByID(nodeID)
+			if !exists {
+				return runtimemodel.ImageState{}, errors.New("image element is disconnected")
+			}
+			resource, decoded, failure := loadReplacedImageNodeWithCache(generationContext, page.imageLoader, pageBaseURL(page), node, page.ViewportWidth, 1, policy[nodeID], budget, page.imageCache)
+			if generationContext.Err() != nil || !page.commitImageResourceLoad(generation, nodeID, resource, decoded, failure) {
 				return runtimemodel.ImageState{}, context.Canceled
 			}
 			if onMutation != nil {

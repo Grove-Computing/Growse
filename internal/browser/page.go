@@ -120,6 +120,32 @@ func (p *Page) commitImageLoad(generation uint64, resources map[dom.NodeID]layou
 	return true
 }
 
+func (p *Page) commitImageResourceLoad(generation uint64, nodeID dom.NodeID, resource layoutmodel.ImageResource, decoded image.Image, failure string) bool {
+	p.imageMu.Lock()
+	defer p.imageMu.Unlock()
+	if generation != p.imageGeneration {
+		return false
+	}
+	resources := make(map[dom.NodeID]layoutmodel.ImageResource, len(p.ImageResources)+1)
+	for currentID, current := range p.ImageResources {
+		resources[currentID] = current
+	}
+	resources[nodeID] = resource
+	images := make(map[string]image.Image, len(p.Images)+1)
+	for currentURL, current := range p.Images {
+		images[currentURL] = current
+	}
+	if decoded != nil && resource.URL != "" {
+		images[resource.URL] = decoded
+	}
+	p.ImageResources, p.Images = resources, images
+	if failure != "" {
+		p.ImageErrors = append(append([]string(nil), p.ImageErrors...), failure)
+	}
+	p.StyleRevision++
+	return true
+}
+
 func (p *Page) cancelImageLoads() {
 	if p == nil {
 		return

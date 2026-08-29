@@ -331,6 +331,35 @@ hero.src = "second.png"; result.setAttribute("width", String(hero.naturalWidth))
 	}
 }
 
+func TestTargetedImageMutationDoesNotLoadSiblingResources(t *testing.T) {
+	baseURL := mustParseURL(t, "https://example.com/")
+	targetURL := "https://example.com/target.png"
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, image.NewNRGBA(image.Rect(0, 0, 5, 3))); err != nil {
+		t.Fatal(err)
+	}
+	loader := &routeLoader{responses: map[string]*network.Response{
+		targetURL: {URL: mustParseURL(t, targetURL), ContentType: "image/png", Body: encoded.Bytes()},
+	}}
+	document := dom.NewDocument()
+	sibling := document.CreateElement("img", map[string]string{"src": "sibling.png"})
+	target := document.CreateElement("img", map[string]string{"src": "target.png"})
+	if err := document.AppendChild(document.Root, sibling); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(document.Root, target); err != nil {
+		t.Fatal(err)
+	}
+	cache := newImageResourceCache()
+	resource, decoded, failure := loadReplacedImageNodeWithCache(context.Background(), loader, baseURL, target, 1280, 1, true, newImageDecodeBudget(), cache)
+	if failure != "" || !resource.Loaded || decoded == nil || resource.URL != targetURL {
+		t.Fatalf("targeted resource = %#v decoded:%v failure:%q", resource, decoded != nil, failure)
+	}
+	if len(loader.requested) != 1 || loader.requested[0] != targetURL || cache.entries["https://example.com/sibling.png"] != nil {
+		t.Fatalf("targeted requests/cache = %v / %#v", loader.requested, cache.entries)
+	}
+}
+
 func TestLazyImagePolicyDefersOutsideViewport(t *testing.T) {
 	baseURL := mustParseURL(t, "https://example.com/")
 	document := dom.NewDocument()
