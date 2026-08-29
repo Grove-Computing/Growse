@@ -2,10 +2,10 @@
   "environment": "viewport=1024x720 scale=1 font=goregular clock=fixed",
   "states": [
     "next-ssr engine=go root=32,32 960x164 boxes=4 paint=4 fonts=0 images=0 revision=2 text=[next-hydration-marker=\"not hydrated\"/display:1/color:202124ff/bg:00000000;next-count=\"0\"/display:0/color:202124ff/bg:00000000] diagnostics=[]",
-    "next-hydrated engine=javascript root=32,32 960x212 boxes=5 paint=5 fonts=1 images=2 revision=8 text=[next-hydration-marker=\"hydrated\"/display:1/color:202124ff/bg:00000000;next-count=\"0\"/display:0/color:202124ff/bg:00000000] diagnostics=[]",
-    "next-interaction engine=javascript root=32,32 960x212 boxes=5 paint=5 fonts=1 images=2 revision=10 text=[next-hydration-marker=\"hydrated\"/display:1/color:202124ff/bg:00000000;next-count=\"1\"/display:0/color:202124ff/bg:00000000] diagnostics=[]",
-    "tailwind-responsive engine=javascript root=32,32 400x42 boxes=2 paint=3 fonts=0 images=0 revision=3 text=[tailwind-card=\"Modern CSS\"/display:1/color:ffffffff/bg:111827ff;tailwind-grid=\"\\n      Modern CSS\\n      Preflight button\\n    \"/display:6/color:202124ff/bg:00000000] diagnostics=[]",
+    "next-hydrated engine=javascript root=32,32 960x215 boxes=5 paint=5 fonts=1 images=2 revision=8 text=[next-hydration-marker=\"hydrated\"/display:1/color:202124ff/bg:00000000;next-count=\"0\"/display:0/color:202124ff/bg:00000000] diagnostics=[]",
+    "next-interaction engine=javascript root=32,32 960x215 boxes=5 paint=5 fonts=1 images=2 revision=10 text=[next-hydration-marker=\"hydrated\"/display:1/color:202124ff/bg:00000000;next-count=\"1\"/display:0/color:202124ff/bg:00000000] diagnostics=[]",
+    "tailwind-responsive engine=javascript root=32,32 400x46 boxes=2 paint=3 fonts=0 images=0 revision=3 text=[tailwind-card=\"Modern CSS\"/display:1/color:ffffffff/bg:111827ff;tailwind-grid=\"\\n      Modern CSS\\n      Preflight button\\n    \"/display:6/color:202124ff/bg:00000000] diagnostics=[]",
     "tailwind-narrow engine=javascript root=32,32 400x48 boxes=2 paint=3 fonts=0 images=0 revision=5 text=[tailwind-card=\"Modern CSS\"/display:1/color:ffffffff/bg:111827ff;tailwind-grid=\"\\n      Modern CSS\\n      Preflight button\\n    \"/display:1/color:202124ff/bg:00000000] diagnostics=[]",
-    "fallback-devtools engine=javascript root=32,32 960x130 boxes=4 paint=4 fonts=1 images=1 revision=6 text=[chunk-state=\"chunk failure isolated\"/display:1/color:202124ff/bg:00000000;broken-image=\"\"/display:0/color:202124ff/bg:00000000] diagnostics=[font:decode,image:decode,resource/module:http,runtime:chunk]"
+    "fallback-devtools engine=javascript root=32,32 960x147 boxes=4 paint=4 fonts=1 images=1 revision=6 text=[chunk-state=\"chunk failure isolated\"/display:1/color:202124ff/bg:00000000;broken-image=\"\"/display:0/color:202124ff/bg:00000000] diagnostics=[font:decode,image:decode,resource/module:http,runtime:chunk]"
   ]
 }
