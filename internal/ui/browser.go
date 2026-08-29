@@ -1832,7 +1832,7 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 		case paintmodel.DrawButton:
 			return ui.layoutDrawButton(gtx, command)
 		case paintmodel.DrawBox:
-			return layoutDrawBox(gtx, command, page.BackgroundImages)
+			return ui.layoutDrawBox(gtx, command, page.BackgroundImages, page.StyleRevision)
 		case paintmodel.DrawImage:
 			return ui.layoutDrawImage(gtx, command, page.Images)
 		default:
@@ -2221,7 +2221,7 @@ func (ui *BrowserUI) layoutDrawImage(gtx layout.Context, command paintmodel.Draw
 	})
 }
 
-func layoutDrawBox(gtx layout.Context, command paintmodel.DrawBox, backgroundImages map[string]image.Image) layout.Dimensions {
+func (ui *BrowserUI) layoutDrawBox(gtx layout.Context, command paintmodel.DrawBox, backgroundImages map[string]image.Image, styleRevision uint64) layout.Dimensions {
 	return layout.Inset{Top: unit.Dp(command.Top), Left: unit.Dp(command.X)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		if command.Transform != (stylemodel.Matrix{}) && command.Transform != stylemodel.IdentityMatrix() {
 			defer pushCSSMatrix(gtx, command.Transform, command.X, command.Y).Pop()
@@ -2279,20 +2279,10 @@ func layoutDrawBox(gtx layout.Context, command paintmodel.DrawBox, backgroundIma
 		}
 		for index := len(layers) - 1; index >= 0; index-- {
 			layer := layers[index]
-			var raster image.Image
-			if layer.Image.Kind == stylemodel.BackgroundImageLinearGradient && width > 0 && height > 0 {
-				raster = rasterLinearGradient(width, height, layer.Image)
-			} else if layer.Image.Kind == stylemodel.BackgroundImageRadialGradient && width > 0 && height > 0 {
-				raster = rasterRadialGradient(width, height, layer.Image)
-			} else if layer.Image.Kind == stylemodel.BackgroundImageURL && backgroundImages[layer.Image.URL] != nil && width > 0 && height > 0 {
-				layerCommand := command
-				layerCommand.Image, layerCommand.Repeat, layerCommand.Position, layerCommand.Size = layer.Image, layer.Repeat, layer.Position, layer.Size
-				raster = rasterBackgroundImage(width, height, backgroundImages[layer.Image.URL], layerCommand, gtx.Metric.PxPerDp)
-			}
-			if raster != nil {
-				raster = rasterFilterImage(raster, command.Filters)
+			cached := ui.imagePaintCache.background(command, layer, index, backgroundImages[layer.Image.URL], width, height, gtx.Metric.PxPerDp, styleRevision)
+			if cached.raster != nil {
 				area := bounds.Push(gtx.Ops)
-				widget.Image{Src: paint.NewImageOp(raster), Fit: widget.Unscaled, Scale: 1 / gtx.Metric.PxPerDp}.Layout(gtx)
+				widget.Image{Src: cached.op, Fit: widget.Unscaled, Scale: 1 / gtx.Metric.PxPerDp}.Layout(gtx)
 				area.Pop()
 			}
 		}
