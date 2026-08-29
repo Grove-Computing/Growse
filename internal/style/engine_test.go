@@ -278,6 +278,33 @@ func TestMatchesStructuralPseudoClasses(t *testing.T) {
 	}
 }
 
+func TestRootHostThemeRuleAppliesOnlyThroughDocumentRoot(t *testing.T) {
+	document := dom.NewDocument()
+	html := document.CreateElement("html", nil)
+	body := document.CreateElement("body", nil)
+	appendNode(t, document, document.Root, html)
+	appendNode(t, document, html, body)
+
+	stylesheet, err := css.Parse(strings.NewReader(`
+:root,:host { --spacing: 4px; color: #0f172a }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	computed := Compute(document, stylesheet)
+	htmlStyle, _ := computed.For(html)
+	bodyStyle, _ := computed.For(body)
+	if got := htmlStyle.CustomProperties["--spacing"]; got != "4px" {
+		t.Fatalf("root --spacing = %q, want 4px", got)
+	}
+	if htmlStyle.Color != 0x0f172aff || bodyStyle.Color != 0x0f172aff {
+		t.Fatalf("theme color = root:%08x body:%08x", htmlStyle.Color, bodyStyle.Color)
+	}
+	if matches(body, stylesheet.Rules[0].Selectors[1], InteractionState{}) {
+		t.Fatal(":host unexpectedly matched a light-DOM element")
+	}
+}
+
 func TestMatchesInteractionAndFormStatePseudoClasses(t *testing.T) {
 	document := dom.NewDocument()
 	link := document.CreateElement("a", map[string]string{"href": "/next"})

@@ -880,6 +880,11 @@ func parsePseudoClassDepth(value string, start, depth int) (*PseudoClass, int, b
 	switch name {
 	case "root":
 		pseudo.Kind = PseudoRoot
+	case "host":
+		// :host is valid selector syntax even when matching a light-DOM
+		// document. Keep it in selector lists so a sibling :root selector is
+		// not discarded; without Shadow DOM it deliberately never matches.
+		pseudo.Kind = PseudoHost
 	case "empty":
 		pseudo.Kind = PseudoEmpty
 	case "first-child":

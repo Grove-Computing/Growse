@@ -1702,6 +1702,10 @@ func matchesPseudoClass(node *dom.Node, pseudo css.PseudoClass, state Interactio
 	switch pseudo.Kind {
 	case css.PseudoRoot:
 		return node.Parent != nil && node.Parent.Type == dom.NodeDocument
+	case css.PseudoHost:
+		// Shadow DOM is outside the supported model. :host remains valid CSS
+		// syntax but has no matching element in a Document tree.
+		return false
 	case css.PseudoEmpty:
 		for _, child := range node.Children {
 			if child.Type == dom.NodeElement || child.Type == dom.NodeText && child.Text != "" {

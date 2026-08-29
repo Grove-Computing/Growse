@@ -35,3 +35,25 @@ section:has(> .badge, :future-pseudo) { color: purple }
 		t.Fatalf(":has relative selector = %#v", hasPseudo.Selectors)
 	}
 }
+
+func TestParseRootHostSelectorListKeepsTailwindThemeRule(t *testing.T) {
+	stylesheet, err := Parse(strings.NewReader(`
+:root,:host { --spacing: .25rem; --color-slate-900: #0f172a }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stylesheet.Rules) != 1 {
+		t.Fatalf("rules = %d, want 1", len(stylesheet.Rules))
+	}
+	rule := stylesheet.Rules[0]
+	if len(rule.Selectors) != 2 {
+		t.Fatalf("selectors = %#v, want :root and :host", rule.Selectors)
+	}
+	if got := rule.Selectors[0].Compounds[0].Pseudos[0].Kind; got != PseudoRoot {
+		t.Fatalf("first pseudo = %v, want :root", got)
+	}
+	if got := rule.Selectors[1].Compounds[0].Pseudos[0].Kind; got != PseudoHost {
+		t.Fatalf("second pseudo = %v, want :host", got)
+	}
+}
