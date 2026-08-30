@@ -485,6 +485,7 @@ func ApplyAnimatedLayout(list *DisplayList, tree *layout.Tree) {
 	for _, layer := range tree.CompositingLayers {
 		list.DamageRegions = append(list.DamageRegions, layer.Damage...)
 	}
+	previousBottom := float32(0)
 	for index, source := range list.sources {
 		if source.decoration >= 0 && source.decoration < len(tree.Decorations) {
 			decoration := tree.Decorations[source.decoration]
@@ -492,6 +493,9 @@ func ApplyAnimatedLayout(list *DisplayList, tree *layout.Tree) {
 			if !ok {
 				continue
 			}
+			command.X, command.Y, command.Width, command.Height = decoration.X, decoration.Y, decoration.Width, decoration.Height
+			command.Top = max(decoration.Y-previousBottom, float32(0))
+			previousBottom += command.Top
 			backdrop := stylemodel.ApplyColorFilters(tree.Background, decoration.BackdropFilters)
 			background := stylemodel.ApplyColorFilters(decoration.Background, decoration.Filters)
 			if decoration.BlendMode != stylemodel.BlendNormal {
@@ -510,12 +514,14 @@ func ApplyAnimatedLayout(list *DisplayList, tree *layout.Tree) {
 			continue
 		}
 		box := tree.Boxes[source.box]
+		top := max(box.Y-previousBottom, float32(0))
 		opacity := box.Opacity
 		if box.Hidden {
 			opacity = 0
 		}
 		switch command := list.Commands[index].(type) {
 		case DrawText:
+			command.X, command.Y, command.Top, command.Width, command.Height, command.Baseline = box.X, box.Y, top, box.Width, box.Height, box.Baseline
 			command.Color, command.Background = box.Color, box.Background
 			command.DecorationColor, command.Opacity, command.Transform = box.DecorationColor, opacity, box.Transform
 			for runIndex := range command.Runs {
@@ -529,22 +535,29 @@ func ApplyAnimatedLayout(list *DisplayList, tree *layout.Tree) {
 			}
 			list.Commands[index] = command
 		case DrawImage:
+			command.X, command.Y, command.Top, command.Width, command.Height = box.X, box.Y, top, box.Width, box.Height
+			command.ImageRect, command.ImageClip = box.ImageRect, box.ImageClip
 			command.Color, command.Background, command.Opacity = box.Color, box.Background, opacity
 			command.Transform = box.Transform
 			list.Commands[index] = command
 		case DrawInput:
+			command.X, command.Y, command.Top, command.Width, command.Height = box.X, box.Y, top, box.Width, box.Height
 			command.Color, command.Opacity = box.Color, opacity
 			list.Commands[index] = command
 		case DrawSelect:
+			command.X, command.Y, command.Top, command.Width, command.Height = box.X, box.Y, top, box.Width, box.Height
 			command.Color, command.Opacity = box.Color, opacity
 			list.Commands[index] = command
 		case DrawCheckable:
+			command.X, command.Y, command.Top, command.Width, command.Height = box.X, box.Y, top, box.Width, box.Height
 			command.Color, command.Opacity = box.Color, opacity
 			list.Commands[index] = command
 		case DrawButton:
+			command.X, command.Y, command.Top, command.Width, command.Height = box.X, box.Y, top, box.Width, box.Height
 			command.Color, command.Opacity = box.Color, opacity
 			list.Commands[index] = command
 		}
+		previousBottom = box.Y + box.Height
 	}
 }
 

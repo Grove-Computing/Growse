@@ -19,6 +19,8 @@ type Tree struct {
 	Boxes             []Box
 	ScrollWidth       float32
 	ScrollHeight      float32
+	ScrollX           float32
+	ScrollY           float32
 	StackingContexts  []StackingContext
 	CompositingLayers []CompositingLayer
 	Parents           map[dom.NodeID]dom.NodeID

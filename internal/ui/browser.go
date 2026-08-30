@@ -146,6 +146,7 @@ type documentLayoutCache struct {
 	viewportHeight        float32
 	listFirst, listOffset int
 	tree                  *layoutengine.Tree
+	baseTree              *layoutengine.Tree
 	displayList           *paintmodel.DisplayList
 }
 
@@ -1899,6 +1900,19 @@ func (ui *BrowserUI) cachedDocumentFrame(page *browser.Page, viewportWidth, view
 		cache.listFirst == position.First && cache.listOffset == position.Offset {
 		return layoutengine.Clone(cache.tree), cache.displayList, true
 	}
+	if cache.baseTree != nil && cache.page == page && cache.revision == page.StyleRevision &&
+		cache.viewportWidth == viewportWidth && cache.viewportHeight == viewportHeight &&
+		(cache.listFirst != position.First || cache.listOffset != position.Offset) {
+		tree := layoutengine.Clone(cache.baseTree)
+		scrollY := documentScrollOffset(cache.displayList, position, pxPerDp)
+		dirtyNodes := layoutengine.ApplyScrollOffset(tree, page.ComputedStyles, 0, scrollY)
+		paintmodel.ApplyAnimatedLayout(cache.displayList, tree)
+		cache.tree, cache.listFirst, cache.listOffset = layoutengine.Clone(tree), position.First, position.Offset
+		page.RecordRenderEvent(browser.RenderCompositeFrame)
+		page.RecordRenderEvent(browser.RenderDisplayListReuse)
+		page.RecordRenderReuse(len(tree.Boxes)+len(tree.Decorations)-len(dirtyNodes), len(cache.displayList.Commands)-len(dirtyNodes))
+		return tree, cache.displayList, true
+	}
 	dirty := page.RenderInvalidationSnapshot()
 	if cache.tree != nil && cache.page == page && dirty.Revision == page.StyleRevision && dirty.Damage < browser.RenderDamageLayout &&
 		cache.viewportWidth == viewportWidth && cache.viewportHeight == viewportHeight &&
@@ -1908,7 +1922,10 @@ func (ui *BrowserUI) cachedDocumentFrame(page *browser.Page, viewportWidth, view
 		tree.Revision = page.StyleRevision
 		paintmodel.ApplyAnimatedLayout(cache.displayList, tree)
 		cache.displayList.Revision = page.StyleRevision
-		cache.tree, cache.revision = layoutengine.Clone(tree), page.StyleRevision
+		baseTree := layoutengine.Clone(cache.baseTree)
+		layoutengine.ApplyAnimatedStyles(baseTree, page.ComputedStyles)
+		baseTree.Revision = page.StyleRevision
+		cache.tree, cache.baseTree, cache.revision = layoutengine.Clone(tree), baseTree, page.StyleRevision
 		page.RecordRenderEvent(browser.RenderDisplayListReuse)
 		page.RecordRenderReuse(len(tree.Boxes)+len(tree.Decorations), len(cache.displayList.Commands))
 		return tree, cache.displayList, true
@@ -1943,9 +1960,22 @@ func (ui *BrowserUI) cachedDocumentFrame(page *browser.Page, viewportWidth, view
 	page.RecordRenderEvent(browser.RenderDisplayListBuild)
 	*cache = documentLayoutCache{
 		page: page, revision: page.StyleRevision, viewportWidth: viewportWidth, viewportHeight: viewportHeight,
-		listFirst: position.First, listOffset: position.Offset, tree: tree, displayList: displayList,
+		listFirst: position.First, listOffset: position.Offset, tree: tree, baseTree: layoutengine.Clone(tree), displayList: displayList,
 	}
 	return layoutengine.Clone(tree), displayList, false
+}
+
+func documentScrollOffset(list *paintmodel.DisplayList, position layout.Position, pixelsPerDP float32) float32 {
+	if list == nil || position.First < 0 || position.First >= len(list.Commands) {
+		return 0
+	}
+	if pixelsPerDP <= 0 {
+		pixelsPerDP = 1
+	}
+	if firstY, exists := commandDocumentY(list.Commands[position.First]); exists {
+		return max(firstY+float32(position.Offset)/pixelsPerDP, float32(0))
+	}
+	return 0
 }
 
 func renderDirtyNodes(page *browser.Page, dirty browser.RenderInvalidation) map[dom.NodeID]bool {
