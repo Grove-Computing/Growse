@@ -1899,6 +1899,20 @@ func (ui *BrowserUI) cachedDocumentFrame(page *browser.Page, viewportWidth, view
 		cache.listFirst == position.First && cache.listOffset == position.Offset {
 		return layoutengine.Clone(cache.tree), cache.displayList, true
 	}
+	dirty := page.RenderInvalidationSnapshot()
+	if cache.tree != nil && cache.page == page && dirty.Revision == page.StyleRevision && dirty.Damage < browser.RenderDamageLayout &&
+		cache.viewportWidth == viewportWidth && cache.viewportHeight == viewportHeight &&
+		cache.listFirst == position.First && cache.listOffset == position.Offset {
+		tree := layoutengine.Clone(cache.tree)
+		layoutengine.ApplyAnimatedStyles(tree, page.ComputedStyles)
+		tree.Revision = page.StyleRevision
+		paintmodel.ApplyAnimatedLayout(cache.displayList, tree)
+		cache.displayList.Revision = page.StyleRevision
+		cache.tree, cache.revision = layoutengine.Clone(tree), page.StyleRevision
+		page.RecordRenderEvent(browser.RenderDisplayListReuse)
+		page.RecordRenderReuse(len(tree.Boxes)+len(tree.Decorations), len(cache.displayList.Commands))
+		return tree, cache.displayList, true
+	}
 	reason := browser.RenderRebuildInitial
 	if cache.tree != nil {
 		switch {
@@ -1915,13 +1929,49 @@ func (ui *BrowserUI) cachedDocumentFrame(page *browser.Page, viewportWidth, view
 	page.RecordRenderRebuild(reason)
 
 	tree := ui.buildDocumentTree(page, page.ComputedStyles, viewportWidth, viewportHeight, pxPerDp)
-	displayList := paintmodel.Build(tree)
+	dirtyNodes := renderDirtyNodes(page, dirty)
+	fragmentsReused := 0
+	var displayList *paintmodel.DisplayList
+	commandsReused := 0
+	if cache.page == page && dirty.Revision == page.StyleRevision {
+		fragmentsReused = layoutengine.ReuseStableFragments(cache.tree, tree, dirtyNodes)
+		displayList, commandsReused = paintmodel.BuildIncremental(cache.displayList, tree, dirtyNodes)
+	} else {
+		displayList = paintmodel.Build(tree)
+	}
+	page.RecordRenderReuse(fragmentsReused, commandsReused)
 	page.RecordRenderEvent(browser.RenderDisplayListBuild)
 	*cache = documentLayoutCache{
 		page: page, revision: page.StyleRevision, viewportWidth: viewportWidth, viewportHeight: viewportHeight,
 		listFirst: position.First, listOffset: position.Offset, tree: tree, displayList: displayList,
 	}
 	return layoutengine.Clone(tree), displayList, false
+}
+
+func renderDirtyNodes(page *browser.Page, dirty browser.RenderInvalidation) map[dom.NodeID]bool {
+	result := make(map[dom.NodeID]bool, len(dirty.StyleNodes))
+	for _, nodeID := range dirty.StyleNodes {
+		result[nodeID] = true
+	}
+	if page == nil || page.Document == nil {
+		return result
+	}
+	var markSubtree func(*dom.Node)
+	markSubtree = func(node *dom.Node) {
+		if node == nil || result[node.ID] && len(node.Children) == 0 {
+			return
+		}
+		result[node.ID] = true
+		for _, child := range node.Children {
+			markSubtree(child)
+		}
+	}
+	for _, rootID := range dirty.LayoutRoots {
+		if root, exists := page.Document.NodeByID(rootID); exists {
+			markSubtree(root)
+		}
+	}
+	return result
 }
 
 func (ui *BrowserUI) buildDocumentTree(page *browser.Page, styles stylemodel.Map, viewportWidth, viewportHeight, pxPerDp float32) *layoutengine.Tree {

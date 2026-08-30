@@ -43,6 +43,8 @@ func ApplyAnimatedStyles(tree *Tree, styles stylemodel.Map) {
 			continue
 		}
 		decoration.Background = computed.BackgroundColor
+		decoration.Image = computed.BackgroundImage
+		decoration.Layers = append([]stylemodel.BackgroundLayer(nil), computed.BackgroundLayers...)
 		decoration.Border.Top.Color = computed.Border.Top.Color
 		decoration.Border.Right.Color = computed.Border.Right.Color
 		decoration.Border.Bottom.Color = computed.Border.Bottom.Color
@@ -51,6 +53,7 @@ func ApplyAnimatedStyles(tree *Tree, styles stylemodel.Map) {
 		decoration.Opacity = cumulativeOpacity(tree, styles, decoration.NodeID)
 		decoration.Transform = cumulativeTransform(tree, styles, decoration.NodeID, decoration.Rect)
 		decoration.Hidden = computed.Visibility == stylemodel.VisibilityHidden
+		decoration.Cursor = computed.Cursor
 		if _, invertible := decoration.Transform.Inverse(); !invertible {
 			decoration.Hidden = true
 		}
@@ -65,6 +68,7 @@ func ApplyAnimatedStyles(tree *Tree, styles stylemodel.Map) {
 			box.Opacity = cumulativeOpacity(tree, styles, box.NodeID)
 			box.Transform = cumulativeTransform(tree, styles, box.NodeID, box.Rect())
 			box.Hidden = computed.Visibility == stylemodel.VisibilityHidden
+			box.Cursor = computed.Cursor
 			if _, invertible := box.Transform.Inverse(); !invertible {
 				box.Hidden = true
 			}

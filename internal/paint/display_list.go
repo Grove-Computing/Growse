@@ -17,6 +17,7 @@ type DisplayList struct {
 	ScrollHeight      float32
 	Background        uint32
 	Commands          []Command
+	CommandIDs        []uint64
 	CompositingLayers []layout.StackingContext
 	sources           []displaySource
 }
@@ -273,6 +274,7 @@ func Build(tree *layout.Tree) *DisplayList {
 		list.sources = append(list.sources, item.source)
 		if item.decoration != nil {
 			decoration := item.decoration
+			list.CommandIDs = append(list.CommandIDs, decoration.FragmentID)
 			top := max(decoration.Y-previousBottom, float32(0))
 			backdrop := stylemodel.ApplyColorFilters(tree.Background, decoration.BackdropFilters)
 			filteredColor := stylemodel.ApplyColorFilters(decoration.Background, decoration.Filters)
@@ -294,6 +296,7 @@ func Build(tree *layout.Tree) *DisplayList {
 			continue
 		}
 		box := *item.box
+		list.CommandIDs = append(list.CommandIDs, box.FragmentID)
 		top := box.Y - previousBottom
 		if top < 0 {
 			top = 0
@@ -399,6 +402,50 @@ func Build(tree *layout.Tree) *DisplayList {
 		previousBottom = box.Y + box.Height
 	}
 	return list
+}
+
+// BuildIncremental reuses immutable command values for stable, unaffected
+// fragments while rebuilding changed commands from the current layout tree.
+func BuildIncremental(previous *DisplayList, tree *layout.Tree, dirty map[dom.NodeID]bool) (*DisplayList, int) {
+	next := Build(tree)
+	if previous == nil || len(previous.CommandIDs) != len(previous.Commands) {
+		return next, 0
+	}
+	indexes := make(map[uint64]int, len(previous.CommandIDs))
+	for index, id := range previous.CommandIDs {
+		indexes[id] = index
+	}
+	reused := 0
+	for index, id := range next.CommandIDs {
+		previousIndex, exists := indexes[id]
+		if !exists || dirty[commandNodeID(next.Commands[index])] {
+			continue
+		}
+		next.Commands[index] = previous.Commands[previousIndex]
+		reused++
+	}
+	return next, reused
+}
+
+func commandNodeID(command Command) dom.NodeID {
+	switch typed := command.(type) {
+	case DrawText:
+		return typed.NodeID
+	case DrawInput:
+		return typed.NodeID
+	case DrawSelect:
+		return typed.NodeID
+	case DrawCheckable:
+		return typed.NodeID
+	case DrawButton:
+		return typed.NodeID
+	case DrawBox:
+		return typed.NodeID
+	case DrawImage:
+		return typed.NodeID
+	default:
+		return 0
+	}
 }
 
 // ApplyAnimatedLayout copies only frame-varying paint and composite state from

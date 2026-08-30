@@ -109,6 +109,7 @@ type Decoration struct {
 	Order      int
 	StackingID int
 	NodeID     dom.NodeID
+	FragmentID uint64
 	Rect
 	Background      uint32
 	Image           stylemodel.BackgroundImage
@@ -162,6 +163,7 @@ type Box struct {
 	Order       int
 	StackingID  int
 	NodeID      dom.NodeID
+	FragmentID  uint64
 	Tag         string
 	Text        string
 	Input       bool
