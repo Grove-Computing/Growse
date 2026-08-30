@@ -337,7 +337,7 @@ func loadReplacedImageNodeWithCache(ctx context.Context, client ResourceLoader, 
 		}
 		resource.Loaded, resource.Error = true, ""
 		resource.IntrinsicWidth, resource.IntrinsicHeight = float32(cached.width), float32(cached.height)
-		resized, err := resizeImageForNode(ctx, cached.decoded, node, deviceScale, budget)
+		resized, err := cache.prepareSurface(ctx, cached, target, node, deviceScale, budget)
 		if err != nil {
 			resource.Loaded, resource.Error = false, "image resize failed"
 			continue

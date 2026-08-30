@@ -130,6 +130,14 @@ func resizeImageForNode(ctx context.Context, source image.Image, node *dom.Node,
 	if source == nil {
 		return nil, errors.New("image source is unavailable")
 	}
+	targetWidth, targetHeight, resize := imageTargetDimensions(source, node, deviceScale)
+	if !resize {
+		return source, nil
+	}
+	return resizeImageToTarget(ctx, source, targetWidth, targetHeight, budget)
+}
+
+func imageTargetDimensions(source image.Image, node *dom.Node, deviceScale float32) (int, int, bool) {
 	bounds := source.Bounds()
 	width, height := bounds.Dx(), bounds.Dy()
 	if deviceScale <= 0 {
@@ -138,7 +146,7 @@ func resizeImageForNode(ctx context.Context, source image.Image, node *dom.Node,
 	targetWidth, hasWidth := imageDimensionAttribute(node, "width")
 	targetHeight, hasHeight := imageDimensionAttribute(node, "height")
 	if !hasWidth && !hasHeight {
-		return source, nil
+		return width, height, false
 	}
 	if hasWidth {
 		targetWidth = int(float32(targetWidth)*deviceScale + 0.5)
@@ -151,8 +159,17 @@ func resizeImageForNode(ctx context.Context, source image.Image, node *dom.Node,
 		targetHeight = max(1, targetWidth*height/width)
 	}
 	if targetWidth == width && targetHeight == height {
-		return source, nil
+		return width, height, false
 	}
+	return targetWidth, targetHeight, true
+}
+
+func resizeImageToTarget(ctx context.Context, source image.Image, targetWidth, targetHeight int, budget *imageDecodeBudget) (image.Image, error) {
+	if source == nil {
+		return nil, errors.New("image source is unavailable")
+	}
+	bounds := source.Bounds()
+	width, height := bounds.Dx(), bounds.Dy()
 	if targetWidth <= 0 || targetHeight <= 0 || targetWidth > maxImageDimension || targetHeight > maxImageDimension || targetWidth > maxImagePixels/targetHeight {
 		return nil, errors.New("image resize dimensions are invalid")
 	}
