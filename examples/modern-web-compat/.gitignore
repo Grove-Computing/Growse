@@ -1,1 +1,5 @@
 node_modules/
+sources/**/.next/
+sources/**/out/
+sources/**/.svelte-kit/
+sources/**/build/

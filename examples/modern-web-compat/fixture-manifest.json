@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "release": "v0.16.0",
+  "release": "v0.17.0",
   "artifactPolicy": "checked-in deterministic build artifacts",
   "publicInternetRequired": false,
   "verificationCommand": "go test ./examples/modern-web-compat -run TestFixtureManifestIsCompleteAndUntampered",
@@ -9,20 +9,21 @@
       "name": "nextjs",
       "framework": "Next.js",
       "frameworkVersion": "15.4.6",
-      "buildTool": "Next.js compiler 15.4.6 / Node.js 22.18.0 / pnpm 10.14.0",
+      "buildTool": "Next.js compiler 15.4.6 / Tailwind CLI 4.1.12 / Node.js 24.18.0 / pnpm 11.21.0",
       "dependencies": {
         "next": "15.4.6",
         "react": "19.1.1",
         "react-dom": "19.1.1"
       },
-      "generationCommand": "corepack pnpm --offline install --frozen-lockfile && corepack pnpm --offline next build",
-      "licenses": ["MIT:Next.js", "MIT:React"],
-      "sources": ["sources/nextjs/app/page.jsx"],
+      "generationCommand": "pnpm install --offline --frozen-lockfile --ignore-scripts && ./node_modules/.bin/next build sources/nextjs",
+      "licenses": ["MIT:Next.js", "MIT:React", "MIT:Tailwind CSS"],
+      "sources": ["sources/nextjs/next.config.mjs", "sources/nextjs/app/layout.jsx", "sources/nextjs/app/page.jsx", "sources/nextjs/app/globals.css"],
       "artifacts": [
         {"path": "fixtures/nextjs/app.css", "sha256": "e561e437caa1677fe2436c9a1c838b20e00dccd29456e659f7294c0dbf97e4b1"},
         {"path": "fixtures/nextjs/app.mjs", "sha256": "4ec741197a8b19e662a0b9b0c84f6c19b04021779b3b8046501550c9e1311ca6"},
         {"path": "fixtures/nextjs/counter.chunk.mjs", "sha256": "45917193109f7ce57a63c568f042ff3d282b075bb926ddc7b97af1d83fc18e1f"},
-        {"path": "fixtures/nextjs/index.html", "sha256": "e15e2c14eafea834be797f2a26d6846e7d599fa10aada5b78bacc9426c12bbf7"}
+        {"path": "fixtures/nextjs/index.html", "sha256": "e15e2c14eafea834be797f2a26d6846e7d599fa10aada5b78bacc9426c12bbf7"},
+        {"path": "fixtures/nextjs/upstream.sha256", "sha256": "0b74d186ae99c13ed6e93c4d85f870870bc1bdbf75736191abed4f4fdfe0aad8"}
       ]
     },
     {

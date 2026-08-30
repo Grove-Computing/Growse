@@ -51,7 +51,7 @@ func TestFixtureManifestIsCompleteAndUntampered(t *testing.T) {
 	if err := json.Unmarshal(encoded, &manifest); err != nil {
 		t.Fatal(err)
 	}
-	if manifest.SchemaVersion != 1 || manifest.Release != "v0.16.0" || manifest.PublicInternetRequired || manifest.ArtifactPolicy != "checked-in deterministic build artifacts" {
+	if manifest.SchemaVersion != 1 || manifest.Release != "v0.17.0" || manifest.PublicInternetRequired || manifest.ArtifactPolicy != "checked-in deterministic build artifacts" {
 		t.Fatalf("offline fixture manifest header = %#v", manifest)
 	}
 	if manifest.VerificationCommand == "" || len(manifest.Fixtures) != 4 {
@@ -102,6 +102,38 @@ func TestFixtureManifestIsCompleteAndUntampered(t *testing.T) {
 	for _, name := range []string{"nextjs", "sveltekit", "tailwind", "real-site"} {
 		if !seen[name] {
 			t.Fatalf("fixture manifest is missing %s", name)
+		}
+	}
+}
+
+func TestUpstreamFrameworkBuildDigests(t *testing.T) {
+	for _, fixture := range []string{"nextjs", "sveltekit"} {
+		checksumPath := filepath.Join("fixtures", fixture, "upstream.sha256")
+		encoded, err := os.ReadFile(checksumPath)
+		if err != nil {
+			if fixture == "sveltekit" {
+				continue // Added by the immediately following release-train item.
+			}
+			t.Fatal(err)
+		}
+		lines := strings.Split(strings.TrimSpace(string(encoded)), "\n")
+		if len(lines) < 2 {
+			t.Fatalf("%s does not cover an upstream module graph", checksumPath)
+		}
+		for _, line := range lines {
+			fields := strings.Fields(line)
+			if len(fields) != 2 || len(fields[0]) != 64 {
+				t.Fatalf("invalid checksum entry %q", line)
+			}
+			assertLocalFixturePath(t, fields[1], "upstream-export/")
+			content, err := os.ReadFile(filepath.Join("fixtures", fixture, fields[1]))
+			if err != nil {
+				t.Fatal(err)
+			}
+			digest := sha256.Sum256(content)
+			if got := hex.EncodeToString(digest[:]); got != fields[0] {
+				t.Fatalf("fixture %s upstream artifact %q digest = %s, want %s", fixture, fields[1], got, fields[0])
+			}
 		}
 	}
 }
