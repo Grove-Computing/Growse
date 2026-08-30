@@ -30,33 +30,33 @@
     {
       "name": "sveltekit",
       "framework": "SvelteKit",
-      "frameworkVersion": "2.37.0",
-      "buildTool": "SvelteKit 2.37.0 / Svelte 5.38.2 / Vite 7.1.3 / Tailwind CLI 4.1.12 / Node.js 24.18.0 / pnpm 11.21.0",
+      "frameworkVersion": "2.70.3",
+      "buildTool": "SvelteKit 2.70.3 / Svelte 5.57.0 / Vite 7.3.6 / Tailwind CLI 4.1.12 / Node.js 24.18.0 / pnpm 11.21.0",
       "dependencies": {
-        "@sveltejs/kit": "2.37.0",
-        "svelte": "5.38.2",
-        "vite": "7.1.3"
+        "@sveltejs/kit": "2.70.3",
+        "svelte": "5.57.0",
+        "vite": "7.3.6"
       },
-      "generationCommand": "pnpm install --offline --frozen-lockfile --ignore-scripts && (cd sources/sveltekit && ../../node_modules/.bin/vite build)",
+      "generationCommand": "pnpm install --offline --frozen-lockfile --ignore-scripts && (cd sources/sveltekit && ../../node_modules/.bin/vite build) && node sources/normalize-framework-build.mjs sources/sveltekit/build",
       "licenses": ["MIT:SvelteKit", "MIT:Svelte", "MIT:Vite", "MIT:Tailwind CSS"],
-      "sources": ["sources/sveltekit/svelte.config.js", "sources/sveltekit/vite.config.js", "sources/sveltekit/src/app.html", "sources/sveltekit/src/app.css", "sources/sveltekit/src/routes/+layout.svelte", "sources/sveltekit/src/routes/+page.js", "sources/sveltekit/src/routes/+page.svelte", "sources/sveltekit/src/routes/svelte/about/+page.svelte"],
+      "sources": ["sources/normalize-framework-build.mjs", "sources/sveltekit/svelte.config.js", "sources/sveltekit/vite.config.js", "sources/sveltekit/src/app.html", "sources/sveltekit/src/app.css", "sources/sveltekit/src/routes/+layout.svelte", "sources/sveltekit/src/routes/+page.js", "sources/sveltekit/src/routes/+page.svelte", "sources/sveltekit/src/routes/svelte/about/+page.svelte"],
       "artifacts": [
         {"path": "fixtures/sveltekit/app.css", "sha256": "a205946e5e6ec4b3731e7980d2367b62b9054173e2b7ebfb766d9001ba7d0b16"},
         {"path": "fixtures/sveltekit/app.mjs", "sha256": "495586a8a3d6fbc5a53787ae7dbd9a197a6ff075cf47a3a4e4c8465373ddc52e"},
         {"path": "fixtures/sveltekit/index.html", "sha256": "b4c46f939e877e39b55b606f73663eb0a72c5288972d3e650d90fdcc5baa856c"},
         {"path": "fixtures/sveltekit/start.mjs", "sha256": "a4e3f26383348b04601c92e4ca3ee05cbfbfbb7230681c229de534568437301b"},
-        {"path": "fixtures/sveltekit/upstream-contract.mjs", "sha256": "f69c6f7ac2454f27706d1db6798091cc65a2042cdc37d84d4b25bb545eb2d195"},
-        {"path": "fixtures/sveltekit/upstream.sha256", "sha256": "6f91d720a8741d958b26c8708b262e425c2d74bd186899b7d6183c988ef55ab5"}
+        {"path": "fixtures/sveltekit/upstream-contract.mjs", "sha256": "51ddfdb8f015c50b1a9d4837666765de5281052950f2745774aa5805528a420f"},
+        {"path": "fixtures/sveltekit/upstream.sha256", "sha256": "8a037bcf0883a0323f5b5fdabaa61b1bba93c3b76526260de9d469c32c0bff50"}
       ]
     },
     {
       "name": "real-site",
       "framework": "SvelteKit + Tailwind CSS",
-      "frameworkVersion": "2.37.0",
-      "buildTool": "Tailwind CLI 4.1.12 / SvelteKit 2.37.0 SSR source / Node.js 24.18.0 / pnpm 11.21.0",
+      "frameworkVersion": "2.70.3",
+      "buildTool": "Tailwind CLI 4.1.12 / SvelteKit 2.70.3 SSR source / Node.js 24.18.0 / pnpm 11.21.0",
       "dependencies": {
-        "@sveltejs/kit": "2.37.0",
-        "svelte": "5.38.2",
+        "@sveltejs/kit": "2.70.3",
+        "svelte": "5.57.0",
         "tailwindcss": "4.1.12",
         "@tailwindcss/cli": "4.1.12"
       },

@@ -19,7 +19,7 @@ async function normalize(directory) {
       await normalize(path);
       continue;
     }
-    if (!entry.isFile() || ![".js", ".mjs"].includes(extname(entry.name))) {
+    if (!entry.isFile() || ![".html", ".js", ".mjs"].includes(extname(entry.name))) {
       continue;
     }
     const original = await readFile(path, "utf8");
@@ -27,6 +27,7 @@ async function normalize(directory) {
     for (const [character, escape] of replacements) {
       normalized = normalized.replaceAll(character, escape);
     }
+    normalized = normalized.replace(/[ \t]+$/gm, "");
     if (normalized !== original) {
       await writeFile(path, normalized, "utf8");
     }

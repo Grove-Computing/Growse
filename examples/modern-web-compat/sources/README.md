@@ -9,6 +9,6 @@ SvelteKit SSR source and a deterministic hydration contract. It includes Japanes
 duplicate images, custom theme tokens, and transform / opacity animation.
 
 The exact upstream versions, offline build command, licenses, and artifact digests are recorded in `../fixture-manifest.json`.
-The Next.js output is passed through `normalize-framework-build.mjs`, which replaces security-sensitive invisible
-Unicode characters with equivalent JavaScript Unicode escapes before checksums are recorded. CI verifies the checked-in
+Framework output is passed through `normalize-framework-build.mjs`, which replaces security-sensitive invisible
+Unicode characters with equivalent JavaScript Unicode escapes and removes trailing whitespace before checksums are recorded. CI verifies the checked-in
 bytes and never runs pnpm, accesses npm, or requires public DNS.

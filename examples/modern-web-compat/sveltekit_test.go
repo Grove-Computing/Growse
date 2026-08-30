@@ -47,9 +47,9 @@ func TestSvelteKitSSRFixtureHydratesAndEnhancesForm(t *testing.T) {
 	}
 	root := fixtureNode(t, page, "svelte")
 	for attribute, want := range map[string]string{
-		"data-framework-build":      "SvelteKit 2.37.0 / Svelte 5.38.2",
-		"data-upstream-entrypoint":  "upstream-export/_app/immutable/entry/start.wQHwKN5a.js",
-		"data-upstream-application": "upstream-export/_app/immutable/entry/app.KTqJPWpF.js",
+		"data-framework-build":      "SvelteKit 2.70.3 / Svelte 5.57.0",
+		"data-upstream-entrypoint":  "upstream-export/_app/immutable/entry/start.DKsUhvBt.js",
+		"data-upstream-application": "upstream-export/_app/immutable/entry/app.BIgHAFAw.js",
 	} {
 		if got, _ := root.Attribute(attribute); got != want {
 			t.Errorf("%s = %q, want %q", attribute, got, want)
