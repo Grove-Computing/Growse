@@ -1817,8 +1817,13 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 	if ui.navigator != nil {
 		ui.navigator.UpdateViewport(viewportWidth, viewportHeight)
 	}
+	pageVisible := true
+	if lifecycle, ok := ui.navigator.(pageLifecycleNavigator); ok {
+		pageVisible = lifecycle.IsPageVisible(page)
+	}
 	frameRequest := browser.FrameRequest{
 		ScrollPending: ui.layoutCache.page == page && (ui.layoutCache.listFirst != ui.pageList.Position.First || ui.layoutCache.listOffset != ui.pageList.Position.Offset),
+		Background:    !pageVisible,
 	}
 	if navigator, ok := ui.navigator.(animationFrameNavigator); ok {
 		frameRequest.AnimationFramePending = navigator.HasAnimationFrameCallbacks()
@@ -1877,10 +1882,6 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 	ui.viewportClick.Add(gtx.Ops)
 	pass.Pop()
 	area.Pop()
-	pageVisible := true
-	if lifecycle, ok := ui.navigator.(pageLifecycleNavigator); ok {
-		pageVisible = lifecycle.IsPageVisible(page)
-	}
 	if pageVisible && page.ActiveAnimationsInViewport(gtx.Now, tree) && ui.invalidate != nil {
 		ui.invalidate()
 	}

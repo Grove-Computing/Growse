@@ -19,17 +19,44 @@ const (
 	FrameSourceScroll
 )
 
+type FrameTaskPriority uint8
+
+const (
+	FrameTaskInput FrameTaskPriority = iota
+	FrameTaskChrome
+	FrameTaskPage
+)
+
+const (
+	maxFrameTasks         = 32
+	maxFrameTaskBudget    = 8 * time.Millisecond
+	backgroundFramePeriod = time.Second
+	animationStormPeriod  = time.Second / 30
+	maxAnimationsPerFrame = 128
+)
+
+type FrameTask struct {
+	Priority FrameTaskPriority
+	Cost     time.Duration
+	Run      func()
+}
+
 type FrameRequest struct {
 	AnimationFramePending bool
 	RunAnimationFrame     func()
 	ScrollPending         bool
+	Background            bool
+	Tasks                 []FrameTask
 }
 
 type FramePlan struct {
-	Styles     style.Map
-	Damage     style.AnimationDamage
-	Sources    FrameSource
-	ImageNodes []dom.NodeID
+	Styles        style.Map
+	Damage        style.AnimationDamage
+	Sources       FrameSource
+	ImageNodes    []dom.NodeID
+	ExecutedTasks int
+	DroppedTasks  int
+	Throttled     bool
 }
 
 // ScheduleFrame samples all frame-producing subsystems at one timestamp and
@@ -39,6 +66,29 @@ func (p *Page) ScheduleFrame(current time.Time, tree *layout.Tree, request Frame
 		return FramePlan{}
 	}
 	plan := FramePlan{}
+	animationCount := 0
+	if p.Animations != nil {
+		animationCount += len(p.Animations.ActiveNodes(current))
+	}
+	if p.Transitions != nil {
+		animationCount += len(p.Transitions.ActiveNodes(current))
+	}
+	p.frameScheduleMu.Lock()
+	backgroundThrottled := request.Background && !p.lastFrame.IsZero() && current.Sub(p.lastFrame) < backgroundFramePeriod
+	stormThrottled := animationCount > maxAnimationsPerFrame && !p.lastAnimationFrame.IsZero() && current.Sub(p.lastAnimationFrame) < animationStormPeriod
+	if backgroundThrottled || stormThrottled {
+		p.frameScheduleMu.Unlock()
+		plan.Styles = p.ComputedStyles
+		plan.Throttled = true
+		p.recordThrottledFrame()
+		return plan
+	}
+	p.lastFrame = current
+	if animationCount != 0 {
+		p.lastAnimationFrame = current
+	}
+	p.frameScheduleMu.Unlock()
+	plan.ExecutedTasks, plan.DroppedTasks = p.runFrameTasks(request.Tasks)
 	if request.AnimationFramePending {
 		plan.Sources |= FrameSourceAnimationFrame
 		if request.RunAnimationFrame != nil {
@@ -67,6 +117,46 @@ func (p *Page) ScheduleFrame(current time.Time, tree *layout.Tree, request Frame
 	}
 	p.recordScheduledFrame(plan.Sources)
 	return plan
+}
+
+func (p *Page) runFrameTasks(tasks []FrameTask) (executed, dropped int) {
+	remaining := maxFrameTaskBudget
+	processed := 0
+	counts := [3]int{}
+	for _, priority := range []FrameTaskPriority{FrameTaskInput, FrameTaskChrome, FrameTaskPage} {
+		for _, task := range tasks {
+			if task.Priority != priority {
+				continue
+			}
+			cost := max(task.Cost, time.Duration(0))
+			if processed >= maxFrameTasks || cost > remaining {
+				dropped++
+				continue
+			}
+			processed++
+			remaining -= cost
+			if task.Run != nil {
+				task.Run()
+			}
+			executed++
+			if priority <= FrameTaskPage {
+				counts[priority]++
+			}
+		}
+	}
+	p.renderMu.Lock()
+	p.renderMetrics.InputTasks = saturatingAdd(p.renderMetrics.InputTasks, counts[FrameTaskInput])
+	p.renderMetrics.ChromeTasks = saturatingAdd(p.renderMetrics.ChromeTasks, counts[FrameTaskChrome])
+	p.renderMetrics.PageTasks = saturatingAdd(p.renderMetrics.PageTasks, counts[FrameTaskPage])
+	p.renderMetrics.DroppedTasks = saturatingAdd(p.renderMetrics.DroppedTasks, dropped)
+	p.renderMu.Unlock()
+	return executed, dropped
+}
+
+func (p *Page) recordThrottledFrame() {
+	p.renderMu.Lock()
+	p.renderMetrics.ThrottledFrames = saturatingAdd(p.renderMetrics.ThrottledFrames, 1)
+	p.renderMu.Unlock()
 }
 
 func (p *Page) ActiveAnimatedImagesInViewport(tree *layout.Tree) bool {

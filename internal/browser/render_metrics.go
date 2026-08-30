@@ -54,6 +54,11 @@ type RenderMetrics struct {
 	AnimationRebuilds      uint64
 	ScheduledFrames        uint64
 	CoalescedFrames        uint64
+	ThrottledFrames        uint64
+	InputTasks             uint64
+	ChromeTasks            uint64
+	PageTasks              uint64
+	DroppedTasks           uint64
 }
 
 // RecordRenderReuse counts stable fragments and commands retained across one

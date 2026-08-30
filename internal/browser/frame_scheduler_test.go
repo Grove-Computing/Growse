@@ -70,3 +70,50 @@ func TestFrameSchedulerCoalescesCSSRAFImageAndScroll(t *testing.T) {
 		t.Fatalf("scheduler metrics = %#v", metrics)
 	}
 }
+
+func TestFrameSchedulerPrioritizesInputAndChromeWithinBudget(t *testing.T) {
+	page := &Page{ComputedStyles: style.Map{}}
+	var order []string
+	plan := page.ScheduleFrame(time.Unix(200, 0), nil, FrameRequest{Tasks: []FrameTask{
+		{Priority: FrameTaskPage, Cost: time.Millisecond, Run: func() { order = append(order, "page") }},
+		{Priority: FrameTaskPage, Cost: 9 * time.Millisecond, Run: func() { order = append(order, "long") }},
+		{Priority: FrameTaskChrome, Cost: time.Millisecond, Run: func() { order = append(order, "chrome") }},
+		{Priority: FrameTaskInput, Cost: time.Millisecond, Run: func() { order = append(order, "input") }},
+	}})
+	if strings.Join(order, ",") != "input,chrome,page" || plan.ExecutedTasks != 3 || plan.DroppedTasks != 1 {
+		t.Fatalf("task order=%v plan=%#v", order, plan)
+	}
+	metrics := page.RenderMetricsSnapshot()
+	if metrics.InputTasks != 1 || metrics.ChromeTasks != 1 || metrics.PageTasks != 1 || metrics.DroppedTasks != 1 {
+		t.Fatalf("task metrics = %#v", metrics)
+	}
+}
+
+func TestFrameSchedulerThrottlesBackgroundAndAnimationStorm(t *testing.T) {
+	start := time.Unix(300, 0)
+	page := &Page{ComputedStyles: style.Map{}}
+	page.ScheduleFrame(start, nil, FrameRequest{Background: true})
+	rafCalls := 0
+	background := page.ScheduleFrame(start.Add(100*time.Millisecond), nil, FrameRequest{
+		Background: true, AnimationFramePending: true, RunAnimationFrame: func() { rafCalls++ },
+	})
+	if !background.Throttled || rafCalls != 0 {
+		t.Fatalf("background plan=%#v rafCalls=%d", background, rafCalls)
+	}
+
+	timing, err := animationmodel.NewTiming(time.Second, 0, animationmodel.Linear{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stormStyles := make(style.Map)
+	for index := 1; index <= maxAnimationsPerFrame+1; index++ {
+		stormStyles[dom.NodeID(index)] = style.ComputedStyle{Animations: []style.CSSAnimation{{Name: "storm", Timing: timing, Iterations: 1000}}}
+	}
+	storm := &Page{ComputedStyles: stormStyles, Animations: style.NewAnimationRegistry()}
+	storm.Animations.Reconcile(stormStyles, start)
+	first := storm.ScheduleFrame(start.Add(time.Millisecond), nil, FrameRequest{})
+	second := storm.ScheduleFrame(start.Add(2*time.Millisecond), nil, FrameRequest{})
+	if first.Throttled || !second.Throttled || storm.RenderMetricsSnapshot().ThrottledFrames != 1 {
+		t.Fatalf("storm plans first=%#v second=%#v metrics=%#v", first, second, storm.RenderMetricsSnapshot())
+	}
+}
