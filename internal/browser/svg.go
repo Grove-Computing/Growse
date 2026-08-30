@@ -61,9 +61,13 @@ func rasterizeSVG(source []byte) (image.Image, int, int, error) {
 }
 
 func rasterizeSVGWithBudget(source []byte, budget *imageDecodeBudget) (decoded image.Image, widthResult, heightResult int, err error) {
+	reservedWidth, reservedHeight := 0, 0
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			decoded, widthResult, heightResult, err = nil, 0, 0, fmt.Errorf("SVG decoder panic: %v", recovered)
+		}
+		if err != nil && reservedWidth > 0 {
+			budget.releaseSurface(reservedWidth, reservedHeight)
 		}
 	}()
 	if err := validateSVG(source); err != nil {
@@ -95,9 +99,10 @@ func rasterizeSVGWithBudget(source []byte, budget *imageDecodeBudget) (decoded i
 	if pixelWidth <= 0 || pixelHeight <= 0 || pixelWidth > maxSVGSurfaceBytes/4/pixelHeight {
 		return nil, 0, 0, errors.New("SVG raster surface is too large")
 	}
-	if !budget.allowsSurface(pixelWidth, pixelHeight) {
+	if !budget.reserveSurface(pixelWidth, pixelHeight) {
 		return nil, 0, 0, errors.New("page image decode surface limit exceeded")
 	}
+	reservedWidth, reservedHeight = pixelWidth, pixelHeight
 	icon.ViewBox.X, icon.ViewBox.Y, icon.ViewBox.W, icon.ViewBox.H = viewBox[0], viewBox[1], viewBox[2], viewBox[3]
 	result := image.NewRGBA(image.Rect(0, 0, pixelWidth, pixelHeight))
 	icon.SetTarget(0, 0, float64(pixelWidth), float64(pixelHeight))
@@ -105,7 +110,6 @@ func rasterizeSVGWithBudget(source []byte, budget *imageDecodeBudget) (decoded i
 	icon.Draw(rasterx.NewDasher(pixelWidth, pixelHeight, scanner), 1)
 	paintSVGText(result, metadata)
 	applySVGClip(result, metadata)
-	budget.commitSurface(pixelWidth, pixelHeight)
 	return result, pixelWidth, pixelHeight, nil
 }
 
