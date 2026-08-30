@@ -7,6 +7,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/Grove-Computing/Growse/internal/conformance"
 )
 
 type compatibilityCorpus struct {
@@ -15,6 +17,20 @@ type compatibilityCorpus struct {
 	Chromium      string       `json:"chromium"`
 	Offline       bool         `json:"offline"`
 	Pages         []corpusPage `json:"pages"`
+}
+
+func TestFixedRunnerPerformanceGateDoesNotRegressFromV016(t *testing.T) {
+	encoded, err := os.ReadFile("performance-gate.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gate conformance.PerformanceGate
+	if err := json.Unmarshal(encoded, &gate); err != nil {
+		t.Fatal(err)
+	}
+	if report := conformance.ComparePerformance(gate); !report.Passed() {
+		t.Fatalf("fixed runner performance gate failed: %+v", report.Differences)
+	}
 }
 
 type corpusPage struct {
