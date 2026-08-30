@@ -1585,6 +1585,16 @@ func parseDisplay(value string) (Display, bool) {
 		return DisplayGrid, true
 	case "inline-grid":
 		return DisplayInlineGrid, true
+	case "contents":
+		return DisplayContents, true
+	case "table":
+		return DisplayTable, true
+	case "table-row-group", "table-header-group", "table-footer-group":
+		return DisplayTableRowGroup, true
+	case "table-row":
+		return DisplayTableRow, true
+	case "table-cell":
+		return DisplayTableCell, true
 	case "none":
 		return DisplayNone, true
 	default:

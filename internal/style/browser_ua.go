@@ -14,6 +14,11 @@ const BrowserUAStylesheetVersion = "growse-browser-ua-v1"
 const browserUASource = `
 html, body, address, article, aside, footer, header, hgroup, main, nav, section,
 div, form, fieldset, figure, figcaption, details, summary { display: block; }
+table { display: table; border-collapse: separate; border-spacing: 2px; }
+thead, tbody, tfoot { display: table-row-group; }
+tr { display: table-row; }
+td, th { display: table-cell; padding: 1px; }
+th { font-weight: bold; text-align: center; }
 head, link, meta, script, style, title, noscript, template, [hidden] { display: none; }
 body { margin: 8px; color: #000; font-family: system-ui, sans-serif; font-size: 16px; }
 h1 { display: block; font-size: 2em; font-weight: bold; margin-block: .67em; }

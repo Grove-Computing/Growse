@@ -18,6 +18,11 @@ const (
 	DisplayInlineFlex
 	DisplayGrid
 	DisplayInlineGrid
+	DisplayContents
+	DisplayTable
+	DisplayTableRowGroup
+	DisplayTableRow
+	DisplayTableCell
 )
 
 // FlexDirection defines the main axis and its direction.

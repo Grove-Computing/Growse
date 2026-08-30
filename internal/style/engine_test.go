@@ -475,8 +475,12 @@ func TestBrowserUAStylesheetProvidesDefaultsBelowAuthorOrigin(t *testing.T) {
 	heading := document.CreateElement("h1", nil)
 	input := document.CreateElement("input", nil)
 	hidden := document.CreateElement("section", map[string]string{"hidden": ""})
+	table := document.CreateElement("table", nil)
+	row := document.CreateElement("tr", nil)
+	cell := document.CreateElement("td", nil)
 	for _, edge := range [][2]*dom.Node{
 		{document.Root, html}, {html, body}, {body, heading}, {body, input}, {body, hidden},
+		{body, table}, {table, row}, {row, cell},
 	} {
 		appendNode(t, document, edge[0], edge[1])
 	}
@@ -497,6 +501,12 @@ func TestBrowserUAStylesheetProvidesDefaultsBelowAuthorOrigin(t *testing.T) {
 	}
 	if hiddenStyle.Display != DisplayNone {
 		t.Fatalf("browser hidden display = %v, want none", hiddenStyle.Display)
+	}
+	tableStyle, _ := browserStyles.For(table)
+	rowStyle, _ := browserStyles.For(row)
+	cellStyle, _ := browserStyles.For(cell)
+	if tableStyle.Display != DisplayTable || rowStyle.Display != DisplayTableRow || cellStyle.Display != DisplayTableCell {
+		t.Fatalf("browser table displays = table:%v row:%v cell:%v", tableStyle.Display, rowStyle.Display, cellStyle.Display)
 	}
 
 	author, err := css.Parse(strings.NewReader(`

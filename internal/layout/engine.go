@@ -279,6 +279,12 @@ func (e *engine) walk(node *dom.Node, x, width, containingHeight float32, height
 		if style.display == stylemodel.DisplayNone {
 			return
 		}
+		if style.display == stylemodel.DisplayContents || style.display == stylemodel.DisplayTableRowGroup || style.display == stylemodel.DisplayTableRow {
+			for _, child := range node.Children {
+				e.walk(child, x, width, containingHeight, heightDefinite)
+			}
+			return
+		}
 		// Top-level positioned elements do not pass through a block parent's
 		// positioned-child collection. Resolve them against the current
 		// containing block (or the initial containing block when it is nil)
@@ -305,6 +311,10 @@ func (e *engine) walk(node *dom.Node, x, width, containingHeight float32, height
 		}
 		if isSubmitButtonControl(node) {
 			e.addSubmitButton(node, style, x, width, containingHeight, heightDefinite)
+			return
+		}
+		if style.display == stylemodel.DisplayTable {
+			e.addTable(node, style, x, width, containingHeight, heightDefinite)
 			return
 		}
 		if isBlockLevelDisplay(style.display) {
@@ -711,10 +721,17 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 			inlineRuns = inlineRuns[:0]
 		}
 
-		for _, child := range node.Children {
+		for _, child := range e.flowChildren(node) {
 			if child.Type == dom.NodeElement {
 				childStyle := e.styleFor(child)
 				if childStyle.display == stylemodel.DisplayNone {
+					continue
+				}
+				if childStyle.display == stylemodel.DisplayTable {
+					flushInline()
+					e.addTable(child, childStyle, contentX, contentWidth, childContainingHeight, declaredHeightDefinite)
+					previousBlock = true
+					previousBottomMargin = childStyle.margin.Bottom
 					continue
 				}
 				if childStyle.layoutPosition == stylemodel.PositionAbsolute || childStyle.layoutPosition == stylemodel.PositionFixed {
@@ -971,6 +988,13 @@ func (e *engine) collectInlineRunsWithOpacity(node, owner *dom.Node, opacity flo
 	opacity *= style.opacity
 	if style.display == stylemodel.DisplayNone {
 		return nil
+	}
+	if style.display == stylemodel.DisplayContents {
+		var result []inlineRun
+		for _, child := range node.Children {
+			result = append(result, e.collectInlineRunsWithOpacity(child, owner, opacity)...)
+		}
+		return result
 	}
 	if style.display == stylemodel.DisplayInlineBlock {
 		return []inlineRun{{nodeID: node.ID, tag: node.TagName, text: e.inlineText(node), style: style, atomic: true, opacity: opacity}}
