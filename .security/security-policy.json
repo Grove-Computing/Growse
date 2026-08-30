@@ -26,7 +26,20 @@
       "reason": "Windows executableとStart Menuで使用するApplication icon"
     }
   ],
-  "unicode_allowlist": [],
+  "unicode_allowlist": [
+    {
+      "path": "examples/modern-web-compat/fixtures/nextjs/upstream-export/_next/static/chunks/polyfills-42372ed130431b0a.js",
+      "code_point": "U+200B",
+      "reason": "digest検証済みNext.js 15.4.6 polyfillのECMAScript whitespace互換表現",
+      "expires": "2027-08-30"
+    },
+    {
+      "path": "examples/modern-web-compat/fixtures/nextjs/upstream-export/_next/static/chunks/polyfills-42372ed130431b0a.js",
+      "code_point": "U+180E",
+      "reason": "digest検証済みNext.js 15.4.6 polyfillのECMAScript whitespace互換表現",
+      "expires": "2027-08-30"
+    }
+  ],
   "editor_extensions": [
     {
       "id": "golang.go",
