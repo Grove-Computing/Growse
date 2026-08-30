@@ -2065,6 +2065,7 @@ func recomputePageStyles(page *Page, current time.Time) {
 	}
 	previous := page.ComputedStyles
 	page.ComputedStyles = computePageStyles(page)
+	page.RecordComputedStyleChanges(previous, page.ComputedStyles)
 	page.StyleRevision++
 	if page.Transitions == nil {
 		page.Transitions = style.NewTransitionRegistry()

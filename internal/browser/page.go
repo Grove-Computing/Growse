@@ -99,6 +99,7 @@ type Page struct {
 	fontDirty        FontInvalidation
 	renderMu         sync.Mutex
 	renderMetrics    RenderMetrics
+	renderDirty      RenderInvalidation
 }
 
 // ImageInvalidation describes the bounded renderer work caused by the latest
