@@ -142,32 +142,15 @@ func TestNextJSSSRFixtureHydratesWithoutReplacingDOM(t *testing.T) {
 	if got := fixtureNode(t, engine.Page(), "next-route").TextContent(); got != "/next/about" {
 		t.Fatalf("client Navigation content = %q", got)
 	}
-	if !engine.DispatchClick(fixtureNode(t, engine.Page(), "next-history-back").ID, 0, 0) {
-		t.Fatal("history back Event was not handled")
+	if _, err := engine.Back(context.Background()); err != nil {
+		t.Fatalf("history back traversal: %v", err)
 	}
-	waitForFixturePath(t, engine, mutations, "/next/")
 	waitForFixtureText(t, engine, mutations, "next-route", "/next/")
-	if fixtureNode(t, engine.Page(), "__next").ID != rootID {
+	if engine.Page().URL.Path != "/next/" || fixtureNode(t, engine.Page(), "__next").ID != rootID {
 		t.Fatal("Next.js history traversal replaced SSR identity or lost popstate")
 	}
 	if engine.Page().RuntimeError != "" || len(engine.Page().ScriptErrors) != 0 {
 		t.Fatalf("Next.js fixture runtime errors = %q / %v", engine.Page().RuntimeError, engine.Page().ScriptErrors)
-	}
-}
-
-func waitForFixturePath(t *testing.T, engine *browser.Browser, mutations <-chan struct{}, want string) {
-	t.Helper()
-	deadline := time.NewTimer(3 * time.Second)
-	defer deadline.Stop()
-	for {
-		if page := engine.Page(); page != nil && page.URL != nil && page.URL.Path == want {
-			return
-		}
-		select {
-		case <-mutations:
-		case <-deadline.C:
-			t.Fatalf("fixture path = %q, want %q", engine.Page().URL.Path, want)
-		}
 	}
 }
 

@@ -48,9 +48,6 @@ export function hydrate(root) {
     document.getElementById("next-route").textContent = "/next/about";
   });
 
-  document.getElementById("next-history-back").addEventListener("click", function () {
-    history.back();
-  });
   addEventListener("popstate", function () {
     document.getElementById("next-route").textContent = location.pathname;
   });

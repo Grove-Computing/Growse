@@ -639,23 +639,30 @@ func (runtime *Runtime) UpdateLocation(documentURL *url.URL) {
 	}
 }
 
-// DispatchPopState queues a Browser history traversal event for JavaScript.
+// DispatchPopState delivers a Browser history traversal on the Page queue and
+// waits until listeners finish so the Browser can publish a stable mutation.
 func (runtime *Runtime) DispatchPopState(state string) {
 	runtime.mu.Lock()
 	navigation := runtime.navigationAPI
 	runtime.mu.Unlock()
 	if navigation != nil {
-		runtime.enqueueCallback(func() { navigation.DispatchPopState(state) })
+		_ = runtime.runSync(context.Background(), func(*goja.Runtime) error {
+			navigation.DispatchPopState(state)
+			return nil
+		})
 	}
 }
 
-// DispatchHashChange queues a same-document fragment event for JavaScript.
+// DispatchHashChange delivers a same-document fragment event on the Page queue.
 func (runtime *Runtime) DispatchHashChange(oldURL, newURL string) {
 	runtime.mu.Lock()
 	navigation := runtime.navigationAPI
 	runtime.mu.Unlock()
 	if navigation != nil {
-		runtime.enqueueCallback(func() { navigation.DispatchHashChange(oldURL, newURL) })
+		_ = runtime.runSync(context.Background(), func(*goja.Runtime) error {
+			navigation.DispatchHashChange(oldURL, newURL)
+			return nil
+		})
 	}
 }
 

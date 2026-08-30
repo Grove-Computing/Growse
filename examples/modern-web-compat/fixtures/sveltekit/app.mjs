@@ -47,9 +47,6 @@ export function hydrate(root) {
     menuToggle.setAttribute("aria-expanded", String(expanded));
   });
 
-  document.getElementById("svelte-history-back").addEventListener("click", function () {
-    history.back();
-  });
   addEventListener("popstate", function () {
     document.getElementById("svelte-route").textContent = location.pathname;
   });

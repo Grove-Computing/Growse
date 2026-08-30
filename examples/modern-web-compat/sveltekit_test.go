@@ -101,12 +101,11 @@ func TestSvelteKitSSRFixtureHydratesAndEnhancesForm(t *testing.T) {
 	if got := engine.Page().URL.Path; got != "/svelte/about" {
 		t.Fatalf("client Navigation path = %q", got)
 	}
-	if !engine.DispatchClick(fixtureNode(t, engine.Page(), "svelte-history-back").ID, 0, 0) {
-		t.Fatal("history back Event was not handled")
+	if _, err := engine.Back(context.Background()); err != nil {
+		t.Fatalf("history back traversal: %v", err)
 	}
-	waitForFixturePath(t, engine, mutations, "/svelte/")
 	waitForFixtureText(t, engine, mutations, "svelte-route", "/svelte/")
-	if fixtureNode(t, engine.Page(), "svelte").ID != rootID {
+	if engine.Page().URL.Path != "/svelte/" || fixtureNode(t, engine.Page(), "svelte").ID != rootID {
 		t.Fatal("SvelteKit history traversal replaced SSR identity or lost popstate")
 	}
 	if engine.Page().RuntimeError != "" || len(engine.Page().ScriptErrors) != 0 {

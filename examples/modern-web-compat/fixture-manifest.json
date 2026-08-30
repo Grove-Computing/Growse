@@ -21,8 +21,8 @@
       "artifacts": [
         {"path": "fixtures/nextjs/app.css", "sha256": "e561e437caa1677fe2436c9a1c838b20e00dccd29456e659f7294c0dbf97e4b1"},
         {"path": "fixtures/nextjs/app.mjs", "sha256": "81e4ed5923ee7258f14a446c635b5114e066505ee05454d95d18546a909584eb"},
-        {"path": "fixtures/nextjs/counter.chunk.mjs", "sha256": "0747364524b391d76b2978573e84ce93cbb2b3e95e2edfb3098e09cf76fec702"},
-        {"path": "fixtures/nextjs/index.html", "sha256": "2dc137bcd6e39cfe5bbd37df63b48051b8c397d71a2078a032ad48478f242e4a"},
+        {"path": "fixtures/nextjs/counter.chunk.mjs", "sha256": "76f7fc483f5ec353528e9842059d593e29711d51f45551cf0a96dd907c57a64d"},
+        {"path": "fixtures/nextjs/index.html", "sha256": "105452dad7a6d76c40a963e106ad897e72d94ff4e97bb277da7198fb59ff341d"},
         {"path": "fixtures/nextjs/upstream-contract.mjs", "sha256": "ec69521cd5ff9d0734f23f89082304e404c7078cc8c1e6ffa970794958dd7451"},
         {"path": "fixtures/nextjs/upstream.sha256", "sha256": "0b74d186ae99c13ed6e93c4d85f870870bc1bdbf75736191abed4f4fdfe0aad8"}
       ]
@@ -42,8 +42,8 @@
       "sources": ["sources/sveltekit/svelte.config.js", "sources/sveltekit/vite.config.js", "sources/sveltekit/src/app.html", "sources/sveltekit/src/app.css", "sources/sveltekit/src/routes/+layout.svelte", "sources/sveltekit/src/routes/+page.js", "sources/sveltekit/src/routes/+page.svelte", "sources/sveltekit/src/routes/svelte/about/+page.svelte"],
       "artifacts": [
         {"path": "fixtures/sveltekit/app.css", "sha256": "a205946e5e6ec4b3731e7980d2367b62b9054173e2b7ebfb766d9001ba7d0b16"},
-        {"path": "fixtures/sveltekit/app.mjs", "sha256": "86e7aa0ddeb54989c642eb61a82013aeba3228b286391dab8cfea38d289ec7bb"},
-        {"path": "fixtures/sveltekit/index.html", "sha256": "e8a8ced818440a8f9da9f9ff75966f84d788242ec484670465f127c53000b3ff"},
+        {"path": "fixtures/sveltekit/app.mjs", "sha256": "495586a8a3d6fbc5a53787ae7dbd9a197a6ff075cf47a3a4e4c8465373ddc52e"},
+        {"path": "fixtures/sveltekit/index.html", "sha256": "b4c46f939e877e39b55b606f73663eb0a72c5288972d3e650d90fdcc5baa856c"},
         {"path": "fixtures/sveltekit/start.mjs", "sha256": "a4e3f26383348b04601c92e4ca3ee05cbfbfbb7230681c229de534568437301b"},
         {"path": "fixtures/sveltekit/upstream-contract.mjs", "sha256": "f69c6f7ac2454f27706d1db6798091cc65a2042cdc37d84d4b25bb545eb2d195"},
         {"path": "fixtures/sveltekit/upstream.sha256", "sha256": "6f91d720a8741d958b26c8708b262e425c2d74bd186899b7d6183c988ef55ab5"}
