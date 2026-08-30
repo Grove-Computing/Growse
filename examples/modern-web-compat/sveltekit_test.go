@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/Grove-Computing/Growse/internal/browser"
@@ -46,7 +47,7 @@ func TestSvelteKitSSRFixtureHydratesAndEnhancesForm(t *testing.T) {
 	}
 	root := fixtureNode(t, page, "svelte")
 	for attribute, want := range map[string]string{
-		"data-framework-build":       "SvelteKit 2.37.0 / Svelte 5.38.2",
+		"data-framework-build":      "SvelteKit 2.37.0 / Svelte 5.38.2",
 		"data-upstream-entrypoint":  "upstream-export/_app/immutable/entry/start.wQHwKN5a.js",
 		"data-upstream-application": "upstream-export/_app/immutable/entry/app.KTqJPWpF.js",
 	} {
@@ -67,6 +68,12 @@ func TestSvelteKitSSRFixtureHydratesAndEnhancesForm(t *testing.T) {
 	if got := fixtureNode(t, page, "svelte-state").TextContent(); got != "reactive:1" {
 		t.Fatalf("reactive state = %q", got)
 	}
+	if class, _ := root.Attribute("class"); class != "interactive" {
+		t.Fatalf("SvelteKit class mutation = %q", class)
+	}
+	if style, _ := fixtureNode(t, page, "svelte-state").Attribute("style"); !strings.Contains(style, "color: rgb(124,58,237)") {
+		t.Fatalf("SvelteKit style mutation = %q", style)
+	}
 	if !engine.SetInputValue(fixtureNode(t, page, "svelte-name").ID, "Growse") {
 		t.Fatal("form input was not updated")
 	}
@@ -76,11 +83,31 @@ func TestSvelteKitSSRFixtureHydratesAndEnhancesForm(t *testing.T) {
 	if got := fixtureNode(t, page, "svelte-form-result").TextContent(); got != "enhanced:Growse" {
 		t.Fatalf("enhanced form result = %q", got)
 	}
+	if !engine.DispatchClick(fixtureNode(t, page, "svelte-dialog-toggle").ID, 0, 0) {
+		t.Fatal("dialog Event was not handled")
+	}
+	if _, hidden := fixtureNode(t, page, "svelte-dialog").Attribute("hidden"); hidden || fixtureNode(t, page, "svelte-dialog-state").TextContent() != "open:focused" {
+		t.Fatal("SvelteKit dialog did not open and receive focus")
+	}
+	if !engine.DispatchClick(fixtureNode(t, page, "svelte-menu-toggle").ID, 0, 0) {
+		t.Fatal("menu Event was not handled")
+	}
+	if _, hidden := fixtureNode(t, page, "svelte-menu").Attribute("hidden"); hidden {
+		t.Fatal("SvelteKit menu remained hidden")
+	}
 	if !engine.DispatchClick(fixtureNode(t, page, "svelte-navigation").ID, 0, 0) {
 		t.Fatal("client Navigation Event was not handled")
 	}
 	if got := engine.Page().URL.Path; got != "/svelte/about" {
 		t.Fatalf("client Navigation path = %q", got)
+	}
+	if !engine.DispatchClick(fixtureNode(t, engine.Page(), "svelte-history-back").ID, 0, 0) {
+		t.Fatal("history back Event was not handled")
+	}
+	waitForFixturePath(t, engine, mutations, "/svelte/")
+	waitForFixtureText(t, engine, mutations, "svelte-route", "/svelte/")
+	if fixtureNode(t, engine.Page(), "svelte").ID != rootID {
+		t.Fatal("SvelteKit history traversal replaced SSR identity or lost popstate")
 	}
 	if engine.Page().RuntimeError != "" || len(engine.Page().ScriptErrors) != 0 {
 		t.Fatalf("SvelteKit fixture runtime errors = %q / %v", engine.Page().RuntimeError, engine.Page().ScriptErrors)

@@ -114,6 +114,25 @@ func TestNextJSSSRFixtureHydratesWithoutReplacingDOM(t *testing.T) {
 	if got := fixtureNode(t, page, "next-count").TextContent(); got != "1" {
 		t.Fatalf("counter state = %q", got)
 	}
+	if class, _ := root.Attribute("class"); class != "interactive" {
+		t.Fatalf("Next.js class mutation = %q", class)
+	}
+	if style, _ := fixtureNode(t, page, "next-count").Attribute("style"); !strings.Contains(style, "color: rgb(37,99,235)") {
+		t.Fatalf("Next.js style mutation = %q", style)
+	}
+	if !engine.DispatchClick(fixtureNode(t, page, "next-dialog-toggle").ID, 0, 0) {
+		t.Fatal("dialog Event was not handled")
+	}
+	dialog := fixtureNode(t, page, "next-dialog")
+	if _, hidden := dialog.Attribute("hidden"); hidden || fixtureNode(t, page, "next-dialog-state").TextContent() != "open:focused" {
+		t.Fatal("Next.js dialog did not open and receive focus")
+	}
+	if !engine.DispatchClick(fixtureNode(t, page, "next-menu-toggle").ID, 0, 0) {
+		t.Fatal("menu Event was not handled")
+	}
+	if _, hidden := fixtureNode(t, page, "next-menu").Attribute("hidden"); hidden {
+		t.Fatal("Next.js menu remained hidden")
+	}
 	if !engine.DispatchClick(fixtureNode(t, page, "next-navigation").ID, 0, 0) {
 		t.Fatal("client Navigation Event was not handled")
 	}
@@ -123,8 +142,32 @@ func TestNextJSSSRFixtureHydratesWithoutReplacingDOM(t *testing.T) {
 	if got := fixtureNode(t, engine.Page(), "next-route").TextContent(); got != "/next/about" {
 		t.Fatalf("client Navigation content = %q", got)
 	}
+	if !engine.DispatchClick(fixtureNode(t, engine.Page(), "next-history-back").ID, 0, 0) {
+		t.Fatal("history back Event was not handled")
+	}
+	waitForFixturePath(t, engine, mutations, "/next/")
+	waitForFixtureText(t, engine, mutations, "next-route", "/next/")
+	if fixtureNode(t, engine.Page(), "__next").ID != rootID {
+		t.Fatal("Next.js history traversal replaced SSR identity or lost popstate")
+	}
 	if engine.Page().RuntimeError != "" || len(engine.Page().ScriptErrors) != 0 {
 		t.Fatalf("Next.js fixture runtime errors = %q / %v", engine.Page().RuntimeError, engine.Page().ScriptErrors)
+	}
+}
+
+func waitForFixturePath(t *testing.T, engine *browser.Browser, mutations <-chan struct{}, want string) {
+	t.Helper()
+	deadline := time.NewTimer(3 * time.Second)
+	defer deadline.Stop()
+	for {
+		if page := engine.Page(); page != nil && page.URL != nil && page.URL.Path == want {
+			return
+		}
+		select {
+		case <-mutations:
+		case <-deadline.C:
+			t.Fatalf("fixture path = %q, want %q", engine.Page().URL.Path, want)
+		}
 	}
 }
 

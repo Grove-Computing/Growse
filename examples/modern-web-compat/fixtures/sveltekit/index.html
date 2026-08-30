@@ -17,7 +17,13 @@
       <button id="svelte-submit" type="submit">Save</button>
     </form>
     <output id="svelte-form-result">not submitted</output>
+    <button id="svelte-dialog-toggle" type="button">Open dialog</button>
+    <section id="svelte-dialog" role="dialog" tabindex="-1" hidden>Dialog content</section>
+    <output id="svelte-dialog-state">closed</output>
+    <button id="svelte-menu-toggle" type="button" aria-expanded="false">Menu</button>
+    <menu id="svelte-menu" hidden><li>Profile</li></menu>
     <a id="svelte-navigation" href="/svelte/about">About</a>
+    <button id="svelte-history-back" type="button">Back</button>
     <p id="svelte-route">/svelte/</p>
   </div>
   <script type="module" src="/_app/immutable/entry/start.mjs"></script>
