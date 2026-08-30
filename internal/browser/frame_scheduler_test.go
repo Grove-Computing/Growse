@@ -117,3 +117,42 @@ func TestFrameSchedulerThrottlesBackgroundAndAnimationStorm(t *testing.T) {
 		t.Fatalf("storm plans first=%#v second=%#v metrics=%#v", first, second, storm.RenderMetricsSnapshot())
 	}
 }
+
+func TestFrameGenerationRejectsCloseNavigationAndStaleResourceCompletion(t *testing.T) {
+	page := &Page{
+		ComputedStyles: style.Map{},
+		ImageResources: map[dom.NodeID]layout.ImageResource{},
+		Images:         map[string]image.Image{},
+		imageCache:     newImageResourceCache(),
+	}
+	token := page.FrameGeneration()
+	loadContext, imageGeneration := page.beginImageLoad(nil)
+	rafCalls := 0
+	accepted := page.ScheduleFrame(time.Unix(400, 0), nil, FrameRequest{
+		Generation: token, AnimationFramePending: true, RunAnimationFrame: func() { rafCalls++ },
+	})
+	if accepted.Stale || rafCalls != 1 {
+		t.Fatalf("current generation was rejected: %#v", accepted)
+	}
+	page.releaseImageResources()
+	if loadContext.Err() == nil {
+		t.Fatal("page close did not cancel pending resource work")
+	}
+	stale := page.ScheduleFrame(time.Unix(401, 0), nil, FrameRequest{
+		Generation: token, AnimationFramePending: true, RunAnimationFrame: func() { rafCalls++ },
+	})
+	if !stale.Stale || stale.Generation == token || rafCalls != 1 {
+		t.Fatalf("stale frame was delivered: plan=%#v rafCalls=%d", stale, rafCalls)
+	}
+	if page.commitImageResourceLoad(imageGeneration, 1, layout.ImageResource{URL: "stale.png", Loaded: true}, image.NewNRGBA(image.Rect(0, 0, 1, 1)), "") {
+		t.Fatal("stale resource completion was committed")
+	}
+
+	browserState := New(nil)
+	browserState.SetPage(page)
+	replacement := &Page{ComputedStyles: style.Map{}}
+	browserState.SetPage(replacement)
+	if !page.ScheduleFrame(time.Unix(402, 0), nil, FrameRequest{}).Stale {
+		t.Fatal("navigation replacement accepted an old page frame")
+	}
+}

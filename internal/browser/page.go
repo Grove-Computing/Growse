@@ -103,6 +103,8 @@ type Page struct {
 	frameScheduleMu    sync.Mutex
 	lastFrame          time.Time
 	lastAnimationFrame time.Time
+	frameGeneration    uint64
+	frameClosed        bool
 }
 
 // ImageInvalidation describes the bounded renderer work caused by the latest
@@ -221,6 +223,7 @@ func (p *Page) releaseImageResources() {
 	if p == nil {
 		return
 	}
+	p.cancelFrameLifecycle()
 	p.cancelImageLoads()
 	if p.imageCache != nil {
 		p.imageCache.clear()

@@ -1883,6 +1883,8 @@ func startRuntime(ctx context.Context, factory runtimemodel.EngineFactory, engin
 				return
 			}
 			setRuntimeError(page, fmt.Sprintf("%s runtime worker failed: %v", engine, err))
+			page.cancelFrameLifecycle()
+			page.cancelImageLoads()
 			if onMutation != nil {
 				onMutation()
 			}

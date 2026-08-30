@@ -42,6 +42,7 @@ type FrameTask struct {
 }
 
 type FrameRequest struct {
+	Generation            uint64
 	AnimationFramePending bool
 	RunAnimationFrame     func()
 	ScrollPending         bool
@@ -50,6 +51,7 @@ type FrameRequest struct {
 }
 
 type FramePlan struct {
+	Generation    uint64
 	Styles        style.Map
 	Damage        style.AnimationDamage
 	Sources       FrameSource
@@ -57,6 +59,7 @@ type FramePlan struct {
 	ExecutedTasks int
 	DroppedTasks  int
 	Throttled     bool
+	Stale         bool
 }
 
 // ScheduleFrame samples all frame-producing subsystems at one timestamp and
@@ -66,6 +69,17 @@ func (p *Page) ScheduleFrame(current time.Time, tree *layout.Tree, request Frame
 		return FramePlan{}
 	}
 	plan := FramePlan{}
+	p.frameScheduleMu.Lock()
+	if p.frameGeneration == 0 {
+		p.frameGeneration = 1
+	}
+	plan.Generation = p.frameGeneration
+	if p.frameClosed || request.Generation != 0 && request.Generation != p.frameGeneration {
+		p.frameScheduleMu.Unlock()
+		plan.Styles, plan.Stale = p.ComputedStyles, true
+		return plan
+	}
+	p.frameScheduleMu.Unlock()
 	animationCount := 0
 	if p.Animations != nil {
 		animationCount += len(p.Animations.ActiveNodes(current))
@@ -74,6 +88,11 @@ func (p *Page) ScheduleFrame(current time.Time, tree *layout.Tree, request Frame
 		animationCount += len(p.Transitions.ActiveNodes(current))
 	}
 	p.frameScheduleMu.Lock()
+	if p.frameClosed || p.frameGeneration != plan.Generation {
+		p.frameScheduleMu.Unlock()
+		plan.Styles, plan.Stale = p.ComputedStyles, true
+		return plan
+	}
 	backgroundThrottled := request.Background && !p.lastFrame.IsZero() && current.Sub(p.lastFrame) < backgroundFramePeriod
 	stormThrottled := animationCount > maxAnimationsPerFrame && !p.lastAnimationFrame.IsZero() && current.Sub(p.lastAnimationFrame) < animationStormPeriod
 	if backgroundThrottled || stormThrottled {
@@ -117,6 +136,41 @@ func (p *Page) ScheduleFrame(current time.Time, tree *layout.Tree, request Frame
 	}
 	p.recordScheduledFrame(plan.Sources)
 	return plan
+}
+
+// FrameGeneration returns the token accepted by the current Page lifecycle.
+func (p *Page) FrameGeneration() uint64 {
+	if p == nil {
+		return 0
+	}
+	p.frameScheduleMu.Lock()
+	if p.frameGeneration == 0 {
+		p.frameGeneration = 1
+	}
+	result := p.frameGeneration
+	p.frameScheduleMu.Unlock()
+	return result
+}
+
+func (p *Page) cancelFrameLifecycle() {
+	if p == nil {
+		return
+	}
+	p.frameScheduleMu.Lock()
+	p.frameGeneration++
+	if p.frameGeneration == 0 {
+		p.frameGeneration = 1
+	}
+	p.frameClosed = true
+	p.lastFrame = time.Time{}
+	p.lastAnimationFrame = time.Time{}
+	p.frameScheduleMu.Unlock()
+	if p.Animations != nil {
+		p.Animations.Clear()
+	}
+	if p.Transitions != nil {
+		p.Transitions.Clear()
+	}
 }
 
 func (p *Page) runFrameTasks(tasks []FrameTask) (executed, dropped int) {

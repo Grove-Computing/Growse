@@ -1822,6 +1822,7 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 		pageVisible = lifecycle.IsPageVisible(page)
 	}
 	frameRequest := browser.FrameRequest{
+		Generation:    page.FrameGeneration(),
 		ScrollPending: ui.layoutCache.page == page && (ui.layoutCache.listFirst != ui.pageList.Position.First || ui.layoutCache.listOffset != ui.pageList.Position.Offset),
 		Background:    !pageVisible,
 	}
