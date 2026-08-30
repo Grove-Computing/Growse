@@ -7,6 +7,7 @@ require (
 	github.com/dop251/goja v0.0.0-20260822123354-58e940e0d230
 	github.com/evanw/esbuild v0.28.2
 	github.com/gen2brain/avif v0.6.0
+	github.com/gen2brain/webp v0.6.4
 	github.com/go-text/typesetting v0.3.4
 	github.com/pgaskin/go-woff2 v0.0.2
 	github.com/srwiley/oksvg v0.0.0-20221011165216-be6e8873101c

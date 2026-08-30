@@ -60,6 +60,7 @@ type Page struct {
 	BackgroundErrors []string
 	ImageResources   map[dom.NodeID]layoutmodel.ImageResource
 	Images           map[string]image.Image
+	AnimatedImages   map[dom.NodeID]*animatedImagePlayer
 	ImageErrors      []string
 	Fonts            []FontResource
 	FontErrors       []string
@@ -130,6 +131,7 @@ func (p *Page) commitImageLoad(generation uint64, resources map[dom.NodeID]layou
 		return false
 	}
 	p.ImageResources, p.Images, p.ImageErrors = resources, images, failures
+	p.AnimatedImages = animatedImagesForResources(resources, p.imageCache)
 	p.StyleRevision++
 	return true
 }
@@ -154,6 +156,14 @@ func (p *Page) commitImageResourceLoad(generation uint64, nodeID dom.NodeID, res
 		images[resource.URL] = decoded
 	}
 	p.ImageResources, p.Images = resources, images
+	if p.AnimatedImages == nil {
+		p.AnimatedImages = make(map[dom.NodeID]*animatedImagePlayer)
+	}
+	if animation := p.imageCache.animation(resource.URL); animation != nil {
+		p.AnimatedImages[nodeID] = &animatedImagePlayer{data: animation}
+	} else {
+		delete(p.AnimatedImages, nodeID)
+	}
 	if failure != "" {
 		p.ImageErrors = append(append([]string(nil), p.ImageErrors...), failure)
 	}
@@ -212,6 +222,12 @@ func (p *Page) releaseImageResources() {
 	p.imageMu.Lock()
 	p.ImageResources = nil
 	p.Images = nil
+	for _, player := range p.AnimatedImages {
+		if player != nil {
+			player.closed = true
+		}
+	}
+	p.AnimatedImages = nil
 	p.ImageErrors = nil
 	p.imageEvents = nil
 	p.imageCache = nil

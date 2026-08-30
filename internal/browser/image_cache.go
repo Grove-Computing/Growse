@@ -40,6 +40,7 @@ type cachedImageResource struct {
 	lastUsed    uint64
 	validator   string
 	orientation int
+	animation   *animatedImageData
 }
 
 type imageSurfaceCacheKey struct {
@@ -136,14 +137,17 @@ func (cache *imageResourceCache) load(ctx context.Context, client ResourceLoader
 	default:
 		result.body = append([]byte(nil), response.Body...)
 		result.contentType = response.ContentType
+		mediaType, _, _ := mime.ParseMediaType(response.ContentType)
 		result.validator = imageResponseValidator(response)
 		result.orientation = 1
-		if mediaType, _, parseErr := mime.ParseMediaType(response.ContentType); parseErr == nil && mediaType == "image/jpeg" {
+		if mediaType == "image/jpeg" {
 			result.orientation = jpegEXIFOrientation(response.Body)
 		}
 		result.decoded, result.width, result.height, result.err = decodeImageResponseWithBudget(result.body, result.contentType, budget)
 		if result.err != nil {
 			result.failure = imageLoadDecodeFailure
+		} else if animation, animationErr := decodeAnimatedImage(result.body, mediaType, budget); animationErr == nil {
+			result.animation = animation
 		}
 	}
 
@@ -157,6 +161,7 @@ func (cache *imageResourceCache) load(ctx context.Context, client ResourceLoader
 	entry.err = result.err
 	entry.validator = result.validator
 	entry.orientation = result.orientation
+	entry.animation = result.animation
 	entry.complete = true
 	entry.bytes = int64(len(result.body)) + int64(result.width)*int64(result.height)*4
 	cache.bytes += entry.bytes
@@ -305,7 +310,20 @@ func cloneCachedImageResource(entry *cachedImageResource) cachedImageResource {
 		body: entry.body, contentType: entry.contentType, decoded: entry.decoded,
 		width: entry.width, height: entry.height, failure: entry.failure, err: entry.err,
 		validator: entry.validator, orientation: entry.orientation,
+		animation: entry.animation,
 	}
+}
+
+func (cache *imageResourceCache) animation(rawURL string) *animatedImageData {
+	if cache == nil {
+		return nil
+	}
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	if entry := cache.entries[rawURL]; entry != nil && entry.complete {
+		return entry.animation
+	}
+	return nil
 }
 
 func imageResponseValidator(response *network.Response) string {

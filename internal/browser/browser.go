@@ -1446,6 +1446,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 		BackgroundErrors: backgroundErrors,
 		ImageResources:   replacedImages,
 		Images:           decodedImages,
+		AnimatedImages:   animatedImagesForResources(replacedImages, imageCache),
 		ImageErrors:      imageErrors,
 		Fonts:            fonts,
 		FontErrors:       fontErrors,
