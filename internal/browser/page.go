@@ -53,6 +53,7 @@ type Page struct {
 	Events           *events.Dispatcher
 	Stylesheet       *css.Stylesheet
 	ComputedStyles   style.Map
+	StyleErrors      []string
 	Animations       *style.AnimationRegistry
 	Transitions      *style.TransitionRegistry
 	BackgroundImages map[string]image.Image

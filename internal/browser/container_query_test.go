@@ -39,3 +39,20 @@ func TestContainerQueryIterationBudgetMatchesReleaseBoundary(t *testing.T) {
 		t.Fatalf("container query iterations = %d, want 16", maxContainerQueryIterations)
 	}
 }
+
+func TestStableContainerQueryDoesNotReportIterationFallback(t *testing.T) {
+	pageURL := mustParseURL(t, "https://example.com/stable-container.html")
+	loader := &routeLoader{responses: map[string]*network.Response{
+		pageURL.String(): {
+			URL: pageURL, StatusCode: 200, ContentType: "text/html",
+			Body: []byte(`<style>.card{container-type:inline-size;width:200px}@container (min-width:150px){.title{color:green}}</style><div class="card"><p class="title">ok</p></div>`),
+		},
+	}}
+	page, err := New(loader).Navigate(context.Background(), pageURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.StyleErrors) != 0 {
+		t.Fatalf("stable container query diagnostics = %v", page.StyleErrors)
+	}
+}

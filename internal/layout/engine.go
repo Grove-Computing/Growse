@@ -858,6 +858,7 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 			if e.stackingID > 0 && e.stackingID < len(e.tree.StackingContexts) && style.opacity >= 1 {
 				e.tree.StackingContexts[e.stackingID].Offscreen = false
 			}
+			e.tree.addFallback(node.ID, "visual-effect-surface-limit")
 		}
 	}
 	if e.positionCB != nil && style.layoutPosition != stylemodel.PositionStatic {

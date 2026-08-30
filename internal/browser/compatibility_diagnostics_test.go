@@ -38,6 +38,7 @@ func TestCompatibilityDiagnosticsExplainResourcesStylesFallbacksAndRuntimeErrors
 	page.FontErrors = []string{"font CORS rejected token=secret"}
 	page.ImageErrors = []string{"image decode failed /private/source.png"}
 	page.ScriptErrors = []string{"dynamic chunk load failed token=secret", "hydration exception secret", "observer loop limit secret"}
+	page.StyleErrors = []string{"layout container query iteration limit reached"}
 	page.DevTools.ObserveNetwork(network.Observation{
 		Method: "GET", URL: requested, FinalURL: finalURL, Kind: network.RequestModule, Engine: "javascript",
 		Initiator: "module-graph", Schedule: "module", StatusCode: 503, ErrorCategory: "http",
@@ -53,6 +54,7 @@ func TestCompatibilityDiagnosticsExplainResourcesStylesFallbacksAndRuntimeErrors
 		{"style", "applied", "matched"},
 		{"style", "ignored", "selector-unmatched"},
 		{"style", "ignored", "media-condition"},
+		{"layout", "fallback", "iteration-limit"},
 		{"font", "fallback", "cors"},
 		{"image", "fallback", "decode"},
 		{"runtime", "error", "chunk"},
