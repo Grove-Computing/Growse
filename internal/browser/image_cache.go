@@ -2,9 +2,16 @@ package browser
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"image"
+	"mime"
 	"net/url"
 	"sync"
+
+	"github.com/Grove-Computing/Growse/internal/dom"
+	"github.com/Grove-Computing/Growse/internal/network"
 )
 
 const maxPageImageCacheBytes = 256 << 20
@@ -20,17 +27,39 @@ const (
 )
 
 type cachedImageResource struct {
-	ready       chan struct{}
-	body        []byte
-	contentType string
-	decoded     image.Image
-	width       int
-	height      int
-	failure     imageLoadFailure
-	err         error
-	complete    bool
-	bytes       int64
-	lastUsed    uint64
+	ready        chan struct{}
+	body         []byte
+	contentType  string
+	decoded      image.Image
+	width        int
+	height       int
+	failure      imageLoadFailure
+	err          error
+	complete     bool
+	bytes        int64
+	lastUsed     uint64
+	validator    string
+	orientation  int
+	animation    *animatedImageData
+	animationErr string
+}
+
+type imageSurfaceCacheKey struct {
+	URL                       string
+	Validator                 string
+	DeviceScaleMilli          int
+	TargetWidth, TargetHeight int
+	Orientation               int
+	StyleRevision             uint64
+}
+
+type cachedImageSurface struct {
+	ready    chan struct{}
+	image    image.Image
+	err      error
+	bytes    int64
+	lastUsed uint64
+	complete bool
 }
 
 // imageResourceCache is owned by one Page generation. It coalesces duplicate
@@ -38,7 +67,9 @@ type cachedImageResource struct {
 // consumers in the same generation.
 type imageResourceCache struct {
 	mu         sync.Mutex
+	fetchMu    sync.Mutex
 	entries    map[string]*cachedImageResource
+	surfaces   map[imageSurfaceCacheKey]*cachedImageSurface
 	bytes      int64
 	tick       uint64
 	maxBytes   int64
@@ -55,7 +86,10 @@ func newImageResourceCache() *imageResourceCache {
 }
 
 func newImageResourceCacheWithLimits(maxBytes int64, maxEntries int) *imageResourceCache {
-	return &imageResourceCache{entries: make(map[string]*cachedImageResource), maxBytes: maxBytes, maxEntries: maxEntries}
+	return &imageResourceCache{
+		entries: make(map[string]*cachedImageResource), surfaces: make(map[imageSurfaceCacheKey]*cachedImageSurface),
+		maxBytes: maxBytes, maxEntries: maxEntries,
+	}
 }
 
 func (cache *imageResourceCache) load(ctx context.Context, client ResourceLoader, target *url.URL, budget *imageDecodeBudget) cachedImageResource {
@@ -79,7 +113,7 @@ func (cache *imageResourceCache) load(ctx context.Context, client ResourceLoader
 	}
 	cache.misses++
 	cache.evictLocked(0, 1)
-	if cache.maxEntries <= 0 || len(cache.entries) >= cache.maxEntries {
+	if cache.maxEntries <= 0 || len(cache.entries)+len(cache.surfaces) >= cache.maxEntries {
 		cache.mu.Unlock()
 		return cachedImageResource{failure: imageLoadResourceLimit}
 	}
@@ -92,7 +126,9 @@ func (cache *imageResourceCache) load(ctx context.Context, client ResourceLoader
 	cache.entries[key] = entry
 	cache.mu.Unlock()
 
+	cache.fetchMu.Lock()
 	response, err := client.Get(ctx, target)
+	cache.fetchMu.Unlock()
 	result := cachedImageResource{}
 	switch {
 	case err != nil || response == nil:
@@ -102,9 +138,20 @@ func (cache *imageResourceCache) load(ctx context.Context, client ResourceLoader
 	default:
 		result.body = append([]byte(nil), response.Body...)
 		result.contentType = response.ContentType
+		mediaType, _, _ := mime.ParseMediaType(response.ContentType)
+		result.validator = imageResponseValidator(response)
+		result.orientation = 1
+		if mediaType == "image/jpeg" {
+			result.orientation = jpegEXIFOrientation(response.Body)
+		}
 		result.decoded, result.width, result.height, result.err = decodeImageResponseWithBudget(result.body, result.contentType, budget)
 		if result.err != nil {
 			result.failure = imageLoadDecodeFailure
+		} else if animation, animationErr := decodeAnimatedImage(result.body, mediaType, budget); animationErr != nil {
+			result.failure = imageLoadDecodeFailure
+			result.animationErr = "animated image frame decode failed"
+		} else {
+			result.animation = animation
 		}
 	}
 
@@ -116,6 +163,10 @@ func (cache *imageResourceCache) load(ctx context.Context, client ResourceLoader
 	entry.height = result.height
 	entry.failure = result.failure
 	entry.err = result.err
+	entry.validator = result.validator
+	entry.orientation = result.orientation
+	entry.animation = result.animation
+	entry.animationErr = result.animationErr
 	entry.complete = true
 	entry.bytes = int64(len(result.body)) + int64(result.width)*int64(result.height)*4
 	cache.bytes += entry.bytes
@@ -130,9 +181,72 @@ func (cache *imageResourceCache) load(ctx context.Context, client ResourceLoader
 	return result
 }
 
+func (cache *imageResourceCache) prepareSurface(ctx context.Context, source cachedImageResource, target *url.URL, node *dom.Node, deviceScale float32, budget *imageDecodeBudget) (image.Image, error) {
+	if cache == nil || source.decoded == nil || target == nil {
+		return nil, errors.New("image surface source is unavailable")
+	}
+	targetWidth, targetHeight, resize := imageTargetDimensions(source.decoded, node, deviceScale)
+	key := imageSurfaceCacheKey{
+		URL: target.String(), Validator: source.validator, DeviceScaleMilli: int(deviceScale*1000 + 0.5),
+		TargetWidth: targetWidth, TargetHeight: targetHeight, Orientation: source.orientation,
+		StyleRevision: imageNodeStyleRevision(node),
+	}
+	cache.mu.Lock()
+	cache.tick++
+	if sourceEntry := cache.entries[target.String()]; sourceEntry != nil {
+		sourceEntry.lastUsed = cache.tick
+	}
+	if existing := cache.surfaces[key]; existing != nil {
+		cache.hits++
+		cache.tick++
+		existing.lastUsed = cache.tick
+		ready := existing.ready
+		cache.mu.Unlock()
+		select {
+		case <-ready:
+			return existing.image, existing.err
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	cache.misses++
+	cache.evictLocked(0, 1)
+	if cache.maxEntries <= 0 || len(cache.entries)+len(cache.surfaces) >= cache.maxEntries {
+		cache.mu.Unlock()
+		return nil, errors.New("image surface cache entry limit exceeded")
+	}
+	cache.tick++
+	entry := &cachedImageSurface{ready: make(chan struct{}), lastUsed: cache.tick}
+	cache.surfaces[key] = entry
+	cache.mu.Unlock()
+
+	prepared := source.decoded
+	var err error
+	if resize {
+		prepared, err = resizeImageToTarget(ctx, source.decoded, targetWidth, targetHeight, budget)
+	}
+	cache.mu.Lock()
+	entry.image, entry.err, entry.complete = prepared, err, true
+	if err == nil && prepared != source.decoded {
+		entry.bytes = int64(targetWidth) * int64(targetHeight) * 4
+		cache.bytes += entry.bytes
+	}
+	close(entry.ready)
+	if ctx.Err() != nil {
+		cache.bytes -= entry.bytes
+		delete(cache.surfaces, key)
+	} else {
+		cache.evictLocked(cache.maxBytes, 0)
+	}
+	cache.mu.Unlock()
+	return prepared, err
+}
+
 func (cache *imageResourceCache) evictLocked(targetBytes int64, reserveEntries int) {
-	for (targetBytes > 0 && cache.bytes > targetBytes) || (cache.maxEntries > 0 && len(cache.entries)+reserveEntries > cache.maxEntries) {
+	for (targetBytes > 0 && cache.bytes > targetBytes) || (cache.maxEntries > 0 && len(cache.entries)+len(cache.surfaces)+reserveEntries > cache.maxEntries) {
 		oldestKey := ""
+		var oldestSurface imageSurfaceCacheKey
+		oldestIsSurface := false
 		oldestTick := ^uint64(0)
 		for key, entry := range cache.entries {
 			if entry == nil || !entry.complete || entry.lastUsed >= oldestTick {
@@ -140,12 +254,31 @@ func (cache *imageResourceCache) evictLocked(targetBytes int64, reserveEntries i
 			}
 			oldestKey, oldestTick = key, entry.lastUsed
 		}
-		if oldestKey == "" {
+		for key, entry := range cache.surfaces {
+			if entry == nil || !entry.complete || entry.lastUsed >= oldestTick {
+				continue
+			}
+			oldestKey, oldestSurface, oldestTick, oldestIsSurface = "", key, entry.lastUsed, true
+		}
+		if oldestKey == "" && !oldestIsSurface {
 			return
+		}
+		if oldestIsSurface {
+			entry := cache.surfaces[oldestSurface]
+			cache.bytes -= entry.bytes
+			delete(cache.surfaces, oldestSurface)
+			cache.evictions++
+			continue
 		}
 		entry := cache.entries[oldestKey]
 		cache.bytes -= entry.bytes
 		delete(cache.entries, oldestKey)
+		for key, surface := range cache.surfaces {
+			if key.URL == oldestKey {
+				cache.bytes -= surface.bytes
+				delete(cache.surfaces, key)
+			}
+		}
 		cache.evictions++
 	}
 }
@@ -156,6 +289,7 @@ func (cache *imageResourceCache) clear() {
 	}
 	cache.mu.Lock()
 	cache.entries = make(map[string]*cachedImageResource)
+	cache.surfaces = make(map[imageSurfaceCacheKey]*cachedImageSurface)
 	cache.bytes = 0
 	cache.tick = 0
 	cache.hits = 0
@@ -180,5 +314,51 @@ func cloneCachedImageResource(entry *cachedImageResource) cachedImageResource {
 	return cachedImageResource{
 		body: entry.body, contentType: entry.contentType, decoded: entry.decoded,
 		width: entry.width, height: entry.height, failure: entry.failure, err: entry.err,
+		validator: entry.validator, orientation: entry.orientation,
+		animation: entry.animation, animationErr: entry.animationErr,
 	}
+}
+
+func (cache *imageResourceCache) animation(rawURL string) *animatedImageData {
+	if cache == nil {
+		return nil
+	}
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	if entry := cache.entries[rawURL]; entry != nil && entry.complete {
+		return entry.animation
+	}
+	return nil
+}
+
+func imageResponseValidator(response *network.Response) string {
+	if response == nil {
+		return ""
+	}
+	if response.Header != nil {
+		if value := response.Header.Get("ETag"); value != "" {
+			return "etag:" + value
+		}
+		if value := response.Header.Get("Last-Modified"); value != "" {
+			return "last-modified:" + value
+		}
+	}
+	digest := sha256.Sum256(response.Body)
+	return "sha256:" + hex.EncodeToString(digest[:])
+}
+
+func imageNodeStyleRevision(node *dom.Node) uint64 {
+	if node == nil {
+		return 0
+	}
+	hash := uint64(1469598103934665603)
+	for _, name := range []string{"width", "height", "class", "style"} {
+		value, _ := node.Attribute(name)
+		input := name + "=" + value + "\x00"
+		for index := range len(input) {
+			hash ^= uint64(input[index])
+			hash *= 1099511628211
+		}
+	}
+	return hash
 }

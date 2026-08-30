@@ -5,8 +5,10 @@ import (
 	"context"
 	"image"
 	"image/png"
+	"net/http"
 	"testing"
 
+	"github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/network"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 )
@@ -43,6 +45,51 @@ func TestImageResourceCacheEvictsLeastRecentlyUsedEntryWithinLimits(t *testing.T
 	}
 	if stats := cache.statsSnapshot(); stats.hits != 1 || stats.misses != 3 || stats.evictions != 1 {
 		t.Fatalf("image resource cache stats = %+v", stats)
+	}
+}
+
+func TestImageSurfaceCacheKeysValidatorDPRTargetOrientationAndStyleRevision(t *testing.T) {
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, image.NewNRGBA(image.Rect(0, 0, 4, 2))); err != nil {
+		t.Fatal(err)
+	}
+	rawURL := "https://example.com/hero.png"
+	loader := &routeLoader{responses: map[string]*network.Response{
+		rawURL: {URL: mustParseURL(t, rawURL), ContentType: "image/png", Header: http.Header{"Etag": {`"hero-v1"`}}, Body: encoded.Bytes()},
+	}}
+	cache := newImageResourceCacheWithLimits(1<<20, 2)
+	budget := newImageDecodeBudget()
+	source := cache.load(context.Background(), loader, mustParseURL(t, rawURL), budget)
+	if source.failure != imageLoadOK {
+		t.Fatalf("source load = %#v", source)
+	}
+	document := dom.NewDocument()
+	first := document.CreateElement("img", map[string]string{"width": "2", "height": "1", "class": "hero"})
+	second := document.CreateElement("img", map[string]string{"width": "2", "height": "1", "class": "hero"})
+	for _, node := range []*dom.Node{first, second} {
+		if _, err := cache.prepareSurface(context.Background(), source, mustParseURL(t, rawURL), node, 1, budget); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(cache.surfaces) != 1 {
+		t.Fatalf("equivalent scaled surfaces were not shared: %#v", cache.surfaces)
+	}
+	for key := range cache.surfaces {
+		if key.URL != rawURL || key.Validator != `etag:"hero-v1"` || key.DeviceScaleMilli != 1000 || key.TargetWidth != 2 || key.TargetHeight != 1 || key.Orientation != 1 || key.StyleRevision == 0 {
+			t.Fatalf("surface cache key = %+v", key)
+		}
+	}
+	second.Attributes["class"] = "hero changed"
+	if _, err := cache.prepareSurface(context.Background(), source, mustParseURL(t, rawURL), second, 2, budget); err != nil {
+		t.Fatal(err)
+	}
+	if len(cache.entries) != 1 || len(cache.surfaces) != 1 || cache.evictions == 0 {
+		t.Fatalf("variant eviction/source reuse = sources:%d surfaces:%d evictions:%d", len(cache.entries), len(cache.surfaces), cache.evictions)
+	}
+	for key := range cache.surfaces {
+		if key.DeviceScaleMilli != 2000 || key.TargetWidth != 4 || key.TargetHeight != 2 {
+			t.Fatalf("replacement variant key = %+v", key)
+		}
 	}
 }
 
