@@ -774,6 +774,14 @@ func resolveSizeWinner(property string, current, parent SizeValue, winners map[s
 		return initialSizeValue(property)
 	}
 	value := strings.ToLower(strings.TrimSpace(resolved))
+	switch value {
+	case "min-content":
+		return SizeValue{Kind: SizeMinContent}
+	case "max-content":
+		return SizeValue{Kind: SizeMaxContent}
+	case "fit-content":
+		return SizeValue{Kind: SizeFitContent}
+	}
 	if (property == "width" || property == "height" || property == "min-width" || property == "min-height") && value == "auto" {
 		return SizeValue{Kind: SizeAuto}
 	}

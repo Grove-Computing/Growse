@@ -80,6 +80,9 @@ func supportsDeclaration(property, value string) bool {
 		return ok
 	case "width", "height", "min-width", "min-height", "max-width", "max-height", "flex-basis":
 		lower := strings.ToLower(value)
+		if lower == "min-content" || lower == "max-content" || lower == "fit-content" {
+			return true
+		}
 		if (property == "width" || property == "height" || strings.HasPrefix(property, "min-")) && lower == "auto" {
 			return true
 		}

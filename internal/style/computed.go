@@ -180,6 +180,9 @@ const (
 	SizeAuto SizeKind = iota
 	SizeLength
 	SizeNone
+	SizeMinContent
+	SizeMaxContent
+	SizeFitContent
 )
 
 // SizeValue is a computed sizing property which still may contain a percentage.

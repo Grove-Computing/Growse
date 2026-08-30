@@ -639,8 +639,27 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 	}
 	if resolved, ok := resolveSize(style.width, width, true); ok {
 		sizingWidth = resolved
+	} else if intrinsic, ok := e.intrinsicKeywordSize(node, style.width, style, width, true); ok {
+		sizingWidth = intrinsic
+		if style.boxSizing == stylemodel.BoxSizingContentBox {
+			sizingWidth -= style.padding.Left + style.padding.Right + horizontalBorder
+		}
 	}
 	sizingWidth = constrainSize(sizingWidth, style.minWidth, style.maxWidth, width, true)
+	if intrinsic, ok := e.intrinsicKeywordSize(node, style.minWidth, style, width, true); ok {
+		minimum := intrinsic
+		if style.boxSizing == stylemodel.BoxSizingContentBox {
+			minimum -= style.padding.Left + style.padding.Right + horizontalBorder
+		}
+		sizingWidth = max(sizingWidth, minimum)
+	}
+	if intrinsic, ok := e.intrinsicKeywordSize(node, style.maxWidth, style, width, true); ok {
+		maximum := intrinsic
+		if style.boxSizing == stylemodel.BoxSizingContentBox {
+			maximum -= style.padding.Left + style.padding.Right + horizontalBorder
+		}
+		sizingWidth = min(sizingWidth, maximum)
+	}
 	outerWidth := sizingWidth
 	if style.boxSizing == stylemodel.BoxSizingContentBox {
 		outerWidth += style.padding.Left + style.padding.Right + horizontalBorder
@@ -676,6 +695,12 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 	e.y += style.border.Top.Width + style.padding.Top
 	contentTop := e.y
 	declaredHeight, declaredHeightDefinite := resolveSize(style.height, containingHeight, heightDefinite)
+	if intrinsic, ok := e.intrinsicKeywordSize(node, style.height, style, containingHeight, false); ok {
+		declaredHeight, declaredHeightDefinite = intrinsic, true
+		if style.boxSizing == stylemodel.BoxSizingContentBox {
+			declaredHeight -= style.padding.Top + style.padding.Bottom + verticalBorder
+		}
+	}
 	childContainingHeight := declaredHeight
 	if declaredHeightDefinite && style.boxSizing == stylemodel.BoxSizingBorderBox {
 		childContainingHeight -= style.padding.Top + style.padding.Bottom + verticalBorder
