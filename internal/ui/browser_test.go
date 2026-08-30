@@ -1541,9 +1541,18 @@ div { width: 100px; height: 100px; animation: fade 1s linear infinite; }
 
 	ui.layoutDocument(gtx, page)
 	displayList := ui.layoutCache.displayList
+	gallery := pageImagePaintCache{}
+	gallery.prepare(page)
+	gallerySource := image.NewNRGBA(image.Rect(0, 0, 8, 8))
+	for _, resource := range []string{"gallery-a", "gallery-b", "gallery-c"} {
+		gallery.scale(resource, gallerySource, 64, 64)
+	}
 	gtx.Reset()
 	gtx.Now = start.Add(500 * time.Millisecond)
 	ui.layoutDocument(gtx, page)
+	for _, resource := range []string{"gallery-a", "gallery-b", "gallery-c"} {
+		gallery.scale(resource, gallerySource, 64, 64)
+	}
 	if builds != 1 {
 		t.Fatalf("layout builds across animation frames = %d, want 1", builds)
 	}
@@ -1551,7 +1560,7 @@ div { width: 100px; height: 100px; animation: fade 1s linear infinite; }
 		t.Fatal("static display list was rebuilt across composite frames")
 	}
 	metrics := page.RenderMetricsSnapshot()
-	if metrics.LayoutBuilds != 1 || metrics.DisplayListBuilds != 2 || metrics.DisplayListReuses != 1 || metrics.CompositeFrames != 2 || metrics.InitialRebuilds != 1 {
+	if metrics.LayoutBuilds != 1 || metrics.DisplayListBuilds != 2 || metrics.DisplayListReuses != 1 || metrics.CompositeFrames != 2 || metrics.InitialRebuilds != 1 || metrics.AnimationRebuilds != 0 || metrics.ImagePaintMisses != 3 || metrics.ImagePaintHits != 3 {
 		t.Fatalf("warm composite frame metrics = %+v", metrics)
 	}
 }
@@ -1611,14 +1620,23 @@ func TestScrollFrameDoesNotRebuildLayoutOrDisplayList(t *testing.T) {
 	if _, _, reused := ui.cachedDocumentFrame(page, 800, 80, 1); reused {
 		t.Fatal("initial frame unexpectedly reused")
 	}
+	gallery := pageImagePaintCache{}
+	gallery.prepare(page)
+	gallerySource := image.NewNRGBA(image.Rect(0, 0, 8, 8))
+	for _, resource := range []string{"gallery-a", "gallery-b", "gallery-c"} {
+		gallery.scale(resource, gallerySource, 64, 64)
+	}
 	before := page.RenderMetricsSnapshot()
 	ui.pageList.Position = layout.Position{First: 1, Offset: 8}
 	tree, _, reused := ui.cachedDocumentFrame(page, 800, 80, 1)
+	for _, resource := range []string{"gallery-a", "gallery-b", "gallery-c"} {
+		gallery.scale(resource, gallerySource, 64, 64)
+	}
 	after := page.RenderMetricsSnapshot()
 	if !reused || tree.ScrollY <= 0 {
 		t.Fatalf("scroll frame reused=%t scrollY=%v", reused, tree.ScrollY)
 	}
-	if after.LayoutBuilds != before.LayoutBuilds || after.DisplayListBuilds != before.DisplayListBuilds || after.ScrollRebuilds != 0 || after.CompositeFrames != before.CompositeFrames+1 {
+	if after.LayoutBuilds != before.LayoutBuilds || after.DisplayListBuilds != before.DisplayListBuilds || after.ScrollRebuilds != 0 || after.CompositeFrames != before.CompositeFrames+1 || after.ImagePaintMisses != before.ImagePaintMisses || after.ImagePaintHits != before.ImagePaintHits+3 {
 		t.Fatalf("scroll work before=%#v after=%#v", before, after)
 	}
 }

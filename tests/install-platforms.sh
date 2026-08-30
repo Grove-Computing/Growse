@@ -6,7 +6,7 @@ repository_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 test_root=$(mktemp -d)
 trap 'rm -rf "$test_root"' EXIT
 
-version=${GROWSE_TEST_VERSION:-v0.16.0}
+version=${GROWSE_TEST_VERSION:-v0.17.0}
 release_root="${test_root}/releases/${version}"
 fixture_bin="${repository_root}/tests/fixtures/platform-bin"
 mkdir -p "$release_root"

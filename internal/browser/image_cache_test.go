@@ -43,8 +43,45 @@ func TestImageResourceCacheEvictsLeastRecentlyUsedEntryWithinLimits(t *testing.T
 	if cache.entries[urls[0]] == nil || cache.entries[urls[1]] != nil || cache.entries[urls[2]] == nil || len(cache.entries) != 2 || cache.bytes > cache.maxBytes {
 		t.Fatalf("LRU entries/bytes = %#v / %d", cache.entries, cache.bytes)
 	}
-	if stats := cache.statsSnapshot(); stats.hits != 1 || stats.misses != 3 || stats.evictions != 1 {
+	if stats := cache.statsSnapshot(); stats.hits != 1 || stats.misses != 3 || stats.evictions != 1 || stats.decodes != 3 {
 		t.Fatalf("image resource cache stats = %+v", stats)
+	}
+}
+
+func TestImageGalleryWarmAccessDoesNotDecodeOrResizeAgain(t *testing.T) {
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, image.NewNRGBA(image.Rect(0, 0, 8, 8))); err != nil {
+		t.Fatal(err)
+	}
+	loader := &routeLoader{responses: map[string]*network.Response{}}
+	document := dom.NewDocument()
+	cache := newImageResourceCacheWithLimits(1<<20, 16)
+	budget := newImageDecodeBudget()
+	type galleryItem struct {
+		rawURL string
+		node   *dom.Node
+	}
+	items := make([]galleryItem, 0, 3)
+	for _, name := range []string{"a", "b", "c"} {
+		rawURL := "https://example.com/" + name + ".png"
+		loader.responses[rawURL] = &network.Response{URL: mustParseURL(t, rawURL), ContentType: "image/png", Body: encoded.Bytes()}
+		node := document.CreateElement("img", map[string]string{"width": "4", "height": "4"})
+		source := cache.load(context.Background(), loader, mustParseURL(t, rawURL), budget)
+		if _, err := cache.prepareSurface(context.Background(), source, mustParseURL(t, rawURL), node, 1, budget); err != nil {
+			t.Fatal(err)
+		}
+		items = append(items, galleryItem{rawURL: rawURL, node: node})
+	}
+	cold := cache.statsSnapshot()
+	for _, item := range items {
+		source := cache.load(context.Background(), loader, mustParseURL(t, item.rawURL), budget)
+		if _, err := cache.prepareSurface(context.Background(), source, mustParseURL(t, item.rawURL), item.node, 1, budget); err != nil {
+			t.Fatal(err)
+		}
+	}
+	warm := cache.statsSnapshot()
+	if cold.decodes != 3 || cold.resizes != 3 || warm.decodes != cold.decodes || warm.resizes != cold.resizes || warm.hits < cold.hits+6 {
+		t.Fatalf("gallery cold/warm stats = %+v / %+v", cold, warm)
 	}
 }
 

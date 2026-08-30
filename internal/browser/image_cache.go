@@ -77,9 +77,11 @@ type imageResourceCache struct {
 	hits       uint64
 	misses     uint64
 	evictions  uint64
+	decodes    uint64
+	resizes    uint64
 }
 
-type imageResourceCacheStats struct{ hits, misses, evictions uint64 }
+type imageResourceCacheStats struct{ hits, misses, evictions, decodes, resizes uint64 }
 
 func newImageResourceCache() *imageResourceCache {
 	return newImageResourceCacheWithLimits(maxPageImageCacheBytes, maxPageImageResources)
@@ -144,6 +146,9 @@ func (cache *imageResourceCache) load(ctx context.Context, client ResourceLoader
 		if mediaType == "image/jpeg" {
 			result.orientation = jpegEXIFOrientation(response.Body)
 		}
+		cache.mu.Lock()
+		cache.decodes++
+		cache.mu.Unlock()
 		result.decoded, result.width, result.height, result.err = decodeImageResponseWithBudget(result.body, result.contentType, budget)
 		if result.err != nil {
 			result.failure = imageLoadDecodeFailure
@@ -223,6 +228,9 @@ func (cache *imageResourceCache) prepareSurface(ctx context.Context, source cach
 	prepared := source.decoded
 	var err error
 	if resize {
+		cache.mu.Lock()
+		cache.resizes++
+		cache.mu.Unlock()
 		prepared, err = resizeImageToTarget(ctx, source.decoded, targetWidth, targetHeight, budget)
 	}
 	cache.mu.Lock()
@@ -295,6 +303,8 @@ func (cache *imageResourceCache) clear() {
 	cache.hits = 0
 	cache.misses = 0
 	cache.evictions = 0
+	cache.decodes = 0
+	cache.resizes = 0
 	cache.mu.Unlock()
 }
 
@@ -304,7 +314,7 @@ func (cache *imageResourceCache) statsSnapshot() imageResourceCacheStats {
 	}
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
-	return imageResourceCacheStats{hits: cache.hits, misses: cache.misses, evictions: cache.evictions}
+	return imageResourceCacheStats{hits: cache.hits, misses: cache.misses, evictions: cache.evictions, decodes: cache.decodes, resizes: cache.resizes}
 }
 
 func cloneCachedImageResource(entry *cachedImageResource) cachedImageResource {

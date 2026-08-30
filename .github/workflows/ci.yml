@@ -110,6 +110,12 @@ jobs:
       - name: Run v0.16.0 rendering safety tests
         run: bash tests/v016-security.sh
 
+      - name: Run v0.17.0 browser differential conformance tests
+        run: bash tests/v017-conformance.sh
+
+      - name: Run v0.17.0 deterministic safety tests
+        run: bash tests/v017-security.sh
+
       - name: Run race tests with coverage
         run: go test -race -covermode=atomic -coverprofile=coverage.out ./...
 
@@ -219,7 +225,7 @@ jobs:
           CGO_ENABLED: ${{ matrix.cgo_enabled }}
           GOARCH: ${{ matrix.goarch }}
           GOOS: ${{ matrix.goos }}
-        run: scripts/package-gui.sh dist/package v0.16.0 "$GITHUB_RUN_NUMBER"
+        run: scripts/package-gui.sh dist/package v0.17.0 "$GITHUB_RUN_NUMBER"
 
       - name: Verify GUI package
         shell: bash
@@ -247,7 +253,7 @@ jobs:
           esac
 
   docker-package:
-    name: Docker package (v0.16.0)
+    name: Docker package (v0.17.0)
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -259,30 +265,33 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
-      - name: Build v0.16.0 Docker image
+      - name: Build v0.17.0 Docker image
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           platforms: linux/amd64
           load: true
           push: false
-          tags: growse:v0.16.0
+          tags: growse:v0.17.0
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
       - name: Verify unused Pebble runtime is absent
-        run: docker run --rm --user root --entrypoint sh growse:v0.16.0 -c 'test ! -e /usr/bin/pebble'
+        run: docker run --rm --user root --entrypoint sh growse:v0.17.0 -c 'test ! -e /usr/bin/pebble'
 
       - name: Run sandbox Web Platform smoke
-        run: docker run --rm --entrypoint growse-smoke growse:v0.16.0 /usr/local/share/growse/examples/external-web-platform
+        run: docker run --rm --entrypoint growse-smoke growse:v0.17.0 /usr/local/share/growse/examples/external-web-platform
 
       - name: Run Modern Web Compatibility smoke
-        run: docker run --rm --entrypoint growse-smoke growse:v0.16.0 /usr/local/share/growse/examples/modern-web-compat
+        run: docker run --rm --entrypoint growse-smoke growse:v0.17.0 /usr/local/share/growse/examples/modern-web-compat
+
+      - name: Run Browser-grade Compatibility smoke
+        run: docker run --rm --entrypoint growse-smoke growse:v0.17.0 /usr/local/share/growse/examples/browser-grade-compat
 
       - name: Scan Docker image
         uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
         with:
-          image: growse:v0.16.0
+          image: growse:v0.17.0
           fail-build: true
           severity-cutoff: high
           output-format: table

@@ -48,6 +48,10 @@ func compatibilityDiagnostics(page *Page) []devtools.CompatibilityDiagnostic {
 	// resource/rule lists so the bounded DevTools preview remains actionable.
 	appendFontDiagnostics(page, appendDiagnostic)
 	appendRenderDiagnostics(page.RenderMetricsSnapshot(), appendDiagnostic)
+	appendResourceQueueDiagnostics(page, appendDiagnostic)
+	if page.UsesModernWebCompatibility() && page.RuntimeStarted {
+		appendDiagnostic(devtools.CompatibilityDiagnostic{Category: "hydration", Subject: "page", State: "complete", Reason: "runtime-started"})
+	}
 
 	if page.DevTools != nil {
 		for _, record := range page.DevTools.Network() {
@@ -195,6 +199,8 @@ func appendRenderDiagnostics(metrics RenderMetrics, appendDiagnostic func(devtoo
 		{"image-cache", "resource", "hit", "decoded-resource", metrics.ImageResourceHits},
 		{"image-cache", "resource", "miss", "decoded-resource", metrics.ImageResourceMisses},
 		{"image-cache", "resource", "eviction", "byte-lru", metrics.ImageResourceEvictions},
+		{"image-pipeline", "resource", "decode", "static", metrics.ImageResourceDecodes},
+		{"image-pipeline", "surface", "resize", "target", metrics.ImageSurfaceResizes},
 		{"image-cache", "paint", "hit", "target-raster", metrics.ImagePaintHits},
 		{"image-cache", "paint", "miss", "target-raster", metrics.ImagePaintMisses},
 		{"image-cache", "paint", "eviction", "byte-lru", metrics.ImagePaintEvictions},
@@ -205,6 +211,11 @@ func appendRenderDiagnostics(metrics RenderMetrics, appendDiagnostic func(devtoo
 		{"frame", "layout/display-list", "rebuild", "scroll", metrics.ScrollRebuilds},
 		{"frame", "layout/display-list", "rebuild", "animation", metrics.AnimationRebuilds},
 		{"frame", "display-list", "reuse", "static", metrics.DisplayListReuses},
+		{"dirty-subtree", "node", "invalidated", "mutation", metrics.DirtyNodes},
+		{"compositor", "layer", "active", "promotion", metrics.CompositingLayers},
+		{"compositor", "damage-region", "active", "redraw", metrics.DamageRegions},
+		{"frame", "task", "drop", "budget", metrics.DroppedTasks},
+		{"frame", "frame", "drop", "throttled", metrics.ThrottledFrames},
 	} {
 		if counter.count == 0 {
 			continue
@@ -212,6 +223,36 @@ func appendRenderDiagnostics(metrics RenderMetrics, appendDiagnostic func(devtoo
 		appendDiagnostic(devtools.CompatibilityDiagnostic{
 			Category: counter.category, Subject: counter.subject, State: counter.state, Reason: counter.reason, Count: boundedCompatibilityDiagnosticCount(counter.count),
 		})
+	}
+}
+
+func appendResourceQueueDiagnostics(page *Page, appendDiagnostic func(devtools.CompatibilityDiagnostic)) {
+	states := map[string]int{"pending": 0, "complete": 0, "error": 0}
+	for _, resource := range page.ImageResources {
+		switch {
+		case resource.Error != "":
+			states["error"]++
+		case resource.Loaded:
+			states["complete"]++
+		default:
+			states["pending"]++
+		}
+	}
+	for _, resource := range page.Fonts {
+		switch {
+		case resource.Error != "":
+			states["error"]++
+		case resource.Loaded:
+			states["complete"]++
+		default:
+			states["pending"]++
+		}
+	}
+	for _, state := range []string{"pending", "complete", "error"} {
+		if states[state] == 0 {
+			continue
+		}
+		appendDiagnostic(devtools.CompatibilityDiagnostic{Category: "resource-queue", Subject: "image-font", State: state, Reason: "bounded", Count: min(states[state], maxCompatibilityDiagnosticCount)})
 	}
 }
 

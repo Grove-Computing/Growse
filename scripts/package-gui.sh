@@ -67,6 +67,7 @@ go build -trimpath -ldflags="$ldflags" -o "$output" ./cmd/growse
 
 example_resources=(
   animation
+  browser-grade-compat
   counter
   css3-core
   dashboard

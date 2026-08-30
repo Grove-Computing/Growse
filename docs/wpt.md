@@ -118,3 +118,10 @@ Upstreamのファイル全体はコピーせず、assertionの意味と最小入
 - CSSOMとobserverは固定Viewportのdeclaration / geometry / media query、およびMutation / Resize / Intersectionのbounded配送を選定し、live DOMRect、visual viewport、browser全体のmicrotask orderingは対象外とする。
 - imageとfontは`picture` / `srcset` / `sizes` / DPR選択、`@font-face` descriptor、WOFF decode、source fallbackを選定し、animated image、OS local font探索、FontFaceSet Promise、可変font axisは対象外とする。
 - `tests/v015-conformance.sh`は上表のv0.15.0対象Testを固定shuffle seedで3回、新規processかつofflineで実行する。WPT harnessとupstream file全体は取り込まず、固定RevisionのassertionをGrowseのDOM、resource queue、computed style、layout / paint snapshotへ縮約する。
+
+## v0.17.0の選定範囲
+
+- v0.15.0までの選定WPTに加え、実framework corpusから観測するDOM landmark、computed style、geometry、scroll extent、focus、resource completionを固定Chromium referenceへ縮約する。
+- screenshotは動的領域と許容font raster差をmaskし、Page全体と主要regionの2% thresholdを検証する。WPTのpixel harnessや公開networkは直接実行しない。
+- resource priority / cancel / backpressure、dirty propagation、layer promotion、damage region、frame coalescing、stale Page拒否はGrowseのbounded modelへ直接入力するUnit / Integration Testで固定する。
+- `tests/v017-conformance.sh`と`tests/v017-security.sh`はoffline fixtureと固定shuffle seedを使い、公開DNS、実時間resource、外部APIを合否条件にしない。
