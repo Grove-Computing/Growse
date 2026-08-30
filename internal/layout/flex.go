@@ -458,12 +458,16 @@ func (e *engine) flexIntrinsicSizes(node *dom.Node, style blockStyle, axis flexA
 		if style.boxSizing == stylemodel.BoxSizingContentBox {
 			intrinsicWidth += horizontalExtras
 		}
+	} else if resolved, ok := e.intrinsicKeywordSize(node, style.width, style, width, true); ok {
+		intrinsicWidth = resolved
 	}
 	if resolved, ok := resolveSize(style.height, height, heightDefinite); ok {
 		intrinsicHeight = resolved
 		if style.boxSizing == stylemodel.BoxSizingContentBox {
 			intrinsicHeight += verticalExtras
 		}
+	} else if resolved, ok := e.intrinsicKeywordSize(node, style.height, style, height, false); ok {
+		intrinsicHeight = resolved
 	}
 	base := intrinsicWidth
 	if !axis.horizontal {

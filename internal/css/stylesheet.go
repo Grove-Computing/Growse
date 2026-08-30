@@ -287,9 +287,10 @@ const (
 
 // AttributeSelector is one attribute condition in a compound selector.
 type AttributeSelector struct {
-	Name    string
-	Matcher AttributeMatcher
-	Value   string
+	Name            string
+	Matcher         AttributeMatcher
+	Value           string
+	CaseInsensitive bool
 }
 
 // Combinator describes the relationship between two adjacent compounds.

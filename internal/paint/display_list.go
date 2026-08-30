@@ -169,6 +169,7 @@ type DrawBox struct {
 	Position        stylemodel.BackgroundPosition
 	Size            stylemodel.BackgroundSize
 	Border          stylemodel.Borders
+	Padding         stylemodel.Edges
 	Radius          layout.BorderRadii
 	Opacity         float32
 	Clip            *layout.Rect
@@ -283,7 +284,7 @@ func Build(tree *layout.Tree) *DisplayList {
 				Width: decoration.Width, Height: decoration.Height, Color: filteredColor, BackdropColor: backdrop,
 				Image: cloneBackgroundImage(decoration.Image), Layers: cloneBackgroundLayers(decoration.Layers), Repeat: decoration.Repeat,
 				Position: decoration.Position, Size: decoration.Size, Clip: cloneLayoutRect(decoration.Clip),
-				Border: decoration.Border, Radius: decoration.Radius, Opacity: decoration.Opacity,
+				Border: decoration.Border, Padding: decoration.Padding, Radius: decoration.Radius, Opacity: decoration.Opacity,
 				BoxShadows: append([]stylemodel.Shadow(nil), decoration.BoxShadows...), Outline: decoration.Outline, OutlineOffset: decoration.OutlineOffset,
 				Filters: append([]stylemodel.Filter(nil), decoration.Filters...), BackdropFilters: append([]stylemodel.Filter(nil), decoration.BackdropFilters...), BlendMode: decoration.BlendMode, Cursor: decoration.Cursor,
 				Transform: decoration.Transform,

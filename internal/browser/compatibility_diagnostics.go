@@ -73,6 +73,9 @@ func compatibilityDiagnostics(page *Page) []devtools.CompatibilityDiagnostic {
 	}
 
 	appendStyleDiagnostics(page, appendDiagnostic)
+	for range page.StyleErrors {
+		appendDiagnostic(devtools.CompatibilityDiagnostic{Category: "layout", Subject: "container-query", State: "fallback", Reason: "iteration-limit"})
+	}
 	for _, failure := range append(append([]string(nil), page.ImageErrors...), page.BackgroundErrors...) {
 		appendDiagnostic(devtools.CompatibilityDiagnostic{Category: "image", Subject: "image", State: "fallback", Reason: fallbackCategory(failure)})
 	}

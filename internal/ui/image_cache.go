@@ -98,6 +98,8 @@ func (cache *pageImagePaintCache) background(command paintmodel.DrawBox, layer s
 		raster = rasterLinearGradient(width, height, layer.Image)
 	case stylemodel.BackgroundImageRadialGradient:
 		raster = rasterRadialGradient(width, height, layer.Image)
+	case stylemodel.BackgroundImageConicGradient:
+		raster = rasterConicGradient(width, height, layer.Image)
 	case stylemodel.BackgroundImageURL:
 		if source != nil {
 			layerCommand := command

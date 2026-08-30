@@ -3,6 +3,7 @@ package browser
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"image"
@@ -90,9 +91,6 @@ func loadBackgroundImagesWithBudget(ctx context.Context, client ResourceLoader, 
 func loadBackgroundImagesWithCache(ctx context.Context, client ResourceLoader, computed style.Map, budget *imageDecodeBudget, cache *imageResourceCache) (map[string]image.Image, []string) {
 	images := make(map[string]image.Image)
 	var errors []string
-	if client == nil {
-		return images, errors
-	}
 	seen := make(map[string]bool)
 	for _, computedStyle := range computed {
 		backgrounds := []style.BackgroundImage{computedStyle.BackgroundImage}
@@ -104,9 +102,22 @@ func loadBackgroundImagesWithCache(ctx context.Context, client ResourceLoader, c
 				continue
 			}
 			seen[background.URL] = true
+			if strings.HasPrefix(strings.ToLower(background.URL), "data:") {
+				decoded, err := decodeDataBackground(background.URL, budget)
+				if err != nil {
+					errors = append(errors, "background data image decode failed")
+					continue
+				}
+				images[background.URL] = decoded
+				continue
+			}
 			resourceURL, err := url.Parse(background.URL)
 			if err != nil || resourceURL.Scheme != "http" && resourceURL.Scheme != "https" {
 				errors = append(errors, "background image URL is not a supported HTTP(S) URL")
+				continue
+			}
+			if client == nil {
+				errors = append(errors, "background image request failed: "+network.RedactedURL(resourceURL))
 				continue
 			}
 			resource := cache.load(ctx, client, resourceURL, budget)
@@ -128,6 +139,42 @@ func loadBackgroundImagesWithCache(ctx context.Context, client ResourceLoader, c
 		}
 	}
 	return images, errors
+}
+
+func decodeDataBackground(resource string, budget *imageDecodeBudget) (image.Image, error) {
+	if len(resource) > maxImageBytes*2 || !budget.claim("background:"+resource) {
+		return nil, errors.New("data image resource limit exceeded")
+	}
+	comma := strings.IndexByte(resource, ',')
+	if comma < len("data:image/ ") || comma < 0 {
+		return nil, errors.New("invalid data image")
+	}
+	metadata, payload := resource[len("data:"):comma], resource[comma+1:]
+	parts := strings.Split(metadata, ";")
+	mediaType := strings.ToLower(strings.TrimSpace(parts[0]))
+	if !strings.HasPrefix(mediaType, "image/") {
+		return nil, errors.New("data resource is not an image")
+	}
+	base64Encoded := false
+	for _, parameter := range parts[1:] {
+		if strings.EqualFold(strings.TrimSpace(parameter), "base64") {
+			base64Encoded = true
+		}
+	}
+	var body []byte
+	var err error
+	if base64Encoded {
+		body, err = base64.StdEncoding.DecodeString(payload)
+	} else {
+		var decoded string
+		decoded, err = url.PathUnescape(payload)
+		body = []byte(decoded)
+	}
+	if err != nil || len(body) == 0 || len(body) > maxImageBytes {
+		return nil, errors.New("invalid data image payload")
+	}
+	decoded, _, _, err := decodeImageResponseWithBudget(body, mediaType, budget)
+	return decoded, err
 }
 
 func loadReplacedImages(ctx context.Context, client ResourceLoader, baseURL *url.URL, document *dom.Document, viewportWidth, deviceScale float32) (map[dom.NodeID]layout.ImageResource, map[string]image.Image, []string) {

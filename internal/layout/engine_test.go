@@ -691,6 +691,29 @@ func TestBuildCreatesDeterministicStackingContextsAndPaintOrder(t *testing.T) {
 	}
 }
 
+func TestBuildLocalizesOversizedVisualEffectAndContinuesSibling(t *testing.T) {
+	document := dom.NewDocument()
+	oversized := document.CreateElement("div", map[string]string{"class": "oversized"})
+	sibling := document.CreateElement("div", map[string]string{"class": "sibling"})
+	appendNodes(t, document, [2]*dom.Node{document.Root, oversized}, [2]*dom.Node{document.Root, sibling})
+	stylesheet, err := css.Parse(strings.NewReader(`
+.oversized { display:block; width:5000px; height:20px; background-color:#ddd; filter:blur(4px) }
+.sibling { display:block; width:40px; height:20px; background-color:#0f0 }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, style.Compute(document, stylesheet), 6000)
+	oversizedDecoration := decorationForNode(t, tree, oversized.ID)
+	siblingDecoration := decorationForNode(t, tree, sibling.ID)
+	if len(oversizedDecoration.Filters) != 0 || siblingDecoration.Width != 40 {
+		t.Fatalf("localized visual fallback oversized=%#v sibling=%#v", oversizedDecoration, siblingDecoration)
+	}
+	if len(tree.Fallbacks) != 1 || tree.Fallbacks[0].NodeID != oversized.ID || tree.Fallbacks[0].Reason != "visual-effect-surface-limit" {
+		t.Fatalf("bounded layout fallback = %#v", tree.Fallbacks)
+	}
+}
+
 func TestBuildAppliesTransformOriginToDisplayGeometry(t *testing.T) {
 	document := dom.NewDocument()
 	item := document.CreateElement("div", map[string]string{"class": "item"})

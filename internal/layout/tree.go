@@ -22,6 +22,22 @@ type Tree struct {
 	StackingContexts []StackingContext
 	Parents          map[dom.NodeID]dom.NodeID
 	Bounds           map[dom.NodeID]Rect
+	Fallbacks        []Fallback
+}
+
+// Fallback records a bounded, payload-free layout/paint safety decision.
+type Fallback struct {
+	NodeID dom.NodeID
+	Reason string
+}
+
+const maxLayoutFallbacks = 256
+
+func (t *Tree) addFallback(nodeID dom.NodeID, reason string) {
+	if t == nil || len(t.Fallbacks) >= maxLayoutFallbacks {
+		return
+	}
+	t.Fallbacks = append(t.Fallbacks, Fallback{NodeID: nodeID, Reason: reason})
 }
 
 // StackingContext records atomic paint-order ownership.
@@ -101,6 +117,7 @@ type Decoration struct {
 	Position        stylemodel.BackgroundPosition
 	Size            stylemodel.BackgroundSize
 	Border          stylemodel.Borders
+	Padding         stylemodel.Edges
 	Radius          BorderRadii
 	Opacity         float32
 	Clip            *Rect

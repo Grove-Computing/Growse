@@ -43,6 +43,9 @@ type Environment struct {
 	ContainerSizes  map[dom.NodeID]ContainerSize
 	ContainerWidth  float32
 	ContainerHeight float32
+	// BrowserDefaults enables the versioned browser-compatible UA stylesheet.
+	// Browser callers only set this for an explicitly selected JavaScript Engine.
+	BrowserDefaults bool
 }
 
 // ContainerSize is the previous layout iteration's content-box size.
@@ -97,10 +100,15 @@ func computeNode(node *dom.Node, parent ComputedStyle, stylesheet *css.Styleshee
 	if node.Type == dom.NodeDocument {
 		computed = initialStyle()
 	} else if node.Type == dom.NodeElement {
-		computed = applyUADefaults(node.TagName, computed)
+		if environment.BrowserDefaults {
+			computed = applyAuthorRules(node, computed, parent, browserUAStylesheet(), state, environment, result, false)
+		} else {
+			computed = applyUADefaults(node.TagName, computed)
+		}
 		computed = applyPresentationalHints(node, computed)
-		computed = applyAuthorRules(node, computed, parent, stylesheet, state, environment, result)
+		computed = applyAuthorRules(node, computed, parent, stylesheet, state, environment, result, true)
 		computed = applyGeneratedContent(node, computed, stylesheet, state, environment, result)
+		computed.BrowserDefaults = environment.BrowserDefaults
 		result[node.ID] = computed
 	} else if node.Type == dom.NodeText {
 		result[node.ID] = computed
@@ -142,8 +150,8 @@ func initialStyle() ComputedStyle {
 		Color: defaultTextColor, BackgroundColor: transparent, FontSize: 16, FontWeight: 400,
 		FontFamilies: []string{"Growse Sans", "sans-serif"}, FontStyle: "normal", FontStretch: "normal", FontFaceIndex: -1,
 		ObjectPosition: BackgroundPosition{X: LengthPercentage{Percentage: 50}, Y: LengthPercentage{Percentage: 50}}, AccentColorAuto: true,
-		BackgroundRepeat: BackgroundRepeat{X: true, Y: true},
-		DecorationColor:  defaultTextColor, Opacity: 1, FlexShrink: 1,
+		BackgroundRepeat: BackgroundRepeat{X: true, Y: true}, BackgroundOrigin: BackgroundBoxPadding,
+		DecorationColor: defaultTextColor, Opacity: 1, FlexShrink: 1,
 		ZIndexAuto: true,
 		AlignItems: AlignStretch, JustifyItems: AlignStretch, AlignContent: AlignStretch, AlignSelf: AlignAuto, JustifySelf: AlignAuto,
 		Width: SizeValue{Kind: SizeAuto}, Height: SizeValue{Kind: SizeAuto},
@@ -165,8 +173,8 @@ func inheritedStyle(parent ComputedStyle) ComputedStyle {
 		AccentColor: parent.AccentColor, AccentColorAuto: parent.AccentColorAuto, Cursor: parent.Cursor,
 		ObjectPosition:  BackgroundPosition{X: LengthPercentage{Percentage: 50}, Y: LengthPercentage{Percentage: 50}},
 		BackgroundColor: transparent, Display: DisplayInline,
-		BackgroundRepeat: BackgroundRepeat{X: true, Y: true},
-		DecorationColor:  parent.Color, Opacity: 1, FlexShrink: 1,
+		BackgroundRepeat: BackgroundRepeat{X: true, Y: true}, BackgroundOrigin: BackgroundBoxPadding,
+		DecorationColor: parent.Color, Opacity: 1, FlexShrink: 1,
 		ZIndexAuto: true,
 		AlignItems: AlignStretch, JustifyItems: AlignStretch, AlignContent: AlignStretch, AlignSelf: AlignAuto, JustifySelf: AlignAuto,
 		Width: SizeValue{Kind: SizeAuto}, Height: SizeValue{Kind: SizeAuto},
@@ -226,7 +234,7 @@ func applyUADefaults(tag string, computed ComputedStyle) ComputedStyle {
 	return computed
 }
 
-func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet *css.Stylesheet, state InteractionState, environment Environment, computedAncestors Map) ComputedStyle {
+func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet *css.Stylesheet, state InteractionState, environment Environment, computedAncestors Map, includeInline bool) ComputedStyle {
 	if stylesheet == nil {
 		stylesheet = &css.Stylesheet{}
 	}
@@ -250,32 +258,42 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 		}
 		candidates[property] = append(candidates[property], candidate)
 	}
-	for _, rule := range stylesheet.Rules {
-		if !matchesMediaGroups(rule.Media, environment) || !matchesSupportsGroups(rule.Supports) || !matchesContainerGroups(node, rule.Containers, computedAncestors, environment) {
-			continue
+	appendStylesheet := func(candidateStylesheet *css.Stylesheet) {
+		if candidateStylesheet == nil {
+			return
 		}
-		for _, selector := range rule.Selectors {
-			if selectorPseudoElement(selector) != css.PseudoElementNone {
+		candidateLayerOrders := make(map[string]int, len(candidateStylesheet.LayerOrder))
+		for index, layer := range candidateStylesheet.LayerOrder {
+			candidateLayerOrders[layer] = index
+		}
+		for _, rule := range candidateStylesheet.Rules {
+			if !matchesMediaGroups(rule.Media, environment) || !matchesSupportsGroups(rule.Supports) || !matchesContainerGroups(node, rule.Containers, computedAncestors, environment) {
 				continue
 			}
-			if !matches(node, selector, state) {
-				continue
-			}
-			for declarationIndex, declaration := range rule.Declarations {
-				for _, property := range expandedProperties(declaration.Property) {
-					candidate := winner{
-						value: declaration.Value.Raw, source: declaration.Property, important: declaration.Important,
-						specificity: selector.Specificity(), order: [2]int{rule.Order, declarationIndex}, layer: rule.Layer,
+			for _, selector := range rule.Selectors {
+				if selectorPseudoElement(selector) != css.PseudoElementNone {
+					continue
+				}
+				if !matches(node, selector, state) {
+					continue
+				}
+				for declarationIndex, declaration := range rule.Declarations {
+					for _, property := range expandedProperties(declaration.Property) {
+						candidate := winner{
+							value: declaration.Value.Raw, source: declaration.Property, important: declaration.Important,
+							specificity: selector.Specificity(), order: [2]int{rule.Order, declarationIndex}, layer: rule.Layer,
+						}
+						if rule.Layer != "" {
+							candidate.layerOrder = candidateLayerOrders[rule.Layer]
+						}
+						appendCandidate(property, candidate)
 					}
-					if rule.Layer != "" {
-						candidate.layerOrder = layerOrders[rule.Layer]
-					}
-					appendCandidate(property, candidate)
 				}
 			}
 		}
 	}
-	if inlineValue, ok := node.Attribute("style"); ok {
+	appendStylesheet(stylesheet)
+	if inlineValue, ok := node.Attribute("style"); ok && includeInline {
 		declarations, _ := css.ParseDeclarations(inlineValue)
 		for declarationIndex, declaration := range declarations {
 			for _, property := range expandedProperties(declaration.Property) {
@@ -518,6 +536,20 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 			}
 		}
 	}
+	if value, ok := winners["float"]; ok {
+		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
+			if parsed, valid := resolveFloatSide(resolved, parent.Float); valid {
+				computed.Float = parsed
+			}
+		}
+	}
+	if value, ok := winners["clear"]; ok {
+		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
+			if parsed, valid := resolveClear(resolved, parent.Clear); valid {
+				computed.Clear = parsed
+			}
+		}
+	}
 	if value, ok := winners["visibility"]; ok {
 		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
 			switch parseGlobalKeyword(resolved) {
@@ -669,6 +701,46 @@ func resolveDisplay(value string, parent Display) (Display, bool) {
 	}
 }
 
+func resolveFloatSide(value string, parent Float) (Float, bool) {
+	switch parseGlobalKeyword(value) {
+	case globalInherit:
+		return parent, true
+	case globalInitial, globalUnset:
+		return FloatNone, true
+	}
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "none":
+		return FloatNone, true
+	case "left", "inline-start":
+		return FloatLeft, true
+	case "right", "inline-end":
+		return FloatRight, true
+	default:
+		return FloatNone, false
+	}
+}
+
+func resolveClear(value string, parent Clear) (Clear, bool) {
+	switch parseGlobalKeyword(value) {
+	case globalInherit:
+		return parent, true
+	case globalInitial, globalUnset:
+		return ClearNone, true
+	}
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "none":
+		return ClearNone, true
+	case "left", "inline-start":
+		return ClearLeft, true
+	case "right", "inline-end":
+		return ClearRight, true
+	case "both":
+		return ClearBoth, true
+	default:
+		return ClearNone, false
+	}
+}
+
 func resolveBoxSizing(value string, parent BoxSizing) (BoxSizing, bool) {
 	switch parseGlobalKeyword(value) {
 	case globalInherit:
@@ -702,6 +774,14 @@ func resolveSizeWinner(property string, current, parent SizeValue, winners map[s
 		return initialSizeValue(property)
 	}
 	value := strings.ToLower(strings.TrimSpace(resolved))
+	switch value {
+	case "min-content":
+		return SizeValue{Kind: SizeMinContent}
+	case "max-content":
+		return SizeValue{Kind: SizeMaxContent}
+	case "fit-content":
+		return SizeValue{Kind: SizeFitContent}
+	}
 	if (property == "width" || property == "height" || property == "min-width" || property == "min-height") && value == "auto" {
 		return SizeValue{Kind: SizeAuto}
 	}
@@ -1567,6 +1647,16 @@ func parseDisplay(value string) (Display, bool) {
 		return DisplayGrid, true
 	case "inline-grid":
 		return DisplayInlineGrid, true
+	case "contents":
+		return DisplayContents, true
+	case "table":
+		return DisplayTable, true
+	case "table-row-group", "table-header-group", "table-footer-group":
+		return DisplayTableRowGroup, true
+	case "table-row":
+		return DisplayTableRow, true
+	case "table-cell":
+		return DisplayTableCell, true
 	case "none":
 		return DisplayNone, true
 	default:
@@ -1947,24 +2037,28 @@ func matchesAttribute(node *dom.Node, selector css.AttributeSelector) bool {
 	if !present {
 		return false
 	}
+	want := selector.Value
+	if selector.CaseInsensitive {
+		value, want = strings.ToLower(value), strings.ToLower(want)
+	}
 	switch selector.Matcher {
 	case css.AttributeExact:
-		return value == selector.Value
+		return value == want
 	case css.AttributeIncludes:
 		for _, word := range strings.Fields(value) {
-			if word == selector.Value {
+			if word == want {
 				return true
 			}
 		}
 		return false
 	case css.AttributeDashMatch:
-		return value == selector.Value || strings.HasPrefix(value, selector.Value+"-")
+		return value == want || strings.HasPrefix(value, want+"-")
 	case css.AttributePrefix:
-		return selector.Value != "" && strings.HasPrefix(value, selector.Value)
+		return want != "" && strings.HasPrefix(value, want)
 	case css.AttributeSuffix:
-		return selector.Value != "" && strings.HasSuffix(value, selector.Value)
+		return want != "" && strings.HasSuffix(value, want)
 	case css.AttributeSubstring:
-		return selector.Value != "" && strings.Contains(value, selector.Value)
+		return want != "" && strings.Contains(value, want)
 	default:
 		return false
 	}

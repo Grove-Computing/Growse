@@ -26,23 +26,48 @@ func parseBackgroundImage(value string, currentColor uint32) (BackgroundImage, b
 	lower := strings.ToLower(value)
 	linear := strings.HasPrefix(lower, "linear-gradient(")
 	radial := strings.HasPrefix(lower, "radial-gradient(")
-	if (!linear && !radial) || !strings.HasSuffix(value, ")") {
+	conic := strings.HasPrefix(lower, "conic-gradient(")
+	if (!linear && !radial && !conic) || !strings.HasSuffix(value, ")") {
 		return BackgroundImage{}, false
 	}
 	prefixLength := len("linear-gradient(")
 	if radial {
 		prefixLength = len("radial-gradient(")
+	} else if conic {
+		prefixLength = len("conic-gradient(")
 	}
 	parts := splitBackgroundArguments(value[prefixLength : len(value)-1])
 	if len(parts) < 2 {
 		return BackgroundImage{}, false
 	}
 	angle := float32(180)
+	if conic {
+		angle = 0
+	}
 	center := BackgroundPosition{X: LengthPercentage{Percentage: 50}, Y: LengthPercentage{Percentage: 50}}
 	circle := false
 	if linear {
 		if parsed, ok := parseGradientDirection(parts[0]); ok {
 			angle = parsed
+			parts = parts[1:]
+		}
+	} else if conic {
+		descriptor := strings.ToLower(strings.TrimSpace(parts[0]))
+		if strings.HasPrefix(descriptor, "from ") || strings.HasPrefix(descriptor, "at ") {
+			if at := strings.Index(descriptor, " at "); at >= 0 {
+				if parsed, valid := parseGradientDirection(strings.TrimSpace(descriptor[len("from "):at])); valid {
+					angle = parsed
+				}
+				if parsed, valid := parseBackgroundPosition(descriptor[at+4:], LengthContext{}); valid {
+					center = parsed
+				}
+			} else if strings.HasPrefix(descriptor, "from ") {
+				if parsed, valid := parseGradientDirection(strings.TrimSpace(descriptor[len("from "):])); valid {
+					angle = parsed
+				}
+			} else if parsed, valid := parseBackgroundPosition(descriptor[len("at "):], LengthContext{}); valid {
+				center = parsed
+			}
 			parts = parts[1:]
 		}
 	} else if descriptor := strings.ToLower(strings.TrimSpace(parts[0])); strings.HasPrefix(descriptor, "circle") || strings.HasPrefix(descriptor, "ellipse") || strings.HasPrefix(descriptor, "at ") {
@@ -76,6 +101,8 @@ func parseBackgroundImage(value string, currentColor uint32) (BackgroundImage, b
 	kind := BackgroundImageLinearGradient
 	if radial {
 		kind = BackgroundImageRadialGradient
+	} else if conic {
+		kind = BackgroundImageConicGradient
 	}
 	return BackgroundImage{Kind: kind, GradientAngle: angle, GradientStops: stops, GradientCenter: center, RadialCircle: circle}, true
 }
@@ -104,7 +131,7 @@ func applyBackgroundLayers(computed, parent ComputedStyle, winners map[string]wi
 		if !valid {
 			return computed
 		}
-		layers = append(layers, BackgroundLayer{Image: image, Repeat: BackgroundRepeat{X: true, Y: true}})
+		layers = append(layers, BackgroundLayer{Image: image, Repeat: BackgroundRepeat{X: true, Y: true}, Origin: computed.BackgroundOrigin, Clip: computed.BackgroundClip})
 	}
 	applyLayerValues := func(property string, apply func(*BackgroundLayer, string) bool) bool {
 		candidate, ok := winners[property]
@@ -138,6 +165,14 @@ func applyBackgroundLayers(computed, parent ComputedStyle, winners map[string]wi
 		parsed, valid := parseBackgroundSize(value, context)
 		layer.Size = parsed
 		return valid
+	}) || !applyLayerValues("background-origin", func(layer *BackgroundLayer, value string) bool {
+		parsed, valid := parseBackgroundBox(value)
+		layer.Origin = parsed
+		return valid
+	}) || !applyLayerValues("background-clip", func(layer *BackgroundLayer, value string) bool {
+		parsed, valid := parseBackgroundBox(value)
+		layer.Clip = parsed
+		return valid
 	}) {
 		return computed
 	}
@@ -145,8 +180,22 @@ func applyBackgroundLayers(computed, parent ComputedStyle, winners map[string]wi
 	if len(layers) != 0 {
 		computed.BackgroundImage, computed.BackgroundRepeat = layers[0].Image, layers[0].Repeat
 		computed.BackgroundPos, computed.BackgroundSize = layers[0].Position, layers[0].Size
+		computed.BackgroundOrigin, computed.BackgroundClip = layers[0].Origin, layers[0].Clip
 	}
 	return computed
+}
+
+func parseBackgroundBox(value string) (BackgroundBox, bool) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "border-box":
+		return BackgroundBoxBorder, true
+	case "padding-box":
+		return BackgroundBoxPadding, true
+	case "content-box":
+		return BackgroundBoxContent, true
+	default:
+		return BackgroundBoxBorder, false
+	}
 }
 
 func cloneBackgroundLayers(source []BackgroundLayer) []BackgroundLayer {
@@ -240,6 +289,11 @@ func splitColorStop(value string) (string, float32, bool) {
 					position, err := strconv.ParseFloat(strings.TrimSpace(strings.TrimSuffix(positionText, "%")), 32)
 					if err == nil && !math.IsNaN(position) && !math.IsInf(position, 0) {
 						return strings.TrimSpace(value[:index]), float32(position) / 100, true
+					}
+				} else if strings.HasSuffix(positionText, "deg") {
+					position, err := strconv.ParseFloat(strings.TrimSpace(strings.TrimSuffix(positionText, "deg")), 32)
+					if err == nil && !math.IsNaN(position) && !math.IsInf(position, 0) {
+						return strings.TrimSpace(value[:index]), float32(position) / 360, true
 					}
 				}
 				return value, 0, false
