@@ -93,8 +93,19 @@ type Page struct {
 	imageGeneration  uint64
 	imageEvents      map[dom.NodeID]string
 	imageCache       *imageResourceCache
+	imageDirty       ImageInvalidation
 	renderMu         sync.Mutex
 	renderMetrics    RenderMetrics
+}
+
+// ImageInvalidation describes the bounded renderer work caused by the latest
+// image completion without retaining resource bytes or decoded pixels.
+type ImageInvalidation struct {
+	Revision         uint64
+	Target           dom.NodeID
+	PaintNodes       []dom.NodeID
+	LayoutAncestors  []dom.NodeID
+	IntrinsicChanged bool
 }
 
 func (p *Page) beginImageLoad(parent context.Context) (context.Context, uint64) {
@@ -129,6 +140,7 @@ func (p *Page) commitImageResourceLoad(generation uint64, nodeID dom.NodeID, res
 	if generation != p.imageGeneration {
 		return false
 	}
+	previous := p.ImageResources[nodeID]
 	resources := make(map[dom.NodeID]layoutmodel.ImageResource, len(p.ImageResources)+1)
 	for currentID, current := range p.ImageResources {
 		resources[currentID] = current
@@ -145,8 +157,35 @@ func (p *Page) commitImageResourceLoad(generation uint64, nodeID dom.NodeID, res
 	if failure != "" {
 		p.ImageErrors = append(append([]string(nil), p.ImageErrors...), failure)
 	}
-	p.StyleRevision++
+	intrinsicChanged := previous.IntrinsicWidth != resource.IntrinsicWidth || previous.IntrinsicHeight != resource.IntrinsicHeight
+	p.imageDirty.Revision++
+	p.imageDirty.Target = nodeID
+	p.imageDirty.PaintNodes = []dom.NodeID{nodeID}
+	p.imageDirty.LayoutAncestors = p.imageDirty.LayoutAncestors[:0]
+	p.imageDirty.IntrinsicChanged = intrinsicChanged
+	if intrinsicChanged && p.Document != nil {
+		if node, exists := p.Document.NodeByID(nodeID); exists {
+			for current := node; current != nil && len(p.imageDirty.LayoutAncestors) < 256; current = current.Parent {
+				p.imageDirty.LayoutAncestors = append(p.imageDirty.LayoutAncestors, current.ID)
+			}
+		}
+		p.StyleRevision++
+	}
 	return true
+}
+
+// ImageInvalidationSnapshot returns a payload-free copy suitable for the UI
+// renderer and DevTools. Unrelated siblings are never included.
+func (p *Page) ImageInvalidationSnapshot() ImageInvalidation {
+	if p == nil {
+		return ImageInvalidation{}
+	}
+	p.imageMu.Lock()
+	defer p.imageMu.Unlock()
+	result := p.imageDirty
+	result.PaintNodes = append([]dom.NodeID(nil), result.PaintNodes...)
+	result.LayoutAncestors = append([]dom.NodeID(nil), result.LayoutAncestors...)
+	return result
 }
 
 func (p *Page) cancelImageLoads() {
@@ -176,6 +215,7 @@ func (p *Page) releaseImageResources() {
 	p.ImageErrors = nil
 	p.imageEvents = nil
 	p.imageCache = nil
+	p.imageDirty = ImageInvalidation{}
 	p.imageMu.Unlock()
 	p.BackgroundImages = nil
 	p.BackgroundErrors = nil
