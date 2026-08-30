@@ -195,6 +195,8 @@ func appendRenderDiagnostics(metrics RenderMetrics, appendDiagnostic func(devtoo
 		{"image-cache", "resource", "hit", "decoded-resource", metrics.ImageResourceHits},
 		{"image-cache", "resource", "miss", "decoded-resource", metrics.ImageResourceMisses},
 		{"image-cache", "resource", "eviction", "byte-lru", metrics.ImageResourceEvictions},
+		{"image-pipeline", "resource", "decode", "static", metrics.ImageResourceDecodes},
+		{"image-pipeline", "surface", "resize", "target", metrics.ImageSurfaceResizes},
 		{"image-cache", "paint", "hit", "target-raster", metrics.ImagePaintHits},
 		{"image-cache", "paint", "miss", "target-raster", metrics.ImagePaintMisses},
 		{"image-cache", "paint", "eviction", "byte-lru", metrics.ImagePaintEvictions},
