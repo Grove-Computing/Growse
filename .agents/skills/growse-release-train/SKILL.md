@@ -14,6 +14,7 @@ Growseのリリース定義書を唯一の進捗表として扱い、リリー�
 3. 対象versionが分かる場合は`scripts/release-status.sh vX.Y.Z`を実行し、定義書とcheckboxの状態を確認する。
 4. 既存の`docs/vX.Y.Z.md`、branch、commit、PRから再開位置を判断する。完了済み作業を作り直さない。
 5. GitHub操作前に認証を確認する。Networkまたは認証の一時失敗では安全な確認を行って再試行する。
+6. リリース全体を依頼された場合は、annotated tagのpushと、それをtriggerにしたGitHub Releaseの公開が明示的に許可されているか確認する。包括的な「必要な権限」の許可だけを公開tagのpush許可とは解釈しない。未許可でも実装とmainへの最終mergeまでは進め、tagを作成・pushする直前に公開操作と影響を説明して明示承認を得る。一度明示承認を得た同一versionのtag pushでは再確認しない。
 
 ## 新しいリリースを定義する
 
@@ -94,7 +95,7 @@ Test失敗時はcheckboxを更新せず、原因を調査して同じ少項目�
 3. README、SECURITY.md、対応表、Showcase、Installer、成果物versionがscope文書と一致することを確認する。
 4. release branchのopen PR、未push commit、未commit変更がないことを確認する。
 5. 完了内容、PR一覧、Test結果、既知の対象外を報告する。
-6. リリース全体の実行を依頼されている場合は、`release/vX.Y.Z`から`main`への最終PRを作成し、必須CI成功後にMerge commitで取り込む。続けてrelease branchのHEADへannotated tag `vX.Y.Z`を作成・pushする。GitHub Releaseがtagから自動作成されるRepositoryでは作成完了を確認し、手動作成は行わない。
+6. リリース全体の実行を依頼されている場合は、`release/vX.Y.Z`から`main`への最終PRを作成し、必須CI成功後にMerge commitで取り込む。公開tagのpushについて明示承認済みであることを確認し、remoteに同名tagがないことをread-onlyで検証してから、release branchのHEADへannotated tag `vX.Y.Z`を作成・pushする。tag pushはGitHub Releaseを公開し得る不可逆な外部操作として扱い、未承認なら実行せず利用者へ確認する。GitHub Releaseがtagから自動作成されるRepositoryでは作成完了を確認し、手動作成は行わない。
 7. 利用者が最終PR、tag、またはGitHub Releaseを明示的に除外した場合だけ、その操作を省略して理由を報告する。
 
 ## 中断条件
