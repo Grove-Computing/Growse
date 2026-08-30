@@ -1447,7 +1447,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 		ImageResources:   replacedImages,
 		Images:           decodedImages,
 		AnimatedImages:   animatedImagesForResources(replacedImages, imageCache),
-		ImageErrors:      imageErrors,
+		ImageErrors:      boundedImageDiagnostics(imageErrors),
 		Fonts:            fonts,
 		FontErrors:       fontErrors,
 		WebFonts:         layoutPageFonts(fonts, engine == runtimemodel.EngineJavaScript),

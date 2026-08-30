@@ -132,7 +132,7 @@ func (p *Page) commitImageLoad(generation uint64, resources map[dom.NodeID]layou
 	if generation != p.imageGeneration {
 		return false
 	}
-	p.ImageResources, p.Images, p.ImageErrors = resources, images, failures
+	p.ImageResources, p.Images, p.ImageErrors = resources, images, boundedImageDiagnostics(failures)
 	p.AnimatedImages = animatedImagesForResources(resources, p.imageCache)
 	p.StyleRevision++
 	return true
@@ -167,7 +167,7 @@ func (p *Page) commitImageResourceLoad(generation uint64, nodeID dom.NodeID, res
 		delete(p.AnimatedImages, nodeID)
 	}
 	if failure != "" {
-		p.ImageErrors = append(append([]string(nil), p.ImageErrors...), failure)
+		p.ImageErrors = appendImageDiagnostic(append([]string(nil), p.ImageErrors...), failure)
 	}
 	intrinsicChanged := previous.IntrinsicWidth != resource.IntrinsicWidth || previous.IntrinsicHeight != resource.IntrinsicHeight
 	p.imageDirty.Revision++

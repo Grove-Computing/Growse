@@ -13,6 +13,8 @@ import (
 	"github.com/Grove-Computing/Growse/internal/dom"
 )
 
+var allocateImageNRGBA = image.NewNRGBA
+
 func normalizeDecodedImage(source image.Image, encoded []byte, contentType string) *image.NRGBA {
 	orientation := 1
 	if mediaType, _, err := mime.ParseMediaType(contentType); err == nil && mediaType == "image/jpeg" {
@@ -164,7 +166,7 @@ func imageTargetDimensions(source image.Image, node *dom.Node, deviceScale float
 	return targetWidth, targetHeight, true
 }
 
-func resizeImageToTarget(ctx context.Context, source image.Image, targetWidth, targetHeight int, budget *imageDecodeBudget) (image.Image, error) {
+func resizeImageToTarget(ctx context.Context, source image.Image, targetWidth, targetHeight int, budget *imageDecodeBudget) (result image.Image, err error) {
 	if source == nil {
 		return nil, errors.New("image source is unavailable")
 	}
@@ -176,12 +178,26 @@ func resizeImageToTarget(ctx context.Context, source image.Image, targetWidth, t
 	if !budget.reserveSurface(targetWidth, targetHeight) {
 		return nil, errors.New("page image resize surface limit exceeded")
 	}
-	target := image.NewNRGBA(image.Rect(0, 0, targetWidth, targetHeight))
+	reserved := true
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			if reserved {
+				budget.releaseSurface(targetWidth, targetHeight)
+			}
+			result, err = nil, errors.New("image resize allocation failed")
+		}
+	}()
+	target := allocateImageNRGBA(image.Rect(0, 0, targetWidth, targetHeight))
+	if target == nil {
+		budget.releaseSurface(targetWidth, targetHeight)
+		return nil, errors.New("image resize allocation failed")
+	}
 	for y := range targetHeight {
 		if y&31 == 0 {
 			select {
 			case <-ctx.Done():
 				budget.releaseSurface(targetWidth, targetHeight)
+				reserved = false
 				return nil, ctx.Err()
 			default:
 			}
@@ -192,6 +208,7 @@ func resizeImageToTarget(ctx context.Context, source image.Image, targetWidth, t
 			target.SetNRGBA(x, y, color.NRGBAModel.Convert(source.At(sourceX, sourceY)).(color.NRGBA))
 		}
 	}
+	reserved = false
 	return target, nil
 }
 

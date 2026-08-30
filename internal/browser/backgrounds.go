@@ -173,7 +173,7 @@ func loadBackgroundImagesWithCache(ctx context.Context, client ResourceLoader, c
 			images[background.URL] = resource.decoded
 		}
 	}
-	return images, errors
+	return images, boundedImageDiagnostics(errors)
 }
 
 func decodeDataBackground(resource string, budget *imageDecodeBudget) (image.Image, error) {
@@ -291,7 +291,7 @@ func loadReplacedImagesWithCache(ctx context.Context, client ResourceLoader, bas
 			errors = append(errors, result.failure)
 		}
 	}
-	return resources, images, errors
+	return resources, images, boundedImageDiagnostics(errors)
 }
 
 func loadReplacedImageNodeWithCache(ctx context.Context, client ResourceLoader, baseURL *url.URL, node *dom.Node, viewportWidth, deviceScale float32, eligible bool, budget *imageDecodeBudget, cache *imageResourceCache) (layout.ImageResource, image.Image, string) {
@@ -330,7 +330,11 @@ func loadReplacedImageNodeWithCache(ctx context.Context, client ResourceLoader, 
 			resource.Error = "image response was rejected"
 			continue
 		case imageLoadDecodeFailure:
-			resource.Error = "image dimensions were rejected"
+			if cached.animationErr != "" {
+				resource.Error = cached.animationErr
+			} else {
+				resource.Error = "image dimensions were rejected"
+			}
 			continue
 		case imageLoadResourceLimit:
 			resource.Error = "image resource limit exceeded"
