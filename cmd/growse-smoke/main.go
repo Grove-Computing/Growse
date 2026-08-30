@@ -207,6 +207,9 @@ func modernHandler(root string) http.Handler {
 		case "/_next/static/chunks/counter.chunk.mjs":
 			target = filepath.Join(root, "fixtures", "nextjs", "counter.chunk.mjs")
 			response.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		case "/_next/static/chunks/upstream-contract.mjs":
+			target = filepath.Join(root, "fixtures", "nextjs", "upstream-contract.mjs")
+			response.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 		case "/assets/growse-regular.woff2":
 			response.Header().Set("Content-Type", "font/woff2")
 			_, _ = response.Write(modernSmokeFont)
