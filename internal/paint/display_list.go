@@ -19,6 +19,8 @@ type DisplayList struct {
 	Commands          []Command
 	CommandIDs        []uint64
 	CompositingLayers []layout.StackingContext
+	Layers            []layout.CompositingLayer
+	DamageRegions     []layout.Rect
 	sources           []displaySource
 }
 
@@ -245,6 +247,8 @@ func Build(tree *layout.Tree) *DisplayList {
 		Width:    tree.Width, Height: tree.Height, ScrollWidth: tree.ScrollWidth,
 		ScrollHeight: tree.ScrollHeight, Background: tree.Background,
 		CompositingLayers: append([]layout.StackingContext(nil), tree.StackingContexts...),
+		Layers:            cloneCompositingLayers(tree.CompositingLayers),
+		DamageRegions:     compositingDamage(tree.CompositingLayers),
 	}
 	type orderedItem struct {
 		order      int
@@ -448,6 +452,23 @@ func commandNodeID(command Command) dom.NodeID {
 	}
 }
 
+func cloneCompositingLayers(source []layout.CompositingLayer) []layout.CompositingLayer {
+	result := append([]layout.CompositingLayer(nil), source...)
+	for index := range result {
+		result[index].Damage = append([]layout.Rect(nil), source[index].Damage...)
+		result[index].Clip = cloneLayoutRect(source[index].Clip)
+	}
+	return result
+}
+
+func compositingDamage(layers []layout.CompositingLayer) []layout.Rect {
+	var result []layout.Rect
+	for _, layer := range layers {
+		result = append(result, layer.Damage...)
+	}
+	return result
+}
+
 // ApplyAnimatedLayout copies only frame-varying paint and composite state from
 // a geometry-compatible tree into an existing display list. The command slice,
 // static visual resources, and text metrics remain allocated once.
@@ -458,6 +479,11 @@ func ApplyAnimatedLayout(list *DisplayList, tree *layout.Tree) {
 	list.Background = tree.Background
 	if len(list.CompositingLayers) == len(tree.StackingContexts) {
 		copy(list.CompositingLayers, tree.StackingContexts)
+	}
+	list.Layers = cloneCompositingLayers(tree.CompositingLayers)
+	list.DamageRegions = list.DamageRegions[:0]
+	for _, layer := range tree.CompositingLayers {
+		list.DamageRegions = append(list.DamageRegions, layer.Damage...)
 	}
 	for index, source := range list.sources {
 		if source.decoration >= 0 && source.decoration < len(tree.Decorations) {

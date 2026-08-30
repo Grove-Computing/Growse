@@ -224,6 +224,7 @@ func build(document *dom.Document, computed stylemodel.Map, images map[dom.NodeI
 		tree.ScrollHeight = max(tree.ScrollHeight, decoration.Y+decoration.Height+pageInset)
 	}
 	assignFragmentIdentities(tree)
+	buildCompositingLayers(tree, computed)
 	return tree
 }
 

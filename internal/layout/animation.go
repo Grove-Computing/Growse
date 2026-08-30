@@ -15,6 +15,11 @@ func Clone(tree *Tree) *Tree {
 	clone.Decorations = append([]Decoration(nil), tree.Decorations...)
 	clone.Boxes = append([]Box(nil), tree.Boxes...)
 	clone.StackingContexts = append([]StackingContext(nil), tree.StackingContexts...)
+	clone.CompositingLayers = append([]CompositingLayer(nil), tree.CompositingLayers...)
+	for index := range clone.CompositingLayers {
+		clone.CompositingLayers[index].Damage = append([]Rect(nil), tree.CompositingLayers[index].Damage...)
+		clone.CompositingLayers[index].Clip = cloneRect(tree.CompositingLayers[index].Clip)
+	}
 	clone.Parents = make(map[dom.NodeID]dom.NodeID, len(tree.Parents))
 	for nodeID, parentID := range tree.Parents {
 		clone.Parents[nodeID] = parentID
@@ -89,6 +94,7 @@ func ApplyAnimatedStyles(tree *Tree, styles stylemodel.Map) {
 			context.Offscreen = computed.Opacity < 1
 		}
 	}
+	UpdateCompositingLayers(tree, styles)
 }
 
 func (box Box) Rect() Rect {

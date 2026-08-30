@@ -23,3 +23,15 @@ func TestBuildIncrementalReusesStableDisplayCommands(t *testing.T) {
 		t.Fatal("stable display command storage was rebuilt")
 	}
 }
+
+func TestDisplayListCarriesCompositingDamageWithoutAliasing(t *testing.T) {
+	tree := &layout.Tree{CompositingLayers: []layout.CompositingLayer{{ID: 1, NodeID: 2, Bounds: layout.Rect{Width: 10, Height: 10}, Damage: []layout.Rect{{Width: 10, Height: 10}}}}}
+	list := Build(tree)
+	if len(list.Layers) != 1 || len(list.DamageRegions) != 1 {
+		t.Fatalf("display compositor metadata = %#v / %#v", list.Layers, list.DamageRegions)
+	}
+	tree.CompositingLayers[0].Damage[0].Width = 99
+	if list.Layers[0].Damage[0].Width != 10 || list.DamageRegions[0].Width != 10 {
+		t.Fatal("display compositor metadata aliases layout tree")
+	}
+}
