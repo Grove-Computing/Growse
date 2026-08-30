@@ -1883,6 +1883,8 @@ func startRuntime(ctx context.Context, factory runtimemodel.EngineFactory, engin
 				return
 			}
 			setRuntimeError(page, fmt.Sprintf("%s runtime worker failed: %v", engine, err))
+			page.cancelFrameLifecycle()
+			page.cancelImageLoads()
 			if onMutation != nil {
 				onMutation()
 			}
@@ -2065,6 +2067,7 @@ func recomputePageStyles(page *Page, current time.Time) {
 	}
 	previous := page.ComputedStyles
 	page.ComputedStyles = computePageStyles(page)
+	page.RecordComputedStyleChanges(previous, page.ComputedStyles)
 	page.StyleRevision++
 	if page.Transitions == nil {
 		page.Transitions = style.NewTransitionRegistry()

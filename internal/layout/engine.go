@@ -182,7 +182,7 @@ func build(document *dom.Document, computed stylemodel.Map, images map[dom.NodeI
 	}
 
 	tree := &Tree{
-		Width: viewportWidth, Background: 0xffffffff, StackingContexts: []StackingContext{{Parent: -1}},
+		Width: viewportWidth, Background: 0xffffffff, ScrollX: scrollX, ScrollY: scrollY, StackingContexts: []StackingContext{{Parent: -1}},
 		Parents: make(map[dom.NodeID]dom.NodeID), Bounds: make(map[dom.NodeID]Rect),
 	}
 	recordNodeParents(tree, document)
@@ -223,6 +223,8 @@ func build(document *dom.Document, computed stylemodel.Map, images map[dom.NodeI
 		tree.ScrollWidth = max(tree.ScrollWidth, decoration.X+decoration.Width+pageInset)
 		tree.ScrollHeight = max(tree.ScrollHeight, decoration.Y+decoration.Height+pageInset)
 	}
+	assignFragmentIdentities(tree)
+	buildCompositingLayers(tree, computed)
 	return tree
 }
 

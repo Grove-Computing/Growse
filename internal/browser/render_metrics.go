@@ -41,6 +41,8 @@ type RenderMetrics struct {
 	LayoutBuilds           uint64
 	DisplayListBuilds      uint64
 	DisplayListReuses      uint64
+	LayoutFragmentReuses   uint64
+	DisplayCommandReuses   uint64
 	CompositeFrames        uint64
 	PaintFrames            uint64
 	LayoutFrames           uint64
@@ -50,6 +52,36 @@ type RenderMetrics struct {
 	ViewportRebuilds       uint64
 	ScrollRebuilds         uint64
 	AnimationRebuilds      uint64
+	ScheduledFrames        uint64
+	CoalescedFrames        uint64
+	ThrottledFrames        uint64
+	InputTasks             uint64
+	ChromeTasks            uint64
+	PageTasks              uint64
+	DroppedTasks           uint64
+}
+
+// RecordRenderReuse counts stable fragments and commands retained across one
+// incremental revision. Values saturate to keep diagnostics monotonic.
+func (p *Page) RecordRenderReuse(fragments, commands int) {
+	if p == nil {
+		return
+	}
+	p.renderMu.Lock()
+	p.renderMetrics.LayoutFragmentReuses = saturatingAdd(p.renderMetrics.LayoutFragmentReuses, fragments)
+	p.renderMetrics.DisplayCommandReuses = saturatingAdd(p.renderMetrics.DisplayCommandReuses, commands)
+	p.renderMu.Unlock()
+}
+
+func saturatingAdd(current uint64, amount int) uint64 {
+	if amount <= 0 || current == ^uint64(0) {
+		return current
+	}
+	addition := uint64(amount)
+	if addition > ^uint64(0)-current {
+		return ^uint64(0)
+	}
+	return current + addition
 }
 
 // RecordRenderEvent records UI-owned work without retaining DOM or resource

@@ -17,7 +17,10 @@ type DisplayList struct {
 	ScrollHeight      float32
 	Background        uint32
 	Commands          []Command
+	CommandIDs        []uint64
 	CompositingLayers []layout.StackingContext
+	Layers            []layout.CompositingLayer
+	DamageRegions     []layout.Rect
 	sources           []displaySource
 }
 
@@ -244,6 +247,8 @@ func Build(tree *layout.Tree) *DisplayList {
 		Width:    tree.Width, Height: tree.Height, ScrollWidth: tree.ScrollWidth,
 		ScrollHeight: tree.ScrollHeight, Background: tree.Background,
 		CompositingLayers: append([]layout.StackingContext(nil), tree.StackingContexts...),
+		Layers:            cloneCompositingLayers(tree.CompositingLayers),
+		DamageRegions:     compositingDamage(tree.CompositingLayers),
 	}
 	type orderedItem struct {
 		order      int
@@ -273,6 +278,7 @@ func Build(tree *layout.Tree) *DisplayList {
 		list.sources = append(list.sources, item.source)
 		if item.decoration != nil {
 			decoration := item.decoration
+			list.CommandIDs = append(list.CommandIDs, decoration.FragmentID)
 			top := max(decoration.Y-previousBottom, float32(0))
 			backdrop := stylemodel.ApplyColorFilters(tree.Background, decoration.BackdropFilters)
 			filteredColor := stylemodel.ApplyColorFilters(decoration.Background, decoration.Filters)
@@ -294,6 +300,7 @@ func Build(tree *layout.Tree) *DisplayList {
 			continue
 		}
 		box := *item.box
+		list.CommandIDs = append(list.CommandIDs, box.FragmentID)
 		top := box.Y - previousBottom
 		if top < 0 {
 			top = 0
@@ -401,6 +408,67 @@ func Build(tree *layout.Tree) *DisplayList {
 	return list
 }
 
+// BuildIncremental reuses immutable command values for stable, unaffected
+// fragments while rebuilding changed commands from the current layout tree.
+func BuildIncremental(previous *DisplayList, tree *layout.Tree, dirty map[dom.NodeID]bool) (*DisplayList, int) {
+	next := Build(tree)
+	if previous == nil || len(previous.CommandIDs) != len(previous.Commands) {
+		return next, 0
+	}
+	indexes := make(map[uint64]int, len(previous.CommandIDs))
+	for index, id := range previous.CommandIDs {
+		indexes[id] = index
+	}
+	reused := 0
+	for index, id := range next.CommandIDs {
+		previousIndex, exists := indexes[id]
+		if !exists || dirty[commandNodeID(next.Commands[index])] {
+			continue
+		}
+		next.Commands[index] = previous.Commands[previousIndex]
+		reused++
+	}
+	return next, reused
+}
+
+func commandNodeID(command Command) dom.NodeID {
+	switch typed := command.(type) {
+	case DrawText:
+		return typed.NodeID
+	case DrawInput:
+		return typed.NodeID
+	case DrawSelect:
+		return typed.NodeID
+	case DrawCheckable:
+		return typed.NodeID
+	case DrawButton:
+		return typed.NodeID
+	case DrawBox:
+		return typed.NodeID
+	case DrawImage:
+		return typed.NodeID
+	default:
+		return 0
+	}
+}
+
+func cloneCompositingLayers(source []layout.CompositingLayer) []layout.CompositingLayer {
+	result := append([]layout.CompositingLayer(nil), source...)
+	for index := range result {
+		result[index].Damage = append([]layout.Rect(nil), source[index].Damage...)
+		result[index].Clip = cloneLayoutRect(source[index].Clip)
+	}
+	return result
+}
+
+func compositingDamage(layers []layout.CompositingLayer) []layout.Rect {
+	var result []layout.Rect
+	for _, layer := range layers {
+		result = append(result, layer.Damage...)
+	}
+	return result
+}
+
 // ApplyAnimatedLayout copies only frame-varying paint and composite state from
 // a geometry-compatible tree into an existing display list. The command slice,
 // static visual resources, and text metrics remain allocated once.
@@ -412,6 +480,12 @@ func ApplyAnimatedLayout(list *DisplayList, tree *layout.Tree) {
 	if len(list.CompositingLayers) == len(tree.StackingContexts) {
 		copy(list.CompositingLayers, tree.StackingContexts)
 	}
+	list.Layers = cloneCompositingLayers(tree.CompositingLayers)
+	list.DamageRegions = list.DamageRegions[:0]
+	for _, layer := range tree.CompositingLayers {
+		list.DamageRegions = append(list.DamageRegions, layer.Damage...)
+	}
+	previousBottom := float32(0)
 	for index, source := range list.sources {
 		if source.decoration >= 0 && source.decoration < len(tree.Decorations) {
 			decoration := tree.Decorations[source.decoration]
@@ -419,6 +493,9 @@ func ApplyAnimatedLayout(list *DisplayList, tree *layout.Tree) {
 			if !ok {
 				continue
 			}
+			command.X, command.Y, command.Width, command.Height = decoration.X, decoration.Y, decoration.Width, decoration.Height
+			command.Top = max(decoration.Y-previousBottom, float32(0))
+			previousBottom += command.Top
 			backdrop := stylemodel.ApplyColorFilters(tree.Background, decoration.BackdropFilters)
 			background := stylemodel.ApplyColorFilters(decoration.Background, decoration.Filters)
 			if decoration.BlendMode != stylemodel.BlendNormal {
@@ -437,12 +514,14 @@ func ApplyAnimatedLayout(list *DisplayList, tree *layout.Tree) {
 			continue
 		}
 		box := tree.Boxes[source.box]
+		top := max(box.Y-previousBottom, float32(0))
 		opacity := box.Opacity
 		if box.Hidden {
 			opacity = 0
 		}
 		switch command := list.Commands[index].(type) {
 		case DrawText:
+			command.X, command.Y, command.Top, command.Width, command.Height, command.Baseline = box.X, box.Y, top, box.Width, box.Height, box.Baseline
 			command.Color, command.Background = box.Color, box.Background
 			command.DecorationColor, command.Opacity, command.Transform = box.DecorationColor, opacity, box.Transform
 			for runIndex := range command.Runs {
@@ -456,22 +535,29 @@ func ApplyAnimatedLayout(list *DisplayList, tree *layout.Tree) {
 			}
 			list.Commands[index] = command
 		case DrawImage:
+			command.X, command.Y, command.Top, command.Width, command.Height = box.X, box.Y, top, box.Width, box.Height
+			command.ImageRect, command.ImageClip = box.ImageRect, box.ImageClip
 			command.Color, command.Background, command.Opacity = box.Color, box.Background, opacity
 			command.Transform = box.Transform
 			list.Commands[index] = command
 		case DrawInput:
+			command.X, command.Y, command.Top, command.Width, command.Height = box.X, box.Y, top, box.Width, box.Height
 			command.Color, command.Opacity = box.Color, opacity
 			list.Commands[index] = command
 		case DrawSelect:
+			command.X, command.Y, command.Top, command.Width, command.Height = box.X, box.Y, top, box.Width, box.Height
 			command.Color, command.Opacity = box.Color, opacity
 			list.Commands[index] = command
 		case DrawCheckable:
+			command.X, command.Y, command.Top, command.Width, command.Height = box.X, box.Y, top, box.Width, box.Height
 			command.Color, command.Opacity = box.Color, opacity
 			list.Commands[index] = command
 		case DrawButton:
+			command.X, command.Y, command.Top, command.Width, command.Height = box.X, box.Y, top, box.Width, box.Height
 			command.Color, command.Opacity = box.Color, opacity
 			list.Commands[index] = command
 		}
+		previousBottom = box.Y + box.Height
 	}
 }
 

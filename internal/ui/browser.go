@@ -146,6 +146,7 @@ type documentLayoutCache struct {
 	viewportHeight        float32
 	listFirst, listOffset int
 	tree                  *layoutengine.Tree
+	baseTree              *layoutengine.Tree
 	displayList           *paintmodel.DisplayList
 }
 
@@ -1808,9 +1809,6 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 		ui.scrollRevision = page.ScrollRevision
 		ui.layoutCache = documentLayoutCache{}
 	}
-	if navigator, ok := ui.navigator.(animationFrameNavigator); ok {
-		navigator.RunAnimationFrame(gtx.Now)
-	}
 	ui.handleFormTraversal(gtx, page)
 	ui.syncFormFocus(gtx, page.FocusTarget)
 
@@ -1819,7 +1817,21 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 	if ui.navigator != nil {
 		ui.navigator.UpdateViewport(viewportWidth, viewportHeight)
 	}
-	frameStyles, animationDamage := page.AnimationFrame(gtx.Now)
+	pageVisible := true
+	if lifecycle, ok := ui.navigator.(pageLifecycleNavigator); ok {
+		pageVisible = lifecycle.IsPageVisible(page)
+	}
+	frameRequest := browser.FrameRequest{
+		Generation:    page.FrameGeneration(),
+		ScrollPending: ui.layoutCache.page == page && (ui.layoutCache.listFirst != ui.pageList.Position.First || ui.layoutCache.listOffset != ui.pageList.Position.Offset),
+		Background:    !pageVisible,
+	}
+	if navigator, ok := ui.navigator.(animationFrameNavigator); ok {
+		frameRequest.AnimationFramePending = navigator.HasAnimationFrameCallbacks()
+		frameRequest.RunAnimationFrame = func() { navigator.RunAnimationFrame(gtx.Now) }
+	}
+	framePlan := page.ScheduleFrame(gtx.Now, ui.layoutCache.tree, frameRequest)
+	frameStyles, animationDamage := framePlan.Styles, framePlan.Damage
 	switch animationDamage {
 	case stylemodel.AnimationDamageComposite:
 		page.RecordRenderEvent(browser.RenderCompositeFrame)
@@ -1871,14 +1883,13 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 	ui.viewportClick.Add(gtx.Ops)
 	pass.Pop()
 	area.Pop()
-	pageVisible := true
-	if lifecycle, ok := ui.navigator.(pageLifecycleNavigator); ok {
-		pageVisible = lifecycle.IsPageVisible(page)
-	}
 	if pageVisible && page.ActiveAnimationsInViewport(gtx.Now, tree) && ui.invalidate != nil {
 		ui.invalidate()
 	}
 	if navigator, ok := ui.navigator.(animationFrameNavigator); pageVisible && ok && navigator.HasAnimationFrameCallbacks() && ui.invalidate != nil {
+		ui.invalidate()
+	}
+	if pageVisible && page.ActiveAnimatedImagesInViewport(tree) && ui.invalidate != nil {
 		ui.invalidate()
 	}
 	ui.persistHistoryScroll()
@@ -1899,6 +1910,36 @@ func (ui *BrowserUI) cachedDocumentFrame(page *browser.Page, viewportWidth, view
 		cache.listFirst == position.First && cache.listOffset == position.Offset {
 		return layoutengine.Clone(cache.tree), cache.displayList, true
 	}
+	if cache.baseTree != nil && cache.page == page && cache.revision == page.StyleRevision &&
+		cache.viewportWidth == viewportWidth && cache.viewportHeight == viewportHeight &&
+		(cache.listFirst != position.First || cache.listOffset != position.Offset) {
+		tree := layoutengine.Clone(cache.baseTree)
+		scrollY := documentScrollOffset(cache.displayList, position, pxPerDp)
+		dirtyNodes := layoutengine.ApplyScrollOffset(tree, page.ComputedStyles, 0, scrollY)
+		paintmodel.ApplyAnimatedLayout(cache.displayList, tree)
+		cache.tree, cache.listFirst, cache.listOffset = layoutengine.Clone(tree), position.First, position.Offset
+		page.RecordRenderEvent(browser.RenderCompositeFrame)
+		page.RecordRenderEvent(browser.RenderDisplayListReuse)
+		page.RecordRenderReuse(len(tree.Boxes)+len(tree.Decorations)-len(dirtyNodes), len(cache.displayList.Commands)-len(dirtyNodes))
+		return tree, cache.displayList, true
+	}
+	dirty := page.RenderInvalidationSnapshot()
+	if cache.tree != nil && cache.page == page && dirty.Revision == page.StyleRevision && dirty.Damage < browser.RenderDamageLayout &&
+		cache.viewportWidth == viewportWidth && cache.viewportHeight == viewportHeight &&
+		cache.listFirst == position.First && cache.listOffset == position.Offset {
+		tree := layoutengine.Clone(cache.tree)
+		layoutengine.ApplyAnimatedStyles(tree, page.ComputedStyles)
+		tree.Revision = page.StyleRevision
+		paintmodel.ApplyAnimatedLayout(cache.displayList, tree)
+		cache.displayList.Revision = page.StyleRevision
+		baseTree := layoutengine.Clone(cache.baseTree)
+		layoutengine.ApplyAnimatedStyles(baseTree, page.ComputedStyles)
+		baseTree.Revision = page.StyleRevision
+		cache.tree, cache.baseTree, cache.revision = layoutengine.Clone(tree), baseTree, page.StyleRevision
+		page.RecordRenderEvent(browser.RenderDisplayListReuse)
+		page.RecordRenderReuse(len(tree.Boxes)+len(tree.Decorations), len(cache.displayList.Commands))
+		return tree, cache.displayList, true
+	}
 	reason := browser.RenderRebuildInitial
 	if cache.tree != nil {
 		switch {
@@ -1915,13 +1956,62 @@ func (ui *BrowserUI) cachedDocumentFrame(page *browser.Page, viewportWidth, view
 	page.RecordRenderRebuild(reason)
 
 	tree := ui.buildDocumentTree(page, page.ComputedStyles, viewportWidth, viewportHeight, pxPerDp)
-	displayList := paintmodel.Build(tree)
+	dirtyNodes := renderDirtyNodes(page, dirty)
+	fragmentsReused := 0
+	var displayList *paintmodel.DisplayList
+	commandsReused := 0
+	if cache.page == page && dirty.Revision == page.StyleRevision {
+		fragmentsReused = layoutengine.ReuseStableFragments(cache.tree, tree, dirtyNodes)
+		displayList, commandsReused = paintmodel.BuildIncremental(cache.displayList, tree, dirtyNodes)
+	} else {
+		displayList = paintmodel.Build(tree)
+	}
+	page.RecordRenderReuse(fragmentsReused, commandsReused)
 	page.RecordRenderEvent(browser.RenderDisplayListBuild)
 	*cache = documentLayoutCache{
 		page: page, revision: page.StyleRevision, viewportWidth: viewportWidth, viewportHeight: viewportHeight,
-		listFirst: position.First, listOffset: position.Offset, tree: tree, displayList: displayList,
+		listFirst: position.First, listOffset: position.Offset, tree: tree, baseTree: layoutengine.Clone(tree), displayList: displayList,
 	}
 	return layoutengine.Clone(tree), displayList, false
+}
+
+func documentScrollOffset(list *paintmodel.DisplayList, position layout.Position, pixelsPerDP float32) float32 {
+	if list == nil || position.First < 0 || position.First >= len(list.Commands) {
+		return 0
+	}
+	if pixelsPerDP <= 0 {
+		pixelsPerDP = 1
+	}
+	if firstY, exists := commandDocumentY(list.Commands[position.First]); exists {
+		return max(firstY+float32(position.Offset)/pixelsPerDP, float32(0))
+	}
+	return 0
+}
+
+func renderDirtyNodes(page *browser.Page, dirty browser.RenderInvalidation) map[dom.NodeID]bool {
+	result := make(map[dom.NodeID]bool, len(dirty.StyleNodes))
+	for _, nodeID := range dirty.StyleNodes {
+		result[nodeID] = true
+	}
+	if page == nil || page.Document == nil {
+		return result
+	}
+	var markSubtree func(*dom.Node)
+	markSubtree = func(node *dom.Node) {
+		if node == nil || result[node.ID] && len(node.Children) == 0 {
+			return
+		}
+		result[node.ID] = true
+		for _, child := range node.Children {
+			markSubtree(child)
+		}
+	}
+	for _, rootID := range dirty.LayoutRoots {
+		if root, exists := page.Document.NodeByID(rootID); exists {
+			markSubtree(root)
+		}
+	}
+	return result
 }
 
 func (ui *BrowserUI) buildDocumentTree(page *browser.Page, styles stylemodel.Map, viewportWidth, viewportHeight, pxPerDp float32) *layoutengine.Tree {

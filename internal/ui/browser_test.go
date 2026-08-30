@@ -1556,6 +1556,73 @@ div { width: 100px; height: 100px; animation: fade 1s linear infinite; }
 	}
 }
 
+func TestPaintMutationReusesStableLayoutAndDisplayList(t *testing.T) {
+	document := dom.NewDocument()
+	target := document.CreateElement("div", nil)
+	sibling := document.CreateElement("p", nil)
+	if err := document.AppendChild(document.Root, target); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(document.Root, sibling); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(sibling, document.CreateText("stable sibling")); err != nil {
+		t.Fatal(err)
+	}
+	computed := style.Compute(document, nil)
+	page := &browser.Page{Document: document, ComputedStyles: computed, StyleRevision: 1, ViewportWidth: 800, ViewportHeight: 600}
+	ui := NewBrowserUI(&stubNavigator{page: page}, nil)
+	if _, _, reused := ui.cachedDocumentFrame(page, 800, 600, 1); reused {
+		t.Fatal("initial frame unexpectedly reused")
+	}
+	next := make(style.Map, len(computed))
+	for nodeID, value := range computed {
+		next[nodeID] = value
+	}
+	changed := next[target.ID]
+	changed.Color = 0xff0000ff
+	next[target.ID] = changed
+	page.RecordComputedStyleChanges(computed, next)
+	page.ComputedStyles = next
+	page.StyleRevision++
+	if _, _, reused := ui.cachedDocumentFrame(page, 800, 600, 1); !reused {
+		t.Fatal("paint-only mutation rebuilt the document frame")
+	}
+	metrics := page.RenderMetricsSnapshot()
+	if metrics.LayoutBuilds != 1 || metrics.DisplayListReuses == 0 || metrics.LayoutFragmentReuses == 0 || metrics.DisplayCommandReuses == 0 {
+		t.Fatalf("incremental render metrics = %#v", metrics)
+	}
+}
+
+func TestScrollFrameDoesNotRebuildLayoutOrDisplayList(t *testing.T) {
+	document := dom.NewDocument()
+	for _, textValue := range []string{"first", "second", "third"} {
+		paragraph := document.CreateElement("p", nil)
+		if err := document.AppendChild(document.Root, paragraph); err != nil {
+			t.Fatal(err)
+		}
+		if err := document.AppendChild(paragraph, document.CreateText(textValue)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	computed := style.Compute(document, nil)
+	page := &browser.Page{Document: document, ComputedStyles: computed, StyleRevision: 1, ViewportWidth: 800, ViewportHeight: 80}
+	ui := NewBrowserUI(&stubNavigator{page: page}, nil)
+	if _, _, reused := ui.cachedDocumentFrame(page, 800, 80, 1); reused {
+		t.Fatal("initial frame unexpectedly reused")
+	}
+	before := page.RenderMetricsSnapshot()
+	ui.pageList.Position = layout.Position{First: 1, Offset: 8}
+	tree, _, reused := ui.cachedDocumentFrame(page, 800, 80, 1)
+	after := page.RenderMetricsSnapshot()
+	if !reused || tree.ScrollY <= 0 {
+		t.Fatalf("scroll frame reused=%t scrollY=%v", reused, tree.ScrollY)
+	}
+	if after.LayoutBuilds != before.LayoutBuilds || after.DisplayListBuilds != before.DisplayListBuilds || after.ScrollRebuilds != 0 || after.CompositeFrames != before.CompositeFrames+1 {
+		t.Fatalf("scroll work before=%#v after=%#v", before, after)
+	}
+}
+
 func TestLayoutAnimationFramesRebuildLayoutAndDisplayList(t *testing.T) {
 	document := dom.NewDocument()
 	target := document.CreateElement("div", nil)
