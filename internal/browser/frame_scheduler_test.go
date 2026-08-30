@@ -1,6 +1,7 @@
 package browser
 
 import (
+	"context"
 	"image"
 	"strings"
 	"testing"
@@ -126,7 +127,7 @@ func TestFrameGenerationRejectsCloseNavigationAndStaleResourceCompletion(t *test
 		imageCache:     newImageResourceCache(),
 	}
 	token := page.FrameGeneration()
-	loadContext, imageGeneration := page.beginImageLoad(nil)
+	loadContext, imageGeneration := page.beginImageLoad(context.Background())
 	rafCalls := 0
 	accepted := page.ScheduleFrame(time.Unix(400, 0), nil, FrameRequest{
 		Generation: token, AnimationFramePending: true, RunAnimationFrame: func() { rafCalls++ },
