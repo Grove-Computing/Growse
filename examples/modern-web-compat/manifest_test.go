@@ -131,6 +131,9 @@ func TestUpstreamFrameworkBuildDigests(t *testing.T) {
 			if got := hex.EncodeToString(digest[:]); got != fields[0] {
 				t.Fatalf("fixture %s upstream artifact %q digest = %s, want %s", fixture, fields[1], got, fields[0])
 			}
+			if strings.ContainsAny(string(content), "\u180e\u200b") {
+				t.Fatalf("fixture %s upstream artifact %q contains security-sensitive invisible Unicode", fixture, fields[1])
+			}
 		}
 	}
 }

@@ -8,23 +8,23 @@
     {
       "name": "nextjs",
       "framework": "Next.js",
-      "frameworkVersion": "15.4.6",
-      "buildTool": "Next.js compiler 15.4.6 / Tailwind CLI 4.1.12 / Node.js 24.18.0 / pnpm 11.21.0",
+      "frameworkVersion": "16.3.3",
+      "buildTool": "Next.js Turbopack 16.3.3 / Tailwind CLI 4.1.12 / Node.js 24.18.0 / pnpm 11.21.0",
       "dependencies": {
-        "next": "15.4.6",
-        "react": "19.1.1",
-        "react-dom": "19.1.1"
+        "next": "16.3.3",
+        "react": "19.2.8",
+        "react-dom": "19.2.8"
       },
-      "generationCommand": "pnpm install --offline --frozen-lockfile --ignore-scripts && ./node_modules/.bin/next build sources/nextjs",
+      "generationCommand": "pnpm install --offline --frozen-lockfile --ignore-scripts && ./node_modules/.bin/next build sources/nextjs && node sources/normalize-framework-build.mjs sources/nextjs/out",
       "licenses": ["MIT:Next.js", "MIT:React", "MIT:Tailwind CSS"],
-      "sources": ["sources/nextjs/next.config.mjs", "sources/nextjs/app/layout.jsx", "sources/nextjs/app/page.jsx", "sources/nextjs/app/globals.css"],
+      "sources": ["sources/normalize-framework-build.mjs", "sources/nextjs/next.config.mjs", "sources/nextjs/app/layout.jsx", "sources/nextjs/app/page.jsx", "sources/nextjs/app/globals.css"],
       "artifacts": [
         {"path": "fixtures/nextjs/app.css", "sha256": "e561e437caa1677fe2436c9a1c838b20e00dccd29456e659f7294c0dbf97e4b1"},
         {"path": "fixtures/nextjs/app.mjs", "sha256": "81e4ed5923ee7258f14a446c635b5114e066505ee05454d95d18546a909584eb"},
         {"path": "fixtures/nextjs/counter.chunk.mjs", "sha256": "76f7fc483f5ec353528e9842059d593e29711d51f45551cf0a96dd907c57a64d"},
         {"path": "fixtures/nextjs/index.html", "sha256": "105452dad7a6d76c40a963e106ad897e72d94ff4e97bb277da7198fb59ff341d"},
-        {"path": "fixtures/nextjs/upstream-contract.mjs", "sha256": "ec69521cd5ff9d0734f23f89082304e404c7078cc8c1e6ffa970794958dd7451"},
-        {"path": "fixtures/nextjs/upstream.sha256", "sha256": "0b74d186ae99c13ed6e93c4d85f870870bc1bdbf75736191abed4f4fdfe0aad8"}
+        {"path": "fixtures/nextjs/upstream-contract.mjs", "sha256": "c93c0fb576f3b9a5e2657645fab9ec83fea3d323338032ab4113493930500c1e"},
+        {"path": "fixtures/nextjs/upstream.sha256", "sha256": "1e9da77b52fa4eb10e22c587601fcabbc317c911907ba23ecd36337c7371d974"}
       ]
     },
     {

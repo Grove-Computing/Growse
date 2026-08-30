@@ -82,8 +82,8 @@ func TestNextJSSSRFixtureHydratesWithoutReplacingDOM(t *testing.T) {
 	}
 	for attribute, want := range map[string]string{
 		"data-build-id":            "growse-v0.17.0-nextjs",
-		"data-framework-build":     "Next.js 15.4.6 / React 19.1.1",
-		"data-upstream-entrypoint": "upstream-export/_next/static/chunks/app/page-dd41e4cd632e1042.js",
+		"data-framework-build":     "Next.js 16.3.3 / React 19.2.8",
+		"data-upstream-entrypoint": "upstream-export/_next/static/chunks/34xz_oa9zbnuv.js",
 	} {
 		if got, _ := root.Attribute(attribute); got != want {
 			t.Errorf("%s = %q, want %q", attribute, got, want)
