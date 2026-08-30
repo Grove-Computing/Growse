@@ -1324,8 +1324,7 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 		remaining := []rune(token.text)
 		for len(remaining) > 0 {
 			available := lineWidth - usedWidth
-			mWidth, _, _ := measureStyledText("m", token.style)
-			characters := int(available / max(mWidth, float32(1)))
+			characters := fittingRuneCount(remaining, available, token.style)
 			if characters < 1 {
 				if wrapsWhitespace(token.style.whiteSpace) && usedWidth > 0 {
 					flushLine(false)
@@ -1391,6 +1390,11 @@ func tokenizeInlineRuns(runs []inlineRun) []inlineRun {
 					token.text = " "
 					tokens = append(tokens, token)
 				}
+			} else if isCJKLineBreakRune(character) {
+				flushWord()
+				token := run
+				token.text = string(character)
+				tokens = append(tokens, token)
 			} else {
 				word.WriteRune(character)
 			}
@@ -1398,6 +1402,29 @@ func tokenizeInlineRuns(runs []inlineRun) []inlineRun {
 		flushWord()
 	}
 	return tokens
+}
+
+func fittingRuneCount(remaining []rune, available float32, style blockStyle) int {
+	if available <= 0 || len(remaining) == 0 {
+		return 0
+	}
+	low, high := 1, len(remaining)
+	best := 0
+	for low <= high {
+		middle := low + (high-low)/2
+		width, _, _ := measureStyledText(string(remaining[:middle]), style)
+		if width <= available {
+			best = middle
+			low = middle + 1
+		} else {
+			high = middle - 1
+		}
+	}
+	return best
+}
+
+func isCJKLineBreakRune(character rune) bool {
+	return unicode.In(character, unicode.Han, unicode.Hiragana, unicode.Katakana, unicode.Hangul)
 }
 
 func resolveAtomicSize(run inlineRun, containingWidth float32) (float32, float32) {
