@@ -95,6 +95,8 @@ type Page struct {
 	imageEvents      map[dom.NodeID]string
 	imageCache       *imageResourceCache
 	imageDirty       ImageInvalidation
+	fontMu           sync.Mutex
+	fontDirty        FontInvalidation
 	renderMu         sync.Mutex
 	renderMetrics    RenderMetrics
 }
