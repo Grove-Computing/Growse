@@ -337,7 +337,12 @@ func loadReplacedImageNodeWithCache(ctx context.Context, client ResourceLoader, 
 		}
 		resource.Loaded, resource.Error = true, ""
 		resource.IntrinsicWidth, resource.IntrinsicHeight = float32(cached.width), float32(cached.height)
-		return resource, cached.decoded, ""
+		resized, err := resizeImageForNode(ctx, cached.decoded, node, deviceScale, budget)
+		if err != nil {
+			resource.Loaded, resource.Error = false, "image resize failed"
+			continue
+		}
+		return resource, resized, ""
 	}
 	if resource.Error != "" && lastTarget != nil {
 		return resource, nil, resource.Error + ": " + network.RedactedURL(lastTarget)
@@ -401,7 +406,9 @@ func decodeImageResponseWithBudget(body []byte, contentType string, budget *imag
 	if bounds.Dx() != config.Width || bounds.Dy() != config.Height {
 		return nil, 0, 0, errors.New("decoded image dimensions changed")
 	}
-	return decoded, config.Width, config.Height, nil
+	decoded = normalizeDecodedImage(decoded, body, mediaType)
+	bounds = decoded.Bounds()
+	return decoded, bounds.Dx(), bounds.Dy(), nil
 }
 
 func imageViewportPolicy(document *dom.Document, computed style.Map, baseURL *url.URL, viewportWidth, viewportHeight float32) map[dom.NodeID]bool {
