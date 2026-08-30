@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "release": "v0.17.0",
+  "chromium": "140.0.7339.80",
+  "offline": true,
+  "pages": [
+    {
+      "name": "nextjs-app-router",
+      "framework": "Next.js 15.4.6",
+      "path": "/next/",
+      "viewports": ["desktop", "narrow"],
+      "devicePixelRatios": [1, 2],
+      "states": ["ssr", "resource-complete", "hydrated", "interaction", "scroll", "animation"]
+    },
+    {
+      "name": "sveltekit-static",
+      "framework": "SvelteKit 2.37.0",
+      "path": "/svelte/",
+      "viewports": ["desktop", "narrow"],
+      "devicePixelRatios": [1, 2],
+      "states": ["ssr", "resource-complete", "hydrated", "interaction", "scroll", "animation"]
+    }
+  ]
+}
