@@ -113,3 +113,16 @@ bash tests/v016-security.sh
 合格条件は、同じURLの2画像が1 fetch / decodeへ集約されること、同じtargetのwarm paintが既存rasterへhitすること、transform / opacity frameでLayout Treeと静的Display Listを再構築しないこと、width / height frameだけが`animation`理由のrebuildになることとする。cacheは256 MiB / 512 resourceおよびpaint側のbyte / entry上限でLRU evictionし、Navigation、Page close、Engine切替後にゼロへ戻る。Animation Frame callbackは1 tick 256件のFIFO budgetを使い、残りを次tickへ繰り越す。
 
 実サイトfixtureのCSS、hydration、画像、animationを含む統合回帰は`bash tests/v016-framework.sh`で実行する。異なるGPU / system font環境の経過時間を合否判定には使わず、reuse counterと固定timestampのvisual stateを比較する。
+
+## v0.17.0 Browser differential / frame budget
+
+v0.17.0は`examples/browser-grade-compat/performance-gate.json`へ固定Linux runner、v0.16.0 baseline、絶対budget、現行値を記録する。`internal/conformance.ComparePerformance`はlong frame比率、input-to-next-frame、scroll frame、animation frameのp95が絶対budget内であり、かつ同一runnerのv0.16.0 baselineから退行していないことを同時に要求する。
+
+`RenderMetricsSnapshot`はimage decode / resize、dirty node、compositor layer、damage region、frame drop / throttleもbody-free counterとして公開する。warm image galleryのscrollとtransform / opacity animationでは、静的decode / resize、全Layout、全Display List rebuildを0回に固定する。
+
+```sh
+bash tests/v017-conformance.sh
+bash tests/v017-security.sh
+```
+
+wall-clock値は`ubuntu-24.04-amd64-2vcpu`の固定runnerだけで比較し、異なるhostの値をRelease合否へ混在させない。安全上限、task starvation、cancel、stale generationは3つのshuffle seedで別途決定的に検証する。

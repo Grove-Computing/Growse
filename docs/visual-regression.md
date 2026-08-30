@@ -62,3 +62,15 @@ bash tests/v016-framework.sh
 ```
 
 golden更新時はTailwind artifactのversion / offline generation command / SHA-256 digest、SSR marker、image request集約、hydration interaction、animation damage classifierの個別assertionも同時に通す。Go Engine側のsnapshotへhydration callbackやJavaScript animation stateを追加しない。
+
+## v0.17.0 Browser-grade Differential
+
+`examples/browser-grade-compat/corpus.json`は固定Next.js / SvelteKit buildについてdesktop / narrow、DPR 1 / 2、SSR / resource完了 / hydration / interaction / scroll / animationを列挙する。固定ChromiumとGrowseから同じscenarioのDOM landmark、computed style、geometry、scroll extent、focus、resource stateを取得し、`internal/conformance.Compare`で比較する。
+
+geometryは2 CSS pxまたは参照値の1%以内、computed / focus / resource stateは完全一致を要求する。screenshotは動的領域と許容font raster差をmaskし、Page全体と主要regionの双方でperceptual changed pixelを2%以下にする。
+
+```sh
+bash tests/v017-conformance.sh
+```
+
+差分が出た場合はmaskやgoldenを先に広げず、semantic、region、性能counterのどのGateが変化したかを確認する。固定Chromium versionとcorpus scenarioを変更する場合は、referenceとGrowse snapshotを同じcommitで更新する。

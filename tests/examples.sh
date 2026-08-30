@@ -3,6 +3,7 @@ set -euo pipefail
 
 examples=(
   animation
+  browser-grade-compat
   counter
   css3-core
   dashboard
@@ -26,6 +27,7 @@ done
 
 go test \
   ./examples/animation \
+  ./examples/browser-grade-compat \
   ./examples/counter \
   ./examples/css3-core \
   ./examples/dashboard \
@@ -39,4 +41,4 @@ go test \
   ./examples/persistent-app \
   ./examples/todo
 
-echo "v0.16.0 Demo回帰検証成功: ${examples[*]} multi-tab-workspace"
+echo "v0.17.0 Demo回帰検証成功: ${examples[*]} multi-tab-workspace"

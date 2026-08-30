@@ -22,6 +22,11 @@ func browserGradeCompatibilityHandler(root string) http.Handler {
 	mux := http.NewServeMux()
 	modernRoot := filepath.Join(root, "modern-web-compat")
 	mux.HandleFunc("/showcase/", func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/showcase/style.css" {
+			writer.Header().Set("Content-Type", "text/css; charset=utf-8")
+			http.ServeFile(writer, request, filepath.Join(root, "browser-grade-compat", "style.css"))
+			return
+		}
 		if request.URL.Path != "/showcase/" && request.URL.Path != "/showcase/index.html" {
 			http.NotFound(writer, request)
 			return
