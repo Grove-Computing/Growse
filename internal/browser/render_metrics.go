@@ -52,6 +52,8 @@ type RenderMetrics struct {
 	ViewportRebuilds       uint64
 	ScrollRebuilds         uint64
 	AnimationRebuilds      uint64
+	ScheduledFrames        uint64
+	CoalescedFrames        uint64
 }
 
 // RecordRenderReuse counts stable fragments and commands retained across one

@@ -1809,9 +1809,6 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 		ui.scrollRevision = page.ScrollRevision
 		ui.layoutCache = documentLayoutCache{}
 	}
-	if navigator, ok := ui.navigator.(animationFrameNavigator); ok {
-		navigator.RunAnimationFrame(gtx.Now)
-	}
 	ui.handleFormTraversal(gtx, page)
 	ui.syncFormFocus(gtx, page.FocusTarget)
 
@@ -1820,7 +1817,15 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 	if ui.navigator != nil {
 		ui.navigator.UpdateViewport(viewportWidth, viewportHeight)
 	}
-	frameStyles, animationDamage := page.AnimationFrame(gtx.Now)
+	frameRequest := browser.FrameRequest{
+		ScrollPending: ui.layoutCache.page == page && (ui.layoutCache.listFirst != ui.pageList.Position.First || ui.layoutCache.listOffset != ui.pageList.Position.Offset),
+	}
+	if navigator, ok := ui.navigator.(animationFrameNavigator); ok {
+		frameRequest.AnimationFramePending = navigator.HasAnimationFrameCallbacks()
+		frameRequest.RunAnimationFrame = func() { navigator.RunAnimationFrame(gtx.Now) }
+	}
+	framePlan := page.ScheduleFrame(gtx.Now, ui.layoutCache.tree, frameRequest)
+	frameStyles, animationDamage := framePlan.Styles, framePlan.Damage
 	switch animationDamage {
 	case stylemodel.AnimationDamageComposite:
 		page.RecordRenderEvent(browser.RenderCompositeFrame)
@@ -1880,6 +1885,9 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 		ui.invalidate()
 	}
 	if navigator, ok := ui.navigator.(animationFrameNavigator); pageVisible && ok && navigator.HasAnimationFrameCallbacks() && ui.invalidate != nil {
+		ui.invalidate()
+	}
+	if pageVisible && page.ActiveAnimatedImagesInViewport(tree) && ui.invalidate != nil {
 		ui.invalidate()
 	}
 	ui.persistHistoryScroll()
