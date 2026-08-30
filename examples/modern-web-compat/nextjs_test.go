@@ -80,8 +80,20 @@ func TestNextJSSSRFixtureHydratesWithoutReplacingDOM(t *testing.T) {
 	if value, _ := root.Attribute("data-bootstrap"); value != "loaded" {
 		t.Fatalf("bootstrap marker = %q", value)
 	}
+	for attribute, want := range map[string]string{
+		"data-build-id":            "growse-v0.17.0-nextjs",
+		"data-framework-build":     "Next.js 15.4.6 / React 19.1.1",
+		"data-upstream-entrypoint": "upstream-export/_next/static/chunks/app/page-dd41e4cd632e1042.js",
+	} {
+		if got, _ := root.Attribute(attribute); got != want {
+			t.Errorf("%s = %q, want %q", attribute, got, want)
+		}
+	}
 	if requests.count("/_next/static/chunks/app.mjs") != 1 || requests.count("/_next/static/chunks/counter.chunk.mjs") != 1 {
 		t.Fatalf("Next.js chunk requests = %#v", requests.paths)
+	}
+	if requests.count("/_next/static/chunks/upstream-contract.mjs") != 1 {
+		t.Fatalf("Next.js upstream build contract requests = %#v", requests.paths)
 	}
 	foundChunkDiagnostic := false
 	for _, context := range page.RuntimeDiagnostics() {

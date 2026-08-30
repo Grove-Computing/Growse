@@ -20,9 +20,10 @@
       "sources": ["sources/nextjs/next.config.mjs", "sources/nextjs/app/layout.jsx", "sources/nextjs/app/page.jsx", "sources/nextjs/app/globals.css"],
       "artifacts": [
         {"path": "fixtures/nextjs/app.css", "sha256": "e561e437caa1677fe2436c9a1c838b20e00dccd29456e659f7294c0dbf97e4b1"},
-        {"path": "fixtures/nextjs/app.mjs", "sha256": "4ec741197a8b19e662a0b9b0c84f6c19b04021779b3b8046501550c9e1311ca6"},
+        {"path": "fixtures/nextjs/app.mjs", "sha256": "81e4ed5923ee7258f14a446c635b5114e066505ee05454d95d18546a909584eb"},
         {"path": "fixtures/nextjs/counter.chunk.mjs", "sha256": "45917193109f7ce57a63c568f042ff3d282b075bb926ddc7b97af1d83fc18e1f"},
-        {"path": "fixtures/nextjs/index.html", "sha256": "e15e2c14eafea834be797f2a26d6846e7d599fa10aada5b78bacc9426c12bbf7"},
+        {"path": "fixtures/nextjs/index.html", "sha256": "8dfd970a70a86e5d91d5b51dad802673ddd719445b90a1de582db074201d8016"},
+        {"path": "fixtures/nextjs/upstream-contract.mjs", "sha256": "ec69521cd5ff9d0734f23f89082304e404c7078cc8c1e6ffa970794958dd7451"},
         {"path": "fixtures/nextjs/upstream.sha256", "sha256": "0b74d186ae99c13ed6e93c4d85f870870bc1bdbf75736191abed4f4fdfe0aad8"}
       ]
     },
@@ -43,7 +44,8 @@
         {"path": "fixtures/sveltekit/app.css", "sha256": "a205946e5e6ec4b3731e7980d2367b62b9054173e2b7ebfb766d9001ba7d0b16"},
         {"path": "fixtures/sveltekit/app.mjs", "sha256": "1e588fe84889ba5eefbc0eea6444aaf41fbf62b20b7a30f79466f074e2e5f440"},
         {"path": "fixtures/sveltekit/index.html", "sha256": "81f303fd8772a35a085dcc051590e3b61273fb5f89b0c18284c5753ccb60bf00"},
-        {"path": "fixtures/sveltekit/start.mjs", "sha256": "de2a26d22df681a1065b7a2ec5046d701b1073c6f067bd2e86521f43c979a13c"},
+        {"path": "fixtures/sveltekit/start.mjs", "sha256": "a4e3f26383348b04601c92e4ca3ee05cbfbfbb7230681c229de534568437301b"},
+        {"path": "fixtures/sveltekit/upstream-contract.mjs", "sha256": "f69c6f7ac2454f27706d1db6798091cc65a2042cdc37d84d4b25bb545eb2d195"},
         {"path": "fixtures/sveltekit/upstream.sha256", "sha256": "6f91d720a8741d958b26c8708b262e425c2d74bd186899b7d6183c988ef55ab5"}
       ]
     },

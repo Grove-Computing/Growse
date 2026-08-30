@@ -44,8 +44,21 @@ func TestSvelteKitSSRFixtureHydratesAndEnhancesForm(t *testing.T) {
 	if fixtureNode(t, page, "svelte").ID != rootID {
 		t.Fatal("SvelteKit hydration replaced the SSR root")
 	}
+	root := fixtureNode(t, page, "svelte")
+	for attribute, want := range map[string]string{
+		"data-framework-build":       "SvelteKit 2.37.0 / Svelte 5.38.2",
+		"data-upstream-entrypoint":  "upstream-export/_app/immutable/entry/start.wQHwKN5a.js",
+		"data-upstream-application": "upstream-export/_app/immutable/entry/app.KTqJPWpF.js",
+	} {
+		if got, _ := root.Attribute(attribute); got != want {
+			t.Errorf("%s = %q, want %q", attribute, got, want)
+		}
+	}
 	if requests.count("/_app/immutable/entry/start.mjs") != 1 || requests.count("/_app/immutable/nodes/app.mjs") != 1 {
 		t.Fatalf("SvelteKit Module requests = %#v", requests.paths)
+	}
+	if requests.count("/_app/immutable/upstream-contract.mjs") != 1 {
+		t.Fatalf("SvelteKit upstream build contract requests = %#v", requests.paths)
 	}
 
 	if !engine.DispatchClick(fixtureNode(t, page, "svelte-reactive").ID, 0, 0) {

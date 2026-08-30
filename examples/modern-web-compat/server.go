@@ -87,6 +87,9 @@ func nextJSFixtureHandler() http.Handler {
 		case "/_next/static/chunks/counter.chunk.mjs":
 			request.URL.Path = "/counter.chunk.mjs"
 			response.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		case "/_next/static/chunks/upstream-contract.mjs":
+			request.URL.Path = "/upstream-contract.mjs"
+			response.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 		default:
 			http.NotFound(response, request)
 			return
@@ -113,6 +116,9 @@ func svelteKitFixtureHandler() http.Handler {
 			response.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 		case "/_app/immutable/nodes/app.mjs":
 			request.URL.Path = "/app.mjs"
+			response.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		case "/_app/immutable/upstream-contract.mjs":
+			request.URL.Path = "/upstream-contract.mjs"
 			response.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 		default:
 			http.NotFound(response, request)
