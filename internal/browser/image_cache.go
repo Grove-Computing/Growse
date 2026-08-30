@@ -354,8 +354,9 @@ func imageNodeStyleRevision(node *dom.Node) uint64 {
 	hash := uint64(1469598103934665603)
 	for _, name := range []string{"width", "height", "class", "style"} {
 		value, _ := node.Attribute(name)
-		for _, character := range name + "=" + value + "\x00" {
-			hash ^= uint64(character)
+		input := name + "=" + value + "\x00"
+		for index := range len(input) {
+			hash ^= uint64(input[index])
 			hash *= 1099511628211
 		}
 	}
