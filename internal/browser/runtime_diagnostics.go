@@ -100,6 +100,10 @@ func runtimeErrorCategory(message string) string {
 	switch {
 	case strings.Contains(value, "hydration") || strings.Contains(value, "hydrate"):
 		return "hydration"
+	case strings.Contains(value, "unsupported global") || strings.Contains(value, "unsupported web api"):
+		return "unsupported-global"
+	case strings.Contains(value, "event dispatch") || strings.Contains(value, "event listener"):
+		return "event"
 	case strings.Contains(value, "observer") || strings.Contains(value, "loop limit"):
 		return "observer"
 	case strings.Contains(value, "chunk"):

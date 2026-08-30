@@ -6,7 +6,19 @@ import("./missing.chunk.mjs").then(function () {
 });
 
 document.getElementById("hydration-error").addEventListener("click", function () {
-  throw new Error("hydration exception isolated");
+  throw new Error("[component:diagnostic-root] hydration mismatch isolated");
+});
+
+document.getElementById("unsupported-global-error").addEventListener("click", function () {
+  try {
+    navigator.frameworkUnsupportedAPI();
+  } catch (_) {
+    console.error("[component:diagnostic-root] unsupported global navigator.frameworkUnsupportedAPI");
+  }
+});
+
+document.getElementById("event-error").addEventListener("click", function () {
+  throw new Error("[component:diagnostic-root] Event dispatch failure isolated");
 });
 
 document.getElementById("observer-error").addEventListener("click", function () {

@@ -39,6 +39,8 @@ func TestCompatibilityDiagnosticsExplainResourcesStylesFallbacksAndRuntimeErrors
 	page.ImageErrors = []string{"image decode failed /private/source.png"}
 	page.ScriptErrors = []string{"dynamic chunk load failed token=secret", "hydration exception secret", "observer loop limit secret"}
 	page.StyleErrors = []string{"layout container query iteration limit reached"}
+	page.DevTools.AddConsoleForEngine("error", "javascript", "event", "[component:framework-boundary] unsupported global navigator.secret")
+	page.DevTools.AddConsoleForEngine("error", "javascript", "event", "[component:framework-boundary] Event dispatch failure")
 	page.DevTools.ObserveNetwork(network.Observation{
 		Method: "GET", URL: requested, FinalURL: finalURL, Kind: network.RequestModule, Engine: "javascript",
 		Initiator: "module-graph", Schedule: "module", StatusCode: 503, ErrorCategory: "http",
@@ -60,9 +62,16 @@ func TestCompatibilityDiagnosticsExplainResourcesStylesFallbacksAndRuntimeErrors
 		{"runtime", "error", "chunk"},
 		{"runtime", "error", "hydration"},
 		{"runtime", "error", "observer"},
+		{"runtime", "error", "unsupported-global"},
+		{"runtime", "error", "event"},
 	} {
 		if !hasCompatibilityDiagnostic(diagnostics, expected[0], expected[1], expected[2]) {
 			t.Errorf("missing diagnostic %v in %+v", expected, diagnostics)
+		}
+	}
+	for _, reason := range []string{"unsupported-global", "event"} {
+		if !hasExactCompatibilityDiagnostic(diagnostics, "runtime", "component/framework-boundary", "error", reason, 1) {
+			t.Errorf("missing component-localized %s diagnostic in %+v", reason, diagnostics)
 		}
 	}
 	var resource devtools.CompatibilityDiagnostic
