@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    
+		<link href="./_app/immutable/assets/0.BL-wHRmC.css" rel="stylesheet">
+		<link rel="modulepreload" href="./_app/immutable/entry/start.wQHwKN5a.js">
+		<link rel="modulepreload" href="./_app/immutable/chunks/CISq7E0d.js">
+		<link rel="modulepreload" href="./_app/immutable/chunks/Dqz7KwCw.js">
+		<link rel="modulepreload" href="./_app/immutable/chunks/zWgCcKFc.js">
+		<link rel="modulepreload" href="./_app/immutable/chunks/OD0klbOS.js">
+		<link rel="modulepreload" href="./_app/immutable/chunks/BcnsLuOf.js">
+		<link rel="modulepreload" href="./_app/immutable/entry/app.KTqJPWpF.js">
+		<link rel="modulepreload" href="./_app/immutable/chunks/DsnmJJEf.js">
+		<link rel="modulepreload" href="./_app/immutable/nodes/0.uA6TAnlK.js">
+		<link rel="modulepreload" href="./_app/immutable/nodes/2.DS06vFqf.js">
+		<link rel="modulepreload" href="./_app/immutable/chunks/1N01TqOy.js"><!--[--><!--]--><title>SvelteKit SSR compatibility fixture</title>
+  </head>
+  <body data-sveltekit-preload-data="hover">
+    <div style="display: contents"><!--[--><!--[--><!----><!----><main data-ssr-token="svelte-ssr-root-v1"><p>SSR rendered</p> <button type="button">Update</button> <output>reactive:0</output> <form method="post" action="/svelte/action"><input name="name" value="SSR"/> <button type="submit">Save</button></form> <output>not submitted</output> <a href="/svelte/about">About</a></main><!----><!----><!----><!--]--> <!--[!--><!--]--><!--]-->
+			
+			<script>
+				{
+					__sveltekit_k6k7ll = {
+						base: new URL(".", location).pathname.slice(0, -1)
+					};
+
+					const element = document.currentScript.parentElement;
+
+					Promise.all([
+						import("./_app/immutable/entry/start.wQHwKN5a.js"),
+						import("./_app/immutable/entry/app.KTqJPWpF.js")
+					]).then(([kit, app]) => {
+						kit.start(app, element, {
+							node_ids: [0, 2],
+							data: [null,null],
+							form: null,
+							error: null
+						});
+					});
+				}
+			</script>
+		</div>
+  </body>
+</html>

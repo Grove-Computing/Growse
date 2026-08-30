@@ -111,9 +111,6 @@ func TestUpstreamFrameworkBuildDigests(t *testing.T) {
 		checksumPath := filepath.Join("fixtures", fixture, "upstream.sha256")
 		encoded, err := os.ReadFile(checksumPath)
 		if err != nil {
-			if fixture == "sveltekit" {
-				continue // Added by the immediately following release-train item.
-			}
 			t.Fatal(err)
 		}
 		lines := strings.Split(strings.TrimSpace(string(encoded)), "\n")

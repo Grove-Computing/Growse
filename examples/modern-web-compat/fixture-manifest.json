@@ -30,20 +30,21 @@
       "name": "sveltekit",
       "framework": "SvelteKit",
       "frameworkVersion": "2.37.0",
-      "buildTool": "Svelte 5.38.2 / Vite 7.1.3 / Node.js 22.18.0 / pnpm 10.14.0",
+      "buildTool": "SvelteKit 2.37.0 / Svelte 5.38.2 / Vite 7.1.3 / Tailwind CLI 4.1.12 / Node.js 24.18.0 / pnpm 11.21.0",
       "dependencies": {
         "@sveltejs/kit": "2.37.0",
         "svelte": "5.38.2",
         "vite": "7.1.3"
       },
-      "generationCommand": "corepack pnpm --offline install --frozen-lockfile && corepack pnpm --offline vite build",
-      "licenses": ["MIT:SvelteKit", "MIT:Svelte", "MIT:Vite"],
-      "sources": ["sources/sveltekit/src/routes/+page.svelte"],
+      "generationCommand": "pnpm install --offline --frozen-lockfile --ignore-scripts && (cd sources/sveltekit && ../../node_modules/.bin/vite build)",
+      "licenses": ["MIT:SvelteKit", "MIT:Svelte", "MIT:Vite", "MIT:Tailwind CSS"],
+      "sources": ["sources/sveltekit/svelte.config.js", "sources/sveltekit/vite.config.js", "sources/sveltekit/src/app.html", "sources/sveltekit/src/app.css", "sources/sveltekit/src/routes/+layout.svelte", "sources/sveltekit/src/routes/+page.js", "sources/sveltekit/src/routes/+page.svelte", "sources/sveltekit/src/routes/svelte/about/+page.svelte"],
       "artifacts": [
         {"path": "fixtures/sveltekit/app.css", "sha256": "a205946e5e6ec4b3731e7980d2367b62b9054173e2b7ebfb766d9001ba7d0b16"},
         {"path": "fixtures/sveltekit/app.mjs", "sha256": "1e588fe84889ba5eefbc0eea6444aaf41fbf62b20b7a30f79466f074e2e5f440"},
         {"path": "fixtures/sveltekit/index.html", "sha256": "81f303fd8772a35a085dcc051590e3b61273fb5f89b0c18284c5753ccb60bf00"},
-        {"path": "fixtures/sveltekit/start.mjs", "sha256": "de2a26d22df681a1065b7a2ec5046d701b1073c6f067bd2e86521f43c979a13c"}
+        {"path": "fixtures/sveltekit/start.mjs", "sha256": "de2a26d22df681a1065b7a2ec5046d701b1073c6f067bd2e86521f43c979a13c"},
+        {"path": "fixtures/sveltekit/upstream.sha256", "sha256": "6f91d720a8741d958b26c8708b262e425c2d74bd186899b7d6183c988ef55ab5"}
       ]
     },
     {
