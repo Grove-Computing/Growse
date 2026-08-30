@@ -36,6 +36,42 @@ func TestCompareRejectsMissingAndNonFiniteGeometry(t *testing.T) {
 	}
 }
 
+func TestGeometryUsesTwoPixelsOrOnePercentAndSemanticStateIsExact(t *testing.T) {
+	reference := Snapshot{
+		Scenario: "threshold", DOMLandmarks: []string{"small", "large"},
+		Geometry: map[string]Rect{
+			"small": {X: 10, Y: 10, Width: 100, Height: 100},
+			"large": {X: 1000, Y: 1000, Width: 1000, Height: 1000},
+		},
+		Computed:  map[string]map[string]string{"small": {"display": "block"}},
+		Resources: map[string]string{"hero": "complete"}, Focus: "small",
+	}
+	actual := reference
+	actual.DOMLandmarks = append([]string(nil), reference.DOMLandmarks...)
+	actual.Geometry = map[string]Rect{
+		"small": {X: 12, Y: 8, Width: 102, Height: 98},
+		"large": {X: 1010, Y: 990, Width: 1010, Height: 990},
+	}
+	actual.Computed = map[string]map[string]string{"small": {"display": "block"}}
+	actual.Resources = map[string]string{"hero": "complete"}
+	if report := Compare(reference, actual); !report.Passed() {
+		t.Fatalf("boundary values failed: %+v", report.Differences)
+	}
+
+	small := actual.Geometry["small"]
+	small.X = 12.01
+	actual.Geometry["small"] = small
+	if report := Compare(reference, actual); report.Passed() || !hasDifference(report, "geometry/small") {
+		t.Fatalf("geometry above 2px passed: %+v", report.Differences)
+	}
+	small.X = 12
+	actual.Geometry["small"] = small
+	actual.Computed["small"]["display"] = "inline"
+	if report := Compare(reference, actual); report.Passed() || !hasDifference(report, "computed/small") {
+		t.Fatalf("non-exact computed state passed: %+v", report.Differences)
+	}
+}
+
 func hasDifference(report Report, category string) bool {
 	for _, difference := range report.Differences {
 		if difference.Category == category {
