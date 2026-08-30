@@ -60,9 +60,9 @@ Service WorkerはSecure Context（HTTPSとloopback）でOrigin / scopeごとに�
 
 ## JavaScript Fetchの範囲
 
-`fetch(input, init)`はPromiseを返す。string URL、method、headers object、text body、`omit` / `same-origin` / `include` credentials、AbortSignal、millisecond timeoutを扱う。Responseはstatus、URL、redirect、read-only headersと、一度だけ消費できる`text()` / `json()`を提供する。
+`fetch(input, init)`はPromiseを返す。string URL、method、headers object、text body、`omit` / `same-origin` / `include` credentials、AbortSignal、millisecond timeoutを扱う。Responseはstatus、URL、redirect、read-only headersと、一度だけ消費できる`text()` / `json()` / `arrayBuffer()`、または`body.getReader()`によるbounded consumerを提供する。
 
-Request 1 MiB、Response 4 MiB、Header 100件 / 64 KiB、redirect 10回、Page 16件・Session 128件の同時Fetch上限をGoと共有する。ReadableStreamと任意body streamingは対象外である。
+Request 1 MiB、Response 4 MiB、Header 100件 / 64 KiB、redirect 10回、Page 16件・Session 128件の同時Fetch上限をGoと共有する。Response streamは1 readあたり16 KiB、同時pending read 1件に制限し、cancelとPage closeをPage task queueへ接続する。任意sourceからのReadableStream生成とstreaming uploadは対象外である。
 
 ## 公開しない機能
 

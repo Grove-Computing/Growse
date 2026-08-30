@@ -34,14 +34,14 @@ Goは`growse/fetch`の`Fetch(Request, success, failure)`を利用する。JavaSc
 | 機能 | 対応 | 補足 |
 | --- | --- | --- |
 | 非同期callback | 対応 | Page event queueで成功・失敗のどちらか一回を通知する |
-| JavaScript Promise | 対応 | `fetch`、`Response.text()`、`Response.json()`をPage queue上でsettleする |
+| JavaScript Promise | 対応 | `fetch`、`Response.text()`、`Response.json()`、`Response.arrayBuffer()`、stream readをPage queue上でsettleする |
 | redirect | 対応 | 301、302、303、307、308とmethod変換を扱い、loop検出・最大10回を適用する |
 | timeout / cancel | 対応 | `AbortController` / `AbortSignal`とrequest単位timeoutを扱う。NavigationとPage終了で進行中Requestをcancelする |
-| Body helper | 対応 | Bytes、Text、JSON、BodyUsed。二重消費とinvalid UTF-8 textはErrorになる |
+| Body helper | 対応 | Bytes、Text、JSON、BodyUsedと`Response.body.getReader()`。streamは16 KiB chunk、1 pending readに制限し、二重消費、backpressure違反、invalid UTF-8 textはErrorになる |
 | Credentials Mode | 対応 | `omit`、`same-origin`、`include` |
 | safety limit | 対応 | Request 1 MiB、Header 100件/64 KiB、Pageあたり16件・Sessionあたり128件の同時Fetch |
 | HTTP Cache | 対応 | Navigation、Resource Loading、Go / JavaScript Source、Fetchで共通のprivate cacheを使用する |
-| 対象外 | 非対応 | ReadableStream、File / Blob body、Service Worker、WebSocket |
+| 対象外 | 非対応 | 任意sourceからのReadableStream生成、streaming upload、File / Blob body、Service Worker、WebSocket |
 
 ## Cookie
 

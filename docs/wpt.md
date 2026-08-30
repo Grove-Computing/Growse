@@ -96,7 +96,7 @@ Upstreamのファイル全体はコピーせず、assertionの意味と最小入
 
 ## v0.13.0の選定範囲
 
-- Fetchは既存Network policyの結果をJavaScript Promiseへ接続し、resolve / reject、Response bodyの一回消費、abort、timeout、Page closeを選定する。ReadableStreamとbrowser全体のmicrotask timingは対象外とする。
+- Fetchは既存Network policyの結果をJavaScript Promiseへ接続し、resolve / reject、Response bodyの一回消費、16 KiB chunk / 1 pending readのbounded stream consumer、backpressure error、cancel、timeout、Page closeを選定する。任意sourceからのReadableStream生成とbrowser全体のmicrotask timingは対象外とする。
 - Timersはfunction callback、引数、登録順、clear、Page closeを選定し、文字列callbackは安全上の意図的な非対応として拒否する。
 - Web StorageはJavaScriptの同期Storage操作と更新元以外へのsame-origin `storage` Eventを選定し、複数Process間EventとSession Storage Eventは対象外とする。
 - HistoryはJSONへ変換可能なstate、same-origin URL、size上限、`popstate`、`hashchange`を選定し、Window / iframe joint session historyとBFCacheは対象外とする。
