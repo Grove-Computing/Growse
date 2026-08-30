@@ -71,16 +71,6 @@ func (budget *imageDecodeBudget) claim(resource string) bool {
 	return true
 }
 
-func (budget *imageDecodeBudget) allowsSurface(width, height int) bool {
-	if budget == nil {
-		return true
-	}
-	budget.mu.Lock()
-	defer budget.mu.Unlock()
-	bytes := int64(width) * int64(height) * 4
-	return bytes > 0 && bytes <= maxPageImageSurfaceBytes-budget.surfaceBytes
-}
-
 func (budget *imageDecodeBudget) commitSurface(width, height int) {
 	if budget != nil {
 		budget.mu.Lock()
