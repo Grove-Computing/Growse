@@ -55,6 +55,7 @@ COPY --from=build /out/growse /usr/local/bin/growse
 COPY --from=build /out/growse-smoke /usr/local/bin/growse-smoke
 COPY --from=build /src/examples/external-web-platform /usr/local/share/growse/examples/external-web-platform
 COPY --from=build /src/examples/modern-web-compat /usr/local/share/growse/examples/modern-web-compat
+COPY --from=build /src/examples/browser-grade-compat /usr/local/share/growse/examples/browser-grade-compat
 
 USER growse
 ENTRYPOINT ["growse"]

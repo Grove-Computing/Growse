@@ -80,8 +80,20 @@ func TestNextJSSSRFixtureHydratesWithoutReplacingDOM(t *testing.T) {
 	if value, _ := root.Attribute("data-bootstrap"); value != "loaded" {
 		t.Fatalf("bootstrap marker = %q", value)
 	}
+	for attribute, want := range map[string]string{
+		"data-build-id":            "growse-v0.17.0-nextjs",
+		"data-framework-build":     "Next.js 16.3.3 / React 19.2.8",
+		"data-upstream-entrypoint": "upstream-export/_next/static/chunks/34xz_oa9zbnuv.js",
+	} {
+		if got, _ := root.Attribute(attribute); got != want {
+			t.Errorf("%s = %q, want %q", attribute, got, want)
+		}
+	}
 	if requests.count("/_next/static/chunks/app.mjs") != 1 || requests.count("/_next/static/chunks/counter.chunk.mjs") != 1 {
 		t.Fatalf("Next.js chunk requests = %#v", requests.paths)
+	}
+	if requests.count("/_next/static/chunks/upstream-contract.mjs") != 1 {
+		t.Fatalf("Next.js upstream build contract requests = %#v", requests.paths)
 	}
 	foundChunkDiagnostic := false
 	for _, context := range page.RuntimeDiagnostics() {
@@ -102,6 +114,25 @@ func TestNextJSSSRFixtureHydratesWithoutReplacingDOM(t *testing.T) {
 	if got := fixtureNode(t, page, "next-count").TextContent(); got != "1" {
 		t.Fatalf("counter state = %q", got)
 	}
+	if class, _ := root.Attribute("class"); class != "interactive" {
+		t.Fatalf("Next.js class mutation = %q", class)
+	}
+	if style, _ := fixtureNode(t, page, "next-count").Attribute("style"); !strings.Contains(style, "color: rgb(37,99,235)") {
+		t.Fatalf("Next.js style mutation = %q", style)
+	}
+	if !engine.DispatchClick(fixtureNode(t, page, "next-dialog-toggle").ID, 0, 0) {
+		t.Fatal("dialog Event was not handled")
+	}
+	dialog := fixtureNode(t, page, "next-dialog")
+	if _, hidden := dialog.Attribute("hidden"); hidden || fixtureNode(t, page, "next-dialog-state").TextContent() != "open:focused" {
+		t.Fatal("Next.js dialog did not open and receive focus")
+	}
+	if !engine.DispatchClick(fixtureNode(t, page, "next-menu-toggle").ID, 0, 0) {
+		t.Fatal("menu Event was not handled")
+	}
+	if _, hidden := fixtureNode(t, page, "next-menu").Attribute("hidden"); hidden {
+		t.Fatal("Next.js menu remained hidden")
+	}
 	if !engine.DispatchClick(fixtureNode(t, page, "next-navigation").ID, 0, 0) {
 		t.Fatal("client Navigation Event was not handled")
 	}
@@ -110,6 +141,13 @@ func TestNextJSSSRFixtureHydratesWithoutReplacingDOM(t *testing.T) {
 	}
 	if got := fixtureNode(t, engine.Page(), "next-route").TextContent(); got != "/next/about" {
 		t.Fatalf("client Navigation content = %q", got)
+	}
+	if _, err := engine.Back(context.Background()); err != nil {
+		t.Fatalf("history back traversal: %v", err)
+	}
+	waitForFixtureText(t, engine, mutations, "next-route", "/next/")
+	if engine.Page().URL.Path != "/next/" || fixtureNode(t, engine.Page(), "__next").ID != rootID {
+		t.Fatal("Next.js history traversal replaced SSR identity or lost popstate")
 	}
 	if engine.Page().RuntimeError != "" || len(engine.Page().ScriptErrors) != 0 {
 		t.Fatalf("Next.js fixture runtime errors = %q / %v", engine.Page().RuntimeError, engine.Page().ScriptErrors)

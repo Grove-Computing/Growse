@@ -1,9 +1,17 @@
 {
   "name": "growse-modern-web-fixtures",
   "private": true,
+  "type": "module",
   "packageManager": "pnpm@11.21.0",
   "devDependencies": {
+    "@sveltejs/adapter-static": "3.0.10",
+    "@sveltejs/kit": "2.70.3",
     "@tailwindcss/cli": "4.1.12",
-    "tailwindcss": "4.1.12"
+    "next": "16.3.3",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "svelte": "5.57.0",
+    "tailwindcss": "4.1.12",
+    "vite": "7.3.6"
   }
 }

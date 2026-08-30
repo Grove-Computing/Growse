@@ -12,6 +12,9 @@ import (
 )
 
 func (runtime *Runtime) installFetch(vm *goja.Runtime) error {
+	if err := runtime.installFetchInterfaces(vm); err != nil {
+		return err
+	}
 	if err := vm.Set("fetch", func(call goja.FunctionCall) goja.Value {
 		promise, resolve, reject := vm.NewPromise()
 		request, err := runtime.fetchRequest(vm, call)
@@ -93,6 +96,7 @@ func (runtime *Runtime) responseValue(vm *goja.Runtime, response fetchapi.Respon
 	defineReadOnly("redirected", vm.ToValue(response.Redirected))
 	defineReadOnly("ok", vm.ToValue(response.Status >= 200 && response.Status <= 299))
 	defineReadOnly("headers", runtime.responseHeadersValue(vm, response.Headers))
+	defineReadOnly("body", runtime.responseBodyValue(vm, response))
 	bodyUsedGetter := vm.ToValue(func(goja.FunctionCall) goja.Value { return vm.ToValue(response.BodyUsed()) })
 	_ = object.DefineAccessorProperty("bodyUsed", bodyUsedGetter, nil, goja.FLAG_FALSE, goja.FLAG_TRUE)
 	_ = object.Set("text", func(goja.FunctionCall) goja.Value {
@@ -120,6 +124,113 @@ func (runtime *Runtime) responseValue(vm *goja.Runtime, response fetchapi.Respon
 		})
 	})
 	return object
+}
+
+func (runtime *Runtime) installFetchInterfaces(vm *goja.Runtime) error {
+	_, err := vm.RunString(`
+		(function (global) {
+			function illegal() { throw new TypeError("Illegal constructor"); }
+			function ReadableStream() { illegal(); }
+			function ReadableStreamDefaultReader() { illegal(); }
+			Object.defineProperty(ReadableStream.prototype, Symbol.toStringTag, { value: "ReadableStream" });
+			Object.defineProperty(ReadableStreamDefaultReader.prototype, Symbol.toStringTag, { value: "ReadableStreamDefaultReader" });
+			global.ReadableStream = ReadableStream;
+			global.ReadableStreamDefaultReader = ReadableStreamDefaultReader;
+		})(globalThis);
+	`)
+	if err != nil {
+		return fmt.Errorf("install Fetch stream interfaces: %w", err)
+	}
+	return nil
+}
+
+func (runtime *Runtime) responseBodyValue(vm *goja.Runtime, response fetchapi.Response) goja.Value {
+	stream := vm.NewObject()
+	if prototype := domInterfacePrototype(vm, "ReadableStream"); prototype != nil {
+		_ = stream.SetPrototype(prototype)
+	}
+	locked := false
+	_ = stream.DefineAccessorProperty("locked", vm.ToValue(func(goja.FunctionCall) goja.Value {
+		return vm.ToValue(locked)
+	}), nil, goja.FLAG_FALSE, goja.FLAG_TRUE)
+	_ = stream.Set("getReader", func(goja.FunctionCall) goja.Value {
+		if locked {
+			panic(vm.NewTypeError("ReadableStream is locked"))
+		}
+		bodyReader, err := response.Stream()
+		if err != nil {
+			panic(vm.NewTypeError(err.Error()))
+		}
+		locked = true
+		reader := vm.NewObject()
+		if prototype := domInterfacePrototype(vm, "ReadableStreamDefaultReader"); prototype != nil {
+			_ = reader.SetPrototype(prototype)
+		}
+		pending, released := false, false
+		closedPromise, closeStream, failStream := vm.NewPromise()
+		_ = reader.DefineDataProperty("closed", vm.ToValue(closedPromise), goja.FLAG_FALSE, goja.FLAG_FALSE, goja.FLAG_TRUE)
+		_ = reader.Set("read", func(goja.FunctionCall) goja.Value {
+			promise, resolve, reject := vm.NewPromise()
+			if released {
+				_ = reject(vm.NewTypeError("ReadableStream reader was released"))
+				return vm.ToValue(promise)
+			}
+			if pending {
+				_ = reject(vm.NewTypeError("ReadableStream backpressure limit: one pending read"))
+				return vm.ToValue(promise)
+			}
+			pending = true
+			if !runtime.enqueueCallback(func() {
+				pending = false
+				chunk, done, readErr := bodyReader.Read()
+				if readErr != nil {
+					_ = reject(vm.NewTypeError(readErr.Error()))
+					_ = failStream(vm.NewTypeError(readErr.Error()))
+					return
+				}
+				result := vm.NewObject()
+				_ = result.Set("done", done)
+				if done {
+					_ = result.Set("value", goja.Undefined())
+					_ = closeStream(goja.Undefined())
+				} else {
+					arrayBuffer := vm.NewArrayBuffer(chunk)
+					constructor, _ := vm.Get("Uint8Array").(*goja.Object)
+					value, typedErr := vm.New(constructor, vm.ToValue(arrayBuffer))
+					if typedErr != nil {
+						_ = reject(vm.NewTypeError(typedErr.Error()))
+						_ = failStream(vm.NewTypeError(typedErr.Error()))
+						return
+					}
+					_ = result.Set("value", value)
+				}
+				_ = resolve(result)
+			}) {
+				pending = false
+				_ = reject(fetchRejection(vm, "AbortError: Page task queue is closed"))
+			}
+			return vm.ToValue(promise)
+		})
+		_ = reader.Set("cancel", func(goja.FunctionCall) goja.Value {
+			bodyReader.Cancel()
+			_ = closeStream(goja.Undefined())
+			return runtime.resolvedPromise(vm, func() (goja.Value, error) { return goja.Undefined(), nil })
+		})
+		_ = reader.Set("releaseLock", func(goja.FunctionCall) goja.Value {
+			if pending {
+				panic(vm.NewTypeError("cannot release a reader with a pending read"))
+			}
+			if !released {
+				released = true
+				locked = false
+				bodyReader.Release()
+				_ = failStream(vm.NewTypeError("ReadableStream reader was released"))
+			}
+			return goja.Undefined()
+		})
+		return reader
+	})
+	return stream
 }
 
 func (runtime *Runtime) resolvedPromise(vm *goja.Runtime, action func() (goja.Value, error)) goja.Value {

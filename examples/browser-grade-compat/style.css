@@ -1,0 +1,6 @@
+:root { color-scheme: light; font-family: system-ui, sans-serif; background: #f8fafc; color: #0f172a; }
+body { margin: 0; }
+main { max-width: 60rem; margin: 0 auto; padding: 4rem 2rem; }
+.eyebrow { color: #0369a1; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+nav { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: 1rem; margin: 2rem 0; }
+a { padding: 1rem; border: 1px solid #bae6fd; border-radius: .75rem; background: white; color: #075985; font-weight: 700; text-decoration: none; }

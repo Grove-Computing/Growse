@@ -35,12 +35,16 @@ type RenderMetrics struct {
 	ImageResourceHits      uint64
 	ImageResourceMisses    uint64
 	ImageResourceEvictions uint64
+	ImageResourceDecodes   uint64
+	ImageSurfaceResizes    uint64
 	ImagePaintHits         uint64
 	ImagePaintMisses       uint64
 	ImagePaintEvictions    uint64
 	LayoutBuilds           uint64
 	DisplayListBuilds      uint64
 	DisplayListReuses      uint64
+	LayoutFragmentReuses   uint64
+	DisplayCommandReuses   uint64
 	CompositeFrames        uint64
 	PaintFrames            uint64
 	LayoutFrames           uint64
@@ -50,6 +54,62 @@ type RenderMetrics struct {
 	ViewportRebuilds       uint64
 	ScrollRebuilds         uint64
 	AnimationRebuilds      uint64
+	ScheduledFrames        uint64
+	CoalescedFrames        uint64
+	ThrottledFrames        uint64
+	InputTasks             uint64
+	ChromeTasks            uint64
+	PageTasks              uint64
+	DroppedTasks           uint64
+	DirtyNodes             uint64
+	CompositingLayers      uint64
+	DamageRegions          uint64
+}
+
+// RecordRenderReuse counts stable fragments and commands retained across one
+// incremental revision. Values saturate to keep diagnostics monotonic.
+func (p *Page) RecordRenderReuse(fragments, commands int) {
+	if p == nil {
+		return
+	}
+	p.renderMu.Lock()
+	p.renderMetrics.LayoutFragmentReuses = saturatingAdd(p.renderMetrics.LayoutFragmentReuses, fragments)
+	p.renderMetrics.DisplayCommandReuses = saturatingAdd(p.renderMetrics.DisplayCommandReuses, commands)
+	p.renderMu.Unlock()
+}
+
+// RecordCompositorSnapshot publishes bounded, payload-free diagnostics for
+// the latest frame. Values are snapshots rather than cumulative counters.
+func (p *Page) RecordCompositorSnapshot(dirtyNodes, layers, damageRegions int) {
+	if p == nil {
+		return
+	}
+	p.renderMu.Lock()
+	p.renderMetrics.DirtyNodes = boundedRenderSnapshot(dirtyNodes, 256)
+	p.renderMetrics.CompositingLayers = boundedRenderSnapshot(layers, 128)
+	p.renderMetrics.DamageRegions = boundedRenderSnapshot(damageRegions, 256)
+	p.renderMu.Unlock()
+}
+
+func boundedRenderSnapshot(value, limit int) uint64 {
+	if value <= 0 {
+		return 0
+	}
+	if value > limit {
+		value = limit
+	}
+	return uint64(value)
+}
+
+func saturatingAdd(current uint64, amount int) uint64 {
+	if amount <= 0 || current == ^uint64(0) {
+		return current
+	}
+	addition := uint64(amount)
+	if addition > ^uint64(0)-current {
+		return ^uint64(0)
+	}
+	return current + addition
 }
 
 // RecordRenderEvent records UI-owned work without retaining DOM or resource
@@ -129,6 +189,8 @@ func (p *Page) RenderMetricsSnapshot() RenderMetrics {
 		result.ImageResourceHits = stats.hits
 		result.ImageResourceMisses = stats.misses
 		result.ImageResourceEvictions = stats.evictions
+		result.ImageResourceDecodes = stats.decodes
+		result.ImageSurfaceResizes = stats.resizes
 	}
 	return result
 }

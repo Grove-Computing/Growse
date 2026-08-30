@@ -39,61 +39,82 @@ func compatibilityProfileForEngine(engine runtimemodel.Engine) CompatibilityProf
 // Runtimeの状態はスクリプト取得エラーと分けて保持し、Goコードを実行できない場合も
 // ページの表示を継続できるようにする。
 type Page struct {
-	HistoryID        uint64
-	HistoryState     string
-	ScrollFirst      int
-	ScrollOffset     int
-	ScrollRevision   uint64
-	URL              *url.URL
-	BaseURL          *url.URL
-	StatusCode       int
-	ContentType      string
-	Source           []byte
-	Document         *dom.Document
-	Events           *events.Dispatcher
-	Stylesheet       *css.Stylesheet
-	ComputedStyles   style.Map
-	Animations       *style.AnimationRegistry
-	Transitions      *style.TransitionRegistry
-	BackgroundImages map[string]image.Image
-	BackgroundErrors []string
-	ImageResources   map[dom.NodeID]layoutmodel.ImageResource
-	Images           map[string]image.Image
-	ImageErrors      []string
-	Fonts            []FontResource
-	FontErrors       []string
-	WebFonts         *layoutmodel.FontSet
-	Engine           runtimemodel.Engine
-	Compatibility    CompatibilityProfile
-	Scripts          []Script
-	ImportMap        map[string]string
-	ScriptErrors     []string
-	RuntimeStarted   bool
-	RuntimeError     string
-	Sandbox          runtimemodel.SandboxStatus
-	HoverTarget      dom.NodeID
-	HoverPath        []dom.NodeID
-	FocusTarget      dom.NodeID
-	FocusVisible     bool
-	Submitter        dom.NodeID
-	ViewportWidth    float32
-	ViewportHeight   float32
-	ReducedMotion    bool
-	StyleRevision    uint64
-	DevTools         *devtools.PageStore
-	Frames           []*Frame
-	FramePolicy      runtimemodel.FramePolicy
-	window           runtimemodel.WindowContext
-	windows          *windowRegistry
-	serviceWorkers   *serviceworker.Manager
-	imageLoader      ResourceLoader
-	imageMu          sync.Mutex
-	imageCancel      context.CancelFunc
-	imageGeneration  uint64
-	imageEvents      map[dom.NodeID]string
-	imageCache       *imageResourceCache
-	renderMu         sync.Mutex
-	renderMetrics    RenderMetrics
+	HistoryID          uint64
+	HistoryState       string
+	ScrollFirst        int
+	ScrollOffset       int
+	ScrollRevision     uint64
+	URL                *url.URL
+	BaseURL            *url.URL
+	StatusCode         int
+	ContentType        string
+	Source             []byte
+	Document           *dom.Document
+	Events             *events.Dispatcher
+	Stylesheet         *css.Stylesheet
+	ComputedStyles     style.Map
+	StyleErrors        []string
+	Animations         *style.AnimationRegistry
+	Transitions        *style.TransitionRegistry
+	BackgroundImages   map[string]image.Image
+	BackgroundErrors   []string
+	ImageResources     map[dom.NodeID]layoutmodel.ImageResource
+	Images             map[string]image.Image
+	AnimatedImages     map[dom.NodeID]*animatedImagePlayer
+	ImageErrors        []string
+	Fonts              []FontResource
+	FontErrors         []string
+	WebFonts           *layoutmodel.FontSet
+	Engine             runtimemodel.Engine
+	Compatibility      CompatibilityProfile
+	Scripts            []Script
+	ImportMap          map[string]string
+	ScriptErrors       []string
+	RuntimeStarted     bool
+	RuntimeError       string
+	Sandbox            runtimemodel.SandboxStatus
+	HoverTarget        dom.NodeID
+	HoverPath          []dom.NodeID
+	FocusTarget        dom.NodeID
+	FocusVisible       bool
+	Submitter          dom.NodeID
+	ViewportWidth      float32
+	ViewportHeight     float32
+	ReducedMotion      bool
+	StyleRevision      uint64
+	DevTools           *devtools.PageStore
+	Frames             []*Frame
+	FramePolicy        runtimemodel.FramePolicy
+	window             runtimemodel.WindowContext
+	windows            *windowRegistry
+	serviceWorkers     *serviceworker.Manager
+	imageLoader        ResourceLoader
+	imageMu            sync.Mutex
+	imageCancel        context.CancelFunc
+	imageGeneration    uint64
+	imageEvents        map[dom.NodeID]string
+	imageCache         *imageResourceCache
+	imageDirty         ImageInvalidation
+	fontMu             sync.Mutex
+	fontDirty          FontInvalidation
+	renderMu           sync.Mutex
+	renderMetrics      RenderMetrics
+	renderDirty        RenderInvalidation
+	frameScheduleMu    sync.Mutex
+	lastFrame          time.Time
+	lastAnimationFrame time.Time
+	frameGeneration    uint64
+	frameClosed        bool
+}
+
+// ImageInvalidation describes the bounded renderer work caused by the latest
+// image completion without retaining resource bytes or decoded pixels.
+type ImageInvalidation struct {
+	Revision         uint64
+	Target           dom.NodeID
+	PaintNodes       []dom.NodeID
+	LayoutAncestors  []dom.NodeID
+	IntrinsicChanged bool
 }
 
 func (p *Page) beginImageLoad(parent context.Context) (context.Context, uint64) {
@@ -117,7 +138,8 @@ func (p *Page) commitImageLoad(generation uint64, resources map[dom.NodeID]layou
 	if generation != p.imageGeneration {
 		return false
 	}
-	p.ImageResources, p.Images, p.ImageErrors = resources, images, failures
+	p.ImageResources, p.Images, p.ImageErrors = resources, images, boundedImageDiagnostics(failures)
+	p.AnimatedImages = animatedImagesForResources(resources, p.imageCache)
 	p.StyleRevision++
 	return true
 }
@@ -128,6 +150,7 @@ func (p *Page) commitImageResourceLoad(generation uint64, nodeID dom.NodeID, res
 	if generation != p.imageGeneration {
 		return false
 	}
+	previous := p.ImageResources[nodeID]
 	resources := make(map[dom.NodeID]layoutmodel.ImageResource, len(p.ImageResources)+1)
 	for currentID, current := range p.ImageResources {
 		resources[currentID] = current
@@ -141,11 +164,46 @@ func (p *Page) commitImageResourceLoad(generation uint64, nodeID dom.NodeID, res
 		images[resource.URL] = decoded
 	}
 	p.ImageResources, p.Images = resources, images
-	if failure != "" {
-		p.ImageErrors = append(append([]string(nil), p.ImageErrors...), failure)
+	if p.AnimatedImages == nil {
+		p.AnimatedImages = make(map[dom.NodeID]*animatedImagePlayer)
 	}
-	p.StyleRevision++
+	if animation := p.imageCache.animation(resource.URL); animation != nil {
+		p.AnimatedImages[nodeID] = &animatedImagePlayer{data: animation}
+	} else {
+		delete(p.AnimatedImages, nodeID)
+	}
+	if failure != "" {
+		p.ImageErrors = appendImageDiagnostic(append([]string(nil), p.ImageErrors...), failure)
+	}
+	intrinsicChanged := previous.IntrinsicWidth != resource.IntrinsicWidth || previous.IntrinsicHeight != resource.IntrinsicHeight
+	p.imageDirty.Revision++
+	p.imageDirty.Target = nodeID
+	p.imageDirty.PaintNodes = []dom.NodeID{nodeID}
+	p.imageDirty.LayoutAncestors = p.imageDirty.LayoutAncestors[:0]
+	p.imageDirty.IntrinsicChanged = intrinsicChanged
+	if intrinsicChanged && p.Document != nil {
+		if node, exists := p.Document.NodeByID(nodeID); exists {
+			for current := node; current != nil && len(p.imageDirty.LayoutAncestors) < 256; current = current.Parent {
+				p.imageDirty.LayoutAncestors = append(p.imageDirty.LayoutAncestors, current.ID)
+			}
+		}
+		p.StyleRevision++
+	}
 	return true
+}
+
+// ImageInvalidationSnapshot returns a payload-free copy suitable for the UI
+// renderer and DevTools. Unrelated siblings are never included.
+func (p *Page) ImageInvalidationSnapshot() ImageInvalidation {
+	if p == nil {
+		return ImageInvalidation{}
+	}
+	p.imageMu.Lock()
+	defer p.imageMu.Unlock()
+	result := p.imageDirty
+	result.PaintNodes = append([]dom.NodeID(nil), result.PaintNodes...)
+	result.LayoutAncestors = append([]dom.NodeID(nil), result.LayoutAncestors...)
+	return result
 }
 
 func (p *Page) cancelImageLoads() {
@@ -165,6 +223,7 @@ func (p *Page) releaseImageResources() {
 	if p == nil {
 		return
 	}
+	p.cancelFrameLifecycle()
 	p.cancelImageLoads()
 	if p.imageCache != nil {
 		p.imageCache.clear()
@@ -172,9 +231,16 @@ func (p *Page) releaseImageResources() {
 	p.imageMu.Lock()
 	p.ImageResources = nil
 	p.Images = nil
+	for _, player := range p.AnimatedImages {
+		if player != nil {
+			player.closed = true
+		}
+	}
+	p.AnimatedImages = nil
 	p.ImageErrors = nil
 	p.imageEvents = nil
 	p.imageCache = nil
+	p.imageDirty = ImageInvalidation{}
 	p.imageMu.Unlock()
 	p.BackgroundImages = nil
 	p.BackgroundErrors = nil

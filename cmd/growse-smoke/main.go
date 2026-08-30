@@ -5,6 +5,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"image"
@@ -18,6 +19,7 @@ import (
 	"time"
 
 	"github.com/Grove-Computing/Growse/internal/browser"
+	"github.com/Grove-Computing/Growse/internal/conformance"
 	"github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/network"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
@@ -30,11 +32,19 @@ import (
 
 func main() {
 	if len(os.Args) != 2 {
-		fmt.Fprintln(os.Stderr, "usage: growse-smoke <external-web-platform-directory>")
+		fmt.Fprintln(os.Stderr, "usage: growse-smoke <fixture-directory>")
 		os.Exit(2)
 	}
 	root := os.Args[1]
-	if filepath.Base(filepath.Clean(root)) == "modern-web-compat" {
+	switch filepath.Base(filepath.Clean(root)) {
+	case "browser-grade-compat":
+		if err := runBrowserGrade(root); err != nil {
+			fmt.Fprintln(os.Stderr, "Docker Browser-grade Compatibility smoke failed:", err)
+			os.Exit(1)
+		}
+		fmt.Println("Docker Browser-grade Compatibility smoke passed: corpus, performance gate, sandbox worker, SSR, hydration, interaction, navigation")
+		return
+	case "modern-web-compat":
 		if err := runModern(root); err != nil {
 			fmt.Fprintln(os.Stderr, "Docker Modern Web Compatibility smoke failed:", err)
 			os.Exit(1)
@@ -47,6 +57,43 @@ func main() {
 		os.Exit(1)
 	}
 	fmt.Println("Docker Web Platform smoke passed: sandbox worker, JavaScript, Module, WASM, iframe, Service Worker")
+}
+
+func runBrowserGrade(root string) error {
+	if info, err := os.Stat(root); err != nil || !info.IsDir() {
+		return fmt.Errorf("fixture directory is unavailable: %s", root)
+	}
+	var corpus struct {
+		Release  string `json:"release"`
+		Chromium string `json:"chromium"`
+		Offline  bool   `json:"offline"`
+		Pages    []any  `json:"pages"`
+	}
+	if err := readJSON(filepath.Join(root, "corpus.json"), &corpus); err != nil {
+		return err
+	}
+	if corpus.Release != "v0.17.0" || corpus.Chromium == "" || !corpus.Offline || len(corpus.Pages) != 2 {
+		return fmt.Errorf("invalid browser-grade corpus: %+v", corpus)
+	}
+	var gate conformance.PerformanceGate
+	if err := readJSON(filepath.Join(root, "performance-gate.json"), &gate); err != nil {
+		return err
+	}
+	if report := conformance.ComparePerformance(gate); !report.Passed() {
+		return fmt.Errorf("performance gate failed: %+v", report.Differences)
+	}
+	return runModern(filepath.Join(filepath.Dir(filepath.Clean(root)), "modern-web-compat"))
+}
+
+func readJSON(path string, target any) error {
+	encoded, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", path, err)
+	}
+	if err := json.Unmarshal(encoded, target); err != nil {
+		return fmt.Errorf("decode %s: %w", path, err)
+	}
+	return nil
 }
 
 func runExternal(root string) error {
@@ -206,6 +253,9 @@ func modernHandler(root string) http.Handler {
 			response.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 		case "/_next/static/chunks/counter.chunk.mjs":
 			target = filepath.Join(root, "fixtures", "nextjs", "counter.chunk.mjs")
+			response.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		case "/_next/static/chunks/upstream-contract.mjs":
+			target = filepath.Join(root, "fixtures", "nextjs", "upstream-contract.mjs")
 			response.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 		case "/assets/growse-regular.woff2":
 			response.Header().Set("Content-Type", "font/woff2")

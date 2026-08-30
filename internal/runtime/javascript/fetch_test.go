@@ -125,6 +125,48 @@ func TestFetchPromiseRejectsNetworkCORSAndAbort(t *testing.T) {
 	}
 }
 
+func TestFetchBodyReadableStreamUsesBoundedPageTasksAndBackpressure(t *testing.T) {
+	baseURL, _ := url.Parse("https://example.test/page")
+	messages := make(chan string, 8)
+	runtime := New()
+	t.Cleanup(func() { _ = runtime.Stop() })
+	environment := runtimemodel.Environment{
+		BaseURL:      baseURL,
+		FetchLimiter: fetchapi.NewLimiter(8),
+		Fetch: func(_ context.Context, request *network.Request) (*network.Response, error) {
+			return &network.Response{URL: request.URL, StatusCode: http.StatusOK, Body: []byte(strings.Repeat("x", fetchapi.MaxStreamChunkSize+17))}, nil
+		},
+		ConsoleRecord: func(_, message string) { messages <- message },
+	}
+	source := `
+		fetch("/stream").then(function (response) {
+			var reader = response.body.getReader();
+			console.log("stream:" + (response.body instanceof ReadableStream) + ":" + response.bodyUsed + ":" + response.body.locked);
+			var first = reader.read();
+			reader.read().catch(function (error) { console.log("backpressure:" + error.message); });
+			return first.then(function (result) {
+				console.log("chunk:" + result.value.byteLength + ":" + response.bodyUsed);
+				return reader.cancel().then(function () { return reader.read(); });
+			}).then(function (result) { console.log("done:" + result.done); });
+		});`
+	startJavaScriptRuntime(t, runtime, source, environment)
+	got := make([]string, 0, 4)
+	for range 4 {
+		got = append(got, receiveMessage(t, messages))
+	}
+	joined := strings.Join(got, "\n")
+	for _, want := range []string{
+		"stream:true:false:true",
+		"backpressure:ReadableStream backpressure limit: one pending read",
+		"chunk:16384:true",
+		"done:true",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("stream messages = %v, missing %q", got, want)
+		}
+	}
+}
+
 type javascriptFetchClock struct {
 	mu         sync.Mutex
 	callback   func()

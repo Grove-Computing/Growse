@@ -1,6 +1,6 @@
 # Runtime / Web API対応表
 
-この表はGrowse v0.16.0の実装を基準とする。GrowseはGoを既定Engineとし、Tab単位でJavaScriptへ切り替えられる。切り替えはtop-level、Frame、WASM、dynamic resource、observer、pending hydration / animation callbackを停止する完全なPage reloadであり、両Engineのobject、Page shaper、image cacheを共有しない。
+この表はGrowse v0.17.0の実装を基準とする。GrowseはGoを既定Engineとし、Tab単位でJavaScriptへ切り替えられる。切り替えはtop-level、Frame、WASM、dynamic resource、observer、pending hydration / animation callbackを停止する完全なPage reloadであり、両Engineのobject、Page shaper、image cacheを共有しない。
 
 ## EngineとScript
 
@@ -20,7 +20,7 @@ classic / module sourceは1件2 MiB、Pageのinitial / dynamic script合計256�
 
 ## Web API
 
-| API | Go | JavaScript | v0.16.0の範囲 |
+| API | Go | JavaScript | v0.17.0の範囲 |
 | --- | --- | --- | --- |
 | Console | `growse/console` | `console.log`、`info`、`warn`、`error` | Engine / context付きrecord、1件4 KiB、Page 1,000件 |
 | DOM検索・生成 | `growse/dom` | `getElementById`、`querySelector(All)`、`getElementsBy*`、`createElement`、`createTextNode` | 対応selectorとBrowser所有Node wrapperに限定 |
@@ -60,9 +60,9 @@ Service WorkerはSecure Context（HTTPSとloopback）でOrigin / scopeごとに�
 
 ## JavaScript Fetchの範囲
 
-`fetch(input, init)`はPromiseを返す。string URL、method、headers object、text body、`omit` / `same-origin` / `include` credentials、AbortSignal、millisecond timeoutを扱う。Responseはstatus、URL、redirect、read-only headersと、一度だけ消費できる`text()` / `json()`を提供する。
+`fetch(input, init)`はPromiseを返す。string URL、method、headers object、text body、`omit` / `same-origin` / `include` credentials、AbortSignal、millisecond timeoutを扱う。Responseはstatus、URL、redirect、read-only headersと、一度だけ消費できる`text()` / `json()` / `arrayBuffer()`、または`body.getReader()`によるbounded consumerを提供する。
 
-Request 1 MiB、Response 4 MiB、Header 100件 / 64 KiB、redirect 10回、Page 16件・Session 128件の同時Fetch上限をGoと共有する。ReadableStreamと任意body streamingは対象外である。
+Request 1 MiB、Response 4 MiB、Header 100件 / 64 KiB、redirect 10回、Page 16件・Session 128件の同時Fetch上限をGoと共有する。Response streamは1 readあたり16 KiB、同時pending read 1件に制限し、cancelとPage closeをPage task queueへ接続する。任意sourceからのReadableStream生成とstreaming uploadは対象外である。
 
 ## 公開しない機能
 
@@ -73,7 +73,7 @@ Request 1 MiB、Response 4 MiB、Header 100件 / 64 KiB、redirect 10回、Page 
 - Service Worker Background Sync、Push、Notification、navigation preload、module worker
 - DevTools REPL、source debugger、breakpoint、heap profiler
 
-goja、WASM、HTML、CSS、Web API、Next.js、SvelteKit、Tailwindの仕様全体や任意公開サイトの完全互換は保証しない。対応範囲は本書、v0.16.0定義、Tailwind CSS v4実artifactを含むoffline fixture、Showcase、選定WPT / Integration Testで観測できるsubsetである。
+goja、WASM、HTML、CSS、Web API、Next.js、SvelteKit、Tailwindの仕様全体や任意公開サイトの完全互換は保証しない。対応範囲は本書、v0.17.0定義、固定Chromium reference、Tailwind CSS v4実artifactを含むoffline fixture、Showcase、選定WPT / Integration / Differential Testで観測できるsubsetである。
 
 ## Security Boundary
 

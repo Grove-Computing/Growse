@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"fmt"
 	"hash/crc32"
 	"image"
+	"image/color"
+	"image/gif"
 	"image/png"
 	"io"
 	"net/http"
@@ -13,6 +16,7 @@ import (
 	"testing"
 
 	"github.com/Grove-Computing/Growse/internal/css"
+	"github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/network"
 	"golang.org/x/image/font/gofont/goregular"
 )
@@ -109,6 +113,91 @@ func TestFontFaceCountLimitStopsAdditionalRequests(t *testing.T) {
 	if len(resources) != maxFontFaces || len(failures) != maxFontFaces+1 || failures[0] != "font face limit exceeded" {
 		t.Fatalf("font face limit resources=%d failures=%#v", len(resources), failures)
 	}
+}
+
+func TestImageQueueSaturationUsesPlaceholdersAndBoundsDiagnostics(t *testing.T) {
+	document := dom.NewDocument()
+	for index := 0; index < maxResourceQueue+44; index++ {
+		node := document.CreateElement("img", map[string]string{"src": fmt.Sprintf("image-%d.png", index), "alt": "placeholder"})
+		if err := document.AppendChild(document.Root, node); err != nil {
+			t.Fatal(err)
+		}
+	}
+	resources, images, failures := loadReplacedImagesWithCache(
+		context.Background(), &routeLoader{responses: map[string]*network.Response{}}, mustParseURL(t, "https://example.com/"), document, 1280, 1, nil, newImageDecodeBudget(), newImageResourceCache(),
+	)
+	if len(resources) != maxResourceQueue+44 || len(images) != 0 || len(failures) != maxImageDiagnostics {
+		t.Fatalf("resources=%d images=%d failures=%d", len(resources), len(images), len(failures))
+	}
+	for nodeID, resource := range resources {
+		if resource.Loaded || resource.Error == "" || resource.Alt != "placeholder" {
+			t.Fatalf("resource %d is not a localized placeholder: %#v", nodeID, resource)
+		}
+	}
+}
+
+func TestImageAllocationAndCorruptAnimationFailuresStayLocal(t *testing.T) {
+	pageURL := mustParseURL(t, "https://example.com/")
+	validURL := "https://example.com/valid.png"
+	corruptURL := "https://example.com/corrupt.gif"
+	var pngBody bytes.Buffer
+	if err := png.Encode(&pngBody, image.NewNRGBA(image.Rect(0, 0, 1, 1))); err != nil {
+		t.Fatal(err)
+	}
+	loader := &routeLoader{responses: map[string]*network.Response{
+		validURL:   {URL: mustParseURL(t, validURL), ContentType: "image/png", Body: pngBody.Bytes()},
+		corruptURL: {URL: mustParseURL(t, corruptURL), ContentType: "image/gif", Body: corruptAnimatedGIF(t)},
+	}}
+
+	allocationNode := dom.NewDocument().CreateElement("img", map[string]string{"src": validURL, "alt": "allocation fallback"})
+	budget := newImageDecodeBudget()
+	budget.surfaceBytes = maxPageImageSurfaceBytes
+	resource, decoded, failure := loadReplacedImageNodeWithCache(context.Background(), loader, pageURL, allocationNode, 1280, 1, true, budget, newImageResourceCache())
+	if resource.Loaded || decoded != nil || failure == "" || resource.Alt != "allocation fallback" {
+		t.Fatalf("allocation failure escaped placeholder: resource=%#v decoded=%v failure=%q", resource, decoded, failure)
+	}
+	previousAllocator := allocateImageNRGBA
+	allocateImageNRGBA = func(image.Rectangle) *image.NRGBA { panic("allocation fixture") }
+	defer func() { allocateImageNRGBA = previousAllocator }()
+	resizeNode := dom.NewDocument().CreateElement("img", map[string]string{"src": validURL, "width": "2", "height": "2", "alt": "resize fallback"})
+	resource, decoded, failure = loadReplacedImageNodeWithCache(context.Background(), loader, pageURL, resizeNode, 1280, 1, true, newImageDecodeBudget(), newImageResourceCache())
+	if resource.Loaded || decoded != nil || failure == "" || resource.Alt != "resize fallback" {
+		t.Fatalf("allocation panic escaped placeholder: resource=%#v decoded=%v failure=%q", resource, decoded, failure)
+	}
+	allocateImageNRGBA = previousAllocator
+
+	corruptNode := dom.NewDocument().CreateElement("img", map[string]string{"src": corruptURL, "alt": "corrupt fallback"})
+	resource, decoded, failure = loadReplacedImageNodeWithCache(context.Background(), loader, pageURL, corruptNode, 1280, 1, true, newImageDecodeBudget(), newImageResourceCache())
+	if resource.Loaded || decoded != nil || failure == "" || resource.Alt != "corrupt fallback" {
+		t.Fatalf("corrupt animation escaped placeholder: resource=%#v decoded=%v failure=%q", resource, decoded, failure)
+	}
+	if !strings.Contains(resource.Error, "animated image frame") {
+		t.Fatalf("corrupt animation diagnostic = %q", resource.Error)
+	}
+}
+
+func corruptAnimatedGIF(t *testing.T) []byte {
+	t.Helper()
+	palette := color.Palette{color.Black, color.White}
+	first := image.NewPaletted(image.Rect(0, 0, 2, 1), palette)
+	second := image.NewPaletted(image.Rect(0, 0, 2, 1), palette)
+	second.SetColorIndex(0, 0, 1)
+	var encoded bytes.Buffer
+	if err := gif.EncodeAll(&encoded, &gif.GIF{Image: []*image.Paletted{first, second}, Delay: []int{10, 10}, Config: image.Config{Width: 2, Height: 1, ColorModel: palette}}); err != nil {
+		t.Fatal(err)
+	}
+	body := encoded.Bytes()
+	for cut := len(body) - 1; cut > 0; cut-- {
+		candidate := append([]byte(nil), body[:cut]...)
+		if _, staticErr := gif.Decode(bytes.NewReader(candidate)); staticErr != nil {
+			continue
+		}
+		if _, animationErr := gif.DecodeAll(bytes.NewReader(candidate)); animationErr != nil {
+			return candidate
+		}
+	}
+	t.Fatal("could not construct a GIF with a valid first frame and corrupt animation tail")
+	return nil
 }
 
 func encodeLimitTestPNG(t *testing.T) []byte {

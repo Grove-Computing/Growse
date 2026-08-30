@@ -1289,8 +1289,14 @@ func parseAttributeSelector(value string) (AttributeSelector, bool) {
 	if len(tokens) == 1 {
 		return attribute, true
 	}
-	if len(tokens) != 3 || (tokens[2].kind != parser.IdentToken && tokens[2].kind != parser.StringToken) {
+	if (len(tokens) != 3 && len(tokens) != 4) || (tokens[2].kind != parser.IdentToken && tokens[2].kind != parser.StringToken) {
 		return AttributeSelector{}, false
+	}
+	if len(tokens) == 4 {
+		if tokens[3].kind != parser.IdentToken || !strings.EqualFold(tokens[3].raw, "i") && !strings.EqualFold(tokens[3].raw, "s") {
+			return AttributeSelector{}, false
+		}
+		attribute.CaseInsensitive = strings.EqualFold(tokens[3].raw, "i")
 	}
 	switch {
 	case tokens[1].kind == parser.DelimToken && tokens[1].raw == "=":

@@ -50,6 +50,8 @@ type blockStyle struct {
 	decorationColor     uint32
 	opacity             float32
 	display             stylemodel.Display
+	float               stylemodel.Float
+	clear               stylemodel.Clear
 	hidden              bool
 	margin              stylemodel.Edges
 	padding             stylemodel.Edges
@@ -171,12 +173,16 @@ func BuildWithScrollAtRevision(document *dom.Document, computed stylemodel.Map, 
 }
 
 func build(document *dom.Document, computed stylemodel.Map, images map[dom.NodeID]ImageResource, fonts *FontSet, viewportWidth, viewportHeight, scrollX, scrollY float32) *Tree {
-	if viewportWidth < pagePadding*2+1 {
-		viewportWidth = pagePadding*2 + 1
+	pageInset := pagePadding
+	if usesBrowserViewport(document, computed) {
+		pageInset = 0
+	}
+	if viewportWidth < pageInset*2+1 {
+		viewportWidth = pageInset*2 + 1
 	}
 
 	tree := &Tree{
-		Width: viewportWidth, Background: 0xffffffff, StackingContexts: []StackingContext{{Parent: -1}},
+		Width: viewportWidth, Background: 0xffffffff, ScrollX: scrollX, ScrollY: scrollY, StackingContexts: []StackingContext{{Parent: -1}},
 		Parents: make(map[dom.NodeID]dom.NodeID), Bounds: make(map[dom.NodeID]Rect),
 	}
 	recordNodeParents(tree, document)
@@ -185,7 +191,7 @@ func build(document *dom.Document, computed stylemodel.Map, images map[dom.NodeI
 		computed:       computed,
 		images:         images,
 		fonts:          fonts,
-		y:              pagePadding,
+		y:              pageInset,
 		opacity:        1,
 		viewportWidth:  viewportWidth,
 		viewportHeight: viewportHeight,
@@ -198,9 +204,9 @@ func build(document *dom.Document, computed stylemodel.Map, images map[dom.NodeI
 				tree.Background = bodyStyle.BackgroundColor
 			}
 		}
-		state.walk(document.Root, pagePadding, viewportWidth-pagePadding*2, viewportHeight, viewportHeight > 0)
+		state.walk(document.Root, pageInset, viewportWidth-pageInset*2, viewportHeight, viewportHeight > 0)
 	}
-	tree.Height = state.y + pagePadding
+	tree.Height = state.y + pageInset
 	tree.ScrollWidth, tree.ScrollHeight = tree.Width, tree.Height
 	for _, box := range tree.Boxes {
 		contentWidth := box.Width
@@ -210,14 +216,28 @@ func build(document *dom.Document, computed stylemodel.Map, images map[dom.NodeI
 				contentWidth += run.Width
 			}
 		}
-		tree.ScrollWidth = max(tree.ScrollWidth, box.X+contentWidth+pagePadding)
-		tree.ScrollHeight = max(tree.ScrollHeight, box.Y+box.Height+pagePadding)
+		tree.ScrollWidth = max(tree.ScrollWidth, box.X+contentWidth+pageInset)
+		tree.ScrollHeight = max(tree.ScrollHeight, box.Y+box.Height+pageInset)
 	}
 	for _, decoration := range tree.Decorations {
-		tree.ScrollWidth = max(tree.ScrollWidth, decoration.X+decoration.Width+pagePadding)
-		tree.ScrollHeight = max(tree.ScrollHeight, decoration.Y+decoration.Height+pagePadding)
+		tree.ScrollWidth = max(tree.ScrollWidth, decoration.X+decoration.Width+pageInset)
+		tree.ScrollHeight = max(tree.ScrollHeight, decoration.Y+decoration.Height+pageInset)
 	}
+	assignFragmentIdentities(tree)
+	buildCompositingLayers(tree, computed)
 	return tree
+}
+
+func usesBrowserViewport(document *dom.Document, computed stylemodel.Map) bool {
+	if document == nil {
+		return false
+	}
+	html := findElement(document.Root, "html")
+	if html == nil {
+		return false
+	}
+	computedStyle, ok := computed.For(html)
+	return ok && computedStyle.BrowserDefaults
 }
 
 type engine struct {
@@ -234,6 +254,7 @@ type engine struct {
 	scrollX, scrollY              float32
 	positionCB                    *Rect
 	stackingID                    int
+	floats                        []floatRegion
 }
 
 func (e *engine) nextOrder() int {
@@ -263,6 +284,12 @@ func (e *engine) walk(node *dom.Node, x, width, containingHeight float32, height
 		if style.display == stylemodel.DisplayNone {
 			return
 		}
+		if style.display == stylemodel.DisplayContents || style.display == stylemodel.DisplayTableRowGroup || style.display == stylemodel.DisplayTableRow {
+			for _, child := range node.Children {
+				e.walk(child, x, width, containingHeight, heightDefinite)
+			}
+			return
+		}
 		// Top-level positioned elements do not pass through a block parent's
 		// positioned-child collection. Resolve them against the current
 		// containing block (or the initial containing block when it is nil)
@@ -289,6 +316,10 @@ func (e *engine) walk(node *dom.Node, x, width, containingHeight float32, height
 		}
 		if isSubmitButtonControl(node) {
 			e.addSubmitButton(node, style, x, width, containingHeight, heightDefinite)
+			return
+		}
+		if style.display == stylemodel.DisplayTable {
+			e.addTable(node, style, x, width, containingHeight, heightDefinite)
 			return
 		}
 		if isBlockLevelDisplay(style.display) {
@@ -610,8 +641,27 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 	}
 	if resolved, ok := resolveSize(style.width, width, true); ok {
 		sizingWidth = resolved
+	} else if intrinsic, ok := e.intrinsicKeywordSize(node, style.width, style, width, true); ok {
+		sizingWidth = intrinsic
+		if style.boxSizing == stylemodel.BoxSizingContentBox {
+			sizingWidth -= style.padding.Left + style.padding.Right + horizontalBorder
+		}
 	}
 	sizingWidth = constrainSize(sizingWidth, style.minWidth, style.maxWidth, width, true)
+	if intrinsic, ok := e.intrinsicKeywordSize(node, style.minWidth, style, width, true); ok {
+		minimum := intrinsic
+		if style.boxSizing == stylemodel.BoxSizingContentBox {
+			minimum -= style.padding.Left + style.padding.Right + horizontalBorder
+		}
+		sizingWidth = max(sizingWidth, minimum)
+	}
+	if intrinsic, ok := e.intrinsicKeywordSize(node, style.maxWidth, style, width, true); ok {
+		maximum := intrinsic
+		if style.boxSizing == stylemodel.BoxSizingContentBox {
+			maximum -= style.padding.Left + style.padding.Right + horizontalBorder
+		}
+		sizingWidth = min(sizingWidth, maximum)
+	}
 	outerWidth := sizingWidth
 	if style.boxSizing == stylemodel.BoxSizingContentBox {
 		outerWidth += style.padding.Left + style.padding.Right + horizontalBorder
@@ -637,7 +687,7 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 			Background: style.background, Image: cloneBackgroundImage(style.image), Layers: cloneBackgroundLayers(style.backgroundLayers),
 			Repeat: style.repeat, Position: style.position, Size: style.backgroundSize, Clip: cloneRect(e.clip),
 			Clips:  cloneClipRegions(e.clips),
-			Border: style.border, Opacity: e.opacity, BoxShadows: append([]stylemodel.Shadow(nil), style.boxShadows...),
+			Border: style.border, Padding: style.padding, Opacity: e.opacity, BoxShadows: append([]stylemodel.Shadow(nil), style.boxShadows...),
 			Outline: style.outline, OutlineOffset: style.outlineOffset,
 			Filters: append([]stylemodel.Filter(nil), style.filters...), BackdropFilters: append([]stylemodel.Filter(nil), style.backdropFilters...), BlendMode: style.mixBlendMode, Cursor: style.cursor,
 			Transform: stylemodel.IdentityMatrix(),
@@ -647,6 +697,12 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 	e.y += style.border.Top.Width + style.padding.Top
 	contentTop := e.y
 	declaredHeight, declaredHeightDefinite := resolveSize(style.height, containingHeight, heightDefinite)
+	if intrinsic, ok := e.intrinsicKeywordSize(node, style.height, style, containingHeight, false); ok {
+		declaredHeight, declaredHeightDefinite = intrinsic, true
+		if style.boxSizing == stylemodel.BoxSizingContentBox {
+			declaredHeight -= style.padding.Top + style.padding.Bottom + verticalBorder
+		}
+	}
 	childContainingHeight := declaredHeight
 	if declaredHeightDefinite && style.boxSizing == stylemodel.BoxSizingBorderBox {
 		childContainingHeight -= style.padding.Top + style.padding.Bottom + verticalBorder
@@ -695,10 +751,27 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 			inlineRuns = inlineRuns[:0]
 		}
 
-		for _, child := range node.Children {
+		for _, child := range e.flowChildren(node) {
 			if child.Type == dom.NodeElement {
 				childStyle := e.styleFor(child)
 				if childStyle.display == stylemodel.DisplayNone {
+					continue
+				}
+				if childStyle.clear != stylemodel.ClearNone {
+					flushInline()
+					e.clearFloats(childStyle.clear)
+				}
+				if childStyle.float != stylemodel.FloatNone {
+					flushInline()
+					e.addFloat(child, childStyle, contentX, contentWidth, childContainingHeight, declaredHeightDefinite)
+					previousBlock = false
+					continue
+				}
+				if childStyle.display == stylemodel.DisplayTable {
+					flushInline()
+					e.addTable(child, childStyle, contentX, contentWidth, childContainingHeight, declaredHeightDefinite)
+					previousBlock = true
+					previousBottomMargin = childStyle.margin.Bottom
 					continue
 				}
 				if childStyle.layoutPosition == stylemodel.PositionAbsolute || childStyle.layoutPosition == stylemodel.PositionFixed {
@@ -787,6 +860,7 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 			if e.stackingID > 0 && e.stackingID < len(e.tree.StackingContexts) && style.opacity >= 1 {
 				e.tree.StackingContexts[e.stackingID].Offscreen = false
 			}
+			e.tree.addFallback(node.ID, "visual-effect-surface-limit")
 		}
 	}
 	if e.positionCB != nil && style.layoutPosition != stylemodel.PositionStatic {
@@ -956,6 +1030,13 @@ func (e *engine) collectInlineRunsWithOpacity(node, owner *dom.Node, opacity flo
 	if style.display == stylemodel.DisplayNone {
 		return nil
 	}
+	if style.display == stylemodel.DisplayContents {
+		var result []inlineRun
+		for _, child := range node.Children {
+			result = append(result, e.collectInlineRunsWithOpacity(child, owner, opacity)...)
+		}
+		return result
+	}
 	if style.display == stylemodel.DisplayInlineBlock {
 		return []inlineRun{{nodeID: node.ID, tag: node.TagName, text: e.inlineText(node), style: style, atomic: true, opacity: opacity}}
 	}
@@ -1064,7 +1145,7 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 	var lineText strings.Builder
 	var usedWidth, lineHeight, lineAscent float32
 	var pendingSpace *inlineRun
-	lineX, lineWidth := x, width
+	lineX, lineWidth := e.floatLineArea(x, width, e.y, container.lineHeight)
 	firstLine := true
 	if indent := container.textIndent.Resolve(width); indent != 0 {
 		lineX += indent
@@ -1147,8 +1228,8 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 		flexPlacements = flexPlacements[:0]
 		if firstLine {
 			firstLine = false
-			lineX, lineWidth = x, width
 		}
+		lineX, lineWidth = e.floatLineArea(x, width, e.y, container.lineHeight)
 	}
 
 	appendPiece := func(run inlineRun, text string, pieceWidth float32) {
@@ -1246,8 +1327,7 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 		remaining := []rune(token.text)
 		for len(remaining) > 0 {
 			available := lineWidth - usedWidth
-			mWidth, _, _ := measureStyledText("m", token.style)
-			characters := int(available / max(mWidth, float32(1)))
+			characters := fittingRuneCount(remaining, available, token.style)
 			if characters < 1 {
 				if wrapsWhitespace(token.style.whiteSpace) && usedWidth > 0 {
 					flushLine(false)
@@ -1313,6 +1393,11 @@ func tokenizeInlineRuns(runs []inlineRun) []inlineRun {
 					token.text = " "
 					tokens = append(tokens, token)
 				}
+			} else if isCJKLineBreakRune(character) {
+				flushWord()
+				token := run
+				token.text = string(character)
+				tokens = append(tokens, token)
 			} else {
 				word.WriteRune(character)
 			}
@@ -1320,6 +1405,29 @@ func tokenizeInlineRuns(runs []inlineRun) []inlineRun {
 		flushWord()
 	}
 	return tokens
+}
+
+func fittingRuneCount(remaining []rune, available float32, style blockStyle) int {
+	if available <= 0 || len(remaining) == 0 {
+		return 0
+	}
+	low, high := 1, len(remaining)
+	best := 0
+	for low <= high {
+		middle := low + (high-low)/2
+		width, _, _ := measureStyledText(string(remaining[:middle]), style)
+		if width <= available {
+			best = middle
+			low = middle + 1
+		} else {
+			high = middle - 1
+		}
+	}
+	return best
+}
+
+func isCJKLineBreakRune(character rune) bool {
+	return unicode.In(character, unicode.Han, unicode.Hiragana, unicode.Katakana, unicode.Hangul)
 }
 
 func resolveAtomicSize(run inlineRun, containingWidth float32) (float32, float32) {
@@ -1620,6 +1728,8 @@ func applyComputed(block blockStyle, computed stylemodel.ComputedStyle) blockSty
 	block.decorationColor = computed.DecorationColor
 	block.opacity = computed.Opacity
 	block.display = computed.Display
+	block.float = computed.Float
+	block.clear = computed.Clear
 	block.hidden = computed.Visibility == stylemodel.VisibilityHidden
 	block.margin = computed.Margin
 	block.padding = computed.Padding

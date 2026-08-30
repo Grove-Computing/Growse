@@ -3,6 +3,7 @@ package browser
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"image"
@@ -13,12 +14,14 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/events"
 	"github.com/Grove-Computing/Growse/internal/layout"
 	"github.com/Grove-Computing/Growse/internal/network"
 	"github.com/Grove-Computing/Growse/internal/style"
+	"github.com/gen2brain/avif"
 	_ "golang.org/x/image/webp"
 )
 
@@ -31,6 +34,7 @@ const (
 )
 
 type imageDecodeBudget struct {
+	mu           sync.Mutex
 	resources    map[string]struct{}
 	surfaceBytes int64
 }
@@ -55,6 +59,8 @@ func (budget *imageDecodeBudget) claim(resource string) bool {
 	if budget == nil {
 		return true
 	}
+	budget.mu.Lock()
+	defer budget.mu.Unlock()
 	if _, exists := budget.resources[resource]; exists {
 		return true
 	}
@@ -65,18 +71,38 @@ func (budget *imageDecodeBudget) claim(resource string) bool {
 	return true
 }
 
-func (budget *imageDecodeBudget) allowsSurface(width, height int) bool {
+func (budget *imageDecodeBudget) commitSurface(width, height int) {
+	if budget != nil {
+		budget.mu.Lock()
+		budget.surfaceBytes += int64(width) * int64(height) * 4
+		budget.mu.Unlock()
+	}
+}
+
+func (budget *imageDecodeBudget) reserveSurface(width, height int) bool {
 	if budget == nil {
 		return true
 	}
 	bytes := int64(width) * int64(height) * 4
-	return bytes > 0 && bytes <= maxPageImageSurfaceBytes-budget.surfaceBytes
+	budget.mu.Lock()
+	defer budget.mu.Unlock()
+	if bytes <= 0 || bytes > maxPageImageSurfaceBytes-budget.surfaceBytes {
+		return false
+	}
+	budget.surfaceBytes += bytes
+	return true
 }
 
-func (budget *imageDecodeBudget) commitSurface(width, height int) {
-	if budget != nil {
-		budget.surfaceBytes += int64(width) * int64(height) * 4
+func (budget *imageDecodeBudget) releaseSurface(width, height int) {
+	if budget == nil {
+		return
 	}
+	budget.mu.Lock()
+	budget.surfaceBytes -= int64(width) * int64(height) * 4
+	if budget.surfaceBytes < 0 {
+		budget.surfaceBytes = 0
+	}
+	budget.mu.Unlock()
 }
 
 func loadBackgroundImages(ctx context.Context, client ResourceLoader, computed style.Map) (map[string]image.Image, []string) {
@@ -90,9 +116,6 @@ func loadBackgroundImagesWithBudget(ctx context.Context, client ResourceLoader, 
 func loadBackgroundImagesWithCache(ctx context.Context, client ResourceLoader, computed style.Map, budget *imageDecodeBudget, cache *imageResourceCache) (map[string]image.Image, []string) {
 	images := make(map[string]image.Image)
 	var errors []string
-	if client == nil {
-		return images, errors
-	}
 	seen := make(map[string]bool)
 	for _, computedStyle := range computed {
 		backgrounds := []style.BackgroundImage{computedStyle.BackgroundImage}
@@ -104,9 +127,22 @@ func loadBackgroundImagesWithCache(ctx context.Context, client ResourceLoader, c
 				continue
 			}
 			seen[background.URL] = true
+			if strings.HasPrefix(strings.ToLower(background.URL), "data:") {
+				decoded, err := decodeDataBackground(background.URL, budget)
+				if err != nil {
+					errors = append(errors, "background data image decode failed")
+					continue
+				}
+				images[background.URL] = decoded
+				continue
+			}
 			resourceURL, err := url.Parse(background.URL)
 			if err != nil || resourceURL.Scheme != "http" && resourceURL.Scheme != "https" {
 				errors = append(errors, "background image URL is not a supported HTTP(S) URL")
+				continue
+			}
+			if client == nil {
+				errors = append(errors, "background image request failed: "+network.RedactedURL(resourceURL))
 				continue
 			}
 			resource := cache.load(ctx, client, resourceURL, budget)
@@ -127,7 +163,43 @@ func loadBackgroundImagesWithCache(ctx context.Context, client ResourceLoader, c
 			images[background.URL] = resource.decoded
 		}
 	}
-	return images, errors
+	return images, boundedImageDiagnostics(errors)
+}
+
+func decodeDataBackground(resource string, budget *imageDecodeBudget) (image.Image, error) {
+	if len(resource) > maxImageBytes*2 || !budget.claim("background:"+resource) {
+		return nil, errors.New("data image resource limit exceeded")
+	}
+	comma := strings.IndexByte(resource, ',')
+	if comma < len("data:image/ ") || comma < 0 {
+		return nil, errors.New("invalid data image")
+	}
+	metadata, payload := resource[len("data:"):comma], resource[comma+1:]
+	parts := strings.Split(metadata, ";")
+	mediaType := strings.ToLower(strings.TrimSpace(parts[0]))
+	if !strings.HasPrefix(mediaType, "image/") {
+		return nil, errors.New("data resource is not an image")
+	}
+	base64Encoded := false
+	for _, parameter := range parts[1:] {
+		if strings.EqualFold(strings.TrimSpace(parameter), "base64") {
+			base64Encoded = true
+		}
+	}
+	var body []byte
+	var err error
+	if base64Encoded {
+		body, err = base64.StdEncoding.DecodeString(payload)
+	} else {
+		var decoded string
+		decoded, err = url.PathUnescape(payload)
+		body = []byte(decoded)
+	}
+	if err != nil || len(body) == 0 || len(body) > maxImageBytes {
+		return nil, errors.New("invalid data image payload")
+	}
+	decoded, _, _, err := decodeImageResponseWithBudget(body, mediaType, budget)
+	return decoded, err
 }
 
 func loadReplacedImages(ctx context.Context, client ResourceLoader, baseURL *url.URL, document *dom.Document, viewportWidth, deviceScale float32) (map[dom.NodeID]layout.ImageResource, map[string]image.Image, []string) {
@@ -149,28 +221,67 @@ func loadReplacedImagesWithCache(ctx context.Context, client ResourceLoader, bas
 	if client == nil || baseURL == nil || document == nil {
 		return resources, images, errors
 	}
+	type imageLoadResult struct {
+		nodeID   dom.NodeID
+		resource layout.ImageResource
+		decoded  image.Image
+		failure  string
+	}
+	var nodes []*dom.Node
 	var visit func(*dom.Node)
 	visit = func(node *dom.Node) {
 		if node == nil {
 			return
 		}
 		if node.Type == dom.NodeElement && node.TagName == "img" {
-			load := eligible == nil || eligible[node.ID]
-			resource, decoded, failure := loadReplacedImageNodeWithCache(ctx, client, baseURL, node, viewportWidth, deviceScale, load, budget, cache)
-			resources[node.ID] = resource
-			if decoded != nil {
-				images[resource.URL] = decoded
-			}
-			if failure != "" {
-				errors = append(errors, failure)
-			}
+			nodes = append(nodes, node)
 		}
 		for _, child := range node.Children {
 			visit(child)
 		}
 	}
 	visit(document.Root)
-	return resources, images, errors
+	preloads := imagePreloads(document, baseURL)
+	results := make([]imageLoadResult, len(nodes))
+	jobs := make([]resourceJob, len(nodes))
+	for index, node := range nodes {
+		index, node := index, node
+		load := eligible == nil || eligible[node.ID]
+		var target *url.URL
+		if candidates := imageCandidates(node, baseURL, viewportWidth, deviceScale); len(candidates) != 0 {
+			target = candidates[0]
+		}
+		jobs[index] = resourceJob{
+			priority: imageResourcePriority(node, target, load, preloads), order: index,
+			run: func(jobContext context.Context) {
+				resource, decoded, failure := loadReplacedImageNodeWithCache(jobContext, client, baseURL, node, viewportWidth, deviceScale, load, budget, cache)
+				results[index] = imageLoadResult{nodeID: node.ID, resource: resource, decoded: decoded, failure: failure}
+			},
+		}
+	}
+	rejected := runBoundedResourceJobs(ctx, jobs)
+	for _, job := range jobs[len(jobs)-rejected:] {
+		node := nodes[job.order]
+		alt, _ := node.Attribute("alt")
+		results[job.order] = imageLoadResult{
+			nodeID:   node.ID,
+			resource: layout.ImageResource{Alt: alt, Error: "image resource queue saturated"},
+			failure:  "image resource queue saturated",
+		}
+	}
+	for _, result := range results {
+		if result.nodeID == 0 {
+			continue
+		}
+		resources[result.nodeID] = result.resource
+		if result.decoded != nil {
+			images[result.resource.URL] = result.decoded
+		}
+		if result.failure != "" {
+			errors = append(errors, result.failure)
+		}
+	}
+	return resources, images, boundedImageDiagnostics(errors)
 }
 
 func loadReplacedImageNodeWithCache(ctx context.Context, client ResourceLoader, baseURL *url.URL, node *dom.Node, viewportWidth, deviceScale float32, eligible bool, budget *imageDecodeBudget, cache *imageResourceCache) (layout.ImageResource, image.Image, string) {
@@ -209,7 +320,11 @@ func loadReplacedImageNodeWithCache(ctx context.Context, client ResourceLoader, 
 			resource.Error = "image response was rejected"
 			continue
 		case imageLoadDecodeFailure:
-			resource.Error = "image dimensions were rejected"
+			if cached.animationErr != "" {
+				resource.Error = cached.animationErr
+			} else {
+				resource.Error = "image dimensions were rejected"
+			}
 			continue
 		case imageLoadResourceLimit:
 			resource.Error = "image resource limit exceeded"
@@ -217,7 +332,12 @@ func loadReplacedImageNodeWithCache(ctx context.Context, client ResourceLoader, 
 		}
 		resource.Loaded, resource.Error = true, ""
 		resource.IntrinsicWidth, resource.IntrinsicHeight = float32(cached.width), float32(cached.height)
-		return resource, cached.decoded, ""
+		resized, err := cache.prepareSurface(ctx, cached, target, node, deviceScale, budget)
+		if err != nil {
+			resource.Loaded, resource.Error = false, "image resize failed"
+			continue
+		}
+		return resource, resized, ""
 	}
 	if resource.Error != "" && lastTarget != nil {
 		return resource, nil, resource.Error + ": " + network.RedactedURL(lastTarget)
@@ -234,7 +354,7 @@ func isImageContentType(contentType string) bool {
 		return false
 	}
 	switch mediaType {
-	case "image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml":
+	case "image/png", "image/jpeg", "image/gif", "image/webp", "image/avif", "image/svg+xml":
 		return true
 	default:
 		return false
@@ -246,9 +366,13 @@ func decodeImageResponse(body []byte, contentType string) (image.Image, int, int
 }
 
 func decodeImageResponseWithBudget(body []byte, contentType string, budget *imageDecodeBudget) (decoded image.Image, width, height int, err error) {
+	reservedWidth, reservedHeight := 0, 0
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			decoded, width, height, err = nil, 0, 0, fmt.Errorf("image decoder panic: %v", recovered)
+		}
+		if err != nil && reservedWidth > 0 {
+			budget.releaseSurface(reservedWidth, reservedHeight)
 		}
 	}()
 	mediaType, _, err := mime.ParseMediaType(contentType)
@@ -258,17 +382,27 @@ func decodeImageResponseWithBudget(body []byte, contentType string, budget *imag
 	if mediaType == "image/svg+xml" {
 		return rasterizeSVGWithBudget(body, budget)
 	}
-	config, _, err := image.DecodeConfig(bytes.NewReader(body))
+	var config image.Config
+	if mediaType == "image/avif" {
+		config, err = avif.DecodeConfig(bytes.NewReader(body))
+	} else {
+		config, _, err = image.DecodeConfig(bytes.NewReader(body))
+	}
 	if err != nil {
 		return nil, 0, 0, fmt.Errorf("image dimensions are invalid: %w", err)
 	}
 	if config.Width <= 0 || config.Height <= 0 || config.Width > maxImageDimension || config.Height > maxImageDimension || config.Width > maxImagePixels/config.Height {
 		return nil, 0, 0, errors.New("image dimensions are invalid")
 	}
-	if !budget.allowsSurface(config.Width, config.Height) {
+	if !budget.reserveSurface(config.Width, config.Height) {
 		return nil, 0, 0, errors.New("page image decode surface limit exceeded")
 	}
-	decoded, _, err = image.Decode(bytes.NewReader(body))
+	reservedWidth, reservedHeight = config.Width, config.Height
+	if mediaType == "image/avif" {
+		decoded, err = avif.Decode(bytes.NewReader(body))
+	} else {
+		decoded, _, err = image.Decode(bytes.NewReader(body))
+	}
 	if err != nil {
 		return nil, 0, 0, err
 	}
@@ -276,8 +410,9 @@ func decodeImageResponseWithBudget(body []byte, contentType string, budget *imag
 	if bounds.Dx() != config.Width || bounds.Dy() != config.Height {
 		return nil, 0, 0, errors.New("decoded image dimensions changed")
 	}
-	budget.commitSurface(config.Width, config.Height)
-	return decoded, config.Width, config.Height, nil
+	decoded = normalizeDecodedImage(decoded, body, mediaType)
+	bounds = decoded.Bounds()
+	return decoded, bounds.Dx(), bounds.Dy(), nil
 }
 
 func imageViewportPolicy(document *dom.Document, computed style.Map, baseURL *url.URL, viewportWidth, viewportHeight float32) map[dom.NodeID]bool {

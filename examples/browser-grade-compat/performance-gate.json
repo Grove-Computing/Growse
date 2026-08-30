@@ -1,0 +1,21 @@
+{
+  "runner": "ubuntu-24.04-amd64-2vcpu",
+  "baseline": {
+    "longFrameRatio": 0.010,
+    "inputToNextFrameP95Ms": 12.0,
+    "scrollFrameP95Ms": 8.0,
+    "animationFrameP95Ms": 9.0
+  },
+  "budget": {
+    "longFrameRatio": 0.020,
+    "inputToNextFrameP95Ms": 16.0,
+    "scrollFrameP95Ms": 10.0,
+    "animationFrameP95Ms": 10.0
+  },
+  "current": {
+    "longFrameRatio": 0.008,
+    "inputToNextFrameP95Ms": 11.0,
+    "scrollFrameP95Ms": 7.0,
+    "animationFrameP95Ms": 8.0
+  }
+}

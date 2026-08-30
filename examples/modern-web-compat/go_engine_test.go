@@ -41,6 +41,9 @@ func TestFrameworkFixturesKeepJavaScriptDisabledInGoEngine(t *testing.T) {
 			if page.Engine != runtimemodel.EngineGo || engine.Engine() != runtimemodel.EngineGo {
 				t.Fatalf("default engine = page:%q tab:%q", page.Engine, engine.Engine())
 			}
+			if page.Compatibility != browser.CompatibilityProfileGo || page.UsesModernWebCompatibility() {
+				t.Fatalf("Go Engine compatibility profile = %q modern=%t", page.Compatibility, page.UsesModernWebCompatibility())
+			}
 			if len(page.Scripts) != 0 || page.RuntimeStarted || runtimeCreations.Load() != 0 {
 				t.Fatalf("Go Engine script state = scripts:%v started:%t runtime creations:%d", page.Scripts, page.RuntimeStarted, runtimeCreations.Load())
 			}
@@ -50,6 +53,11 @@ func TestFrameworkFixturesKeepJavaScriptDisabledInGoEngine(t *testing.T) {
 			root := fixtureNode(t, page, test.rootID)
 			if _, hydrated := root.Attribute("data-hydrated"); hydrated {
 				t.Fatal("Go Engine fixture gained a hydration marker")
+			}
+			for _, attribute := range []string{"data-bootstrap", "data-framework-build", "data-upstream-entrypoint"} {
+				if _, generated := root.Attribute(attribute); generated {
+					t.Fatalf("Go Engine generated JavaScript compatibility state %q", attribute)
+				}
 			}
 			if test.ssrID != "" && fixtureNode(t, page, test.ssrID).TextContent() != "SSR rendered" {
 				t.Fatal("Go Engine did not preserve SSR HTML")
@@ -62,6 +70,16 @@ func TestFrameworkFixturesKeepJavaScriptDisabledInGoEngine(t *testing.T) {
 			for _, path := range requests.paths {
 				if strings.HasSuffix(path, ".mjs") || strings.HasSuffix(path, ".js") || strings.Contains(path, "/chunks/") || strings.Contains(path, "/entry/") {
 					t.Fatalf("Go Engine requested JavaScript resource %q; all requests=%v", path, requests.paths)
+				}
+			}
+			for _, runtimeContext := range page.RuntimeDiagnostics() {
+				if len(runtimeContext.Scripts) != 0 {
+					t.Fatalf("Go Engine exposed framework scripts in DevTools: %+v", runtimeContext.Scripts)
+				}
+				for _, diagnostic := range runtimeContext.Diagnostics {
+					if diagnostic.Category == "runtime" || diagnostic.Category == "resource/module" || diagnostic.Category == "resource/script" {
+						t.Fatalf("Go Engine exposed JavaScript compatibility diagnostic: %+v", diagnostic)
+					}
 				}
 			}
 		})

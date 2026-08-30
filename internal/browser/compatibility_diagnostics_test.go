@@ -10,7 +10,9 @@ import (
 
 	"github.com/Grove-Computing/Growse/internal/css"
 	"github.com/Grove-Computing/Growse/internal/devtools"
+	"github.com/Grove-Computing/Growse/internal/dom"
 	htmlparser "github.com/Grove-Computing/Growse/internal/html"
+	layoutmodel "github.com/Grove-Computing/Growse/internal/layout"
 	"github.com/Grove-Computing/Growse/internal/network"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 	stylemodel "github.com/Grove-Computing/Growse/internal/style"
@@ -38,6 +40,9 @@ func TestCompatibilityDiagnosticsExplainResourcesStylesFallbacksAndRuntimeErrors
 	page.FontErrors = []string{"font CORS rejected token=secret"}
 	page.ImageErrors = []string{"image decode failed /private/source.png"}
 	page.ScriptErrors = []string{"dynamic chunk load failed token=secret", "hydration exception secret", "observer loop limit secret"}
+	page.StyleErrors = []string{"layout container query iteration limit reached"}
+	page.DevTools.AddConsoleForEngine("error", "javascript", "event", "[component:framework-boundary] unsupported global navigator.secret")
+	page.DevTools.AddConsoleForEngine("error", "javascript", "event", "[component:framework-boundary] Event dispatch failure")
 	page.DevTools.ObserveNetwork(network.Observation{
 		Method: "GET", URL: requested, FinalURL: finalURL, Kind: network.RequestModule, Engine: "javascript",
 		Initiator: "module-graph", Schedule: "module", StatusCode: 503, ErrorCategory: "http",
@@ -53,14 +58,22 @@ func TestCompatibilityDiagnosticsExplainResourcesStylesFallbacksAndRuntimeErrors
 		{"style", "applied", "matched"},
 		{"style", "ignored", "selector-unmatched"},
 		{"style", "ignored", "media-condition"},
+		{"layout", "fallback", "iteration-limit"},
 		{"font", "fallback", "cors"},
 		{"image", "fallback", "decode"},
 		{"runtime", "error", "chunk"},
 		{"runtime", "error", "hydration"},
 		{"runtime", "error", "observer"},
+		{"runtime", "error", "unsupported-global"},
+		{"runtime", "error", "event"},
 	} {
 		if !hasCompatibilityDiagnostic(diagnostics, expected[0], expected[1], expected[2]) {
 			t.Errorf("missing diagnostic %v in %+v", expected, diagnostics)
+		}
+	}
+	for _, reason := range []string{"unsupported-global", "event"} {
+		if !hasExactCompatibilityDiagnostic(diagnostics, "runtime", "component/framework-boundary", "error", reason, 1) {
+			t.Errorf("missing component-localized %s diagnostic in %+v", reason, diagnostics)
 		}
 	}
 	var resource devtools.CompatibilityDiagnostic
@@ -96,6 +109,15 @@ func TestCompatibilityDiagnosticsExposeFontChainImageCacheAndFrameReasons(t *tes
 		InitialRebuilds:   1,
 		StyleRebuilds:     3,
 		DisplayListReuses: 9,
+		DirtyNodes:        6,
+		CompositingLayers: 4,
+		DamageRegions:     2,
+		DroppedTasks:      5,
+	}
+	page.ImageResources = map[dom.NodeID]layoutmodel.ImageResource{
+		1: {Loaded: true},
+		2: {Error: "decode failed"},
+		3: {},
 	}
 
 	diagnostics := compatibilityDiagnostics(page)
@@ -110,9 +132,38 @@ func TestCompatibilityDiagnosticsExposeFontChainImageCacheAndFrameReasons(t *tes
 		{"frame", "layout/display-list", "rebuild", "initial", 1},
 		{"frame", "layout/display-list", "rebuild", "style", 3},
 		{"frame", "display-list", "reuse", "static", 9},
+		{"dirty-subtree", "node", "invalidated", "mutation", 6},
+		{"compositor", "layer", "active", "promotion", 4},
+		{"compositor", "damage-region", "active", "redraw", 2},
+		{"frame", "task", "drop", "budget", 5},
+		{"resource-queue", "image-font", "pending", "bounded", 1},
+		{"resource-queue", "image-font", "complete", "bounded", 1},
+		{"resource-queue", "image-font", "error", "bounded", 2},
 	} {
 		if !hasExactCompatibilityDiagnostic(diagnostics, expected.category, expected.subject, expected.state, expected.reason, expected.count) {
 			t.Errorf("missing bounded diagnostic %+v in %+v", expected, diagnostics)
+		}
+	}
+}
+
+func TestCompatibilityDiagnosticsExposeSuccessfulHydrationAndBoundRendererSnapshots(t *testing.T) {
+	page := NewPage(nil)
+	page.Engine = runtimemodel.EngineJavaScript
+	page.Compatibility = CompatibilityProfileModernWeb
+	page.RuntimeStarted = true
+	page.RecordCompositorSnapshot(10_000, 10_000, 10_000)
+	diagnostics := compatibilityDiagnostics(page)
+	for _, expected := range []struct {
+		category, subject, state, reason string
+		count                            int
+	}{
+		{"hydration", "page", "complete", "runtime-started", 1},
+		{"dirty-subtree", "node", "invalidated", "mutation", 256},
+		{"compositor", "layer", "active", "promotion", 128},
+		{"compositor", "damage-region", "active", "redraw", 256},
+	} {
+		if !hasExactCompatibilityDiagnostic(diagnostics, expected.category, expected.subject, expected.state, expected.reason, expected.count) {
+			t.Errorf("missing diagnostic %+v in %+v", expected, diagnostics)
 		}
 	}
 }

@@ -80,3 +80,45 @@ func TestWordBreakingAndEllipsisRespectComputedPolicy(t *testing.T) {
 		t.Fatalf("ellipsis text = %q", ellipsisText)
 	}
 }
+
+func TestMixedCJKLatinUsesSharedLineMetricsAndNaturalCJKBreaks(t *testing.T) {
+	document := dom.NewDocument()
+	paragraph := document.CreateElement("p", map[string]string{"class": "mixed"})
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, paragraph},
+		[2]*dom.Node{paragraph, document.CreateText("東京でGrowse browserを表示します")},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.mixed { display:block; width:90px; font-size:16px; line-height:24px; white-space:normal }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, style.Compute(document, stylesheet), 300)
+	var lines []Box
+	for _, box := range tree.Boxes {
+		if box.NodeID == paragraph.ID {
+			lines = append(lines, box)
+		}
+	}
+	if len(lines) < 2 {
+		t.Fatalf("mixed CJK/Latin did not wrap at CJK opportunities: %#v", lines)
+	}
+	for index, line := range lines {
+		if line.Height != 24 || line.Baseline <= line.Y || line.Baseline > line.Y+line.Height {
+			t.Fatalf("line %d metrics = %#v", index, line)
+		}
+		for _, run := range line.Runs {
+			if run.Baseline != line.Baseline {
+				t.Fatalf("line/run baseline diverged: line=%v run=%v", line.Baseline, run.Baseline)
+			}
+		}
+	}
+	joined := ""
+	for _, line := range lines {
+		joined += strings.ReplaceAll(line.Text, " ", "")
+	}
+	if joined != "東京でGrowsebrowserを表示します" {
+		t.Fatalf("wrapped text = %q", joined)
+	}
+}

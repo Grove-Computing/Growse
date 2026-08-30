@@ -11,17 +11,36 @@ import (
 
 // Tree is the result of laying out one document at a specific viewport width.
 type Tree struct {
-	Revision         uint64
-	Width            float32
-	Height           float32
-	Background       uint32
-	Decorations      []Decoration
-	Boxes            []Box
-	ScrollWidth      float32
-	ScrollHeight     float32
-	StackingContexts []StackingContext
-	Parents          map[dom.NodeID]dom.NodeID
-	Bounds           map[dom.NodeID]Rect
+	Revision          uint64
+	Width             float32
+	Height            float32
+	Background        uint32
+	Decorations       []Decoration
+	Boxes             []Box
+	ScrollWidth       float32
+	ScrollHeight      float32
+	ScrollX           float32
+	ScrollY           float32
+	StackingContexts  []StackingContext
+	CompositingLayers []CompositingLayer
+	Parents           map[dom.NodeID]dom.NodeID
+	Bounds            map[dom.NodeID]Rect
+	Fallbacks         []Fallback
+}
+
+// Fallback records a bounded, payload-free layout/paint safety decision.
+type Fallback struct {
+	NodeID dom.NodeID
+	Reason string
+}
+
+const maxLayoutFallbacks = 256
+
+func (t *Tree) addFallback(nodeID dom.NodeID, reason string) {
+	if t == nil || len(t.Fallbacks) >= maxLayoutFallbacks {
+		return
+	}
+	t.Fallbacks = append(t.Fallbacks, Fallback{NodeID: nodeID, Reason: reason})
 }
 
 // StackingContext records atomic paint-order ownership.
@@ -32,6 +51,33 @@ type StackingContext struct {
 	Order     int
 	Opacity   float32
 	Offscreen bool
+}
+
+// LayerReason records why a node owns a compositor surface.
+type LayerReason uint16
+
+const (
+	LayerTransform LayerReason = 1 << iota
+	LayerOpacity
+	LayerClip
+	LayerScroll
+	LayerFixed
+	LayerSticky
+	LayerFilter
+)
+
+// CompositingLayer is bounded page-owned compositor metadata. It contains no
+// raster payload; Damage holds CSS-pixel rectangles for the next frame.
+type CompositingLayer struct {
+	ID        int
+	Parent    int
+	NodeID    dom.NodeID
+	Bounds    Rect
+	Clip      *Rect
+	Reasons   LayerReason
+	Opacity   float32
+	Transform stylemodel.Matrix
+	Damage    []Rect
 }
 
 // ClipRegion is one nested rectangular or rounded clipping boundary.
@@ -93,6 +139,7 @@ type Decoration struct {
 	Order      int
 	StackingID int
 	NodeID     dom.NodeID
+	FragmentID uint64
 	Rect
 	Background      uint32
 	Image           stylemodel.BackgroundImage
@@ -101,6 +148,7 @@ type Decoration struct {
 	Position        stylemodel.BackgroundPosition
 	Size            stylemodel.BackgroundSize
 	Border          stylemodel.Borders
+	Padding         stylemodel.Edges
 	Radius          BorderRadii
 	Opacity         float32
 	Clip            *Rect
@@ -145,6 +193,7 @@ type Box struct {
 	Order       int
 	StackingID  int
 	NodeID      dom.NodeID
+	FragmentID  uint64
 	Tag         string
 	Text        string
 	Input       bool

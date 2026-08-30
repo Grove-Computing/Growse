@@ -1,0 +1,1 @@
+import{a as o,f as e}from"../chunks/0lqzyk9Z.js";import{h as r}from"../chunks/CM__hQ2P.js";import{i as m,af as i}from"../chunks/5IEDbEdy.js";var n=e('<main data-route="about"><h1>About</h1> <a href="/">Back</a></main>');function s(a){var t=n();r("987jaq",f=>{m(()=>{i.title="SvelteKit client route"})}),o(a,t)}export{s as component};

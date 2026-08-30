@@ -232,7 +232,7 @@ func (state *frameLoadState) buildPage(ctx context.Context, response *network.Re
 		pageStore.Close()
 		return nil, fmt.Errorf("load iframe styles: %w", err)
 	}
-	computed := computeStableStyles(document, stylesheet, style.InteractionState{}, defaultFrameWidth, defaultFrameHeight, state.reducedMotion)
+	computed := computeStableStyles(document, stylesheet, style.InteractionState{}, defaultFrameWidth, defaultFrameHeight, state.reducedMotion, state.engine == runtimemodel.EngineJavaScript)
 	imageBudget := newImageDecodeBudget()
 	imageCache := newImageResourceCache()
 	backgroundImages, backgroundErrors := loadBackgroundImagesWithCache(ctx, imageResources, computed, imageBudget, imageCache)
@@ -265,7 +265,7 @@ func (state *frameLoadState) buildPage(ctx context.Context, response *network.Re
 		Document: document, Events: events.NewDispatcher(), Stylesheet: stylesheet, ComputedStyles: computed,
 		Animations: style.NewAnimationRegistry(), Transitions: style.NewTransitionRegistry(), BackgroundImages: backgroundImages,
 		BackgroundErrors: backgroundErrors, Engine: state.engine, Compatibility: compatibilityProfileForEngine(state.engine), Scripts: scripts, ImportMap: importMap, ScriptErrors: scriptErrors,
-		ImageResources: replacedImages, Images: decodedImages, ImageErrors: imageErrors,
+		ImageResources: replacedImages, Images: decodedImages, AnimatedImages: animatedImagesForResources(replacedImages, imageCache), ImageErrors: boundedImageDiagnostics(imageErrors),
 		Fonts: fonts, FontErrors: fontErrors, WebFonts: layoutPageFonts(fonts, state.engine == runtimemodel.EngineJavaScript),
 		StyleRevision: 1, ReducedMotion: state.reducedMotion, ViewportWidth: defaultFrameWidth, ViewportHeight: defaultFrameHeight, DevTools: pageStore,
 		FramePolicy:    policy,

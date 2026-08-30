@@ -65,13 +65,23 @@ type Response struct {
 }
 
 type responseBody struct {
+	mu       sync.Mutex
 	value    []byte
 	consumed bool
+	locked   bool
+	offset   int
+	canceled bool
 }
 
 // ErrBodyConsumed reports a second attempt to consume one response body.
 var ErrBodyConsumed = errors.New("response body has already been consumed")
 var ErrInvalidText = errors.New("response body is not valid UTF-8")
+
+// MaxStreamChunkSize bounds one ReadableStream-equivalent delivery.
+const MaxStreamChunkSize = 16 << 10
+
+// BodyReader incrementally consumes one response body without eager callbacks.
+type BodyReader struct{ body *responseBody }
 
 // Bytes consumes the response body and returns a defensive copy.
 func (response Response) Bytes() ([]byte, error) {
@@ -94,7 +104,72 @@ func (response Response) Text() (string, error) {
 	return string(body), nil
 }
 
-func (response Response) BodyUsed() bool { return response.body != nil && response.body.consumed }
+func (response Response) BodyUsed() bool {
+	if response.body == nil {
+		return false
+	}
+	response.body.mu.Lock()
+	defer response.body.mu.Unlock()
+	return response.body.consumed
+}
+
+// Stream locks the body to one bounded incremental consumer.
+func (response Response) Stream() (*BodyReader, error) {
+	if response.body == nil {
+		return &BodyReader{}, nil
+	}
+	response.body.mu.Lock()
+	defer response.body.mu.Unlock()
+	if response.body.consumed || response.body.locked {
+		return nil, ErrBodyConsumed
+	}
+	response.body.locked = true
+	return &BodyReader{body: response.body}, nil
+}
+
+// Read returns at most MaxStreamChunkSize bytes and advances only on demand.
+func (reader *BodyReader) Read() ([]byte, bool, error) {
+	if reader == nil || reader.body == nil {
+		return nil, true, nil
+	}
+	body := reader.body
+	body.mu.Lock()
+	defer body.mu.Unlock()
+	if body.canceled || body.offset >= len(body.value) {
+		body.consumed = true
+		return nil, true, nil
+	}
+	body.consumed = true
+	end := body.offset + MaxStreamChunkSize
+	if end > len(body.value) {
+		end = len(body.value)
+	}
+	chunk := append([]byte(nil), body.value[body.offset:end]...)
+	body.offset = end
+	return chunk, false, nil
+}
+
+// Cancel discards unread bytes and makes future reads complete immediately.
+func (reader *BodyReader) Cancel() {
+	if reader == nil || reader.body == nil {
+		return
+	}
+	reader.body.mu.Lock()
+	reader.body.canceled = true
+	reader.body.consumed = true
+	reader.body.offset = len(reader.body.value)
+	reader.body.mu.Unlock()
+}
+
+// Release unlocks an undisturbed body so another reader can be acquired.
+func (reader *BodyReader) Release() {
+	if reader == nil || reader.body == nil {
+		return
+	}
+	reader.body.mu.Lock()
+	reader.body.locked = false
+	reader.body.mu.Unlock()
+}
 
 // JSON consumes and decodes the response body into target.
 func (response Response) JSON(target any) error {
@@ -109,7 +184,9 @@ func (response Response) consumeBody() ([]byte, error) {
 	if response.body == nil {
 		return nil, nil
 	}
-	if response.body.consumed {
+	response.body.mu.Lock()
+	defer response.body.mu.Unlock()
+	if response.body.consumed || response.body.locked {
 		return nil, ErrBodyConsumed
 	}
 	response.body.consumed = true

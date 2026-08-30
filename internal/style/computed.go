@@ -18,6 +18,30 @@ const (
 	DisplayInlineFlex
 	DisplayGrid
 	DisplayInlineGrid
+	DisplayContents
+	DisplayTable
+	DisplayTableRowGroup
+	DisplayTableRow
+	DisplayTableCell
+)
+
+// Float places a box at a side of the current block formatting context.
+type Float uint8
+
+const (
+	FloatNone Float = iota
+	FloatLeft
+	FloatRight
+)
+
+// Clear moves a box below preceding floats on the selected side.
+type Clear uint8
+
+const (
+	ClearNone Clear = iota
+	ClearLeft
+	ClearRight
+	ClearBoth
 )
 
 // FlexDirection defines the main axis and its direction.
@@ -156,6 +180,9 @@ const (
 	SizeAuto SizeKind = iota
 	SizeLength
 	SizeNone
+	SizeMinContent
+	SizeMaxContent
+	SizeFitContent
 )
 
 // SizeValue is a computed sizing property which still may contain a percentage.
@@ -474,6 +501,7 @@ const (
 	BackgroundImageURL
 	BackgroundImageLinearGradient
 	BackgroundImageRadialGradient
+	BackgroundImageConicGradient
 )
 
 // GradientStop is one color stop in a linear gradient. Position is normalized
@@ -499,7 +527,18 @@ type BackgroundLayer struct {
 	Repeat   BackgroundRepeat
 	Position BackgroundPosition
 	Size     BackgroundSize
+	Origin   BackgroundBox
+	Clip     BackgroundBox
 }
+
+// BackgroundBox selects the border, padding, or content box used by a layer.
+type BackgroundBox uint8
+
+const (
+	BackgroundBoxBorder BackgroundBox = iota
+	BackgroundBoxPadding
+	BackgroundBoxContent
+)
 
 // BackgroundRepeat stores repetition independently for each axis.
 type BackgroundRepeat struct {
@@ -532,6 +571,10 @@ type BackgroundSize struct {
 
 // ComputedStyle contains the MVP properties consumed by layout and paint.
 type ComputedStyle struct {
+	// BrowserDefaults marks styles computed with the JavaScript-only browser
+	// compatibility UA profile. Layout uses it to select the initial
+	// containing-block behavior without changing the Go Engine defaults.
+	BrowserDefaults     bool
 	Color               uint32
 	BackgroundColor     uint32
 	BackgroundImage     BackgroundImage
@@ -539,6 +582,8 @@ type ComputedStyle struct {
 	BackgroundPos       BackgroundPosition
 	BackgroundSize      BackgroundSize
 	BackgroundLayers    []BackgroundLayer
+	BackgroundOrigin    BackgroundBox
+	BackgroundClip      BackgroundBox
 	FontSize            float32
 	FontWeight          int
 	FontFamilies        []string
@@ -571,6 +616,8 @@ type ComputedStyle struct {
 	OverflowX           Overflow
 	OverflowY           Overflow
 	Display             Display
+	Float               Float
+	Clear               Clear
 	ContainerType       ContainerType
 	ContainerName       string
 	Visibility          Visibility

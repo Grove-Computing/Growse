@@ -16,6 +16,7 @@ import (
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 	runtimejavascript "github.com/Grove-Computing/Growse/internal/runtime/javascript"
 	"github.com/Grove-Computing/Growse/internal/style"
+	"github.com/gen2brain/avif"
 )
 
 func TestLoadBackgroundImagesDecodesSafeImage(t *testing.T) {
@@ -33,6 +34,21 @@ func TestLoadBackgroundImagesDecodesSafeImage(t *testing.T) {
 	images, errors := loadBackgroundImages(context.Background(), loader, computed)
 	if len(errors) != 0 || images[resourceURL] == nil || images[resourceURL].Bounds().Dx() != 2 {
 		t.Fatalf("images/errors = %#v / %#v", images, errors)
+	}
+}
+
+func TestLoadBackgroundImagesDecodesBoundedDataImageWithoutNetwork(t *testing.T) {
+	var encoded bytes.Buffer
+	source := image.NewNRGBA(image.Rect(0, 0, 2, 2))
+	source.SetNRGBA(1, 1, color.NRGBA{B: 255, A: 255})
+	if err := png.Encode(&encoded, source); err != nil {
+		t.Fatal(err)
+	}
+	resource := "data:image/png;base64," + base64.StdEncoding.EncodeToString(encoded.Bytes())
+	computed := style.Map{dom.NodeID(1): {BackgroundImage: style.BackgroundImage{Kind: style.BackgroundImageURL, URL: resource}}}
+	images, failures := loadBackgroundImages(context.Background(), nil, computed)
+	if len(failures) != 0 || images[resource] == nil || images[resource].Bounds() != image.Rect(0, 0, 2, 2) {
+		t.Fatalf("data background images/failures = %#v / %#v", images, failures)
 	}
 }
 
@@ -103,6 +119,37 @@ func TestLoadReplacedImagesResolvesAndDecodesWebP(t *testing.T) {
 	}
 }
 
+func TestAVIFPictureCandidateAndBackgroundDecodeWithinSafetyLimits(t *testing.T) {
+	var encoded bytes.Buffer
+	source := image.NewNRGBA(image.Rect(0, 0, 3, 2))
+	source.SetNRGBA(1, 1, color.NRGBA{R: 32, G: 96, B: 224, A: 255})
+	if err := avif.Encode(&encoded, source, avif.Options{Quality: 80, Speed: 10}); err != nil {
+		t.Fatal(err)
+	}
+	rawURL := "https://example.com/hero.avif"
+	loader := &routeLoader{responses: map[string]*network.Response{
+		rawURL: {URL: mustParseURL(t, rawURL), ContentType: "image/avif", Body: encoded.Bytes()},
+	}}
+	document := dom.NewDocument()
+	picture := document.CreateElement("picture", nil)
+	avifSource := document.CreateElement("source", map[string]string{"type": "image/avif", "srcset": "hero.avif 1x"})
+	imageNode := document.CreateElement("img", map[string]string{"src": "fallback.png"})
+	for _, edge := range [][2]*dom.Node{{document.Root, picture}, {picture, avifSource}, {picture, imageNode}} {
+		if err := document.AppendChild(edge[0], edge[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	resources, images, failures := loadReplacedImages(context.Background(), loader, mustParseURL(t, "https://example.com/"), document, 800, 1)
+	if len(failures) != 0 || !resources[imageNode.ID].Loaded || resources[imageNode.ID].URL != rawURL || images[rawURL] == nil {
+		t.Fatalf("AVIF picture resource/images/failures = %#v / %#v / %#v", resources[imageNode.ID], images, failures)
+	}
+	computed := style.Map{dom.NodeID(99): {BackgroundImage: style.BackgroundImage{Kind: style.BackgroundImageURL, URL: rawURL}}}
+	backgrounds, backgroundFailures := loadBackgroundImages(context.Background(), loader, computed)
+	if len(backgroundFailures) != 0 || backgrounds[rawURL] == nil || backgrounds[rawURL].Bounds().Dx() != 3 {
+		t.Fatalf("AVIF background/failures = %#v / %#v", backgrounds, backgroundFailures)
+	}
+}
+
 func TestLoadReplacedImagesLocalizesDecodeFailure(t *testing.T) {
 	baseURL := mustParseURL(t, "https://example.com/")
 	document := dom.NewDocument()
@@ -159,21 +206,21 @@ func TestNavigateLoadsReplacedImagesOnlyForExplicitJavaScriptEngine(t *testing.T
 func TestImageCandidatesSelectPictureSourceByTypeMediaSizesAndScale(t *testing.T) {
 	document := dom.NewDocument()
 	picture := document.CreateElement("picture", nil)
-	unsupported := document.CreateElement("source", map[string]string{"type": "image/avif", "srcset": "hero.avif 1x"})
+	avifSource := document.CreateElement("source", map[string]string{"type": "image/avif", "srcset": "hero.avif 1x"})
 	wide := document.CreateElement("source", map[string]string{"type": "image/webp", "media": "(min-width: 900px)", "srcset": "wide.webp 1x"})
 	matched := document.CreateElement("source", map[string]string{
 		"type": "image/png", "media": "(max-width: 899px)",
 		"srcset": "small.png 400w, large.png 800w", "sizes": "(max-width: 600px) 100vw, 50vw",
 	})
 	imageNode := document.CreateElement("img", map[string]string{"src": "fallback.jpg"})
-	appendNodes := [][2]*dom.Node{{document.Root, picture}, {picture, unsupported}, {picture, wide}, {picture, matched}, {picture, imageNode}}
+	appendNodes := [][2]*dom.Node{{document.Root, picture}, {picture, avifSource}, {picture, wide}, {picture, matched}, {picture, imageNode}}
 	for _, pair := range appendNodes {
 		if err := document.AppendChild(pair[0], pair[1]); err != nil {
 			t.Fatal(err)
 		}
 	}
 	candidates := imageCandidates(imageNode, mustParseURL(t, "https://example.com/assets/"), 800, 1.5)
-	want := []string{"https://example.com/assets/large.png", "https://example.com/assets/small.png", "https://example.com/assets/fallback.jpg"}
+	want := []string{"https://example.com/assets/hero.avif", "https://example.com/assets/large.png", "https://example.com/assets/small.png", "https://example.com/assets/fallback.jpg"}
 	if len(candidates) != len(want) {
 		t.Fatalf("candidates = %#v, want %#v", candidates, want)
 	}
