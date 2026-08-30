@@ -99,6 +99,7 @@ type Runtime struct {
 	resourceFailures       map[string]int
 	jsEventObjects         map[uint64]*goja.Object
 	nextJSEventID          uint64
+	activeElementID        uint64
 	media                  runtimemodel.MediaEnvironment
 	mediaQueries           []*mediaQueryRecord
 	mutationObservers      []*mutationObserverRecord
@@ -241,6 +242,7 @@ func (runtime *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script,
 	runtime.resourceFailures = make(map[string]int)
 	runtime.jsEventObjects = make(map[uint64]*goja.Object)
 	runtime.nextJSEventID = 0
+	runtime.activeElementID = 0
 	runtime.media = environment.Media
 	runtime.mediaQueries = nil
 	runtime.mutationObservers = nil
