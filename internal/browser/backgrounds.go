@@ -21,6 +21,7 @@ import (
 	"github.com/Grove-Computing/Growse/internal/layout"
 	"github.com/Grove-Computing/Growse/internal/network"
 	"github.com/Grove-Computing/Growse/internal/style"
+	"github.com/gen2brain/avif"
 	_ "golang.org/x/image/webp"
 )
 
@@ -359,7 +360,7 @@ func isImageContentType(contentType string) bool {
 		return false
 	}
 	switch mediaType {
-	case "image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml":
+	case "image/png", "image/jpeg", "image/gif", "image/webp", "image/avif", "image/svg+xml":
 		return true
 	default:
 		return false
@@ -387,7 +388,12 @@ func decodeImageResponseWithBudget(body []byte, contentType string, budget *imag
 	if mediaType == "image/svg+xml" {
 		return rasterizeSVGWithBudget(body, budget)
 	}
-	config, _, err := image.DecodeConfig(bytes.NewReader(body))
+	var config image.Config
+	if mediaType == "image/avif" {
+		config, err = avif.DecodeConfig(bytes.NewReader(body))
+	} else {
+		config, _, err = image.DecodeConfig(bytes.NewReader(body))
+	}
 	if err != nil {
 		return nil, 0, 0, fmt.Errorf("image dimensions are invalid: %w", err)
 	}
@@ -398,7 +404,11 @@ func decodeImageResponseWithBudget(body []byte, contentType string, budget *imag
 		return nil, 0, 0, errors.New("page image decode surface limit exceeded")
 	}
 	reservedWidth, reservedHeight = config.Width, config.Height
-	decoded, _, err = image.Decode(bytes.NewReader(body))
+	if mediaType == "image/avif" {
+		decoded, err = avif.Decode(bytes.NewReader(body))
+	} else {
+		decoded, _, err = image.Decode(bytes.NewReader(body))
+	}
 	if err != nil {
 		return nil, 0, 0, err
 	}
