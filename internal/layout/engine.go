@@ -50,6 +50,8 @@ type blockStyle struct {
 	decorationColor     uint32
 	opacity             float32
 	display             stylemodel.Display
+	float               stylemodel.Float
+	clear               stylemodel.Clear
 	hidden              bool
 	margin              stylemodel.Edges
 	padding             stylemodel.Edges
@@ -250,6 +252,7 @@ type engine struct {
 	scrollX, scrollY              float32
 	positionCB                    *Rect
 	stackingID                    int
+	floats                        []floatRegion
 }
 
 func (e *engine) nextOrder() int {
@@ -727,6 +730,16 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 				if childStyle.display == stylemodel.DisplayNone {
 					continue
 				}
+				if childStyle.clear != stylemodel.ClearNone {
+					flushInline()
+					e.clearFloats(childStyle.clear)
+				}
+				if childStyle.float != stylemodel.FloatNone {
+					flushInline()
+					e.addFloat(child, childStyle, contentX, contentWidth, childContainingHeight, declaredHeightDefinite)
+					previousBlock = false
+					continue
+				}
 				if childStyle.display == stylemodel.DisplayTable {
 					flushInline()
 					e.addTable(child, childStyle, contentX, contentWidth, childContainingHeight, declaredHeightDefinite)
@@ -1104,7 +1117,7 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 	var lineText strings.Builder
 	var usedWidth, lineHeight, lineAscent float32
 	var pendingSpace *inlineRun
-	lineX, lineWidth := x, width
+	lineX, lineWidth := e.floatLineArea(x, width, e.y, container.lineHeight)
 	firstLine := true
 	if indent := container.textIndent.Resolve(width); indent != 0 {
 		lineX += indent
@@ -1187,8 +1200,8 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 		flexPlacements = flexPlacements[:0]
 		if firstLine {
 			firstLine = false
-			lineX, lineWidth = x, width
 		}
+		lineX, lineWidth = e.floatLineArea(x, width, e.y, container.lineHeight)
 	}
 
 	appendPiece := func(run inlineRun, text string, pieceWidth float32) {
@@ -1660,6 +1673,8 @@ func applyComputed(block blockStyle, computed stylemodel.ComputedStyle) blockSty
 	block.decorationColor = computed.DecorationColor
 	block.opacity = computed.Opacity
 	block.display = computed.Display
+	block.float = computed.Float
+	block.clear = computed.Clear
 	block.hidden = computed.Visibility == stylemodel.VisibilityHidden
 	block.margin = computed.Margin
 	block.padding = computed.Padding

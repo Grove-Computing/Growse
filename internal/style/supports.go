@@ -119,6 +119,12 @@ func supportsDeclaration(property, value string) bool {
 			return true
 		}
 		return false
+	case "float":
+		_, ok := resolveFloatSide(value, FloatNone)
+		return ok
+	case "clear":
+		_, ok := resolveClear(value, ClearNone)
+		return ok
 	case "visibility":
 		return value == "visible" || value == "hidden" || value == "collapse"
 	case "white-space":
@@ -199,7 +205,7 @@ func supportsProperty(property string) bool {
 	switch property {
 	case "display", "color", "background-color", "background-image", "font", "font-size", "font-weight", "font-family", "font-style", "font-stretch", "line-height", "letter-spacing", "word-spacing", "text-indent", "text-align", "text-transform", "word-break", "overflow-wrap", "vertical-align", "text-overflow",
 		"object-fit", "object-position", "list-style", "list-style-type", "list-style-position", "list-style-image", "appearance", "-webkit-appearance", "accent-color", "cursor", "filter", "backdrop-filter", "mix-blend-mode",
-		"width", "height", "min-width", "min-height", "max-width", "max-height", "box-sizing", "position", "top", "right", "bottom", "left", "z-index",
+		"width", "height", "min-width", "min-height", "max-width", "max-height", "box-sizing", "position", "top", "right", "bottom", "left", "z-index", "float", "clear",
 		"margin", "margin-top", "margin-right", "margin-bottom", "margin-left", "padding", "padding-top", "padding-right", "padding-bottom", "padding-left",
 		"border", "border-width", "border-style", "border-color", "border-top", "border-right", "border-bottom", "border-left", "border-radius", "outline",
 		"overflow", "overflow-x", "overflow-y", "visibility", "opacity", "white-space", "transform",

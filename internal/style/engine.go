@@ -536,6 +536,20 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 			}
 		}
 	}
+	if value, ok := winners["float"]; ok {
+		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
+			if parsed, valid := resolveFloatSide(resolved, parent.Float); valid {
+				computed.Float = parsed
+			}
+		}
+	}
+	if value, ok := winners["clear"]; ok {
+		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
+			if parsed, valid := resolveClear(resolved, parent.Clear); valid {
+				computed.Clear = parsed
+			}
+		}
+	}
 	if value, ok := winners["visibility"]; ok {
 		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
 			switch parseGlobalKeyword(resolved) {
@@ -684,6 +698,46 @@ func resolveDisplay(value string, parent Display) (Display, bool) {
 		return DisplayInline, true
 	default:
 		return parseDisplay(value)
+	}
+}
+
+func resolveFloatSide(value string, parent Float) (Float, bool) {
+	switch parseGlobalKeyword(value) {
+	case globalInherit:
+		return parent, true
+	case globalInitial, globalUnset:
+		return FloatNone, true
+	}
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "none":
+		return FloatNone, true
+	case "left", "inline-start":
+		return FloatLeft, true
+	case "right", "inline-end":
+		return FloatRight, true
+	default:
+		return FloatNone, false
+	}
+}
+
+func resolveClear(value string, parent Clear) (Clear, bool) {
+	switch parseGlobalKeyword(value) {
+	case globalInherit:
+		return parent, true
+	case globalInitial, globalUnset:
+		return ClearNone, true
+	}
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "none":
+		return ClearNone, true
+	case "left", "inline-start":
+		return ClearLeft, true
+	case "right", "inline-end":
+		return ClearRight, true
+	case "both":
+		return ClearBoth, true
+	default:
+		return ClearNone, false
 	}
 }
 

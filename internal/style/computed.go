@@ -25,6 +25,25 @@ const (
 	DisplayTableCell
 )
 
+// Float places a box at a side of the current block formatting context.
+type Float uint8
+
+const (
+	FloatNone Float = iota
+	FloatLeft
+	FloatRight
+)
+
+// Clear moves a box below preceding floats on the selected side.
+type Clear uint8
+
+const (
+	ClearNone Clear = iota
+	ClearLeft
+	ClearRight
+	ClearBoth
+)
+
 // FlexDirection defines the main axis and its direction.
 type FlexDirection uint8
 
@@ -580,6 +599,8 @@ type ComputedStyle struct {
 	OverflowX           Overflow
 	OverflowY           Overflow
 	Display             Display
+	Float               Float
+	Clear               Clear
 	ContainerType       ContainerType
 	ContainerName       string
 	Visibility          Visibility
