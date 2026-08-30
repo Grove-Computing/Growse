@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "release": "v0.16.0",
+  "release": "v0.17.0",
   "artifactPolicy": "checked-in deterministic build artifacts",
   "publicInternetRequired": false,
   "verificationCommand": "go test ./examples/modern-web-compat -run TestFixtureManifestIsCompleteAndUntampered",
@@ -8,51 +8,55 @@
     {
       "name": "nextjs",
       "framework": "Next.js",
-      "frameworkVersion": "15.4.6",
-      "buildTool": "Next.js compiler 15.4.6 / Node.js 22.18.0 / pnpm 10.14.0",
+      "frameworkVersion": "16.3.3",
+      "buildTool": "Next.js Turbopack 16.3.3 / Tailwind CLI 4.1.12 / Node.js 24.18.0 / pnpm 11.21.0",
       "dependencies": {
-        "next": "15.4.6",
-        "react": "19.1.1",
-        "react-dom": "19.1.1"
+        "next": "16.3.3",
+        "react": "19.2.8",
+        "react-dom": "19.2.8"
       },
-      "generationCommand": "corepack pnpm --offline install --frozen-lockfile && corepack pnpm --offline next build",
-      "licenses": ["MIT:Next.js", "MIT:React"],
-      "sources": ["sources/nextjs/app/page.jsx"],
+      "generationCommand": "pnpm install --offline --frozen-lockfile --ignore-scripts && ./node_modules/.bin/next build sources/nextjs && node sources/normalize-framework-build.mjs sources/nextjs/out",
+      "licenses": ["MIT:Next.js", "MIT:React", "MIT:Tailwind CSS"],
+      "sources": ["sources/normalize-framework-build.mjs", "sources/nextjs/next.config.mjs", "sources/nextjs/app/layout.jsx", "sources/nextjs/app/page.jsx", "sources/nextjs/app/globals.css"],
       "artifacts": [
         {"path": "fixtures/nextjs/app.css", "sha256": "e561e437caa1677fe2436c9a1c838b20e00dccd29456e659f7294c0dbf97e4b1"},
-        {"path": "fixtures/nextjs/app.mjs", "sha256": "4ec741197a8b19e662a0b9b0c84f6c19b04021779b3b8046501550c9e1311ca6"},
-        {"path": "fixtures/nextjs/counter.chunk.mjs", "sha256": "45917193109f7ce57a63c568f042ff3d282b075bb926ddc7b97af1d83fc18e1f"},
-        {"path": "fixtures/nextjs/index.html", "sha256": "e15e2c14eafea834be797f2a26d6846e7d599fa10aada5b78bacc9426c12bbf7"}
+        {"path": "fixtures/nextjs/app.mjs", "sha256": "81e4ed5923ee7258f14a446c635b5114e066505ee05454d95d18546a909584eb"},
+        {"path": "fixtures/nextjs/counter.chunk.mjs", "sha256": "76f7fc483f5ec353528e9842059d593e29711d51f45551cf0a96dd907c57a64d"},
+        {"path": "fixtures/nextjs/index.html", "sha256": "105452dad7a6d76c40a963e106ad897e72d94ff4e97bb277da7198fb59ff341d"},
+        {"path": "fixtures/nextjs/upstream-contract.mjs", "sha256": "c93c0fb576f3b9a5e2657645fab9ec83fea3d323338032ab4113493930500c1e"},
+        {"path": "fixtures/nextjs/upstream.sha256", "sha256": "1e9da77b52fa4eb10e22c587601fcabbc317c911907ba23ecd36337c7371d974"}
       ]
     },
     {
       "name": "sveltekit",
       "framework": "SvelteKit",
-      "frameworkVersion": "2.37.0",
-      "buildTool": "Svelte 5.38.2 / Vite 7.1.3 / Node.js 22.18.0 / pnpm 10.14.0",
+      "frameworkVersion": "2.70.3",
+      "buildTool": "SvelteKit 2.70.3 / Svelte 5.57.0 / Vite 7.3.6 / Tailwind CLI 4.1.12 / Node.js 24.18.0 / pnpm 11.21.0",
       "dependencies": {
-        "@sveltejs/kit": "2.37.0",
-        "svelte": "5.38.2",
-        "vite": "7.1.3"
+        "@sveltejs/kit": "2.70.3",
+        "svelte": "5.57.0",
+        "vite": "7.3.6"
       },
-      "generationCommand": "corepack pnpm --offline install --frozen-lockfile && corepack pnpm --offline vite build",
-      "licenses": ["MIT:SvelteKit", "MIT:Svelte", "MIT:Vite"],
-      "sources": ["sources/sveltekit/src/routes/+page.svelte"],
+      "generationCommand": "pnpm install --offline --frozen-lockfile --ignore-scripts && (cd sources/sveltekit && ../../node_modules/.bin/vite build) && node sources/normalize-framework-build.mjs sources/sveltekit/build",
+      "licenses": ["MIT:SvelteKit", "MIT:Svelte", "MIT:Vite", "MIT:Tailwind CSS"],
+      "sources": ["sources/normalize-framework-build.mjs", "sources/sveltekit/svelte.config.js", "sources/sveltekit/vite.config.js", "sources/sveltekit/src/app.html", "sources/sveltekit/src/app.css", "sources/sveltekit/src/routes/+layout.svelte", "sources/sveltekit/src/routes/+page.js", "sources/sveltekit/src/routes/+page.svelte", "sources/sveltekit/src/routes/svelte/about/+page.svelte"],
       "artifacts": [
         {"path": "fixtures/sveltekit/app.css", "sha256": "a205946e5e6ec4b3731e7980d2367b62b9054173e2b7ebfb766d9001ba7d0b16"},
-        {"path": "fixtures/sveltekit/app.mjs", "sha256": "1e588fe84889ba5eefbc0eea6444aaf41fbf62b20b7a30f79466f074e2e5f440"},
-        {"path": "fixtures/sveltekit/index.html", "sha256": "81f303fd8772a35a085dcc051590e3b61273fb5f89b0c18284c5753ccb60bf00"},
-        {"path": "fixtures/sveltekit/start.mjs", "sha256": "de2a26d22df681a1065b7a2ec5046d701b1073c6f067bd2e86521f43c979a13c"}
+        {"path": "fixtures/sveltekit/app.mjs", "sha256": "495586a8a3d6fbc5a53787ae7dbd9a197a6ff075cf47a3a4e4c8465373ddc52e"},
+        {"path": "fixtures/sveltekit/index.html", "sha256": "b4c46f939e877e39b55b606f73663eb0a72c5288972d3e650d90fdcc5baa856c"},
+        {"path": "fixtures/sveltekit/start.mjs", "sha256": "a4e3f26383348b04601c92e4ca3ee05cbfbfbb7230681c229de534568437301b"},
+        {"path": "fixtures/sveltekit/upstream-contract.mjs", "sha256": "51ddfdb8f015c50b1a9d4837666765de5281052950f2745774aa5805528a420f"},
+        {"path": "fixtures/sveltekit/upstream.sha256", "sha256": "8a037bcf0883a0323f5b5fdabaa61b1bba93c3b76526260de9d469c32c0bff50"}
       ]
     },
     {
       "name": "real-site",
       "framework": "SvelteKit + Tailwind CSS",
-      "frameworkVersion": "2.37.0",
-      "buildTool": "Tailwind CLI 4.1.12 / SvelteKit 2.37.0 SSR source / Node.js 24.18.0 / pnpm 11.21.0",
+      "frameworkVersion": "2.70.3",
+      "buildTool": "Tailwind CLI 4.1.12 / SvelteKit 2.70.3 SSR source / Node.js 24.18.0 / pnpm 11.21.0",
       "dependencies": {
-        "@sveltejs/kit": "2.37.0",
-        "svelte": "5.38.2",
+        "@sveltejs/kit": "2.70.3",
+        "svelte": "5.57.0",
         "tailwindcss": "4.1.12",
         "@tailwindcss/cli": "4.1.12"
       },

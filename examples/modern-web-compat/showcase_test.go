@@ -102,18 +102,43 @@ func TestModernWebCompatibilityShowcaseRunsEntirelyLocally(t *testing.T) {
 	if !engine.DispatchClick(fixtureNode(t, diagnosticPage, "hydration-error").ID, 0, 0) {
 		t.Fatal("hydration failure control was not handled")
 	}
+	if !engine.DispatchClick(fixtureNode(t, diagnosticPage, "unsupported-global-error").ID, 0, 0) {
+		t.Fatal("unsupported global failure control was not handled")
+	}
+	if !engine.DispatchClick(fixtureNode(t, diagnosticPage, "event-error").ID, 0, 0) {
+		t.Fatal("Event failure control was not handled")
+	}
 	if !engine.DispatchClick(fixtureNode(t, diagnosticPage, "observer-error").ID, 0, 0) {
 		t.Fatal("observer failure control was not handled")
 	}
 	contexts := diagnosticPage.RuntimeDiagnostics()
-	for _, reason := range []string{"chunk", "hydration", "observer"} {
+	for _, reason := range []string{"chunk", "hydration", "unsupported-global", "event", "observer"} {
 		if !showcaseHasDiagnostic(contexts, "runtime", "error", reason) {
 			t.Errorf("showcase DevTools is missing %s error: %+v", reason, contexts)
 		}
 	}
+	for _, reason := range []string{"hydration", "unsupported-global", "event"} {
+		if !showcaseHasExactDiagnostic(contexts, "runtime", "component/diagnostic-root", "error", reason) {
+			t.Errorf("showcase DevTools did not localize %s to the component boundary: %+v", reason, contexts)
+		}
+	}
+	if !showcaseHasDiagnostic(contexts, "resource/module", "error", "http") {
+		t.Errorf("showcase DevTools did not localize the failed module resource: %+v", contexts)
+	}
 	if !showcaseHasDiagnostic(contexts, "font", "fallback", "decode") || !showcaseHasDiagnostic(contexts, "image", "fallback", "decode") {
 		t.Fatalf("showcase DevTools fallback diagnostics = %+v font=%v image=%v", contexts, diagnosticPage.FontErrors, diagnosticPage.ImageErrors)
 	}
+}
+
+func showcaseHasExactDiagnostic(contexts []devtools.RuntimeContext, category, subject, state, reason string) bool {
+	for _, context := range contexts {
+		for _, diagnostic := range context.Diagnostics {
+			if diagnostic.Category == category && diagnostic.Subject == subject && diagnostic.State == state && diagnostic.Reason == reason {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func showcaseHasDiagnostic(contexts []devtools.RuntimeContext, category, state, reason string) bool {

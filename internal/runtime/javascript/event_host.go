@@ -55,16 +55,41 @@ func (runtime *Runtime) installEventConstructors(vm *goja.Runtime) error {
 				this.code = init.code === undefined ? "" : String(init.code);
 				this.repeat = Boolean(init.repeat);
 			}
+			function FocusEvent(type, init) {
+				if (!(this instanceof FocusEvent)) throw new TypeError("FocusEvent constructor requires new");
+				initEvent(this, type, init);
+				init = init == null ? {} : Object(init);
+				this.relatedTarget = init.relatedTarget == null ? null : init.relatedTarget;
+			}
+			function PointerEvent(type, init) {
+				if (!(this instanceof PointerEvent)) throw new TypeError("PointerEvent constructor requires new");
+				MouseEvent.call(this, type, init);
+				init = init == null ? {} : Object(init);
+				this.pointerId = Number(init.pointerId) || 0;
+				this.width = Number(init.width) || 1;
+				this.height = Number(init.height) || 1;
+				this.pressure = Number(init.pressure) || 0;
+				this.tiltX = Number(init.tiltX) || 0;
+				this.tiltY = Number(init.tiltY) || 0;
+				this.pointerType = init.pointerType === undefined ? "" : String(init.pointerType);
+				this.isPrimary = Boolean(init.isPrimary);
+			}
 			Object.setPrototypeOf(CustomEvent.prototype, Event.prototype);
 			Object.setPrototypeOf(MouseEvent.prototype, Event.prototype);
 			Object.setPrototypeOf(KeyboardEvent.prototype, Event.prototype);
+			Object.setPrototypeOf(FocusEvent.prototype, Event.prototype);
+			Object.setPrototypeOf(PointerEvent.prototype, MouseEvent.prototype);
 			Object.defineProperty(CustomEvent.prototype, "constructor", { value: CustomEvent, writable: true, configurable: true });
 			Object.defineProperty(MouseEvent.prototype, "constructor", { value: MouseEvent, writable: true, configurable: true });
 			Object.defineProperty(KeyboardEvent.prototype, "constructor", { value: KeyboardEvent, writable: true, configurable: true });
+			Object.defineProperty(FocusEvent.prototype, "constructor", { value: FocusEvent, writable: true, configurable: true });
+			Object.defineProperty(PointerEvent.prototype, "constructor", { value: PointerEvent, writable: true, configurable: true });
 			global.Event = Event;
 			global.CustomEvent = CustomEvent;
 			global.MouseEvent = MouseEvent;
 			global.KeyboardEvent = KeyboardEvent;
+			global.FocusEvent = FocusEvent;
+			global.PointerEvent = PointerEvent;
 		})(globalThis);
 	`)
 	if err != nil {

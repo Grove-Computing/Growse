@@ -95,11 +95,35 @@ func compatibilityDiagnostics(page *Page) []devtools.CompatibilityDiagnostic {
 				continue
 			}
 			appendDiagnostic(devtools.CompatibilityDiagnostic{
-				Category: "runtime", Subject: "console/" + diagnosticSourceCategory(record.Source), State: "error", Reason: reason,
+				Category: "runtime", Subject: runtimeDiagnosticSubject(record.Message, "console/"+diagnosticSourceCategory(record.Source)), State: "error", Reason: reason,
 			})
 		}
 	}
 	return diagnostics
+}
+
+func runtimeDiagnosticSubject(message, fallback string) string {
+	trimmed := strings.TrimSpace(message)
+	start := strings.Index(trimmed, "[component:")
+	if start < 0 {
+		return fallback
+	}
+	trimmed = trimmed[start:]
+	end := strings.IndexByte(trimmed, ']')
+	if end < 2 || end > 160 {
+		return fallback
+	}
+	parts := strings.SplitN(trimmed[1:end], ":", 2)
+	if len(parts) != 2 || parts[0] != "component" || parts[1] == "" || len(parts[1]) > 128 {
+		return fallback
+	}
+	for _, character := range parts[1] {
+		if character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || strings.ContainsRune("-_.", character) {
+			continue
+		}
+		return fallback
+	}
+	return "component/" + parts[1]
 }
 
 func appendFontDiagnostics(page *Page, appendDiagnostic func(devtools.CompatibilityDiagnostic)) {

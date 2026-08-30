@@ -87,6 +87,15 @@ func (runtime *Runtime) installDOM(vm *goja.Runtime) error {
 	if err := document.DefineAccessorProperty("readyState", readyStateGetter, nil, goja.FLAG_FALSE, goja.FLAG_TRUE); err != nil {
 		return err
 	}
+	activeElementGetter := vm.ToValue(func(goja.FunctionCall) goja.Value {
+		if runtime.activeElementID == 0 {
+			return runtime.elementValue(vm, runtime.domAPI.Body())
+		}
+		return runtime.elementValue(vm, runtime.domAPI.NodeByID(dommodel.NodeID(runtime.activeElementID)))
+	})
+	if err := document.DefineAccessorProperty("activeElement", activeElementGetter, nil, goja.FLAG_FALSE, goja.FLAG_TRUE); err != nil {
+		return err
+	}
 	if err := document.Set("addEventListener", func(call goja.FunctionCall) goja.Value {
 		eventType := strings.ToLower(strings.TrimSpace(call.Argument(0).String()))
 		if eventType == "readystatechange" || eventType == "domcontentloaded" {
@@ -172,6 +181,11 @@ func (runtime *Runtime) installDOM(vm *goja.Runtime) error {
 	}
 	if err := document.Set("createTextNode", func(call goja.FunctionCall) goja.Value {
 		return runtime.mustCreateNodeValue(vm, runtime.domAPI.CreateTextNode(call.Argument(0).String()), "createTextNode")
+	}); err != nil {
+		return err
+	}
+	if err := document.Set("createRange", func(goja.FunctionCall) goja.Value {
+		return runtime.newRangeValue(vm, documentRoot)
 	}); err != nil {
 		return err
 	}
@@ -489,6 +503,14 @@ func (runtime *Runtime) elementValue(vm *goja.Runtime, element *domapi.Element) 
 	_ = object.Set("dispatchEvent", func(call goja.FunctionCall) goja.Value {
 		return vm.ToValue(runtime.dispatchJSEvent(vm, element, call.Argument(0)))
 	})
+	_ = object.Set("focus", func(goja.FunctionCall) goja.Value {
+		runtime.focusElement(vm, element)
+		return goja.Undefined()
+	})
+	_ = object.Set("blur", func(goja.FunctionCall) goja.Value {
+		runtime.blurElement(vm, element)
+		return goja.Undefined()
+	})
 
 	classList := vm.NewObject()
 	_ = classList.Set("add", func(call goja.FunctionCall) goja.Value {
@@ -682,6 +704,7 @@ func (runtime *Runtime) installDOMInterfaces(vm *goja.Runtime) error {
 			function HTMLImageElement() { illegal(); }
 			function HTMLTemplateElement() { illegal(); }
 			function CSSStyleDeclaration() { illegal(); }
+			function Range() { illegal(); }
 
 			Object.setPrototypeOf(Node.prototype, EventTarget.prototype);
 			Object.setPrototypeOf(Document.prototype, Node.prototype);
@@ -704,7 +727,8 @@ func (runtime *Runtime) installDOMInterfaces(vm *goja.Runtime) error {
 				HTMLLinkElement: HTMLLinkElement,
 				HTMLImageElement: HTMLImageElement,
 				HTMLTemplateElement: HTMLTemplateElement,
-				CSSStyleDeclaration: CSSStyleDeclaration
+				CSSStyleDeclaration: CSSStyleDeclaration,
+				Range: Range
 			};
 			Object.keys(interfaces).forEach(function (name) {
 				Object.defineProperty(interfaces[name].prototype, Symbol.toStringTag, { value: name });

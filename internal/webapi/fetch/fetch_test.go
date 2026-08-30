@@ -96,6 +96,30 @@ func TestResponseHeadersBodyUsedAndInvalidText(t *testing.T) {
 	}
 }
 
+func TestResponseBodyReaderIsChunkedExclusiveAndCancelable(t *testing.T) {
+	body := strings.Repeat("x", MaxStreamChunkSize+17)
+	response := newResponse(&network.Response{Body: []byte(body)})
+	reader, err := response.Stream()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.BodyUsed() {
+		t.Fatal("locking an undisturbed body marked it used")
+	}
+	if _, err := response.Stream(); !errors.Is(err, ErrBodyConsumed) {
+		t.Fatalf("second Stream error = %v, want ErrBodyConsumed", err)
+	}
+	chunk, done, err := reader.Read()
+	if err != nil || done || len(chunk) != MaxStreamChunkSize || !response.BodyUsed() {
+		t.Fatalf("first stream read = %d bytes, done=%t, used=%t, err=%v", len(chunk), done, response.BodyUsed(), err)
+	}
+	reader.Cancel()
+	chunk, done, err = reader.Read()
+	if err != nil || !done || len(chunk) != 0 {
+		t.Fatalf("canceled stream read = %d bytes, done=%t, err=%v", len(chunk), done, err)
+	}
+}
+
 func TestFetchRejectsInvalidRequestBeforeSending(t *testing.T) {
 	baseURL, err := url.Parse("https://example.test/page")
 	if err != nil {
