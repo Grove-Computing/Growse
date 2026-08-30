@@ -501,6 +501,7 @@ const (
 	BackgroundImageURL
 	BackgroundImageLinearGradient
 	BackgroundImageRadialGradient
+	BackgroundImageConicGradient
 )
 
 // GradientStop is one color stop in a linear gradient. Position is normalized
@@ -526,7 +527,18 @@ type BackgroundLayer struct {
 	Repeat   BackgroundRepeat
 	Position BackgroundPosition
 	Size     BackgroundSize
+	Origin   BackgroundBox
+	Clip     BackgroundBox
 }
+
+// BackgroundBox selects the border, padding, or content box used by a layer.
+type BackgroundBox uint8
+
+const (
+	BackgroundBoxBorder BackgroundBox = iota
+	BackgroundBoxPadding
+	BackgroundBoxContent
+)
 
 // BackgroundRepeat stores repetition independently for each axis.
 type BackgroundRepeat struct {
@@ -570,6 +582,8 @@ type ComputedStyle struct {
 	BackgroundPos       BackgroundPosition
 	BackgroundSize      BackgroundSize
 	BackgroundLayers    []BackgroundLayer
+	BackgroundOrigin    BackgroundBox
+	BackgroundClip      BackgroundBox
 	FontSize            float32
 	FontWeight          int
 	FontFamilies        []string

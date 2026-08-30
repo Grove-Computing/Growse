@@ -189,6 +189,20 @@ input[disabled][type="text"] { color: red }
 	}
 }
 
+func TestComputeMatchesCaseInsensitiveAttributeModifier(t *testing.T) {
+	document := dom.NewDocument()
+	target := document.CreateElement("div", map[string]string{"data-state": "ready"})
+	appendNode(t, document, document.Root, target)
+	stylesheet, err := css.Parse(strings.NewReader(`[data-state="READY" i] { color:red } [data-state="READY" s] { background-color:blue }`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	computed, _ := Compute(document, stylesheet).For(target)
+	if computed.Color != 0xff0000ff || computed.BackgroundColor != transparent {
+		t.Fatalf("attribute modifier style = %#v", computed)
+	}
+}
+
 func TestComputeMatchesCombinators(t *testing.T) {
 	document := dom.NewDocument()
 	main := document.CreateElement("main", nil)

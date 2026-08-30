@@ -685,7 +685,7 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 			Background: style.background, Image: cloneBackgroundImage(style.image), Layers: cloneBackgroundLayers(style.backgroundLayers),
 			Repeat: style.repeat, Position: style.position, Size: style.backgroundSize, Clip: cloneRect(e.clip),
 			Clips:  cloneClipRegions(e.clips),
-			Border: style.border, Opacity: e.opacity, BoxShadows: append([]stylemodel.Shadow(nil), style.boxShadows...),
+			Border: style.border, Padding: style.padding, Opacity: e.opacity, BoxShadows: append([]stylemodel.Shadow(nil), style.boxShadows...),
 			Outline: style.outline, OutlineOffset: style.outlineOffset,
 			Filters: append([]stylemodel.Filter(nil), style.filters...), BackdropFilters: append([]stylemodel.Filter(nil), style.backdropFilters...), BlendMode: style.mixBlendMode, Cursor: style.cursor,
 			Transform: stylemodel.IdentityMatrix(),

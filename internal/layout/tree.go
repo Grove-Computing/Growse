@@ -101,6 +101,7 @@ type Decoration struct {
 	Position        stylemodel.BackgroundPosition
 	Size            stylemodel.BackgroundSize
 	Border          stylemodel.Borders
+	Padding         stylemodel.Edges
 	Radius          BorderRadii
 	Opacity         float32
 	Clip            *Rect

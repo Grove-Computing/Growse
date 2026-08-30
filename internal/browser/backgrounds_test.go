@@ -36,6 +36,21 @@ func TestLoadBackgroundImagesDecodesSafeImage(t *testing.T) {
 	}
 }
 
+func TestLoadBackgroundImagesDecodesBoundedDataImageWithoutNetwork(t *testing.T) {
+	var encoded bytes.Buffer
+	source := image.NewNRGBA(image.Rect(0, 0, 2, 2))
+	source.SetNRGBA(1, 1, color.NRGBA{B: 255, A: 255})
+	if err := png.Encode(&encoded, source); err != nil {
+		t.Fatal(err)
+	}
+	resource := "data:image/png;base64," + base64.StdEncoding.EncodeToString(encoded.Bytes())
+	computed := style.Map{dom.NodeID(1): {BackgroundImage: style.BackgroundImage{Kind: style.BackgroundImageURL, URL: resource}}}
+	images, failures := loadBackgroundImages(context.Background(), nil, computed)
+	if len(failures) != 0 || images[resource] == nil || images[resource].Bounds() != image.Rect(0, 0, 2, 2) {
+		t.Fatalf("data background images/failures = %#v / %#v", images, failures)
+	}
+}
+
 func TestPageImageCacheSharesFetchBodyAndDecodeAcrossBackgroundAndElement(t *testing.T) {
 	resourceURL := "https://example.com/assets/shared.png"
 	var encoded bytes.Buffer

@@ -150,8 +150,8 @@ func initialStyle() ComputedStyle {
 		Color: defaultTextColor, BackgroundColor: transparent, FontSize: 16, FontWeight: 400,
 		FontFamilies: []string{"Growse Sans", "sans-serif"}, FontStyle: "normal", FontStretch: "normal", FontFaceIndex: -1,
 		ObjectPosition: BackgroundPosition{X: LengthPercentage{Percentage: 50}, Y: LengthPercentage{Percentage: 50}}, AccentColorAuto: true,
-		BackgroundRepeat: BackgroundRepeat{X: true, Y: true},
-		DecorationColor:  defaultTextColor, Opacity: 1, FlexShrink: 1,
+		BackgroundRepeat: BackgroundRepeat{X: true, Y: true}, BackgroundOrigin: BackgroundBoxPadding,
+		DecorationColor: defaultTextColor, Opacity: 1, FlexShrink: 1,
 		ZIndexAuto: true,
 		AlignItems: AlignStretch, JustifyItems: AlignStretch, AlignContent: AlignStretch, AlignSelf: AlignAuto, JustifySelf: AlignAuto,
 		Width: SizeValue{Kind: SizeAuto}, Height: SizeValue{Kind: SizeAuto},
@@ -173,8 +173,8 @@ func inheritedStyle(parent ComputedStyle) ComputedStyle {
 		AccentColor: parent.AccentColor, AccentColorAuto: parent.AccentColorAuto, Cursor: parent.Cursor,
 		ObjectPosition:  BackgroundPosition{X: LengthPercentage{Percentage: 50}, Y: LengthPercentage{Percentage: 50}},
 		BackgroundColor: transparent, Display: DisplayInline,
-		BackgroundRepeat: BackgroundRepeat{X: true, Y: true},
-		DecorationColor:  parent.Color, Opacity: 1, FlexShrink: 1,
+		BackgroundRepeat: BackgroundRepeat{X: true, Y: true}, BackgroundOrigin: BackgroundBoxPadding,
+		DecorationColor: parent.Color, Opacity: 1, FlexShrink: 1,
 		ZIndexAuto: true,
 		AlignItems: AlignStretch, JustifyItems: AlignStretch, AlignContent: AlignStretch, AlignSelf: AlignAuto, JustifySelf: AlignAuto,
 		Width: SizeValue{Kind: SizeAuto}, Height: SizeValue{Kind: SizeAuto},
@@ -2037,24 +2037,28 @@ func matchesAttribute(node *dom.Node, selector css.AttributeSelector) bool {
 	if !present {
 		return false
 	}
+	want := selector.Value
+	if selector.CaseInsensitive {
+		value, want = strings.ToLower(value), strings.ToLower(want)
+	}
 	switch selector.Matcher {
 	case css.AttributeExact:
-		return value == selector.Value
+		return value == want
 	case css.AttributeIncludes:
 		for _, word := range strings.Fields(value) {
-			if word == selector.Value {
+			if word == want {
 				return true
 			}
 		}
 		return false
 	case css.AttributeDashMatch:
-		return value == selector.Value || strings.HasPrefix(value, selector.Value+"-")
+		return value == want || strings.HasPrefix(value, want+"-")
 	case css.AttributePrefix:
-		return selector.Value != "" && strings.HasPrefix(value, selector.Value)
+		return want != "" && strings.HasPrefix(value, want)
 	case css.AttributeSuffix:
-		return selector.Value != "" && strings.HasSuffix(value, selector.Value)
+		return want != "" && strings.HasSuffix(value, want)
 	case css.AttributeSubstring:
-		return selector.Value != "" && strings.Contains(value, selector.Value)
+		return want != "" && strings.Contains(value, want)
 	default:
 		return false
 	}

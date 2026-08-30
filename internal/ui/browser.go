@@ -2331,13 +2331,14 @@ func (ui *BrowserUI) layoutDrawBox(gtx layout.Context, command paintmodel.DrawBo
 		}
 		layers := command.Layers
 		if len(layers) == 0 && command.Image.Kind != stylemodel.BackgroundImageNone {
-			layers = []stylemodel.BackgroundLayer{{Image: command.Image, Repeat: command.Repeat, Position: command.Position, Size: command.Size}}
+			layers = []stylemodel.BackgroundLayer{{Image: command.Image, Repeat: command.Repeat, Position: command.Position, Size: command.Size, Origin: stylemodel.BackgroundBoxPadding, Clip: stylemodel.BackgroundBoxBorder}}
 		}
 		for index := len(layers) - 1; index >= 0; index-- {
 			layer := layers[index]
 			cached := ui.imagePaintCache.background(command, layer, index, backgroundImages[layer.Image.URL], width, height, gtx.Metric.PxPerDp, styleRevision)
 			if cached.raster != nil {
-				area := bounds.Push(gtx.Ops)
+				backgroundBounds := backgroundClipRect(gtx, command, layer.Clip, width, height)
+				area := backgroundBounds.Push(gtx.Ops)
 				widget.Image{Src: cached.op, Fit: widget.Unscaled, Scale: 1 / gtx.Metric.PxPerDp}.Layout(gtx)
 				area.Pop()
 			}
@@ -2346,6 +2347,21 @@ func (ui *BrowserUI) layoutDrawBox(gtx layout.Context, command paintmodel.DrawBo
 		paintOutline(gtx, command.Outline, command.OutlineOffset, width, height)
 		return layout.Dimensions{}
 	})
+}
+
+func backgroundClipRect(gtx layout.Context, command paintmodel.DrawBox, box stylemodel.BackgroundBox, width, height int) clip.Rect {
+	left, top, right, bottom := 0, 0, 0, 0
+	if box == stylemodel.BackgroundBoxPadding || box == stylemodel.BackgroundBoxContent {
+		left, top = gtx.Dp(unit.Dp(command.Border.Left.Width)), gtx.Dp(unit.Dp(command.Border.Top.Width))
+		right, bottom = gtx.Dp(unit.Dp(command.Border.Right.Width)), gtx.Dp(unit.Dp(command.Border.Bottom.Width))
+	}
+	if box == stylemodel.BackgroundBoxContent {
+		left += gtx.Dp(unit.Dp(command.Padding.Left))
+		top += gtx.Dp(unit.Dp(command.Padding.Top))
+		right += gtx.Dp(unit.Dp(command.Padding.Right))
+		bottom += gtx.Dp(unit.Dp(command.Padding.Bottom))
+	}
+	return clip.Rect{Min: image.Pt(min(left, width), min(top, height)), Max: image.Pt(max(width-right, left), max(height-bottom, top))}
 }
 
 func rasterFilterImage(source image.Image, filters []stylemodel.Filter) image.Image {
@@ -2594,6 +2610,24 @@ func rasterRadialGradient(width, height int, background stylemodel.BackgroundIma
 		for x := 0; x < width; x++ {
 			dx, dy := (float32(x)-centerX)/max(radiusX, 1), (float32(y)-centerY)/max(radiusY, 1)
 			result.SetNRGBA(x, y, gradientColor(background.GradientStops, min(float32(math.Sqrt(float64(dx*dx+dy*dy))), 1)))
+		}
+	}
+	return result
+}
+
+func rasterConicGradient(width, height int, background stylemodel.BackgroundImage) *image.NRGBA {
+	result := image.NewNRGBA(image.Rect(0, 0, width, height))
+	if len(background.GradientStops) == 0 || width <= 0 || height <= 0 {
+		return result
+	}
+	centerX := background.GradientCenter.X.Resolve(float32(width))
+	centerY := background.GradientCenter.Y.Resolve(float32(height))
+	start := float64(background.GradientAngle) * math.Pi / 180
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			angle := math.Atan2(float64(x)-float64(centerX), float64(centerY)-float64(y)) - start
+			position := float32(math.Mod(angle/(2*math.Pi)+1, 1))
+			result.SetNRGBA(x, y, gradientColor(background.GradientStops, position))
 		}
 	}
 	return result

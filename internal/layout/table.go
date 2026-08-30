@@ -118,7 +118,7 @@ func (e *engine) addTable(node *dom.Node, tableStyle blockStyle, x, availableWid
 		e.tree.Decorations = append(e.tree.Decorations, Decoration{
 			Order: e.nextOrder(), StackingID: e.stackingID, NodeID: node.ID,
 			Rect:       Rect{X: x, Y: boxTop, Width: tableWidth},
-			Background: tableStyle.background, Border: tableStyle.border,
+			Background: tableStyle.background, Border: tableStyle.border, Padding: tableStyle.padding,
 			Opacity: e.opacity * tableStyle.opacity, BoxShadows: append([]stylemodel.Shadow(nil), tableStyle.boxShadows...),
 			Outline: tableStyle.outline, OutlineOffset: tableStyle.outlineOffset,
 			Cursor: tableStyle.cursor, Transform: stylemodel.IdentityMatrix(), Hidden: tableStyle.hidden,

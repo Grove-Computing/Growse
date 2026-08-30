@@ -65,6 +65,21 @@ func TestRasterRadialGradientUsesCenterAndStops(t *testing.T) {
 	}
 }
 
+func TestRasterConicGradientUsesAngleCenterAndStops(t *testing.T) {
+	gradient := style.BackgroundImage{
+		Kind: style.BackgroundImageConicGradient, GradientAngle: 0,
+		GradientCenter: style.BackgroundPosition{X: style.LengthPercentage{Percentage: 50}, Y: style.LengthPercentage{Percentage: 50}},
+		GradientStops:  []style.GradientStop{{Color: 0xff0000ff}, {Color: 0x0000ffff, Position: 1}},
+	}
+	raster := rasterConicGradient(9, 9, gradient)
+	if raster.Bounds() != image.Rect(0, 0, 9, 9) {
+		t.Fatalf("conic bounds = %v", raster.Bounds())
+	}
+	if raster.NRGBAAt(4, 0) == raster.NRGBAAt(4, 8) {
+		t.Fatalf("conic opposite samples are identical: %v", raster.NRGBAAt(4, 0))
+	}
+}
+
 func TestRasterBackgroundImageRepeatsAndSizesImage(t *testing.T) {
 	source := image.NewNRGBA(image.Rect(0, 0, 2, 1))
 	source.SetNRGBA(0, 0, color.NRGBA{R: 255, A: 255})

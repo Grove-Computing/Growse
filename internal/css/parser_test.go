@@ -140,6 +140,18 @@ a[href^="https"][href$='.pdf'][href*="/docs/"] { color: red }
 	}
 }
 
+func TestParseAttributeSelectorCaseModifier(t *testing.T) {
+	stylesheet, err := Parse(strings.NewReader(`[data-state="READY" i] { color:red } [data-state="READY" s] { color:blue }`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	insensitive := stylesheet.Rules[0].Selectors[0].Compounds[0].Attributes[0]
+	sensitive := stylesheet.Rules[1].Selectors[0].Compounds[0].Attributes[0]
+	if !insensitive.CaseInsensitive || sensitive.CaseInsensitive {
+		t.Fatalf("attribute modifiers = insensitive:%#v sensitive:%#v", insensitive, sensitive)
+	}
+}
+
 func TestParseSelectorListKeepsCommaInsideAttributeValue(t *testing.T) {
 	stylesheet, err := Parse(strings.NewReader(`[data-value="a,b"], p { color: red }`))
 	if err != nil {
