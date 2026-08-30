@@ -1854,6 +1854,8 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 			page.RecordRenderEvent(browser.RenderDisplayListReuse)
 		}
 	}
+	dirtySnapshot := page.RenderInvalidationSnapshot()
+	page.RecordCompositorSnapshot(len(dirtySnapshot.StyleNodes), len(displayList.Layers), len(displayList.DamageRegions))
 	paint.Fill(gtx.Ops, rgba(displayList.Background))
 	ui.updateViewportHover(gtx, page, tree, displayList)
 	ui.handleViewportClicks(gtx, page, tree, displayList)

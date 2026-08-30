@@ -61,6 +61,9 @@ type RenderMetrics struct {
 	ChromeTasks            uint64
 	PageTasks              uint64
 	DroppedTasks           uint64
+	DirtyNodes             uint64
+	CompositingLayers      uint64
+	DamageRegions          uint64
 }
 
 // RecordRenderReuse counts stable fragments and commands retained across one
@@ -73,6 +76,29 @@ func (p *Page) RecordRenderReuse(fragments, commands int) {
 	p.renderMetrics.LayoutFragmentReuses = saturatingAdd(p.renderMetrics.LayoutFragmentReuses, fragments)
 	p.renderMetrics.DisplayCommandReuses = saturatingAdd(p.renderMetrics.DisplayCommandReuses, commands)
 	p.renderMu.Unlock()
+}
+
+// RecordCompositorSnapshot publishes bounded, payload-free diagnostics for
+// the latest frame. Values are snapshots rather than cumulative counters.
+func (p *Page) RecordCompositorSnapshot(dirtyNodes, layers, damageRegions int) {
+	if p == nil {
+		return
+	}
+	p.renderMu.Lock()
+	p.renderMetrics.DirtyNodes = boundedRenderSnapshot(dirtyNodes, 256)
+	p.renderMetrics.CompositingLayers = boundedRenderSnapshot(layers, 128)
+	p.renderMetrics.DamageRegions = boundedRenderSnapshot(damageRegions, 256)
+	p.renderMu.Unlock()
+}
+
+func boundedRenderSnapshot(value, limit int) uint64 {
+	if value <= 0 {
+		return 0
+	}
+	if value > limit {
+		value = limit
+	}
+	return uint64(value)
 }
 
 func saturatingAdd(current uint64, amount int) uint64 {
