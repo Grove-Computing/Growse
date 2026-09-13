@@ -67,6 +67,8 @@ type cachedImageSurface struct {
 // consumers in the same generation.
 type imageResourceCache struct {
 	mu         sync.Mutex
+	ctx        context.Context
+	cancel     context.CancelFunc
 	entries    map[string]*cachedImageResource
 	surfaces   map[imageSurfaceCacheKey]*cachedImageSurface
 	bytes      int64
@@ -87,7 +89,9 @@ func newImageResourceCache() *imageResourceCache {
 }
 
 func newImageResourceCacheWithLimits(maxBytes int64, maxEntries int) *imageResourceCache {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &imageResourceCache{
+		ctx: ctx, cancel: cancel,
 		entries: make(map[string]*cachedImageResource), surfaces: make(map[imageSurfaceCacheKey]*cachedImageSurface),
 		maxBytes: maxBytes, maxEntries: maxEntries,
 	}
@@ -139,8 +143,17 @@ func (cache *imageResourceCache) load(ctx context.Context, client ResourceLoader
 		cache.mu.Unlock()
 		break
 	}
+	go cache.fetch(client, target, budget, key, entry)
+	select {
+	case <-entry.ready:
+		return cloneCachedImageResource(entry)
+	case <-ctx.Done():
+		return cachedImageResource{failure: imageLoadRequestFailure, err: ctx.Err()}
+	}
+}
 
-	response, err := client.Get(ctx, target)
+func (cache *imageResourceCache) fetch(client ResourceLoader, target *url.URL, budget *imageDecodeBudget, key string, entry *cachedImageResource) {
+	response, err := client.Get(cache.ctx, target)
 	result := cachedImageResource{}
 	switch {
 	case err != nil || response == nil:
@@ -171,6 +184,12 @@ func (cache *imageResourceCache) load(ctx context.Context, client ResourceLoader
 	}
 
 	cache.mu.Lock()
+	if cache.entries[key] != entry {
+		entry.failure, entry.err, entry.complete = imageLoadRequestFailure, cache.ctx.Err(), true
+		close(entry.ready)
+		cache.mu.Unlock()
+		return
+	}
 	entry.body = result.body
 	entry.contentType = result.contentType
 	entry.decoded = result.decoded
@@ -186,14 +205,8 @@ func (cache *imageResourceCache) load(ctx context.Context, client ResourceLoader
 	entry.bytes = int64(len(result.body)) + int64(result.width)*int64(result.height)*4
 	cache.bytes += entry.bytes
 	close(entry.ready)
-	if ctx.Err() != nil {
-		cache.bytes -= entry.bytes
-		delete(cache.entries, key)
-	} else {
-		cache.evictLocked(cache.maxBytes, 0)
-	}
+	cache.evictLocked(cache.maxBytes, 0)
 	cache.mu.Unlock()
-	return result
 }
 
 func (cache *imageResourceCache) prepareSurface(ctx context.Context, source cachedImageResource, target *url.URL, node *dom.Node, deviceScale float32, budget *imageDecodeBudget) (image.Image, error) {
@@ -306,6 +319,7 @@ func (cache *imageResourceCache) clear() {
 		return
 	}
 	cache.mu.Lock()
+	cancel := cache.cancel
 	cache.entries = make(map[string]*cachedImageResource)
 	cache.surfaces = make(map[imageSurfaceCacheKey]*cachedImageSurface)
 	cache.bytes = 0
@@ -316,6 +330,9 @@ func (cache *imageResourceCache) clear() {
 	cache.decodes = 0
 	cache.resizes = 0
 	cache.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 }
 
 func (cache *imageResourceCache) statsSnapshot() imageResourceCacheStats {

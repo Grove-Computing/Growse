@@ -766,7 +766,7 @@ func (b *Browser) UpdateViewport(width, height float32) bool {
 		loadContext, generation := page.beginImageLoad(context.Background())
 		policy := imageViewportPolicy(page.Document, page.ComputedStyles, baseURL, width, height)
 		budget := newImageDecodeBudgetWithImages(page.BackgroundImages)
-		document := page.Document
+		document := snapshotImageDocument(page.Document)
 		imageCache := page.imageCache
 		if !documentHasViewportImageWork(document) {
 			committed := page.commitImageLoad(generation, make(map[dom.NodeID]layoutengine.ImageResource), make(map[string]image.Image), nil)
@@ -775,21 +775,25 @@ func (b *Browser) UpdateViewport(width, height float32) bool {
 			}
 			return true
 		}
-		go func() {
-			resources, images, failures := loadReplacedImagesWithCache(loadContext, imageLoader, baseURL, document, width, 1, policy, budget, imageCache)
-			inlineResources, inlineImages, inlineFailures := loadInlineSVGImagesWithBudget(document, budget)
-			mergeImageResources(resources, images, inlineResources, inlineImages)
-			failures = append(failures, inlineFailures...)
-			b.mu.RLock()
-			active := b.page == page && page.Engine == runtimemodel.EngineJavaScript
-			b.mu.RUnlock()
-			staged := active && loadContext.Err() == nil && page.stageImageLoad(generation, resources, images, failures)
-			if staged && onMutation != nil {
-				onMutation()
-			}
-		}()
+		b.loadPageImagesAsync(loadContext, generation, page, imageLoader, baseURL, document, width, policy, budget, imageCache, onMutation)
 	}
 	return true
+}
+
+func (b *Browser) loadPageImagesAsync(loadContext context.Context, generation uint64, page *Page, imageLoader ResourceLoader, baseURL *url.URL, document *dom.Document, width float32, policy map[dom.NodeID]bool, budget *imageDecodeBudget, imageCache *imageResourceCache, onMutation func()) {
+	go func() {
+		resources, images, failures := loadReplacedImagesWithCache(loadContext, imageLoader, baseURL, document, width, 1, policy, budget, imageCache)
+		inlineResources, inlineImages, inlineFailures := loadInlineSVGImagesWithBudget(document, budget)
+		mergeImageResources(resources, images, inlineResources, inlineImages)
+		failures = append(failures, inlineFailures...)
+		b.mu.RLock()
+		active := b.page == page && page.Engine == runtimemodel.EngineJavaScript
+		b.mu.RUnlock()
+		staged := active && loadContext.Err() == nil && page.stageImageLoad(generation, resources, images, failures)
+		if staged && onMutation != nil {
+			onMutation()
+		}
+	}()
 }
 
 func documentHasViewportImageWork(document *dom.Document) bool {
@@ -1441,14 +1445,15 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	var replacedImages map[dom.NodeID]layoutengine.ImageResource
 	var decodedImages map[string]image.Image
 	var imageErrors []string
+	var imagePolicy map[dom.NodeID]bool
+	var imageDocument *dom.Document
 	var fonts []FontResource
 	var fontErrors []string
 	if engine == runtimemodel.EngineJavaScript {
-		imagePolicy := imageViewportPolicy(document, computedStyles, baseURL, 1280, 720)
-		replacedImages, decodedImages, imageErrors = loadReplacedImagesWithCache(ctx, imageResources, baseURL, document, 1280, 1, imagePolicy, imageBudget, imageCache)
-		inlineResources, inlineImages, inlineErrors := loadInlineSVGImagesWithBudget(document, imageBudget)
-		mergeImageResources(replacedImages, decodedImages, inlineResources, inlineImages)
-		imageErrors = append(imageErrors, inlineErrors...)
+		imagePolicy = imageViewportPolicy(document, computedStyles, baseURL, 1280, 720)
+		imageDocument = snapshotImageDocument(document)
+		replacedImages = make(map[dom.NodeID]layoutengine.ImageResource)
+		decodedImages = make(map[string]image.Image)
 		fonts, fontErrors = loadWebFonts(ctx, fontResources, response.URL, stylesheet)
 	}
 	scripts, scriptErrors := loadScriptsForEngineWithBase(ctx, scriptResources, response.URL, baseURL, document, engine)
@@ -1596,6 +1601,10 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	b.mu.Unlock()
 	committed = true
 	close(navigationReady)
+	if engine == runtimemodel.EngineJavaScript && documentHasViewportImageWork(imageDocument) {
+		loadContext, generation := page.beginImageLoad(context.Background())
+		b.loadPageImagesAsync(loadContext, generation, page, imageResources, baseURL, imageDocument, 1280, imagePolicy, imageBudget, imageCache, onMutation)
+	}
 	if runtime, ok := pageRuntime.(backgroundRuntime); ok {
 		runtime.SetBackground(background)
 	}

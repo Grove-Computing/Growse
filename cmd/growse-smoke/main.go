@@ -187,6 +187,9 @@ func runModern(root string) error {
 	if err := waitForText(engine, mutations, "next-hydration-marker", "hydrated"); err != nil {
 		return err
 	}
+	if err := waitForImages(engine, mutations, 1); err != nil {
+		return err
+	}
 	rootNode, ok := page.Document.GetElementByID("__next")
 	if !ok {
 		return errors.New("next.js SSR root is missing")
@@ -235,6 +238,22 @@ func waitForText(engine *browser.Browser, mutations <-chan struct{}, id, want st
 		case <-deadline.C:
 			page := engine.Page()
 			return fmt.Errorf("fixture %s = %q, want %q; runtime=%q scripts=%v", id, text(page.Document, id), want, page.RuntimeError, page.ScriptErrors)
+		}
+	}
+}
+
+func waitForImages(engine *browser.Browser, mutations <-chan struct{}, want int) error {
+	deadline := time.NewTimer(10 * time.Second)
+	defer deadline.Stop()
+	for {
+		page := engine.Page()
+		if len(page.Images) >= want {
+			return nil
+		}
+		select {
+		case <-mutations:
+		case <-deadline.C:
+			return fmt.Errorf("fixture images = %d, want at least %d; errors=%v", len(page.Images), want, page.ImageErrors)
 		}
 	}
 }
