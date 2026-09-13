@@ -594,6 +594,41 @@ func TestUpdateViewportReturnsWhileResponsiveImageIsPending(t *testing.T) {
 	}
 }
 
+func TestNavigateReturnsWhileInitialImageIsPending(t *testing.T) {
+	pageURL := "https://example.com/page.html"
+	imageURL := "https://example.com/hero.png"
+	loader := &cancelAwareImageLoader{
+		blocked: imageURL, started: make(chan struct{}), responses: map[string]*network.Response{
+			pageURL: {URL: mustParseURL(t, pageURL), StatusCode: 200, ContentType: "text/html", Body: []byte(`<main>Ready</main><img src="hero.png" alt="Hero">`)},
+		},
+	}
+	browserState := NewWithEngineFactory(loader, func(runtimemodel.Engine) runtimemodel.Runtime { return &runtimeStub{} })
+	defer browserState.Close()
+	_, _ = browserState.SetEngine(context.Background(), runtimemodel.EngineJavaScript)
+	type result struct {
+		page *Page
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		page, err := browserState.Navigate(context.Background(), pageURL)
+		done <- result{page: page, err: err}
+	}()
+	select {
+	case loaded := <-done:
+		if loaded.err != nil || loaded.page == nil || loaded.page.Document == nil {
+			t.Fatalf("navigation result = page:%#v err:%v", loaded.page, loaded.err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("navigation blocked on the initial image request")
+	}
+	select {
+	case <-loader.started:
+	case <-time.After(time.Second):
+		t.Fatal("initial image request did not start after page commit")
+	}
+}
+
 func TestPageCloseCancelsPendingResponsiveImage(t *testing.T) {
 	pageURL := "https://example.com/page.html"
 	desktopURL, mobileURL := "https://example.com/desktop.png", "https://example.com/mobile.png"
