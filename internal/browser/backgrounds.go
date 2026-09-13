@@ -196,6 +196,29 @@ func loadBackgroundImagesWithCache(ctx context.Context, client ResourceLoader, c
 	return images, boundedImageDiagnostics(errors)
 }
 
+func snapshotImageDocument(document *dom.Document) *dom.Document {
+	if document == nil || document.Root == nil {
+		return nil
+	}
+	var cloneNode func(*dom.Node, *dom.Node) *dom.Node
+	cloneNode = func(source, parent *dom.Node) *dom.Node {
+		if source == nil {
+			return nil
+		}
+		attributes := make(map[string]string, len(source.Attributes))
+		for name, value := range source.Attributes {
+			attributes[name] = value
+		}
+		clone := &dom.Node{ID: source.ID, Type: source.Type, TagName: source.TagName, Text: source.Text, Attributes: attributes, Parent: parent}
+		clone.Children = make([]*dom.Node, 0, len(source.Children))
+		for _, child := range source.Children {
+			clone.Children = append(clone.Children, cloneNode(child, clone))
+		}
+		return clone
+	}
+	return &dom.Document{Root: cloneNode(document.Root, nil)}
+}
+
 func decodeDataBackground(resource string, budget *imageDecodeBudget) (image.Image, error) {
 	if len(resource) > maxImageBytes*2 || !budget.claim("background:"+resource) {
 		return nil, errors.New("data image resource limit exceeded")
