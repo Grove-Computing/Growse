@@ -290,16 +290,17 @@ func TestUpdateViewportReselectsResponsiveImageCandidate(t *testing.T) {
 	if !browserState.UpdateViewport(500, 700) {
 		t.Fatal("UpdateViewport() = false")
 	}
-	resource := waitForImageResource(t, page, imageID, mobileURL)
+	resource := waitForImageResource(t, browserState, imageID, mobileURL)
 	if resource.IntrinsicWidth != 2 {
 		t.Fatalf("responsive candidate = %#v", resource)
 	}
 }
 
-func waitForImageResource(t *testing.T, page *Page, nodeID dom.NodeID, expectedURL string) layoutmodel.ImageResource {
+func waitForImageResource(t *testing.T, browserState *Browser, nodeID dom.NodeID, expectedURL string) layoutmodel.ImageResource {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)
 	for {
+		page := browserState.Page()
 		page.imageMu.Lock()
 		resource := page.ImageResources[nodeID]
 		page.imageMu.Unlock()
