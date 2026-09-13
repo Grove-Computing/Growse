@@ -764,6 +764,13 @@ func (b *Browser) UpdateViewport(width, height float32) bool {
 		budget := newImageDecodeBudgetWithImages(page.BackgroundImages)
 		document := page.Document
 		imageCache := page.imageCache
+		if !documentHasViewportImageWork(document) {
+			committed := page.commitImageLoad(generation, make(map[dom.NodeID]layoutmodel.ImageResource), make(map[string]image.Image), nil)
+			if committed && onMutation != nil {
+				onMutation()
+			}
+			return true
+		}
 		go func() {
 			resources, images, failures := loadReplacedImagesWithCache(loadContext, imageLoader, baseURL, document, width, 1, policy, budget, imageCache)
 			inlineResources, inlineImages, inlineFailures := loadInlineSVGImagesWithBudget(document, budget)
@@ -782,6 +789,28 @@ func (b *Browser) UpdateViewport(width, height float32) bool {
 		}()
 	}
 	return true
+}
+
+func documentHasViewportImageWork(document *dom.Document) bool {
+	if document == nil {
+		return false
+	}
+	found := false
+	var visit func(*dom.Node)
+	visit = func(node *dom.Node) {
+		if node == nil || found {
+			return
+		}
+		if node.Type == dom.NodeElement && (node.TagName == "img" || node.TagName == "svg") {
+			found = true
+			return
+		}
+		for _, child := range node.Children {
+			visit(child)
+		}
+	}
+	visit(document.Root)
+	return found
 }
 
 // SetReducedMotion updates the browser preference exposed through the
