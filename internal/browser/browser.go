@@ -765,7 +765,7 @@ func (b *Browser) UpdateViewport(width, height float32) bool {
 		document := page.Document
 		imageCache := page.imageCache
 		if !documentHasViewportImageWork(document) {
-			committed := page.commitImageLoad(generation, make(map[dom.NodeID]layoutmodel.ImageResource), make(map[string]image.Image), nil)
+			committed := page.commitImageLoad(generation, make(map[dom.NodeID]layoutengine.ImageResource), make(map[string]image.Image), nil)
 			if committed && onMutation != nil {
 				onMutation()
 			}
