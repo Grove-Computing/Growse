@@ -209,3 +209,21 @@ func waitForFixtureImage(t *testing.T, engine *browser.Browser, mutations <-chan
 		}
 	}
 }
+
+func waitForFixtureImageSettled(t *testing.T, engine *browser.Browser, mutations <-chan struct{}, id string) {
+	t.Helper()
+	deadline := time.NewTimer(3 * time.Second)
+	defer deadline.Stop()
+	for {
+		page := engine.Page()
+		image := fixtureNode(t, page, id)
+		if resource, ok := page.ImageResources[image.ID]; ok && (resource.Loaded || resource.Error != "") {
+			return
+		}
+		select {
+		case <-mutations:
+		case <-deadline.C:
+			t.Fatalf("fixture %s image did not settle; errors=%v", id, page.ImageErrors)
+		}
+	}
+}
