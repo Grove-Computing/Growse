@@ -98,34 +98,47 @@ func (cache *imageResourceCache) load(ctx context.Context, client ResourceLoader
 		return cachedImageResource{failure: imageLoadRequestFailure}
 	}
 	key := target.String()
-	cache.mu.Lock()
-	if existing := cache.entries[key]; existing != nil {
-		cache.hits++
-		cache.tick++
-		existing.lastUsed = cache.tick
-		ready := existing.ready
-		cache.mu.Unlock()
-		select {
-		case <-ready:
-			return cloneCachedImageResource(existing)
-		case <-ctx.Done():
-			return cachedImageResource{failure: imageLoadRequestFailure, err: ctx.Err()}
+	var entry *cachedImageResource
+	for {
+		cache.mu.Lock()
+		if existing := cache.entries[key]; existing != nil {
+			cache.hits++
+			cache.tick++
+			existing.lastUsed = cache.tick
+			ready := existing.ready
+			cache.mu.Unlock()
+			select {
+			case <-ready:
+				cache.mu.Lock()
+				reusable := cache.entries[key] == existing
+				cache.mu.Unlock()
+				if reusable {
+					return cloneCachedImageResource(existing)
+				}
+				if ctx.Err() != nil {
+					return cachedImageResource{failure: imageLoadRequestFailure, err: ctx.Err()}
+				}
+				continue
+			case <-ctx.Done():
+				return cachedImageResource{failure: imageLoadRequestFailure, err: ctx.Err()}
+			}
 		}
-	}
-	cache.misses++
-	cache.evictLocked(0, 1)
-	if cache.maxEntries <= 0 || len(cache.entries)+len(cache.surfaces) >= cache.maxEntries {
+		cache.misses++
+		cache.evictLocked(0, 1)
+		if cache.maxEntries <= 0 || len(cache.entries)+len(cache.surfaces) >= cache.maxEntries {
+			cache.mu.Unlock()
+			return cachedImageResource{failure: imageLoadResourceLimit}
+		}
+		if !budget.claim(key) {
+			cache.mu.Unlock()
+			return cachedImageResource{failure: imageLoadResourceLimit}
+		}
+		cache.tick++
+		entry = &cachedImageResource{ready: make(chan struct{}), lastUsed: cache.tick}
+		cache.entries[key] = entry
 		cache.mu.Unlock()
-		return cachedImageResource{failure: imageLoadResourceLimit}
+		break
 	}
-	if !budget.claim(key) {
-		cache.mu.Unlock()
-		return cachedImageResource{failure: imageLoadResourceLimit}
-	}
-	cache.tick++
-	entry := &cachedImageResource{ready: make(chan struct{}), lastUsed: cache.tick}
-	cache.entries[key] = entry
-	cache.mu.Unlock()
 
 	response, err := client.Get(ctx, target)
 	result := cachedImageResource{}
