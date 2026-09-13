@@ -67,7 +67,6 @@ type cachedImageSurface struct {
 // consumers in the same generation.
 type imageResourceCache struct {
 	mu         sync.Mutex
-	fetchMu    sync.Mutex
 	entries    map[string]*cachedImageResource
 	surfaces   map[imageSurfaceCacheKey]*cachedImageSurface
 	bytes      int64
@@ -128,9 +127,7 @@ func (cache *imageResourceCache) load(ctx context.Context, client ResourceLoader
 	cache.entries[key] = entry
 	cache.mu.Unlock()
 
-	cache.fetchMu.Lock()
 	response, err := client.Get(ctx, target)
-	cache.fetchMu.Unlock()
 	result := cachedImageResource{}
 	switch {
 	case err != nil || response == nil:
