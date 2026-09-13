@@ -233,8 +233,12 @@ func (b *Browser) SetOnMutation(callback func()) {
 // navigation.
 func (b *Browser) Page() *Page {
 	b.mu.RLock()
-	defer b.mu.RUnlock()
-	return b.page
+	page := b.page
+	b.mu.RUnlock()
+	if page != nil && page.commitPendingImageLoad() {
+		dispatchImageResourceEvents(b, page)
+	}
+	return page
 }
 
 // Engine はこのTabが次のPage loadで使用するEngineを返す。
@@ -779,11 +783,8 @@ func (b *Browser) UpdateViewport(width, height float32) bool {
 			b.mu.RLock()
 			active := b.page == page && page.Engine == runtimemodel.EngineJavaScript
 			b.mu.RUnlock()
-			committed := active && loadContext.Err() == nil && page.commitImageLoad(generation, resources, images, failures)
-			if committed {
-				dispatchImageResourceEvents(b, page)
-			}
-			if committed && onMutation != nil {
+			staged := active && loadContext.Err() == nil && page.stageImageLoad(generation, resources, images, failures)
+			if staged && onMutation != nil {
 				onMutation()
 			}
 		}()
