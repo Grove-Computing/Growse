@@ -126,7 +126,7 @@ func TestImageResourceCacheCoalescesConcurrentDuplicateURL(t *testing.T) {
 	}
 }
 
-func TestImageResourceCacheRetriesEntryCanceledByPriorGeneration(t *testing.T) {
+func TestImageResourceCacheKeepsSharedFetchWhenPriorGenerationIsCanceled(t *testing.T) {
 	var encoded bytes.Buffer
 	if err := png.Encode(&encoded, image.NewNRGBA(image.Rect(0, 0, 2, 2))); err != nil {
 		t.Fatal(err)
@@ -164,9 +164,9 @@ func TestImageResourceCacheRetriesEntryCanceledByPriorGeneration(t *testing.T) {
 		t.Fatalf("first image load error = %v, want context canceled", result.err)
 	}
 	select {
-	case <-loader.started:
-	case <-time.After(time.Second):
-		t.Fatal("replacement image request did not start")
+	case started := <-loader.started:
+		t.Fatalf("duplicate image request started after cancellation: %s", started)
+	case <-time.After(20 * time.Millisecond):
 	}
 	close(loader.release)
 	if result := <-secondResult; result.failure != imageLoadOK {
@@ -174,8 +174,8 @@ func TestImageResourceCacheRetriesEntryCanceledByPriorGeneration(t *testing.T) {
 	}
 	loader.mu.Lock()
 	defer loader.mu.Unlock()
-	if loader.fetches[target.String()] != 2 {
-		t.Fatalf("fetch count = %d, want 2", loader.fetches[target.String()])
+	if loader.fetches[target.String()] != 1 {
+		t.Fatalf("fetch count = %d, want 1", loader.fetches[target.String()])
 	}
 }
 
