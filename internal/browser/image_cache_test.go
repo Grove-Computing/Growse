@@ -6,12 +6,124 @@ import (
 	"image"
 	"image/png"
 	"net/http"
+	"net/url"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/network"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 )
+
+type concurrentImageLoader struct {
+	body    []byte
+	started chan string
+	release chan struct{}
+
+	mu      sync.Mutex
+	fetches map[string]int
+}
+
+func (loader *concurrentImageLoader) Get(ctx context.Context, target *url.URL) (*network.Response, error) {
+	loader.mu.Lock()
+	loader.fetches[target.String()]++
+	loader.mu.Unlock()
+	select {
+	case loader.started <- target.String():
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	select {
+	case <-loader.release:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	return &network.Response{URL: target, StatusCode: http.StatusOK, ContentType: "image/png", Body: append([]byte(nil), loader.body...)}, nil
+}
+
+func TestImageResourceCacheFetchesIndependentURLsConcurrently(t *testing.T) {
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, image.NewNRGBA(image.Rect(0, 0, 2, 2))); err != nil {
+		t.Fatal(err)
+	}
+	loader := &concurrentImageLoader{
+		body: encoded.Bytes(), started: make(chan string, 2), release: make(chan struct{}), fetches: make(map[string]int),
+	}
+	cache := newImageResourceCache()
+	budget := newImageDecodeBudget()
+	urls := []string{"https://example.com/a.png", "https://example.com/b.png"}
+	results := make(chan cachedImageResource, len(urls))
+	for _, rawURL := range urls {
+		target := mustParseURL(t, rawURL)
+		go func() { results <- cache.load(context.Background(), loader, target, budget) }()
+	}
+	released := false
+	defer func() {
+		if !released {
+			close(loader.release)
+		}
+	}()
+	seen := make(map[string]bool)
+	for range urls {
+		select {
+		case started := <-loader.started:
+			seen[started] = true
+		case <-time.After(time.Second):
+			t.Fatal("independent image requests were serialized")
+		}
+	}
+	close(loader.release)
+	released = true
+	for range urls {
+		if result := <-results; result.failure != imageLoadOK {
+			t.Fatalf("image load failed: %#v", result)
+		}
+	}
+	if len(seen) != len(urls) {
+		t.Fatalf("started requests = %v, want %v", seen, urls)
+	}
+	loader.mu.Lock()
+	defer loader.mu.Unlock()
+	for _, rawURL := range urls {
+		if loader.fetches[rawURL] != 1 {
+			t.Fatalf("fetch count for %s = %d, want 1", rawURL, loader.fetches[rawURL])
+		}
+	}
+}
+
+func TestImageResourceCacheCoalescesConcurrentDuplicateURL(t *testing.T) {
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, image.NewNRGBA(image.Rect(0, 0, 2, 2))); err != nil {
+		t.Fatal(err)
+	}
+	loader := &concurrentImageLoader{
+		body: encoded.Bytes(), started: make(chan string, 2), release: make(chan struct{}), fetches: make(map[string]int),
+	}
+	cache := newImageResourceCache()
+	budget := newImageDecodeBudget()
+	target := mustParseURL(t, "https://example.com/shared.png")
+	results := make(chan cachedImageResource, 2)
+	for range 2 {
+		go func() { results <- cache.load(context.Background(), loader, target, budget) }()
+	}
+	select {
+	case <-loader.started:
+	case <-time.After(time.Second):
+		t.Fatal("image request did not start")
+	}
+	close(loader.release)
+	for range 2 {
+		if result := <-results; result.failure != imageLoadOK {
+			t.Fatalf("image load failed: %#v", result)
+		}
+	}
+	loader.mu.Lock()
+	defer loader.mu.Unlock()
+	if loader.fetches[target.String()] != 1 {
+		t.Fatalf("fetch count = %d, want 1", loader.fetches[target.String()])
+	}
+}
 
 func TestImageResourceCacheEvictsLeastRecentlyUsedEntryWithinLimits(t *testing.T) {
 	encode := func(value uint8) []byte {
