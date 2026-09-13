@@ -179,3 +179,33 @@ func waitForFixtureText(t *testing.T, engine *browser.Browser, mutations <-chan 
 		}
 	}
 }
+
+func waitForFixtureImage(t *testing.T, engine *browser.Browser, mutations <-chan struct{}, id string) {
+	t.Helper()
+	deadline := time.NewTimer(3 * time.Second)
+	defer deadline.Stop()
+	var findImage func(*dom.Node) *dom.Node
+	findImage = func(node *dom.Node) *dom.Node {
+		if node.Type == dom.ElementNode && (node.TagName == "img" || node.TagName == "svg") {
+			return node
+		}
+		for _, child := range node.Children {
+			if image := findImage(child); image != nil {
+				return image
+			}
+		}
+		return nil
+	}
+	for {
+		page := engine.Page()
+		container := fixtureNode(t, page, id)
+		if image := findImage(container); image != nil && page.ImageResources[image.ID].Loaded {
+			return
+		}
+		select {
+		case <-mutations:
+		case <-deadline.C:
+			t.Fatalf("fixture %s image did not load; errors=%v", id, page.ImageErrors)
+		}
+	}
+}
