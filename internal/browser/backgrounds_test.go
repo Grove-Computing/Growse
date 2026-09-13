@@ -39,6 +39,49 @@ func TestLoadBackgroundImagesDecodesSafeImage(t *testing.T) {
 	}
 }
 
+func TestLoadBackgroundImagesFetchesIndependentURLsConcurrently(t *testing.T) {
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, image.NewNRGBA(image.Rect(0, 0, 2, 2))); err != nil {
+		t.Fatal(err)
+	}
+	loader := &concurrentImageLoader{
+		body: encoded.Bytes(), started: make(chan string, 2), release: make(chan struct{}), fetches: make(map[string]int),
+	}
+	firstURL, secondURL := "https://example.com/first.png", "https://example.com/second.png"
+	computed := style.Map{
+		dom.NodeID(1): {BackgroundImage: style.BackgroundImage{Kind: style.BackgroundImageURL, URL: firstURL}},
+		dom.NodeID(2): {BackgroundImage: style.BackgroundImage{Kind: style.BackgroundImageURL, URL: secondURL}},
+	}
+	type result struct {
+		images   map[string]image.Image
+		failures []string
+	}
+	done := make(chan result, 1)
+	go func() {
+		images, failures := loadBackgroundImages(context.Background(), loader, computed)
+		done <- result{images: images, failures: failures}
+	}()
+	released := false
+	defer func() {
+		if !released {
+			close(loader.release)
+		}
+	}()
+	for range 2 {
+		select {
+		case <-loader.started:
+		case <-time.After(time.Second):
+			t.Fatal("background image requests were serialized")
+		}
+	}
+	close(loader.release)
+	released = true
+	loaded := <-done
+	if len(loaded.failures) != 0 || loaded.images[firstURL] == nil || loaded.images[secondURL] == nil {
+		t.Fatalf("background images/failures = %#v / %#v", loaded.images, loaded.failures)
+	}
+}
+
 func TestLoadBackgroundImagesDecodesBoundedDataImageWithoutNetwork(t *testing.T) {
 	var encoded bytes.Buffer
 	source := image.NewNRGBA(image.Rect(0, 0, 2, 2))
