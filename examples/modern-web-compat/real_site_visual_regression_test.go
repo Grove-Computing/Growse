@@ -58,6 +58,7 @@ func TestRealSiteVisualRegression(t *testing.T) {
 	}
 	engine.UpdateViewport(1024, 720)
 	waitForFixtureText(t, engine, mutations, "real-site-hydration", "hydrated")
+	waitForFixtureRevision(t, engine, mutations, 7)
 	page = engine.Page()
 	actual.States = append(actual.States, visualFixtureState("real-image-loaded", page, "real-site-root", "real-site-medium", "real-site-high-card"))
 	if !engine.DispatchClick(fixtureNode(t, page, "real-site-high").ID, 0, 0) {
