@@ -220,7 +220,7 @@ func TestNavigateLoadsReplacedImagesOnlyForExplicitJavaScriptEngine(t *testing.T
 	}
 	newLoader := func() *routeLoader {
 		return &routeLoader{responses: map[string]*network.Response{
-			pageURL:  {URL: mustParseURL(t, pageURL), StatusCode: 200, ContentType: "text/html", Body: []byte(`<img src="photo.png" alt="Photo">`)},
+			pageURL:  {URL: mustParseURL(t, pageURL), StatusCode: 200, ContentType: "text/html", Body: []byte(`<img id="photo" src="photo.png" alt="Photo">`)},
 			imageURL: {URL: mustParseURL(t, imageURL), StatusCode: 200, ContentType: "image/png", Body: encoded.Bytes()},
 		}}
 	}
@@ -243,6 +243,12 @@ func TestNavigateLoadsReplacedImagesOnlyForExplicitJavaScriptEngine(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
+	imageNode, ok := jsPage.Document.GetElementByID("photo")
+	if !ok {
+		t.Fatal("photo element is missing")
+	}
+	waitForImageResource(t, jsBrowser, imageNode.ID, imageURL)
+	jsPage = jsBrowser.Page()
 	if len(jsPage.ImageResources) != 1 || jsPage.Images[imageURL] == nil {
 		t.Fatalf("JavaScript page images = %#v / %#v", jsPage.ImageResources, jsPage.Images)
 	}
@@ -310,7 +316,7 @@ func TestUpdateViewportReselectsResponsiveImageCandidate(t *testing.T) {
 		return output.Bytes()
 	}
 	loader := &routeLoader{responses: map[string]*network.Response{
-		pageURL:    {URL: mustParseURL(t, pageURL), StatusCode: 200, ContentType: "text/html", Body: []byte(`<picture><source media="(max-width: 600px)" srcset="mobile.png"><img src="desktop.png"></picture>`)},
+		pageURL:    {URL: mustParseURL(t, pageURL), StatusCode: 200, ContentType: "text/html", Body: []byte(`<picture><source media="(max-width: 600px)" srcset="mobile.png"><img id="hero" src="desktop.png"></picture>`)},
 		desktopURL: {URL: mustParseURL(t, desktopURL), StatusCode: 200, ContentType: "image/png", Body: encode(4)},
 		mobileURL:  {URL: mustParseURL(t, mobileURL), StatusCode: 200, ContentType: "image/png", Body: encode(2)},
 	}}
@@ -323,12 +329,13 @@ func TestUpdateViewportReselectsResponsiveImageCandidate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var imageID dom.NodeID
-	for id := range page.ImageResources {
-		imageID = id
+	imageNode, ok := page.Document.GetElementByID("hero")
+	if !ok {
+		t.Fatal("hero element is missing")
 	}
-	if page.ImageResources[imageID].URL != desktopURL {
-		t.Fatalf("initial candidate = %q, want desktop", page.ImageResources[imageID].URL)
+	imageID := imageNode.ID
+	if resource := waitForImageResource(t, browserState, imageID, desktopURL); resource.URL != desktopURL {
+		t.Fatalf("initial candidate = %q, want desktop", resource.URL)
 	}
 	if !browserState.UpdateViewport(500, 700) {
 		t.Fatal("UpdateViewport() = false")
@@ -394,9 +401,14 @@ bad.addEventListener("error", () => result.setAttribute("events", (result.getAtt
 	if !ok {
 		t.Fatal("result element is missing")
 	}
-	if state, _ := result.Attribute("state"); state != "true|3|2|"+imageURL {
+	if state, _ := result.Attribute("state"); state != "false|0|0|" {
 		t.Fatalf("HTMLImageElement state = %q", state)
 	}
+	okImage, found := page.Document.GetElementByID("ok")
+	if !found {
+		t.Fatal("ok image element is missing")
+	}
+	waitForImageResource(t, browserState, okImage.ID, imageURL)
 	if order, _ := result.Attribute("events"); order != "load,error," {
 		t.Fatalf("image event order = %q", order)
 	}
