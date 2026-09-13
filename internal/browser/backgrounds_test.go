@@ -10,8 +10,10 @@ import (
 	"net/url"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Grove-Computing/Growse/internal/dom"
+	layoutmodel "github.com/Grove-Computing/Growse/internal/layout"
 	"github.com/Grove-Computing/Growse/internal/network"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 	runtimejavascript "github.com/Grove-Computing/Growse/internal/runtime/javascript"
@@ -285,8 +287,29 @@ func TestUpdateViewportReselectsResponsiveImageCandidate(t *testing.T) {
 	if page.ImageResources[imageID].URL != desktopURL {
 		t.Fatalf("initial candidate = %q, want desktop", page.ImageResources[imageID].URL)
 	}
-	if !browserState.UpdateViewport(500, 700) || page.ImageResources[imageID].URL != mobileURL || page.ImageResources[imageID].IntrinsicWidth != 2 {
-		t.Fatalf("responsive candidate = %#v", page.ImageResources[imageID])
+	if !browserState.UpdateViewport(500, 700) {
+		t.Fatal("UpdateViewport() = false")
+	}
+	resource := waitForImageResource(t, page, imageID, mobileURL)
+	if resource.IntrinsicWidth != 2 {
+		t.Fatalf("responsive candidate = %#v", resource)
+	}
+}
+
+func waitForImageResource(t *testing.T, page *Page, nodeID dom.NodeID, expectedURL string) layoutmodel.ImageResource {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for {
+		page.imageMu.Lock()
+		resource := page.ImageResources[nodeID]
+		page.imageMu.Unlock()
+		if resource.URL == expectedURL {
+			return resource
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("image resource did not update to %s; last resource = %#v", expectedURL, resource)
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 
@@ -488,6 +511,42 @@ func TestNavigationCancelsStaleResponsiveImageCompletion(t *testing.T) {
 		if resource.URL == mobileURL {
 			t.Fatalf("stale image completion committed after navigation: %#v", resource)
 		}
+	}
+}
+
+func TestUpdateViewportReturnsWhileResponsiveImageIsPending(t *testing.T) {
+	pageURL := "https://example.com/page.html"
+	desktopURL, mobileURL := "https://example.com/desktop.png", "https://example.com/mobile.png"
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, image.NewNRGBA(image.Rect(0, 0, 2, 1))); err != nil {
+		t.Fatal(err)
+	}
+	loader := &cancelAwareImageLoader{
+		blocked: mobileURL, started: make(chan struct{}), responses: map[string]*network.Response{
+			pageURL:    {URL: mustParseURL(t, pageURL), StatusCode: 200, ContentType: "text/html", Body: []byte(`<picture><source media="(max-width:600px)" srcset="mobile.png"><img src="desktop.png"></picture>`)},
+			desktopURL: {URL: mustParseURL(t, desktopURL), ContentType: "image/png", Body: encoded.Bytes()},
+		},
+	}
+	browserState := NewWithEngineFactory(loader, func(runtimemodel.Engine) runtimemodel.Runtime { return &runtimeStub{} })
+	defer browserState.Close()
+	_, _ = browserState.SetEngine(context.Background(), runtimemodel.EngineJavaScript)
+	if _, err := browserState.Navigate(context.Background(), pageURL); err != nil {
+		t.Fatal(err)
+	}
+	returned := make(chan bool, 1)
+	go func() { returned <- browserState.UpdateViewport(500, 700) }()
+	select {
+	case changed := <-returned:
+		if !changed {
+			t.Fatal("UpdateViewport() = false")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("UpdateViewport blocked on a responsive image request")
+	}
+	select {
+	case <-loader.started:
+	case <-time.After(time.Second):
+		t.Fatal("responsive image request did not start")
 	}
 }
 
