@@ -762,20 +762,24 @@ func (b *Browser) UpdateViewport(width, height float32) bool {
 		loadContext, generation := page.beginImageLoad(context.Background())
 		policy := imageViewportPolicy(page.Document, page.ComputedStyles, baseURL, width, height)
 		budget := newImageDecodeBudgetWithImages(page.BackgroundImages)
-		resources, images, failures := loadReplacedImagesWithCache(loadContext, imageLoader, baseURL, page.Document, width, 1, policy, budget, page.imageCache)
-		inlineResources, inlineImages, inlineFailures := loadInlineSVGImagesWithBudget(page.Document, budget)
-		mergeImageResources(resources, images, inlineResources, inlineImages)
-		failures = append(failures, inlineFailures...)
-		b.mu.RLock()
-		active := b.page == page && page.Engine == runtimemodel.EngineJavaScript
-		b.mu.RUnlock()
-		committed := active && loadContext.Err() == nil && page.commitImageLoad(generation, resources, images, failures)
-		if committed {
-			dispatchImageResourceEvents(b, page)
-		}
-		if committed && onMutation != nil {
-			onMutation()
-		}
+		document := page.Document
+		imageCache := page.imageCache
+		go func() {
+			resources, images, failures := loadReplacedImagesWithCache(loadContext, imageLoader, baseURL, document, width, 1, policy, budget, imageCache)
+			inlineResources, inlineImages, inlineFailures := loadInlineSVGImagesWithBudget(document, budget)
+			mergeImageResources(resources, images, inlineResources, inlineImages)
+			failures = append(failures, inlineFailures...)
+			b.mu.RLock()
+			active := b.page == page && page.Engine == runtimemodel.EngineJavaScript
+			b.mu.RUnlock()
+			committed := active && loadContext.Err() == nil && page.commitImageLoad(generation, resources, images, failures)
+			if committed {
+				dispatchImageResourceEvents(b, page)
+			}
+			if committed && onMutation != nil {
+				onMutation()
+			}
+		}()
 	}
 	return true
 }
