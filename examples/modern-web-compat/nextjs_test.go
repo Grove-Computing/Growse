@@ -186,7 +186,7 @@ func waitForFixtureImage(t *testing.T, engine *browser.Browser, mutations <-chan
 	defer deadline.Stop()
 	var findImage func(*dom.Node) *dom.Node
 	findImage = func(node *dom.Node) *dom.Node {
-		if node.Type == dom.ElementNode && (node.TagName == "img" || node.TagName == "svg") {
+		if node.Type == dom.NodeElement && (node.TagName == "img" || node.TagName == "svg") {
 			return node
 		}
 		for _, child := range node.Children {
