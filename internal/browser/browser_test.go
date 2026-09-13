@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -26,6 +27,7 @@ type stubLoader struct {
 }
 
 type routeLoader struct {
+	mu        sync.Mutex
 	responses map[string]*network.Response
 	requested []string
 }
@@ -56,6 +58,8 @@ func (loader *requestRouteLoader) Do(_ context.Context, request *network.Request
 	copy := *request
 	copy.Body = append([]byte(nil), request.Body...)
 	copy.Header = request.Header.Clone()
+	loader.mu.Lock()
+	defer loader.mu.Unlock()
 	loader.request = &copy
 	loader.requests = append(loader.requests, &copy)
 	response, ok := loader.responses[request.URL.String()]
@@ -66,6 +70,8 @@ func (loader *requestRouteLoader) Do(_ context.Context, request *network.Request
 }
 
 func (loader *routeLoader) Get(_ context.Context, resourceURL *url.URL) (*network.Response, error) {
+	loader.mu.Lock()
+	defer loader.mu.Unlock()
 	loader.requested = append(loader.requested, resourceURL.String())
 	response, ok := loader.responses[resourceURL.String()]
 	if !ok {
