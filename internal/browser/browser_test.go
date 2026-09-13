@@ -474,6 +474,29 @@ p { font-size: 10vw; padding: 5vh }
 	}
 }
 
+func TestUpdateViewportWithoutImagesCommitsSynchronously(t *testing.T) {
+	document := dom.NewDocument()
+	paragraph := document.CreateElement("p", nil)
+	if err := document.AppendChild(document.Root, paragraph); err != nil {
+		t.Fatal(err)
+	}
+	page := NewPage(mustParseURL(t, "https://example.com"))
+	page.Document = document
+	page.Engine = runtimemodel.EngineJavaScript
+	page.imageLoader = &routeLoader{responses: map[string]*network.Response{}}
+	page.imageCache = newImageResourceCache()
+	page.ComputedStyles = style.Compute(document, nil)
+	browserState := New(nil)
+	browserState.SetPage(page)
+	initialRevision := page.StyleRevision
+	if !browserState.UpdateViewport(640, 480) {
+		t.Fatal("UpdateViewport() = false")
+	}
+	if page.StyleRevision != initialRevision+2 {
+		t.Fatalf("style revision = %d, want synchronous revision %d", page.StyleRevision, initialRevision+2)
+	}
+}
+
 func TestUpdateHoverRejectsRemovedElement(t *testing.T) {
 	document := dom.NewDocument()
 	button := document.CreateElement("button", nil)

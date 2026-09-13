@@ -233,8 +233,12 @@ func (b *Browser) SetOnMutation(callback func()) {
 // navigation.
 func (b *Browser) Page() *Page {
 	b.mu.RLock()
-	defer b.mu.RUnlock()
-	return b.page
+	page := b.page
+	b.mu.RUnlock()
+	if page != nil && page.commitPendingImageLoad() {
+		dispatchImageResourceEvents(b, page)
+	}
+	return page
 }
 
 // Engine はこのTabが次のPage loadで使用するEngineを返す。
@@ -762,22 +766,52 @@ func (b *Browser) UpdateViewport(width, height float32) bool {
 		loadContext, generation := page.beginImageLoad(context.Background())
 		policy := imageViewportPolicy(page.Document, page.ComputedStyles, baseURL, width, height)
 		budget := newImageDecodeBudgetWithImages(page.BackgroundImages)
-		resources, images, failures := loadReplacedImagesWithCache(loadContext, imageLoader, baseURL, page.Document, width, 1, policy, budget, page.imageCache)
-		inlineResources, inlineImages, inlineFailures := loadInlineSVGImagesWithBudget(page.Document, budget)
-		mergeImageResources(resources, images, inlineResources, inlineImages)
-		failures = append(failures, inlineFailures...)
-		b.mu.RLock()
-		active := b.page == page && page.Engine == runtimemodel.EngineJavaScript
-		b.mu.RUnlock()
-		committed := active && loadContext.Err() == nil && page.commitImageLoad(generation, resources, images, failures)
-		if committed {
-			dispatchImageResourceEvents(b, page)
+		document := page.Document
+		imageCache := page.imageCache
+		if !documentHasViewportImageWork(document) {
+			committed := page.commitImageLoad(generation, make(map[dom.NodeID]layoutengine.ImageResource), make(map[string]image.Image), nil)
+			if committed && onMutation != nil {
+				onMutation()
+			}
+			return true
 		}
-		if committed && onMutation != nil {
-			onMutation()
-		}
+		go func() {
+			resources, images, failures := loadReplacedImagesWithCache(loadContext, imageLoader, baseURL, document, width, 1, policy, budget, imageCache)
+			inlineResources, inlineImages, inlineFailures := loadInlineSVGImagesWithBudget(document, budget)
+			mergeImageResources(resources, images, inlineResources, inlineImages)
+			failures = append(failures, inlineFailures...)
+			b.mu.RLock()
+			active := b.page == page && page.Engine == runtimemodel.EngineJavaScript
+			b.mu.RUnlock()
+			staged := active && loadContext.Err() == nil && page.stageImageLoad(generation, resources, images, failures)
+			if staged && onMutation != nil {
+				onMutation()
+			}
+		}()
 	}
 	return true
+}
+
+func documentHasViewportImageWork(document *dom.Document) bool {
+	if document == nil {
+		return false
+	}
+	found := false
+	var visit func(*dom.Node)
+	visit = func(node *dom.Node) {
+		if node == nil || found {
+			return
+		}
+		if node.Type == dom.NodeElement && (node.TagName == "img" || node.TagName == "svg") {
+			found = true
+			return
+		}
+		for _, child := range node.Children {
+			visit(child)
+		}
+	}
+	visit(document.Root)
+	return found
 }
 
 // SetReducedMotion updates the browser preference exposed through the

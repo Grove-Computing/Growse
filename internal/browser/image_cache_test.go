@@ -3,6 +3,7 @@ package browser
 import (
 	"bytes"
 	"context"
+	"errors"
 	"image"
 	"image/png"
 	"net/http"
@@ -122,6 +123,59 @@ func TestImageResourceCacheCoalescesConcurrentDuplicateURL(t *testing.T) {
 	defer loader.mu.Unlock()
 	if loader.fetches[target.String()] != 1 {
 		t.Fatalf("fetch count = %d, want 1", loader.fetches[target.String()])
+	}
+}
+
+func TestImageResourceCacheRetriesEntryCanceledByPriorGeneration(t *testing.T) {
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, image.NewNRGBA(image.Rect(0, 0, 2, 2))); err != nil {
+		t.Fatal(err)
+	}
+	loader := &concurrentImageLoader{
+		body: encoded.Bytes(), started: make(chan string, 2), release: make(chan struct{}), fetches: make(map[string]int),
+	}
+	cache := newImageResourceCache()
+	target := mustParseURL(t, "https://example.com/shared.png")
+	firstContext, cancelFirst := context.WithCancel(context.Background())
+	firstResult := make(chan cachedImageResource, 1)
+	go func() { firstResult <- cache.load(firstContext, loader, target, newImageDecodeBudget()) }()
+	select {
+	case <-loader.started:
+	case <-time.After(time.Second):
+		t.Fatal("first image request did not start")
+	}
+	secondResult := make(chan cachedImageResource, 1)
+	go func() { secondResult <- cache.load(context.Background(), loader, target, newImageDecodeBudget()) }()
+	deadline := time.Now().Add(time.Second)
+	for {
+		cache.mu.Lock()
+		hits := cache.hits
+		cache.mu.Unlock()
+		if hits > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("second image load did not wait for the in-flight cache entry")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	cancelFirst()
+	if result := <-firstResult; !errors.Is(result.err, context.Canceled) {
+		t.Fatalf("first image load error = %v, want context canceled", result.err)
+	}
+	select {
+	case <-loader.started:
+	case <-time.After(time.Second):
+		t.Fatal("replacement image request did not start")
+	}
+	close(loader.release)
+	if result := <-secondResult; result.failure != imageLoadOK {
+		t.Fatalf("replacement image load failed: %#v", result)
+	}
+	loader.mu.Lock()
+	defer loader.mu.Unlock()
+	if loader.fetches[target.String()] != 2 {
+		t.Fatalf("fetch count = %d, want 2", loader.fetches[target.String()])
 	}
 }
 
