@@ -6,11 +6,13 @@ import (
 	"crypto/sha512"
 	"crypto/subtle"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"mime"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync/atomic"
 
 	"github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/network"
@@ -59,29 +61,29 @@ func loadScriptsForEngineWithBase(ctx context.Context, client ResourceLoader, pa
 		err    error
 	}
 	results := make([]loadResult, len(candidates))
-	type asyncResult struct {
-		index int
-		loadResult
-	}
-	asyncResults := make(chan asyncResult, len(candidates))
-	asyncCount := 0
+	jobs := make([]resourceJob, 0, len(candidates))
+	var asyncFetchOrder atomic.Int64
 	for index, candidate := range candidates {
-		if engine == runtimemodel.EngineJavaScript && !candidate.inline && candidate.schedule == runtimemodel.ScriptAsync {
-			asyncCount++
-			go func(index int, candidate scriptSource) {
-				script, size, err := loadScriptCandidate(ctx, client, pageURL, baseURL, engine, candidate, index)
-				asyncResults <- asyncResult{index: index, loadResult: loadResult{script: script, size: size, err: err}}
-			}(index, candidate)
+		if engine == runtimemodel.EngineJavaScript && !candidate.inline && candidate.schedule != runtimemodel.ScriptParserBlocking {
+			priority := resourcePriorityHigh
+			if candidate.schedule == runtimemodel.ScriptAsync {
+				priority = resourcePriorityNormal
+			}
+			jobs = append(jobs, resourceJob{priority: priority, order: index, run: func(jobContext context.Context) {
+				script, size, err := loadScriptCandidate(jobContext, client, pageURL, baseURL, engine, candidate, index)
+				if candidate.schedule == runtimemodel.ScriptAsync {
+					script.FetchOrder = int(asyncFetchOrder.Add(1))
+				}
+				results[index] = loadResult{script: script, size: size, err: err}
+			}})
 			continue
 		}
 		script, size, err := loadScriptCandidate(ctx, client, pageURL, baseURL, engine, candidate, index)
 		results[index] = loadResult{script: script, size: size, err: err}
 	}
-	for fetchOrder := 1; fetchOrder <= asyncCount; fetchOrder++ {
-		loaded := <-asyncResults
-		loaded.script.FetchOrder = fetchOrder
-		results[loaded.index] = loaded.loadResult
-		results[loaded.index].script.FetchOrder = fetchOrder
+	rejected := runBoundedResourceJobs(ctx, jobs)
+	for _, job := range jobs[len(jobs)-rejected:] {
+		results[job.order].err = errors.New("script resource queue saturated")
 	}
 	var scripts []Script
 	totalBytes := 0
