@@ -100,6 +100,7 @@ func TestModernWebCompatibilityShowcaseRunsEntirelyLocally(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitForFixtureText(t, engine, mutations, "chunk-state", "chunk failure isolated")
+	waitForFixtureImageSettled(t, engine, mutations, "broken-image")
 	diagnosticPage := engine.Page()
 	if !engine.DispatchClick(fixtureNode(t, diagnosticPage, "hydration-error").ID, 0, 0) {
 		t.Fatal("hydration failure control was not handled")
