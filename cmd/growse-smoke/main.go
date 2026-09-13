@@ -190,7 +190,6 @@ func runModern(root string) error {
 	if err := waitForImages(engine, mutations, 1); err != nil {
 		return err
 	}
-	page = engine.Page()
 	rootNode, ok := page.Document.GetElementByID("__next")
 	if !ok {
 		return errors.New("next.js SSR root is missing")
