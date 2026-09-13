@@ -115,8 +115,8 @@ func loadBackgroundImagesWithBudget(ctx context.Context, client ResourceLoader, 
 
 func loadBackgroundImagesWithCache(ctx context.Context, client ResourceLoader, computed style.Map, budget *imageDecodeBudget, cache *imageResourceCache) (map[string]image.Image, []string) {
 	images := make(map[string]image.Image)
-	var errors []string
 	seen := make(map[string]bool)
+	var resources []string
 	for _, computedStyle := range computed {
 		backgrounds := []style.BackgroundImage{computedStyle.BackgroundImage}
 		for _, layer := range computedStyle.BackgroundLayers {
@@ -127,40 +127,70 @@ func loadBackgroundImagesWithCache(ctx context.Context, client ResourceLoader, c
 				continue
 			}
 			seen[background.URL] = true
-			if strings.HasPrefix(strings.ToLower(background.URL), "data:") {
-				decoded, err := decodeDataBackground(background.URL, budget)
+			resources = append(resources, background.URL)
+		}
+	}
+	sort.Strings(resources)
+	type backgroundResult struct {
+		resource string
+		decoded  image.Image
+		failure  string
+	}
+	results := make([]backgroundResult, len(resources))
+	jobs := make([]resourceJob, len(resources))
+	for index, resource := range resources {
+		index, resource := index, resource
+		jobs[index] = resourceJob{priority: resourcePriorityHigh, order: index, run: func(jobContext context.Context) {
+			result := backgroundResult{resource: resource}
+			if strings.HasPrefix(strings.ToLower(resource), "data:") {
+				decoded, err := decodeDataBackground(resource, budget)
 				if err != nil {
-					errors = append(errors, "background data image decode failed")
-					continue
+					result.failure = "background data image decode failed"
+				} else {
+					result.decoded = decoded
 				}
-				images[background.URL] = decoded
-				continue
+				results[index] = result
+				return
 			}
-			resourceURL, err := url.Parse(background.URL)
+			resourceURL, err := url.Parse(resource)
 			if err != nil || resourceURL.Scheme != "http" && resourceURL.Scheme != "https" {
-				errors = append(errors, "background image URL is not a supported HTTP(S) URL")
-				continue
+				result.failure = "background image URL is not a supported HTTP(S) URL"
+				results[index] = result
+				return
 			}
 			if client == nil {
-				errors = append(errors, "background image request failed: "+network.RedactedURL(resourceURL))
-				continue
+				result.failure = "background image request failed: " + network.RedactedURL(resourceURL)
+				results[index] = result
+				return
 			}
-			resource := cache.load(ctx, client, resourceURL, budget)
-			switch resource.failure {
+			loaded := cache.load(jobContext, client, resourceURL, budget)
+			switch loaded.failure {
 			case imageLoadRequestFailure:
-				errors = append(errors, "background image request failed: "+network.RedactedURL(resourceURL))
-				continue
+				result.failure = "background image request failed: " + network.RedactedURL(resourceURL)
 			case imageLoadResponseFailure:
-				errors = append(errors, "background image response was rejected: "+network.RedactedURL(resourceURL))
-				continue
+				result.failure = "background image response was rejected: " + network.RedactedURL(resourceURL)
 			case imageLoadDecodeFailure:
-				errors = append(errors, "background image decode failed: "+network.RedactedURL(resourceURL))
-				continue
+				result.failure = "background image decode failed: " + network.RedactedURL(resourceURL)
 			case imageLoadResourceLimit:
-				errors = append(errors, "background image resource limit exceeded")
-				continue
+				result.failure = "background image resource limit exceeded"
+			default:
+				result.decoded = loaded.decoded
 			}
-			images[background.URL] = resource.decoded
+			results[index] = result
+		}}
+	}
+	rejected := runBoundedResourceJobs(ctx, jobs)
+	for _, job := range jobs[len(jobs)-rejected:] {
+		results[job.order] = backgroundResult{resource: resources[job.order], failure: "background image resource queue saturated"}
+	}
+	var errors []string
+	for _, result := range results {
+		if result.failure != "" {
+			errors = append(errors, result.failure)
+			continue
+		}
+		if result.decoded != nil {
+			images[result.resource] = result.decoded
 		}
 	}
 	return images, boundedImageDiagnostics(errors)
