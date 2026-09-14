@@ -8,7 +8,7 @@ require (
 	github.com/evanw/esbuild v0.28.2
 	github.com/gen2brain/avif v0.6.0
 	github.com/gen2brain/webp v0.6.4
-	github.com/go-text/typesetting v0.3.4
+	github.com/go-text/typesetting v0.3.5
 	github.com/pgaskin/go-woff2 v0.0.2
 	github.com/srwiley/oksvg v0.0.0-20221011165216-be6e8873101c
 	github.com/srwiley/rasterx v0.0.0-20220730225603-2ab79fcdd4ef
@@ -17,9 +17,9 @@ require (
 	github.com/tetratelabs/wazero v1.12.0
 	github.com/traefik/yaegi v0.16.1
 	golang.org/x/exp/shiny v0.0.0-20250408133849-7e4ce0ab07d0
-	golang.org/x/image v0.45.0
-	golang.org/x/net v0.58.0
-	golang.org/x/sys v0.47.0
+	golang.org/x/image v0.46.0
+	golang.org/x/net v0.59.0
+	golang.org/x/sys v0.48.0
 )
 
 require (
@@ -28,5 +28,5 @@ require (
 	github.com/ebitengine/purego v0.10.1 // indirect
 	github.com/go-sourcemap/sourcemap v2.1.3+incompatible // indirect
 	github.com/google/pprof v0.0.0-20230207041349-798e818bf904 // indirect
-	golang.org/x/text v0.41.0 // indirect
+	golang.org/x/text v0.42.0 // indirect
 )
