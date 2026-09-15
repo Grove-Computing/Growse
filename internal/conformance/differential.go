@@ -52,7 +52,7 @@ type Report struct {
 
 func (report Report) Passed() bool { return len(report.Differences) == 0 }
 
-// Compare applies the v0.17.0 semantic and geometry release thresholds.
+// Compare applies the v0.18.0 semantic and geometry release thresholds.
 func Compare(reference, actual Snapshot) Report {
 	report := Report{Scenario: reference.Scenario}
 	if reference.Scenario != actual.Scenario {

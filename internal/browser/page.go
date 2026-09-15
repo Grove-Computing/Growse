@@ -92,6 +92,7 @@ type Page struct {
 	imageMu            sync.Mutex
 	imageCancel        context.CancelFunc
 	imageGeneration    uint64
+	pendingImageLoad   *pendingImageLoad
 	imageEvents        map[dom.NodeID]string
 	imageCache         *imageResourceCache
 	imageDirty         ImageInvalidation
@@ -105,6 +106,13 @@ type Page struct {
 	lastAnimationFrame time.Time
 	frameGeneration    uint64
 	frameClosed        bool
+}
+
+type pendingImageLoad struct {
+	generation uint64
+	resources  map[dom.NodeID]layoutmodel.ImageResource
+	images     map[string]image.Image
+	failures   []string
 }
 
 // ImageInvalidation describes the bounded renderer work caused by the latest
@@ -126,10 +134,35 @@ func (p *Page) beginImageLoad(parent context.Context) (context.Context, uint64) 
 	if p.imageCancel != nil {
 		p.imageCancel()
 	}
+	p.pendingImageLoad = nil
 	ctx, cancel := context.WithCancel(parent)
 	p.imageCancel = cancel
 	p.imageGeneration++
 	return ctx, p.imageGeneration
+}
+
+func (p *Page) stageImageLoad(generation uint64, resources map[dom.NodeID]layoutmodel.ImageResource, images map[string]image.Image, failures []string) bool {
+	p.imageMu.Lock()
+	defer p.imageMu.Unlock()
+	if generation != p.imageGeneration {
+		return false
+	}
+	p.pendingImageLoad = &pendingImageLoad{generation: generation, resources: resources, images: images, failures: failures}
+	return true
+}
+
+func (p *Page) commitPendingImageLoad() bool {
+	p.imageMu.Lock()
+	defer p.imageMu.Unlock()
+	pending := p.pendingImageLoad
+	if pending == nil || pending.generation != p.imageGeneration {
+		return false
+	}
+	p.pendingImageLoad = nil
+	p.ImageResources, p.Images, p.ImageErrors = pending.resources, pending.images, boundedImageDiagnostics(pending.failures)
+	p.AnimatedImages = animatedImagesForResources(pending.resources, p.imageCache)
+	p.StyleRevision++
+	return true
 }
 
 func (p *Page) commitImageLoad(generation uint64, resources map[dom.NodeID]layoutmodel.ImageResource, images map[string]image.Image, failures []string) bool {
@@ -216,6 +249,7 @@ func (p *Page) cancelImageLoads() {
 		p.imageCancel = nil
 	}
 	p.imageGeneration++
+	p.pendingImageLoad = nil
 	p.imageMu.Unlock()
 }
 

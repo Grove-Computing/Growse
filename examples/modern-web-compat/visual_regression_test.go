@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Grove-Computing/Growse/internal/browser"
 	layoutmodel "github.com/Grove-Computing/Growse/internal/layout"
@@ -54,6 +55,7 @@ func TestFrameworkFixtureVisualRegression(t *testing.T) {
 	}
 	engine.UpdateViewport(1024, 720)
 	waitForFixtureText(t, engine, mutations, "next-hydration-marker", "hydrated")
+	waitForFixtureRevision(t, engine, mutations, 11)
 	page = engine.Page()
 	actual.States = append(actual.States, visualFixtureState("next-hydrated", page, "__next", "next-hydration-marker", "next-count"))
 	if !engine.DispatchClick(fixtureNode(t, page, "next-counter").ID, 0, 0) {
@@ -74,6 +76,7 @@ func TestFrameworkFixtureVisualRegression(t *testing.T) {
 	}
 	engine.UpdateViewport(1024, 720)
 	waitForFixtureText(t, engine, mutations, "chunk-state", "chunk failure isolated")
+	waitForFixtureRevision(t, engine, mutations, 6)
 	actual.States = append(actual.States, visualFixtureState("fallback-devtools", engine.Page(), "diagnostic-root", "chunk-state", "broken-image"))
 
 	wantBytes, err := os.ReadFile("testdata/framework-visual.golden.json")
@@ -88,6 +91,23 @@ func TestFrameworkFixtureVisualRegression(t *testing.T) {
 	if !reflect.DeepEqual(actual, want) {
 		encoded, _ := json.MarshalIndent(actual, "", "  ")
 		t.Fatalf("framework visual snapshot changed; inspect before updating golden\n--- actual ---\n%s", encoded)
+	}
+}
+
+func waitForFixtureRevision(t *testing.T, engine *browser.Browser, mutations <-chan struct{}, want uint64) {
+	t.Helper()
+	deadline := time.NewTimer(3 * time.Second)
+	defer deadline.Stop()
+	for {
+		page := engine.Page()
+		if page != nil && page.StyleRevision >= want {
+			return
+		}
+		select {
+		case <-mutations:
+		case <-deadline.C:
+			t.Fatalf("style revision = %d, want at least %d", page.StyleRevision, want)
+		}
 	}
 }
 

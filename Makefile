@@ -3,7 +3,7 @@ GOVULNCHECK_VERSION ?= v1.6.0
 ACTIONLINT_VERSION ?= v1.7.12
 PROJECT_GO := $(shell go env GOROOT)/bin/go
 
-.PHONY: test race examples-test v014-conformance-test v015-framework-test v015-visual-test v015-conformance-test v015-security-test v015-regression-test v016-framework-test v016-security-test v017-conformance-test v017-security-test vet staticcheck vulncheck actionlint securityscan installer-test release-test docker-test supply-chain-test developer-security-test skills-test docs-test fmt-check tidy-check quality ci
+.PHONY: test race examples-test v014-conformance-test v015-framework-test v015-visual-test v015-conformance-test v015-security-test v015-regression-test v016-framework-test v016-security-test v017-conformance-test v017-security-test v018-resource-loading-test vet staticcheck vulncheck actionlint securityscan installer-test release-test docker-test supply-chain-test developer-security-test skills-test docs-test fmt-check tidy-check quality ci
 
 test:
 	go test ./...
@@ -43,6 +43,9 @@ v017-conformance-test:
 
 v017-security-test:
 	bash tests/v017-security.sh
+
+v018-resource-loading-test:
+	bash tests/v018-resource-loading.sh
 
 vet:
 	go vet ./...
@@ -89,4 +92,4 @@ tidy-check:
 
 quality: fmt-check tidy-check vet staticcheck actionlint
 
-ci: quality securityscan race examples-test v014-conformance-test v015-framework-test v015-visual-test v015-conformance-test v015-security-test v015-regression-test v016-framework-test v016-security-test v017-conformance-test v017-security-test vulncheck installer-test release-test docker-test supply-chain-test developer-security-test skills-test docs-test
+ci: quality securityscan race examples-test v014-conformance-test v015-framework-test v015-visual-test v015-conformance-test v015-security-test v015-regression-test v016-framework-test v016-security-test v017-conformance-test v017-security-test v018-resource-loading-test vulncheck installer-test release-test docker-test supply-chain-test developer-security-test skills-test docs-test

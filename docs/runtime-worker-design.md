@@ -1,6 +1,6 @@
 # Runtime worker / Web Platform設計
 
-本書はGrowse v0.17.0の実行・閲覧context設計を示す。v0.1.0時点の歴史的な詳細設計は[旧MVP詳細設計](details-design.md)に残すが、Runtime、JavaScript、Frame、Service Worker、dynamic resource、hydrationについては本書を現行仕様とする。
+本書はGrowse v0.18.0の実行・閲覧context設計を示す。v0.1.0時点の歴史的な詳細設計は[旧MVP詳細設計](details-design.md)に残すが、Runtime、JavaScript、Frame、Service Worker、dynamic resource、hydrationについては本書を現行仕様とする。
 
 ## 所有境界
 
@@ -27,7 +27,7 @@ workerへ生のCookie、Authorization、Header集合、filesystem path、Browser
 
 Page、Frame、Service Workerの起動ごとにgenerationを増やす。Navigation、Frame navigation、Engine切り替え、close、timeout、crash後は旧generationのcallback、message、DOM snapshot、resource completion、observer recordを拒否する。通常停止はIPC stopと1秒の猶予を使い、応答しないprocessを終了する。Browser Session全体でworkerは32件までとし、上限超過は新しいRuntimeだけをfail closedする。
 
-Goは新規Tabの既定Engineであり、JavaScriptのinitial / dynamic script、Module、modulepreload、hydration callbackは利用者が`JS`を明示選択したgenerationだけへbrokerする。Goへ戻す場合はJavaScript worker、Frame、Module graph、dynamic resource、observer、Event listenerを停止して完全reloadし、Browser所有のDOM / Style / Layout / Paintへ両Engineのobjectを混在させない。
+Goは新規Tabの既定Engineであり、JavaScriptのinitial / dynamic script、Module、modulepreload、hydration callbackは利用者が`JS`を明示選択したgenerationだけへbrokerする。JavaScript Pageは外部script待機中もparse・style済みPageを先行公開し、imageをgeneration付き後続commitとして反映する。Goへ戻す場合はJavaScript worker、Frame、Module graph、dynamic resource、resource queue、observer、Event listenerを停止して完全reloadし、Browser所有のDOM / Style / Layout / Paintへ両Engineのobjectを混在させない。
 
 Service Worker registrationとCache StorageはOrigin profile stateとして残すが、worker VMはidle 30秒で停止する。次のeventは保存済みscriptから新generationを起動し、Pageのcancelとは分離した期限付きevent contextで完了させる。
 
@@ -49,4 +49,4 @@ DevTools Runtime panelはPage / Frame / Service Workerのcontext ID、browsing /
 
 ## 非対象
 
-既存browser engineの埋め込み、Node.js互換、npm resolution、WASI、Web Worker / Shared Worker、Shadow DOM、custom elements、Service Worker Push / Background Sync、完全なPermissions Policy、BFCache、全WPTおよび任意frameworkへの完全適合はv0.17.0の対象外である。
+既存browser engineの埋め込み、Node.js互換、npm resolution、WASI、Web Worker / Shared Worker、Shadow DOM、custom elements、Service Worker Push / Background Sync、完全なPermissions Policy、BFCache、全WPTおよび任意frameworkへの完全適合はv0.18.0の対象外である。

@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -26,6 +27,7 @@ type stubLoader struct {
 }
 
 type routeLoader struct {
+	mu        sync.Mutex
 	responses map[string]*network.Response
 	requested []string
 }
@@ -56,6 +58,8 @@ func (loader *requestRouteLoader) Do(_ context.Context, request *network.Request
 	copy := *request
 	copy.Body = append([]byte(nil), request.Body...)
 	copy.Header = request.Header.Clone()
+	loader.mu.Lock()
+	defer loader.mu.Unlock()
 	loader.request = &copy
 	loader.requests = append(loader.requests, &copy)
 	response, ok := loader.responses[request.URL.String()]
@@ -66,6 +70,8 @@ func (loader *requestRouteLoader) Do(_ context.Context, request *network.Request
 }
 
 func (loader *routeLoader) Get(_ context.Context, resourceURL *url.URL) (*network.Response, error) {
+	loader.mu.Lock()
+	defer loader.mu.Unlock()
 	loader.requested = append(loader.requested, resourceURL.String())
 	response, ok := loader.responses[resourceURL.String()]
 	if !ok {
@@ -465,6 +471,29 @@ p { font-size: 10vw; padding: 5vh }
 	}
 	if browser.UpdateViewport(800, 600) {
 		t.Fatal("same viewport requested a recalculation")
+	}
+}
+
+func TestUpdateViewportWithoutImagesCommitsSynchronously(t *testing.T) {
+	document := dom.NewDocument()
+	paragraph := document.CreateElement("p", nil)
+	if err := document.AppendChild(document.Root, paragraph); err != nil {
+		t.Fatal(err)
+	}
+	page := NewPage(mustParseURL(t, "https://example.com"))
+	page.Document = document
+	page.Engine = runtimemodel.EngineJavaScript
+	page.imageLoader = &routeLoader{responses: map[string]*network.Response{}}
+	page.imageCache = newImageResourceCache()
+	page.ComputedStyles = style.Compute(document, nil)
+	browserState := New(nil)
+	browserState.SetPage(page)
+	initialRevision := page.StyleRevision
+	if !browserState.UpdateViewport(640, 480) {
+		t.Fatal("UpdateViewport() = false")
+	}
+	if page.StyleRevision != initialRevision+2 {
+		t.Fatalf("style revision = %d, want synchronous revision %d", page.StyleRevision, initialRevision+2)
 	}
 }
 
