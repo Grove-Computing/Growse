@@ -110,10 +110,10 @@ func loadBackgroundImages(ctx context.Context, client ResourceLoader, computed s
 }
 
 func loadBackgroundImagesWithBudget(ctx context.Context, client ResourceLoader, computed style.Map, budget *imageDecodeBudget) (map[string]image.Image, []string) {
-	return loadBackgroundImagesWithCache(ctx, client, computed, budget, newImageResourceCache())
+	return loadBackgroundImagesWithCache(ctx, client, computed, budget, newImageResourceCache(), nil)
 }
 
-func loadBackgroundImagesWithCache(ctx context.Context, client ResourceLoader, computed style.Map, budget *imageDecodeBudget, cache *imageResourceCache) (map[string]image.Image, []string) {
+func loadBackgroundImagesWithCache(ctx context.Context, client ResourceLoader, computed style.Map, budget *imageDecodeBudget, cache *imageResourceCache, preloads map[string]resourcePriority) (map[string]image.Image, []string) {
 	images := make(map[string]image.Image)
 	seen := make(map[string]bool)
 	var resources []string
@@ -140,7 +140,7 @@ func loadBackgroundImagesWithCache(ctx context.Context, client ResourceLoader, c
 	jobs := make([]resourceJob, len(resources))
 	for index, resource := range resources {
 		index, resource := index, resource
-		jobs[index] = resourceJob{priority: resourcePriorityHigh, order: index, run: func(jobContext context.Context) {
+		jobs[index] = resourceJob{priority: backgroundResourcePriority(resource, preloads), order: index, run: func(jobContext context.Context) {
 			result := backgroundResult{resource: resource}
 			if strings.HasPrefix(strings.ToLower(resource), "data:") {
 				decoded, err := decodeDataBackground(resource, budget)
@@ -159,18 +159,18 @@ func loadBackgroundImagesWithCache(ctx context.Context, client ResourceLoader, c
 				return
 			}
 			if client == nil {
-				result.failure = "background image request failed: " + network.RedactedURL(resourceURL)
+				result.failure = "background image request failed: " + network.RedactedDiagnosticURL(resourceURL)
 				results[index] = result
 				return
 			}
 			loaded := cache.load(jobContext, client, resourceURL, budget)
 			switch loaded.failure {
 			case imageLoadRequestFailure:
-				result.failure = "background image request failed: " + network.RedactedURL(resourceURL)
+				result.failure = "background image request failed: " + network.RedactedDiagnosticURL(resourceURL)
 			case imageLoadResponseFailure:
-				result.failure = "background image response was rejected: " + network.RedactedURL(resourceURL)
+				result.failure = "background image response was rejected: " + network.RedactedDiagnosticURL(resourceURL)
 			case imageLoadDecodeFailure:
-				result.failure = "background image decode failed: " + network.RedactedURL(resourceURL)
+				result.failure = "background image decode failed: " + network.RedactedDiagnosticURL(resourceURL)
 			case imageLoadResourceLimit:
 				result.failure = "background image resource limit exceeded"
 			default:
@@ -194,6 +194,13 @@ func loadBackgroundImagesWithCache(ctx context.Context, client ResourceLoader, c
 		}
 	}
 	return images, boundedImageDiagnostics(errors)
+}
+
+func backgroundResourcePriority(resource string, preloads map[string]resourcePriority) resourcePriority {
+	if priority, exists := preloads[resource]; exists {
+		return priority
+	}
+	return resourcePriorityHigh
 }
 
 func snapshotImageDocument(document *dom.Document) *dom.Document {
@@ -393,7 +400,7 @@ func loadReplacedImageNodeWithCache(ctx context.Context, client ResourceLoader, 
 		return resource, resized, ""
 	}
 	if resource.Error != "" && lastTarget != nil {
-		return resource, nil, resource.Error + ": " + network.RedactedURL(lastTarget)
+		return resource, nil, resource.Error + ": " + network.RedactedDiagnosticURL(lastTarget)
 	}
 	return resource, nil, ""
 }

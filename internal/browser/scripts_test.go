@@ -148,6 +148,23 @@ func TestCollectJavaScriptRecognizesDefaultAndExplicitTypes(t *testing.T) {
 	}
 }
 
+func TestCollectJavaScriptPreservesScriptFetchPriority(t *testing.T) {
+	document, err := html.Parse(strings.NewReader(`
+		<script defer src="/first.js" fetchpriority="high"></script>
+		<script async src="/second.js" fetchpriority="LOW"></script>
+		<script type="module" src="/third.js" fetchpriority="unknown"></script>`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sources := collectScriptsForEngine(document.Root, runtimemodel.EngineJavaScript)
+	if got, want := len(sources), 3; got != want {
+		t.Fatalf("source count = %d, want %d", got, want)
+	}
+	if sources[0].fetchPriority != "high" || sources[1].fetchPriority != "LOW" || sources[2].fetchPriority != "unknown" {
+		t.Fatalf("fetch priorities = %#v", sources)
+	}
+}
+
 func TestJavaScriptModuleUsesCORSAndDeferredScheduling(t *testing.T) {
 	pageURL := mustParseURL(t, "https://site.example/page")
 	moduleURL := mustParseURL(t, "https://cdn.example/app.js")

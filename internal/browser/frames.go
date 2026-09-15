@@ -235,7 +235,7 @@ func (state *frameLoadState) buildPage(ctx context.Context, response *network.Re
 	computed := computeStableStyles(document, stylesheet, style.InteractionState{}, defaultFrameWidth, defaultFrameHeight, state.reducedMotion, state.engine == runtimemodel.EngineJavaScript)
 	imageBudget := newImageDecodeBudget()
 	imageCache := newImageResourceCache()
-	backgroundImages, backgroundErrors := loadBackgroundImagesWithCache(ctx, imageResources, computed, imageBudget, imageCache)
+	backgroundImages, backgroundErrors := loadBackgroundImagesWithCache(ctx, imageResources, computed, imageBudget, imageCache, imagePreloadPriorities(document, baseURL))
 	var replacedImages map[dom.NodeID]layoutmodel.ImageResource
 	var decodedImages map[string]image.Image
 	var imageErrors []string

@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
 	"net/url"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -82,6 +84,29 @@ func TestLoadBackgroundImagesFetchesIndependentURLsConcurrently(t *testing.T) {
 	}
 }
 
+func TestImageQueueSaturationIsPrioritizedAndRedactsURLQueries(t *testing.T) {
+	baseURL := mustParseURL(t, "https://example.com/")
+	document := dom.NewDocument()
+	lowPriority := document.CreateElement("img", map[string]string{"src": "/low.png?token=queue-secret", "fetchpriority": "low"})
+	if err := document.AppendChild(document.Root, lowPriority); err != nil {
+		t.Fatal(err)
+	}
+	for index := 0; index < maxResourceQueue; index++ {
+		node := document.CreateElement("img", map[string]string{"src": fmt.Sprintf("/normal-%d.png?token=queue-secret", index)})
+		if err := document.AppendChild(document.Root, node); err != nil {
+			t.Fatal(err)
+		}
+	}
+	loader := &routeLoader{responses: make(map[string]*network.Response)}
+	_, _, failures := loadReplacedImagesWithCache(context.Background(), loader, baseURL, document, 1280, 1, nil, newImageDecodeBudget(), newImageResourceCache())
+	if len(failures) == 0 || failures[0] != "image resource queue saturated" {
+		t.Fatalf("queue failures = %v", failures)
+	}
+	if strings.Contains(strings.Join(failures, "\n"), "queue-secret") {
+		t.Fatalf("image diagnostics leaked query: %v", failures)
+	}
+}
+
 func TestLoadBackgroundImagesDecodesBoundedDataImageWithoutNetwork(t *testing.T) {
 	var encoded bytes.Buffer
 	source := image.NewNRGBA(image.Rect(0, 0, 2, 2))
@@ -108,7 +133,7 @@ func TestPageImageCacheSharesFetchBodyAndDecodeAcrossBackgroundAndElement(t *tes
 	}}
 	cache, budget := newImageResourceCache(), newImageDecodeBudget()
 	computed := style.Map{dom.NodeID(1): {BackgroundImage: style.BackgroundImage{Kind: style.BackgroundImageURL, URL: resourceURL}}}
-	backgrounds, backgroundErrors := loadBackgroundImagesWithCache(context.Background(), loader, computed, budget, cache)
+	backgrounds, backgroundErrors := loadBackgroundImagesWithCache(context.Background(), loader, computed, budget, cache, nil)
 	document := dom.NewDocument()
 	imageNode := document.CreateElement("img", map[string]string{"src": resourceURL})
 	if err := document.AppendChild(document.Root, imageNode); err != nil {
