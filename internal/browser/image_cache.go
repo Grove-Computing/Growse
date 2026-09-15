@@ -80,9 +80,12 @@ type imageResourceCache struct {
 	evictions  uint64
 	decodes    uint64
 	resizes    uint64
+	coalesced  uint64
+	canceled   uint64
+	rejected   uint64
 }
 
-type imageResourceCacheStats struct{ hits, misses, evictions, decodes, resizes uint64 }
+type imageResourceCacheStats struct{ hits, misses, evictions, decodes, resizes, coalesced, canceled, rejected uint64 }
 
 func newImageResourceCache() *imageResourceCache {
 	return newImageResourceCacheWithLimits(maxPageImageCacheBytes, maxPageImageResources)
@@ -107,6 +110,9 @@ func (cache *imageResourceCache) load(ctx context.Context, client ResourceLoader
 		cache.mu.Lock()
 		if existing := cache.entries[key]; existing != nil {
 			cache.hits++
+			if !existing.complete {
+				cache.coalesced++
+			}
 			cache.tick++
 			existing.lastUsed = cache.tick
 			ready := existing.ready
@@ -124,16 +130,21 @@ func (cache *imageResourceCache) load(ctx context.Context, client ResourceLoader
 				}
 				continue
 			case <-ctx.Done():
+				cache.mu.Lock()
+				cache.canceled++
+				cache.mu.Unlock()
 				return cachedImageResource{failure: imageLoadRequestFailure, err: ctx.Err()}
 			}
 		}
 		cache.misses++
 		cache.evictLocked(0, 1)
 		if cache.maxEntries <= 0 || len(cache.entries)+len(cache.surfaces) >= cache.maxEntries {
+			cache.rejected++
 			cache.mu.Unlock()
 			return cachedImageResource{failure: imageLoadResourceLimit}
 		}
 		if !budget.claim(key) {
+			cache.rejected++
 			cache.mu.Unlock()
 			return cachedImageResource{failure: imageLoadResourceLimit}
 		}
@@ -148,6 +159,9 @@ func (cache *imageResourceCache) load(ctx context.Context, client ResourceLoader
 	case <-entry.ready:
 		return cloneCachedImageResource(entry)
 	case <-ctx.Done():
+		cache.mu.Lock()
+		cache.canceled++
+		cache.mu.Unlock()
 		return cachedImageResource{failure: imageLoadRequestFailure, err: ctx.Err()}
 	}
 }
@@ -234,12 +248,16 @@ func (cache *imageResourceCache) prepareSurface(ctx context.Context, source cach
 		case <-ready:
 			return existing.image, existing.err
 		case <-ctx.Done():
+			cache.mu.Lock()
+			cache.canceled++
+			cache.mu.Unlock()
 			return nil, ctx.Err()
 		}
 	}
 	cache.misses++
 	cache.evictLocked(0, 1)
 	if cache.maxEntries <= 0 || len(cache.entries)+len(cache.surfaces) >= cache.maxEntries {
+		cache.rejected++
 		cache.mu.Unlock()
 		return nil, errors.New("image surface cache entry limit exceeded")
 	}
@@ -264,6 +282,7 @@ func (cache *imageResourceCache) prepareSurface(ctx context.Context, source cach
 	}
 	close(entry.ready)
 	if ctx.Err() != nil {
+		cache.canceled++
 		cache.bytes -= entry.bytes
 		delete(cache.surfaces, key)
 	} else {
@@ -329,6 +348,9 @@ func (cache *imageResourceCache) clear() {
 	cache.evictions = 0
 	cache.decodes = 0
 	cache.resizes = 0
+	cache.coalesced = 0
+	cache.canceled = 0
+	cache.rejected = 0
 	cache.mu.Unlock()
 	if cancel != nil {
 		cancel()
@@ -341,7 +363,10 @@ func (cache *imageResourceCache) statsSnapshot() imageResourceCacheStats {
 	}
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
-	return imageResourceCacheStats{hits: cache.hits, misses: cache.misses, evictions: cache.evictions, decodes: cache.decodes, resizes: cache.resizes}
+	return imageResourceCacheStats{
+		hits: cache.hits, misses: cache.misses, evictions: cache.evictions, decodes: cache.decodes, resizes: cache.resizes,
+		coalesced: cache.coalesced, canceled: cache.canceled, rejected: cache.rejected,
+	}
 }
 
 func cloneCachedImageResource(entry *cachedImageResource) cachedImageResource {

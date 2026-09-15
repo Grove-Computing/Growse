@@ -177,6 +177,20 @@ func TestImageResourceCacheKeepsSharedFetchWhenPriorGenerationIsCanceled(t *test
 	if loader.fetches[target.String()] != 1 {
 		t.Fatalf("fetch count = %d, want 1", loader.fetches[target.String()])
 	}
+	if stats := cache.statsSnapshot(); stats.coalesced != 1 || stats.canceled != 1 || stats.rejected != 0 {
+		t.Fatalf("coalesced/canceled/rejected stats = %+v", stats)
+	}
+}
+
+func TestImageResourceCacheCountsBoundedRejection(t *testing.T) {
+	cache := newImageResourceCacheWithLimits(1, 0)
+	result := cache.load(context.Background(), &routeLoader{}, mustParseURL(t, "https://example.com/rejected.png"), newImageDecodeBudget())
+	if result.failure != imageLoadResourceLimit {
+		t.Fatalf("rejected load = %#v", result)
+	}
+	if stats := cache.statsSnapshot(); stats.misses != 1 || stats.rejected != 1 {
+		t.Fatalf("rejection stats = %+v", stats)
+	}
 }
 
 func TestImageResourceCacheEvictsLeastRecentlyUsedEntryWithinLimits(t *testing.T) {
