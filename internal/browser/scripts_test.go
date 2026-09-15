@@ -417,6 +417,49 @@ func TestDeferredScriptsFetchConcurrentlyWithinResourceQueue(t *testing.T) {
 	}
 }
 
+func TestCanceledDeferredScriptFetchDoesNotReturnStaleScripts(t *testing.T) {
+	pageURL := mustParseURL(t, "https://site.example/page")
+	document, err := html.Parse(strings.NewReader(`
+		<script defer src="/first.js"></script>
+		<script type="module" src="/second.js"></script>`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	loader := &blockingScriptLoader{started: make(chan string, 2), release: make(chan struct{})}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	type result struct {
+		scripts []Script
+		errors  []string
+	}
+	done := make(chan result, 1)
+	go func() {
+		scripts, loadErrors := loadScriptsForEngine(ctx, loader, pageURL, document, runtimemodel.EngineJavaScript)
+		done <- result{scripts: scripts, errors: loadErrors}
+	}()
+	for range 2 {
+		select {
+		case <-loader.started:
+		case <-time.After(time.Second):
+			t.Fatal("deferred script fetch did not start")
+		}
+	}
+	cancel()
+	select {
+	case loaded := <-done:
+		if len(loaded.scripts) != 0 || len(loaded.errors) != 2 {
+			t.Fatalf("canceled scripts/errors = %#v / %#v", loaded.scripts, loaded.errors)
+		}
+		for _, loadError := range loaded.errors {
+			if !strings.Contains(loadError, "context canceled") {
+				t.Fatalf("canceled script error = %q", loadError)
+			}
+		}
+	case <-time.After(time.Second):
+		t.Fatal("canceled deferred script fetch did not return")
+	}
+}
+
 func TestAsyncClassicScriptsRecordFetchCompletionOrder(t *testing.T) {
 	pageURL := mustParseURL(t, "https://site.example/page")
 	firstURL := mustParseURL(t, "https://site.example/slow.js")
