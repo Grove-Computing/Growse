@@ -37,6 +37,9 @@ type RenderMetrics struct {
 	ImageResourceEvictions uint64
 	ImageResourceDecodes   uint64
 	ImageSurfaceResizes    uint64
+	ImageResourceCoalesced uint64
+	ImageResourceCanceled  uint64
+	ImageResourceRejected  uint64
 	ImagePaintHits         uint64
 	ImagePaintMisses       uint64
 	ImagePaintEvictions    uint64
@@ -191,6 +194,9 @@ func (p *Page) RenderMetricsSnapshot() RenderMetrics {
 		result.ImageResourceEvictions = stats.evictions
 		result.ImageResourceDecodes = stats.decodes
 		result.ImageSurfaceResizes = stats.resizes
+		result.ImageResourceCoalesced = stats.coalesced
+		result.ImageResourceCanceled = stats.canceled
+		result.ImageResourceRejected = stats.rejected
 	}
 	return result
 }
