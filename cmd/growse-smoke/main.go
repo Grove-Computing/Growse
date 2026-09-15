@@ -72,7 +72,7 @@ func runBrowserGrade(root string) error {
 	if err := readJSON(filepath.Join(root, "corpus.json"), &corpus); err != nil {
 		return err
 	}
-	if corpus.Release != "v0.17.0" || corpus.Chromium == "" || !corpus.Offline || len(corpus.Pages) != 2 {
+	if corpus.Release != "v0.18.0" || corpus.Chromium == "" || !corpus.Offline || len(corpus.Pages) != 2 {
 		return fmt.Errorf("invalid browser-grade corpus: %+v", corpus)
 	}
 	var gate conformance.PerformanceGate

@@ -1,6 +1,6 @@
 # CSS対応表
 
-この表はGrowse v0.17.0の実装を基準とする。「部分対応」は一般的な値を扱えるが、仕様全体を実装していない機能を表す。document、initial / dynamic stylesheet、`@import`、image、font resourceは最初の有効な`<base href>`から解決する。
+この表はGrowse v0.18.0の実装を基準とする。「部分対応」は一般的な値を扱えるが、仕様全体を実装していない機能を表す。document、initial / dynamic stylesheet、`@import`、image、font resourceは最初の有効な`<base href>`から解決する。
 
 ## SelectorとCascade
 
@@ -100,6 +100,6 @@ top-level documentとiframeはsame / cross-origin stylesheetを取得できる�
 
 JavaScriptによるattribute、class、tree、`innerHTML` mutation後はStyle revisionを増やし、Computed Style、Layout Tree、Display List、Hit Test、Inspector snapshotを同じrevisionから再生成する。iframeは親Layoutの置換要素としてborder box、clip、scrollを持ち、子DocumentのPaintを親のclip内へ合成する。
 
-Imageは`picture` / `source` / `srcset` / `sizes`、PNG / JPEG / GIF静止Frame / WebP、安全な静的SVG subset、load / error、alt fallback、late relayoutを扱う。同じURLのfetch body / decodeをPage generation内で共有し、target size、DPR、object-fit、filterごとのrasterとbackground / gradient / filter resultをbounded LRUで再利用する。image mutationは対象resourceだけを更新し、Navigation、close、Engine切替でcacheを破棄する。Web FontはCORSを通過したWOFF / WOFF2をdecodeし、完了時に影響Textを再計測する。JS PageのshaperはBrowser chromeから分離し、system font discoveryでCJK glyphへfallbackする。SVG内script、event handler、external resource、`foreignObject`、animation、filter、font load、Navigationは実行しない。
+Imageは`picture` / `source` / `srcset` / `sizes`、PNG / JPEG / GIF静止Frame / WebP、安全な静的SVG subset、load / error、alt fallback、late relayoutを扱う。v0.18.0では`fetchpriority`、preload、`loading=lazy`、viewport proximityを共通priorityへ写像し、初期Page commitと画像fetch / decodeを分離する。同じURLのfetch body / decodeをPage generation内でcoalesceし、target size、DPR、object-fit、filterごとのrasterとbackground / gradient / filter resultをbounded LRUで再利用する。image mutationは対象resourceだけを後続commitで更新し、Navigation、close、Engine切替でqueue、in-flight fetch、cacheを破棄する。Web FontはCORSを通過したWOFF / WOFF2をdecodeし、完了時に影響Textを再計測する。JS PageのshaperはBrowser chromeから分離し、system font discoveryでCJK glyphへfallbackする。SVG内script、event handler、external resource、`foreignObject`、animation、filter、font load、Navigationは実行しない。
 
-v0.17.0の「Browser-grade Web Compatibility」は[Browser-grade Compatibility Showcase](../examples/browser-grade-compat)と[Modern Web Compatibility Showcase](../examples/modern-web-compat)のTailwind CSS v4.1.12実build artifact、固定Next.js / SvelteKit build、Chromium differential、Visual Regression、選定Unit / Integration Testで固定した範囲を指す。未知の公開サイトとのpixel完全一致、framework / React全API、Shadow DOM、Canvas、video、Vertical Writing Mode、全CSS仕様への適合は保証しない。system font discovery、hydration、JavaScript animation state、image lifecycleは`JS`を明示選択したTabだけで有効にし、Go Runtimeの実行経路とobjectを共有しない。
+v0.18.0の「Browser-grade Resource Loading」は[Browser-grade Compatibility Showcase](../examples/browser-grade-compat)と[Modern Web Compatibility Showcase](../examples/modern-web-compat)のTailwind CSS v4.1.12実build artifact、固定Next.js / SvelteKit build、遅延resource fixture、Chromium differential、Visual Regression、選定Unit / Integration Testで固定した範囲を指す。未知の公開サイトとのpixel完全一致、framework / React全API、Shadow DOM、Canvas、video、Vertical Writing Mode、全CSS仕様への適合は保証しない。system font discovery、hydration、JavaScript animation state、image lifecycleは`JS`を明示選択したTabだけで有効にし、Go Runtimeの実行経路とobjectを共有しない。
