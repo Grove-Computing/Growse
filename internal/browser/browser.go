@@ -1441,7 +1441,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	computedStyles, styleErrors := computeStableStylesWithDiagnostics(document, stylesheet, style.InteractionState{}, 1280, 720, reducedMotion, engine == runtimemodel.EngineJavaScript)
 	imageBudget := newImageDecodeBudget()
 	imageCache := newImageResourceCache()
-	backgroundImages, backgroundErrors := loadBackgroundImagesWithCache(ctx, imageResources, computedStyles, imageBudget, imageCache)
+	backgroundImages, backgroundErrors := loadBackgroundImagesWithCache(ctx, imageResources, computedStyles, imageBudget, imageCache, imagePreloadPriorities(document, baseURL))
 	var replacedImages map[dom.NodeID]layoutengine.ImageResource
 	var decodedImages map[string]image.Image
 	var imageErrors []string

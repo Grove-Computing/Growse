@@ -100,8 +100,30 @@ func imageResourcePriority(node *dom.Node, target *url.URL, eligible bool, prelo
 	return resourcePriorityNormal
 }
 
+// resourcePriorityForFetchPriority maps the HTML fetchpriority attribute to
+// the local bounded queue. Unknown and empty values deliberately preserve the
+// resource-type fallback rather than becoming a new priority class.
+func resourcePriorityForFetchPriority(value string, fallback resourcePriority) resourcePriority {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "high":
+		return resourcePriorityCritical
+	case "low":
+		return resourcePriorityLow
+	default:
+		return fallback
+	}
+}
+
 func imagePreloads(document *dom.Document, baseURL *url.URL) map[string]bool {
 	preloads := make(map[string]bool)
+	for target := range imagePreloadPriorities(document, baseURL) {
+		preloads[target] = true
+	}
+	return preloads
+}
+
+func imagePreloadPriorities(document *dom.Document, baseURL *url.URL) map[string]resourcePriority {
+	preloads := make(map[string]resourcePriority)
 	if document == nil || baseURL == nil {
 		return preloads
 	}
@@ -116,7 +138,11 @@ func imagePreloads(document *dom.Document, baseURL *url.URL) map[string]bool {
 			href, _ := node.Attribute("href")
 			if containsSpaceToken(rel, "preload") && strings.EqualFold(strings.TrimSpace(as), "image") {
 				if target := resolveImageCandidate(baseURL, href); target != nil {
-					preloads[target.String()] = true
+					fetchPriority, _ := node.Attribute("fetchpriority")
+					priority := resourcePriorityForFetchPriority(fetchPriority, resourcePriorityCritical)
+					if current, exists := preloads[target.String()]; !exists || priority > current {
+						preloads[target.String()] = priority
+					}
 				}
 			}
 		}

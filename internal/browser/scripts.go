@@ -26,15 +26,16 @@ const (
 )
 
 type scriptSource struct {
-	engine      runtimemodel.Engine
-	kind        runtimemodel.ScriptKind
-	inline      bool
-	source      string
-	src         string
-	integrity   string
-	crossOrigin string
-	hasCORS     bool
-	schedule    runtimemodel.ScriptSchedule
+	engine        runtimemodel.Engine
+	kind          runtimemodel.ScriptKind
+	inline        bool
+	source        string
+	src           string
+	integrity     string
+	crossOrigin   string
+	hasCORS       bool
+	schedule      runtimemodel.ScriptSchedule
+	fetchPriority string
 }
 
 func loadScriptsForEngine(ctx context.Context, client ResourceLoader, pageURL *url.URL, document *dom.Document, engine runtimemodel.Engine) ([]Script, []string) {
@@ -65,10 +66,7 @@ func loadScriptsForEngineWithBase(ctx context.Context, client ResourceLoader, pa
 	var asyncFetchOrder atomic.Int64
 	for index, candidate := range candidates {
 		if engine == runtimemodel.EngineJavaScript && !candidate.inline && candidate.schedule != runtimemodel.ScriptParserBlocking {
-			priority := resourcePriorityHigh
-			if candidate.schedule == runtimemodel.ScriptAsync {
-				priority = resourcePriorityNormal
-			}
+			priority := scriptResourcePriority(candidate)
 			jobs = append(jobs, resourceJob{priority: priority, order: index, run: func(jobContext context.Context) {
 				script, size, err := loadScriptCandidate(jobContext, client, pageURL, baseURL, engine, candidate, index)
 				if candidate.schedule == runtimemodel.ScriptAsync {
@@ -122,20 +120,20 @@ func loadScriptCandidate(ctx context.Context, client ResourceLoader, pageURL, ba
 		return Script{}, 0, fmt.Errorf("resolve %s script %q: %v", engine, candidate.src, err)
 	}
 	if !isHTTPURL(scriptURL) {
-		return Script{}, 0, fmt.Errorf("block %s script from invalid URL %s", engine, network.RedactedURL(scriptURL))
+		return Script{}, 0, fmt.Errorf("block %s script from invalid URL %s", engine, network.RedactedDiagnosticURL(scriptURL))
 	}
 	if isMixedContent(pageURL, scriptURL) {
-		return Script{}, 0, fmt.Errorf("block mixed-content %s script %s", engine, network.RedactedURL(scriptURL))
+		return Script{}, 0, fmt.Errorf("block mixed-content %s script %s", engine, network.RedactedDiagnosticURL(scriptURL))
 	}
 	if engine == runtimemodel.EngineGo && (!IsTrustedOrigin(scriptURL) || !network.SameOrigin(pageURL, scriptURL)) {
-		return Script{}, 0, fmt.Errorf("block %s script from untrusted or cross-origin URL %s", engine, network.RedactedURL(scriptURL))
+		return Script{}, 0, fmt.Errorf("block %s script from untrusted or cross-origin URL %s", engine, network.RedactedDiagnosticURL(scriptURL))
 	}
 	credentials := scriptCredentials(candidate)
 	if candidate.kind == runtimemodel.ScriptModule && candidate.crossOrigin != "use-credentials" {
 		credentials = network.CredentialsSameOrigin
 	}
 	if engine == runtimemodel.EngineJavaScript && candidate.kind != runtimemodel.ScriptModule && candidate.integrity != "" && !network.SameOrigin(pageURL, scriptURL) && !candidate.hasCORS {
-		return Script{}, 0, fmt.Errorf("cross-origin JavaScript integrity requires crossorigin for %s", network.RedactedURL(scriptURL))
+		return Script{}, 0, fmt.Errorf("cross-origin JavaScript integrity requires crossorigin for %s", network.RedactedDiagnosticURL(scriptURL))
 	}
 	cors := candidate.hasCORS || candidate.kind == runtimemodel.ScriptModule
 	requestKind := network.RequestScript
@@ -144,36 +142,36 @@ func loadScriptCandidate(ctx context.Context, client ResourceLoader, pageURL, ba
 	}
 	response, err := loadScriptResource(ctx, client, scriptURL, requestKind, cors, credentials)
 	if err != nil {
-		return Script{}, 0, fmt.Errorf("load %s script %s: %v", engine, network.RedactedURL(scriptURL), err)
+		return Script{}, 0, fmt.Errorf("load %s script %s: %v", engine, network.RedactedDiagnosticURL(scriptURL), err)
 	}
 	if response == nil {
-		return Script{}, 0, fmt.Errorf("load %s script %s: empty response", engine, network.RedactedURL(scriptURL))
+		return Script{}, 0, fmt.Errorf("load %s script %s: empty response", engine, network.RedactedDiagnosticURL(scriptURL))
 	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return Script{}, 0, fmt.Errorf("%s script %s returned HTTP status %d", engine, network.RedactedURL(scriptURL), response.StatusCode)
+		return Script{}, 0, fmt.Errorf("%s script %s returned HTTP status %d", engine, network.RedactedDiagnosticURL(scriptURL), response.StatusCode)
 	}
 	if len(response.Body) > maxScriptBytes {
-		return Script{}, 0, fmt.Errorf("%s script %s exceeds %d bytes", engine, network.RedactedURL(scriptURL), maxScriptBytes)
+		return Script{}, 0, fmt.Errorf("%s script %s exceeds %d bytes", engine, network.RedactedDiagnosticURL(scriptURL), maxScriptBytes)
 	}
 	if !isScriptContentType(engine, response.ContentType) {
-		return Script{}, 0, fmt.Errorf("%s script %s has unsupported Content-Type %q", engine, network.RedactedURL(scriptURL), response.ContentType)
+		return Script{}, 0, fmt.Errorf("%s script %s has unsupported Content-Type %q", engine, network.RedactedDiagnosticURL(scriptURL), response.ContentType)
 	}
 	finalURL := response.URL
 	if finalURL == nil {
 		finalURL = scriptURL
 	}
 	if !isHTTPURL(finalURL) || isMixedContent(pageURL, finalURL) {
-		return Script{}, 0, fmt.Errorf("block redirected %s script from invalid or mixed-content URL %s", engine, network.RedactedURL(finalURL))
+		return Script{}, 0, fmt.Errorf("block redirected %s script from invalid or mixed-content URL %s", engine, network.RedactedDiagnosticURL(finalURL))
 	}
 	if engine == runtimemodel.EngineGo && (!IsTrustedOrigin(finalURL) || !network.SameOrigin(pageURL, finalURL)) {
-		return Script{}, 0, fmt.Errorf("block redirected %s script from untrusted or cross-origin URL %s", engine, network.RedactedURL(finalURL))
+		return Script{}, 0, fmt.Errorf("block redirected %s script from untrusted or cross-origin URL %s", engine, network.RedactedDiagnosticURL(finalURL))
 	}
 	if engine == runtimemodel.EngineJavaScript {
 		if candidate.kind != runtimemodel.ScriptModule && candidate.integrity != "" && !network.SameOrigin(pageURL, finalURL) && !candidate.hasCORS {
-			return Script{}, 0, fmt.Errorf("redirected cross-origin JavaScript integrity requires crossorigin for %s", network.RedactedURL(finalURL))
+			return Script{}, 0, fmt.Errorf("redirected cross-origin JavaScript integrity requires crossorigin for %s", network.RedactedDiagnosticURL(finalURL))
 		}
 		if err := verifyScriptIntegrity(response.Body, candidate.integrity); err != nil {
-			return Script{}, 0, fmt.Errorf("JavaScript integrity check failed for %s: %v", network.RedactedURL(finalURL), err)
+			return Script{}, 0, fmt.Errorf("JavaScript integrity check failed for %s: %v", network.RedactedDiagnosticURL(finalURL), err)
 		}
 	}
 	script = Script{
@@ -214,9 +212,11 @@ func collectScriptsForEngine(root *dom.Node, engine runtimemodel.Engine) []scrip
 					}
 					integrity, _ := node.Attribute("integrity")
 					crossOrigin, hasCORS := node.Attribute("crossorigin")
+					fetchPriority, _ := node.Attribute("fetchpriority")
 					result = append(result, scriptSource{
 						engine: engine, kind: kind, src: src, integrity: strings.TrimSpace(integrity),
 						crossOrigin: normalizeCrossOrigin(crossOrigin, hasCORS), hasCORS: hasCORS, schedule: schedule,
+						fetchPriority: fetchPriority,
 					})
 				} else {
 					schedule := runtimemodel.ScriptParserBlocking
@@ -236,6 +236,17 @@ func collectScriptsForEngine(root *dom.Node, engine runtimemodel.Engine) []scrip
 	}
 	walk(root)
 	return result
+}
+
+// scriptResourcePriority keeps execution scheduling separate from fetch
+// scheduling: async scripts may finish in any order, while defer and classic
+// scripts retain their document-order execution semantics after fetching.
+func scriptResourcePriority(candidate scriptSource) resourcePriority {
+	fallback := resourcePriorityHigh
+	if candidate.schedule == runtimemodel.ScriptAsync {
+		fallback = resourcePriorityNormal
+	}
+	return resourcePriorityForFetchPriority(candidate.fetchPriority, fallback)
 }
 
 func classifyScript(value string, hasType bool) (runtimemodel.Engine, runtimemodel.ScriptKind) {
