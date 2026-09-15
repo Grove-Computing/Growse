@@ -1598,6 +1598,10 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 		}
 		b.history.replaceEntry(&historyEntry{URL: page.URL, State: state, PageID: page.HistoryID})
 	}
+	// Snapshot child runtimes before releasing the Browser lock and waking a
+	// runtime-requested Navigation. The new Navigation may close this Page and
+	// clear page.Frames immediately after navigationReady is closed.
+	childRuntimes := frameRuntimes(page)
 	b.mu.Unlock()
 	committed = true
 	close(navigationReady)
@@ -1608,7 +1612,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	if runtime, ok := pageRuntime.(backgroundRuntime); ok {
 		runtime.SetBackground(background)
 	}
-	for _, childRuntime := range frameRuntimes(page) {
+	for _, childRuntime := range childRuntimes {
 		if runtime, ok := childRuntime.(backgroundRuntime); ok {
 			runtime.SetBackground(background)
 		}
