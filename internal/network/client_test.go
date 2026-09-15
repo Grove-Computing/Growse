@@ -500,6 +500,13 @@ func TestClientRedactsURLCookieAndAuthorizationFromErrors(t *testing.T) {
 	}
 }
 
+func TestRedactedDiagnosticURLRemovesCredentialQueryAndFragment(t *testing.T) {
+	target := mustParseURL(t, "https://alice:password@example.test/private?token=top-secret#credentials")
+	if got, want := RedactedDiagnosticURL(target), "https://example.test/private"; got != want {
+		t.Fatalf("RedactedDiagnosticURL() = %q, want %q", got, want)
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (function roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {

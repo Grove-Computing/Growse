@@ -524,13 +524,28 @@ type redactedError struct {
 func (err *redactedError) Error() string { return err.message }
 func (err *redactedError) Unwrap() error { return err.cause }
 
-// RedactedURL removes userinfo before a URL is included in UI or errors.
+// RedactedURL removes userinfo before a URL is included in user-visible state.
+// Callers that retain a URL as a diagnostic must use RedactedDiagnosticURL.
 func RedactedURL(target *url.URL) string {
 	if target == nil {
 		return "unknown"
 	}
 	copy := *target
 	copy.User = nil
+	return copy.String()
+}
+
+// RedactedDiagnosticURL removes credentials, query, and fragment before a URL
+// is retained in an error or diagnostic. Query values commonly contain tokens.
+func RedactedDiagnosticURL(target *url.URL) string {
+	if target == nil {
+		return "unknown"
+	}
+	copy := *target
+	copy.User = nil
+	copy.RawQuery = ""
+	copy.ForceQuery = false
+	copy.Fragment = ""
 	return copy.String()
 }
 

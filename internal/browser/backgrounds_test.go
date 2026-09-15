@@ -4,14 +4,18 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
 	"net/url"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Grove-Computing/Growse/internal/dom"
+	layoutmodel "github.com/Grove-Computing/Growse/internal/layout"
 	"github.com/Grove-Computing/Growse/internal/network"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 	runtimejavascript "github.com/Grove-Computing/Growse/internal/runtime/javascript"
@@ -34,6 +38,72 @@ func TestLoadBackgroundImagesDecodesSafeImage(t *testing.T) {
 	images, errors := loadBackgroundImages(context.Background(), loader, computed)
 	if len(errors) != 0 || images[resourceURL] == nil || images[resourceURL].Bounds().Dx() != 2 {
 		t.Fatalf("images/errors = %#v / %#v", images, errors)
+	}
+}
+
+func TestLoadBackgroundImagesFetchesIndependentURLsConcurrently(t *testing.T) {
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, image.NewNRGBA(image.Rect(0, 0, 2, 2))); err != nil {
+		t.Fatal(err)
+	}
+	loader := &concurrentImageLoader{
+		body: encoded.Bytes(), started: make(chan string, 2), release: make(chan struct{}), fetches: make(map[string]int),
+	}
+	firstURL, secondURL := "https://example.com/first.png", "https://example.com/second.png"
+	computed := style.Map{
+		dom.NodeID(1): {BackgroundImage: style.BackgroundImage{Kind: style.BackgroundImageURL, URL: firstURL}},
+		dom.NodeID(2): {BackgroundImage: style.BackgroundImage{Kind: style.BackgroundImageURL, URL: secondURL}},
+	}
+	type result struct {
+		images   map[string]image.Image
+		failures []string
+	}
+	done := make(chan result, 1)
+	go func() {
+		images, failures := loadBackgroundImages(context.Background(), loader, computed)
+		done <- result{images: images, failures: failures}
+	}()
+	released := false
+	defer func() {
+		if !released {
+			close(loader.release)
+		}
+	}()
+	for range 2 {
+		select {
+		case <-loader.started:
+		case <-time.After(time.Second):
+			t.Fatal("background image requests were serialized")
+		}
+	}
+	close(loader.release)
+	released = true
+	loaded := <-done
+	if len(loaded.failures) != 0 || loaded.images[firstURL] == nil || loaded.images[secondURL] == nil {
+		t.Fatalf("background images/failures = %#v / %#v", loaded.images, loaded.failures)
+	}
+}
+
+func TestImageQueueSaturationIsPrioritizedAndRedactsURLQueries(t *testing.T) {
+	baseURL := mustParseURL(t, "https://example.com/")
+	document := dom.NewDocument()
+	lowPriority := document.CreateElement("img", map[string]string{"src": "/low.png?token=queue-secret", "fetchpriority": "low"})
+	if err := document.AppendChild(document.Root, lowPriority); err != nil {
+		t.Fatal(err)
+	}
+	for index := 0; index < maxResourceQueue; index++ {
+		node := document.CreateElement("img", map[string]string{"src": fmt.Sprintf("/normal-%d.png?token=queue-secret", index)})
+		if err := document.AppendChild(document.Root, node); err != nil {
+			t.Fatal(err)
+		}
+	}
+	loader := &routeLoader{responses: make(map[string]*network.Response)}
+	_, _, failures := loadReplacedImagesWithCache(context.Background(), loader, baseURL, document, 1280, 1, nil, newImageDecodeBudget(), newImageResourceCache())
+	if len(failures) == 0 || failures[0] != "image resource queue saturated" {
+		t.Fatalf("queue failures = %v", failures)
+	}
+	if strings.Contains(strings.Join(failures, "\n"), "queue-secret") {
+		t.Fatalf("image diagnostics leaked query: %v", failures)
 	}
 }
 
@@ -63,7 +133,7 @@ func TestPageImageCacheSharesFetchBodyAndDecodeAcrossBackgroundAndElement(t *tes
 	}}
 	cache, budget := newImageResourceCache(), newImageDecodeBudget()
 	computed := style.Map{dom.NodeID(1): {BackgroundImage: style.BackgroundImage{Kind: style.BackgroundImageURL, URL: resourceURL}}}
-	backgrounds, backgroundErrors := loadBackgroundImagesWithCache(context.Background(), loader, computed, budget, cache)
+	backgrounds, backgroundErrors := loadBackgroundImagesWithCache(context.Background(), loader, computed, budget, cache, nil)
 	document := dom.NewDocument()
 	imageNode := document.CreateElement("img", map[string]string{"src": resourceURL})
 	if err := document.AppendChild(document.Root, imageNode); err != nil {
@@ -175,7 +245,7 @@ func TestNavigateLoadsReplacedImagesOnlyForExplicitJavaScriptEngine(t *testing.T
 	}
 	newLoader := func() *routeLoader {
 		return &routeLoader{responses: map[string]*network.Response{
-			pageURL:  {URL: mustParseURL(t, pageURL), StatusCode: 200, ContentType: "text/html", Body: []byte(`<img src="photo.png" alt="Photo">`)},
+			pageURL:  {URL: mustParseURL(t, pageURL), StatusCode: 200, ContentType: "text/html", Body: []byte(`<img id="photo" src="photo.png" alt="Photo">`)},
 			imageURL: {URL: mustParseURL(t, imageURL), StatusCode: 200, ContentType: "image/png", Body: encoded.Bytes()},
 		}}
 	}
@@ -198,6 +268,12 @@ func TestNavigateLoadsReplacedImagesOnlyForExplicitJavaScriptEngine(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
+	imageNode, ok := jsPage.Document.GetElementByID("photo")
+	if !ok {
+		t.Fatal("photo element is missing")
+	}
+	waitForImageResource(t, jsBrowser, imageNode.ID, imageURL)
+	jsPage = jsBrowser.Page()
 	if len(jsPage.ImageResources) != 1 || jsPage.Images[imageURL] == nil {
 		t.Fatalf("JavaScript page images = %#v / %#v", jsPage.ImageResources, jsPage.Images)
 	}
@@ -265,7 +341,7 @@ func TestUpdateViewportReselectsResponsiveImageCandidate(t *testing.T) {
 		return output.Bytes()
 	}
 	loader := &routeLoader{responses: map[string]*network.Response{
-		pageURL:    {URL: mustParseURL(t, pageURL), StatusCode: 200, ContentType: "text/html", Body: []byte(`<picture><source media="(max-width: 600px)" srcset="mobile.png"><img src="desktop.png"></picture>`)},
+		pageURL:    {URL: mustParseURL(t, pageURL), StatusCode: 200, ContentType: "text/html", Body: []byte(`<picture><source media="(max-width: 600px)" srcset="mobile.png"><img id="hero" src="desktop.png"></picture>`)},
 		desktopURL: {URL: mustParseURL(t, desktopURL), StatusCode: 200, ContentType: "image/png", Body: encode(4)},
 		mobileURL:  {URL: mustParseURL(t, mobileURL), StatusCode: 200, ContentType: "image/png", Body: encode(2)},
 	}}
@@ -278,15 +354,38 @@ func TestUpdateViewportReselectsResponsiveImageCandidate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var imageID dom.NodeID
-	for id := range page.ImageResources {
-		imageID = id
+	imageNode, ok := page.Document.GetElementByID("hero")
+	if !ok {
+		t.Fatal("hero element is missing")
 	}
-	if page.ImageResources[imageID].URL != desktopURL {
-		t.Fatalf("initial candidate = %q, want desktop", page.ImageResources[imageID].URL)
+	imageID := imageNode.ID
+	if resource := waitForImageResource(t, browserState, imageID, desktopURL); resource.URL != desktopURL {
+		t.Fatalf("initial candidate = %q, want desktop", resource.URL)
 	}
-	if !browserState.UpdateViewport(500, 700) || page.ImageResources[imageID].URL != mobileURL || page.ImageResources[imageID].IntrinsicWidth != 2 {
-		t.Fatalf("responsive candidate = %#v", page.ImageResources[imageID])
+	if !browserState.UpdateViewport(500, 700) {
+		t.Fatal("UpdateViewport() = false")
+	}
+	resource := waitForImageResource(t, browserState, imageID, mobileURL)
+	if resource.IntrinsicWidth != 2 {
+		t.Fatalf("responsive candidate = %#v", resource)
+	}
+}
+
+func waitForImageResource(t *testing.T, browserState *Browser, nodeID dom.NodeID, expectedURL string) layoutmodel.ImageResource {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for {
+		page := browserState.Page()
+		page.imageMu.Lock()
+		resource := page.ImageResources[nodeID]
+		page.imageMu.Unlock()
+		if resource.URL == expectedURL {
+			return resource
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("image resource did not update to %s; last resource = %#v", expectedURL, resource)
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 
@@ -327,9 +426,14 @@ bad.addEventListener("error", () => result.setAttribute("events", (result.getAtt
 	if !ok {
 		t.Fatal("result element is missing")
 	}
-	if state, _ := result.Attribute("state"); state != "true|3|2|"+imageURL {
+	if state, _ := result.Attribute("state"); state != "false|0|0|" {
 		t.Fatalf("HTMLImageElement state = %q", state)
 	}
+	okImage, found := page.Document.GetElementByID("ok")
+	if !found {
+		t.Fatal("ok image element is missing")
+	}
+	waitForImageResource(t, browserState, okImage.ID, imageURL)
 	if order, _ := result.Attribute("events"); order != "load,error," {
 		t.Fatalf("image event order = %q", order)
 	}
@@ -488,6 +592,77 @@ func TestNavigationCancelsStaleResponsiveImageCompletion(t *testing.T) {
 		if resource.URL == mobileURL {
 			t.Fatalf("stale image completion committed after navigation: %#v", resource)
 		}
+	}
+}
+
+func TestUpdateViewportReturnsWhileResponsiveImageIsPending(t *testing.T) {
+	pageURL := "https://example.com/page.html"
+	desktopURL, mobileURL := "https://example.com/desktop.png", "https://example.com/mobile.png"
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, image.NewNRGBA(image.Rect(0, 0, 2, 1))); err != nil {
+		t.Fatal(err)
+	}
+	loader := &cancelAwareImageLoader{
+		blocked: mobileURL, started: make(chan struct{}), responses: map[string]*network.Response{
+			pageURL:    {URL: mustParseURL(t, pageURL), StatusCode: 200, ContentType: "text/html", Body: []byte(`<picture><source media="(max-width:600px)" srcset="mobile.png"><img src="desktop.png"></picture>`)},
+			desktopURL: {URL: mustParseURL(t, desktopURL), ContentType: "image/png", Body: encoded.Bytes()},
+		},
+	}
+	browserState := NewWithEngineFactory(loader, func(runtimemodel.Engine) runtimemodel.Runtime { return &runtimeStub{} })
+	defer browserState.Close()
+	_, _ = browserState.SetEngine(context.Background(), runtimemodel.EngineJavaScript)
+	if _, err := browserState.Navigate(context.Background(), pageURL); err != nil {
+		t.Fatal(err)
+	}
+	returned := make(chan bool, 1)
+	go func() { returned <- browserState.UpdateViewport(500, 700) }()
+	select {
+	case changed := <-returned:
+		if !changed {
+			t.Fatal("UpdateViewport() = false")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("UpdateViewport blocked on a responsive image request")
+	}
+	select {
+	case <-loader.started:
+	case <-time.After(time.Second):
+		t.Fatal("responsive image request did not start")
+	}
+}
+
+func TestNavigateReturnsWhileInitialImageIsPending(t *testing.T) {
+	pageURL := "https://example.com/page.html"
+	imageURL := "https://example.com/hero.png"
+	loader := &cancelAwareImageLoader{
+		blocked: imageURL, started: make(chan struct{}), responses: map[string]*network.Response{
+			pageURL: {URL: mustParseURL(t, pageURL), StatusCode: 200, ContentType: "text/html", Body: []byte(`<main>Ready</main><img src="hero.png" alt="Hero">`)},
+		},
+	}
+	browserState := NewWithEngineFactory(loader, func(runtimemodel.Engine) runtimemodel.Runtime { return &runtimeStub{} })
+	defer browserState.Close()
+	_, _ = browserState.SetEngine(context.Background(), runtimemodel.EngineJavaScript)
+	type result struct {
+		page *Page
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		page, err := browserState.Navigate(context.Background(), pageURL)
+		done <- result{page: page, err: err}
+	}()
+	select {
+	case loaded := <-done:
+		if loaded.err != nil || loaded.page == nil || loaded.page.Document == nil {
+			t.Fatalf("navigation result = page:%#v err:%v", loaded.page, loaded.err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("navigation blocked on the initial image request")
+	}
+	select {
+	case <-loader.started:
+	case <-time.After(time.Second):
+		t.Fatal("initial image request did not start after page commit")
 	}
 }
 

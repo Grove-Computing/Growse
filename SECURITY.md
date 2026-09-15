@@ -6,7 +6,8 @@
 
 | Version | Supported |
 | --- | --- |
-| 0.17.x | Yes |
+| 0.18.x | Yes |
+| 0.17.x | No |
 | 0.16.x | No |
 | 0.15.x | No |
 | 0.14.x | No |
@@ -45,7 +46,7 @@ GitHub Releaseの各Archiveには、同名の`.sha256`と、`growse_<version>_<p
 たとえばLinux amd64のArchiveを検証する場合は、次を実行します。
 
 ```sh
-VERSION=v0.17.0
+VERSION=v0.18.0
 ASSET="growse_${VERSION}_linux_amd64.tar.gz"
 gh release download "$VERSION" --repo Grove-Computing/Growse \
   --pattern "$ASSET" --pattern "$ASSET.sha256" \
@@ -74,7 +75,7 @@ Developer workstationからのCredential窃取、不可視Unicode、未承認Bin
 
 ## Go / JavaScript Runtime Security Boundary
 
-Growse v0.17.0はPage / FrameのYaegi・goja・WASMとService WorkerをBrowser UIとは別の専用worker processで実行します。workerはversion / length制限付きの型付きIPCを通して、BrowserがbrokerするDOM、Event、Timer、Frame、Fetch、Storage、Navigation、Console、Module、dynamic resource、CSSOM、observer、WASM操作だけを要求できます。Browser credential、任意filesystem、直接socket / DNS、subprocess、dynamic library、OS shell、Go reflection、Node.js APIをhost surfaceとして公開しません。
+Growse v0.18.0はPage / FrameのYaegi・goja・WASMとService WorkerをBrowser UIとは別の専用worker processで実行します。workerはversion / length制限付きの型付きIPCを通して、BrowserがbrokerするDOM、Event、Timer、Frame、Fetch、Storage、Navigation、Console、Module、dynamic resource、CSSOM、observer、WASM操作だけを要求できます。Browser credential、任意filesystem、直接socket / DNS、subprocess、dynamic library、OS shell、Go reflection、Node.js APIをhost surfaceとして公開しません。
 
 Browserはcodeを渡す前に、別PID、worker executable / protocol、brokered host I/O、最小environment、parent lifecycle、memory上限を検証します。Linuxでは`no-new-privileges`とparent-death signal、macOS / Windowsでは専用process group、全platformではparent IPC EOFによる終了を適用します。必須条件が欠ける、workerがtimeout / crashする、protocolに違反する場合は対象contextだけをfail closedし、停止済みgenerationのcallbackを拒否します。
 
@@ -82,7 +83,7 @@ Browserはcodeを渡す前に、別PID、worker executable / protocol、brokered
 
 JavaScriptは通常のHTTP(S) Pageのinline / external classic、CORSを通過したECMAScript Module、dynamic script / stylesheet、WebAssemblyを実行できます。redirect、status、MIME、mixed content、credentials、CORS、integrity、sizeをBrowser側で再検証します。これらの取得・実行とhydration callbackは利用者がTabの`JS` selectorを明示選択した場合だけ有効です。Go sourceは明示的な`text/go`かつtrusted loopback / same-originに限定し、外部Internet Originから暗黙実行しません。選択していないEngineのScriptは取得せず、停止したJavaScript generationのresource completion、observer、DOM mutationをGo Pageへcommitしません。FetchはSame-Origin PolicyとCORSを適用し、`omit`、`same-origin`、`include`のCredentials Modeに従います。
 
-Browser Sessionあたりworker 32件、IPC message 1 MiB、pending message 256件、転送中payload 8 MiB、既定task 5秒を上限とします。Page close、Navigation、Engine切替でlistener、Timer、Fetch、Frame / WASM callbackをcancelし、通常停止に応答しないworkerは終了します。
+Browser Sessionあたりworker 32件、IPC message 1 MiB、pending message 256件、転送中payload 8 MiB、既定task 5秒を上限とします。Image / script resource queueはPage単位のworker・entry・byte上限を持ち、Page close、Navigation、Engine切替でlistener、Timer、Fetch、resource completion、Frame / WASM callbackをcancelします。通常停止に応答しないworkerは終了します。
 
 Navigation、Form Submission、FetchはBrowser Session単位のメモリ内Cookie Jarを共有します。各RequestでDomain、Path、Secure、HttpOnly、SameSite、Origin、Credentialsを再評価し、WebGoからHttpOnly Cookieを参照できないようにします。Request Bodyは1 MiB、Headerは100件かつ64 KiB、Response Bodyは既定4 MiB、Redirectは10回を上限とし、Page終了時は進行中のFetchをcancelします。URLを含むErrorと表示にはuserinfoを残さず、CookieとAuthorizationの値をLogへ出力しません。
 
@@ -98,7 +99,7 @@ Service Worker registrationとCache StorageはOrigin profileへ保存します�
 
 DevToolsはPageごとのread-only診断境界です。Consoleは1件4 KiB・Page 1,000件、DOM snapshotは2,000 node・深さ128・attribute 64件・文字列4 KiB、NetworkはPage 2,000件・Browser Session 4,000件を上限とします。Runtime panelはPage / Frame / Service WorkerのID、generation、Engine、state、script種別に加え、CSS局所無視、font fallback chain、image cache counter、frame rebuild理由をbody-free metadataとして表示します。同一診断はcountへ集約し、1 Page 2,000種類・1 field 4 KiB・count 1,000,000で飽和します。Request / Response body、Header、Cookie、Authorization、Service Worker Cache body、decoded pixel、font bytes、IPC payload、raw error本文を保持せず、diagnostic URLからuserinfo、query、fragmentを除去します。Inspectorはpassword inputのvalue、WebGo callback、Runtime objectを公開しません。
 
-外部Go sourceを信頼しないでください。外部JavaScriptはv0.17.0 sandbox boundary内で扱いますが、未知の実装脆弱性を想定し、機密情報を持つ高権限環境では実行しないでください。
+外部Go sourceを信頼しないでください。外部JavaScriptはv0.18.0 sandbox boundary内で扱いますが、未知の実装脆弱性を想定し、機密情報を持つ高権限環境では実行しないでください。
 
 ## Hoverとカーソル表示
 

@@ -154,6 +154,144 @@ func TestNextJSSSRFixtureHydratesWithoutReplacingDOM(t *testing.T) {
 	}
 }
 
+func TestNextJSDelayedResourcesKeepSSRInteractiveThroughIncrementalCommits(t *testing.T) {
+	scriptStarted := make(chan struct{}, 1)
+	imageStarted := make(chan struct{}, 1)
+	scriptGate := make(chan struct{})
+	imageGate := make(chan struct{})
+	var releaseScriptOnce sync.Once
+	var releaseImageOnce sync.Once
+	releaseScript := func() { releaseScriptOnce.Do(func() { close(scriptGate) }) }
+	releaseImage := func() { releaseImageOnce.Do(func() { close(imageGate) }) }
+	defer releaseScript()
+	defer releaseImage()
+
+	fixture := modernWebCompatibilityHandler()
+	delayed := http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		var started chan<- struct{}
+		var gate <-chan struct{}
+		switch request.URL.Path {
+		case "/_next/static/chunks/app.mjs":
+			started, gate = scriptStarted, scriptGate
+		case "/assets/pixel.png":
+			started, gate = imageStarted, imageGate
+		}
+		if gate != nil {
+			select {
+			case started <- struct{}{}:
+			default:
+			}
+			select {
+			case <-gate:
+			case <-request.Context().Done():
+				return
+			}
+		}
+		fixture.ServeHTTP(response, request)
+	})
+	server := httptest.NewServer(delayed)
+	defer server.Close()
+
+	engine := browser.NewWithEngineFactory(network.NewClientWithLimits(server.Client(), 4<<20), func(selected runtimemodel.Engine) runtimemodel.Runtime {
+		if selected == runtimemodel.EngineJavaScript {
+			return javascript.New()
+		}
+		return nil
+	})
+	defer engine.Close()
+	if _, err := engine.SetEngine(context.Background(), runtimemodel.EngineJavaScript); err != nil {
+		t.Fatal(err)
+	}
+	mutations := make(chan struct{}, 64)
+	engine.SetOnMutation(func() {
+		select {
+		case mutations <- struct{}{}:
+		default:
+		}
+	})
+
+	type navigationResult struct {
+		page *browser.Page
+		err  error
+	}
+	navigation := make(chan navigationResult, 1)
+	go func() {
+		page, err := engine.Navigate(context.Background(), server.URL+"/next/")
+		navigation <- navigationResult{page: page, err: err}
+	}()
+	for name, started := range map[string]<-chan struct{}{"script": scriptStarted, "image": imageStarted} {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			t.Fatalf("delayed %s request did not start", name)
+		}
+	}
+	page := engine.Page()
+	if page == nil {
+		t.Fatal("initial SSR was not published while resources were delayed")
+	}
+	if got := fixtureNode(t, page, "next-ssr-marker").TextContent(); got != "SSR rendered" {
+		t.Fatalf("initial SSR marker = %q", got)
+	}
+	if got := fixtureNode(t, page, "next-hydration-marker").TextContent(); got != "not hydrated" {
+		t.Fatalf("hydration ran before delayed script was released: %q", got)
+	}
+	imageNode := fixtureNode(t, page, "next-image")
+	if resource := page.ImageResources[imageNode.ID]; resource.Loaded || resource.Error != "" {
+		t.Fatalf("delayed image settled in initial commit: %+v", resource)
+	}
+
+	releaseScript()
+	select {
+	case result := <-navigation:
+		if result.err != nil || result.page != engine.Page() {
+			t.Fatalf("completed Navigation = page:%p active:%p error:%v", result.page, engine.Page(), result.err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Navigation did not complete after delayed script was released")
+	}
+	waitForInspectedFixtureText(t, engine, mutations, "next-hydration-marker", "hydrated")
+	page = engine.Page()
+	if resource := page.ImageResources[imageNode.ID]; resource.Loaded || resource.Error != "" {
+		t.Fatalf("image settled with the independent script commit: %+v", resource)
+	}
+
+	releaseImage()
+	waitForFixtureImageSettled(t, engine, mutations, "next-image")
+	page = engine.Page()
+	if resource := page.ImageResources[imageNode.ID]; !resource.Loaded || resource.Error != "" {
+		t.Fatalf("delayed image commit = %+v", resource)
+	}
+	if !engine.DispatchClick(fixtureNode(t, page, "next-navigation").ID, 0, 0) {
+		t.Fatal("client Navigation Event was not handled after resource commits")
+	}
+	if engine.Page().URL.Path != "/next/about" || fixtureNode(t, engine.Page(), "next-route").TextContent() != "/next/about" {
+		t.Fatalf("post-resource Navigation = %s / %q", engine.Page().URL.Path, fixtureNode(t, engine.Page(), "next-route").TextContent())
+	}
+}
+
+func waitForInspectedFixtureText(t *testing.T, engine *browser.Browser, mutations <-chan struct{}, id, want string) {
+	t.Helper()
+	deadline := time.NewTimer(3 * time.Second)
+	defer deadline.Stop()
+	for {
+		got := ""
+		if engine.InspectPage(func(page *browser.Page) bool {
+			if node, ok := page.Document.GetElementByID(id); ok {
+				got = node.TextContent()
+			}
+			return true
+		}) && got == want {
+			return
+		}
+		select {
+		case <-mutations:
+		case <-deadline.C:
+			t.Fatalf("fixture %s = %q, want %q", id, got, want)
+		}
+	}
+}
+
 func fixtureNode(t *testing.T, page *browser.Page, id string) *dom.Node {
 	t.Helper()
 	node, ok := page.Document.GetElementByID(id)
@@ -176,6 +314,54 @@ func waitForFixtureText(t *testing.T, engine *browser.Browser, mutations <-chan 
 		case <-mutations:
 		case <-deadline.C:
 			t.Fatalf("fixture %s = %q, want %q; runtime=%q scripts=%v", id, fixtureNode(t, page, id).TextContent(), want, page.RuntimeError, page.ScriptErrors)
+		}
+	}
+}
+
+func waitForFixtureImage(t *testing.T, engine *browser.Browser, mutations <-chan struct{}, id string) {
+	t.Helper()
+	deadline := time.NewTimer(3 * time.Second)
+	defer deadline.Stop()
+	var findImage func(*dom.Node) *dom.Node
+	findImage = func(node *dom.Node) *dom.Node {
+		if node.Type == dom.NodeElement && (node.TagName == "img" || node.TagName == "svg") {
+			return node
+		}
+		for _, child := range node.Children {
+			if image := findImage(child); image != nil {
+				return image
+			}
+		}
+		return nil
+	}
+	for {
+		page := engine.Page()
+		container := fixtureNode(t, page, id)
+		if image := findImage(container); image != nil && page.ImageResources[image.ID].Loaded {
+			return
+		}
+		select {
+		case <-mutations:
+		case <-deadline.C:
+			t.Fatalf("fixture %s image did not load; errors=%v", id, page.ImageErrors)
+		}
+	}
+}
+
+func waitForFixtureImageSettled(t *testing.T, engine *browser.Browser, mutations <-chan struct{}, id string) {
+	t.Helper()
+	deadline := time.NewTimer(3 * time.Second)
+	defer deadline.Stop()
+	for {
+		page := engine.Page()
+		image := fixtureNode(t, page, id)
+		if resource, ok := page.ImageResources[image.ID]; ok && (resource.Loaded || resource.Error != "") {
+			return
+		}
+		select {
+		case <-mutations:
+		case <-deadline.C:
+			t.Fatalf("fixture %s image did not settle; errors=%v", id, page.ImageErrors)
 		}
 	}
 }
