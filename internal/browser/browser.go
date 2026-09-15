@@ -1456,7 +1456,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 		decodedImages = make(map[string]image.Image)
 		fonts, fontErrors = loadWebFonts(ctx, fontResources, response.URL, stylesheet)
 	}
-	scripts, scriptErrors := loadScriptsForEngineWithBase(ctx, scriptResources, response.URL, baseURL, document, engine)
+	var scriptErrors []string
 	var importMap map[string]string
 	if engine == runtimemodel.EngineJavaScript {
 		var importMapErrors []string
@@ -1492,7 +1492,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 		WebFonts:         layoutPageFonts(fonts, engine == runtimemodel.EngineJavaScript),
 		Engine:           engine,
 		Compatibility:    compatibilityProfileForEngine(engine),
-		Scripts:          scripts,
+		Scripts:          nil,
 		ImportMap:        importMap,
 		ScriptErrors:     scriptErrors,
 		DevTools:         pageStore,
@@ -1509,28 +1509,10 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	fetchLimiter := b.fetchLimiter
 	b.mu.RUnlock()
 	b.loadFrames(ctx, page, resourceClient, runtimeClient, engineFactory, engine, storageManager, fetchLimiter, onMutation, reducedMotion)
-	pageRuntime := startRuntime(ctx, engineFactory, engine, page, runtimeClient, storageManager, b.storageSourceID, fetchLimiter, onMutation, b.currentTime, func(target *url.URL) error {
-		resolved := cloneURL(target)
-		go func() {
-			<-navigationReady
-			b.navigateFromRuntime(page, resolved)
-		}()
-		return nil
-	}, func(state string, target *url.URL) error {
-		return b.pushHistoryState(page, target, state)
-	}, func(state string, target *url.URL) error {
-		return b.replaceHistoryState(page, target, state)
-	}, func(delta int) error {
-		return b.queueHistoryTraversal(page, navigationReady, delta)
-	}, b.historyInfo)
-	document.SetReadyState("complete")
 	if err := ctx.Err(); err != nil {
 		close(navigationReady)
 		page.Animations.Clear()
 		page.Transitions.Clear()
-		if pageRuntime != nil {
-			_ = pageRuntime.Stop()
-		}
 		_ = closePageFrames(page)
 		page.closeDevTools()
 		page.releaseImageResources()
@@ -1542,9 +1524,6 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 		close(navigationReady)
 		page.Animations.Clear()
 		page.Transitions.Clear()
-		if pageRuntime != nil {
-			_ = pageRuntime.Stop()
-		}
 		_ = closePageFrames(page)
 		page.closeDevTools()
 		page.releaseImageResources()
@@ -1556,7 +1535,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	b.nextPageID++
 	page.HistoryID = b.nextPageID
 	page.ScrollRevision = 1
-	b.activeRuntime = pageRuntime
+	b.activeRuntime = nil
 	b.page = page
 	if previousPage != nil && previousPage != page && previousPage.Animations != nil {
 		previousPage.Animations.Clear()
@@ -1604,13 +1583,9 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	childRuntimes := frameRuntimes(page)
 	b.mu.Unlock()
 	committed = true
-	close(navigationReady)
 	if engine == runtimemodel.EngineJavaScript && documentHasViewportImageWork(imageDocument) {
 		loadContext, generation := page.beginImageLoad(context.Background())
 		b.loadPageImagesAsync(loadContext, generation, page, imageResources, baseURL, imageDocument, 1280, imagePolicy, imageBudget, imageCache, onMutation)
-	}
-	if runtime, ok := pageRuntime.(backgroundRuntime); ok {
-		runtime.SetBackground(background)
 	}
 	for _, childRuntime := range childRuntimes {
 		if runtime, ok := childRuntime.(backgroundRuntime); ok {
@@ -1623,6 +1598,70 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	if previousPage != nil && previousPage != page {
 		_ = closePageFrames(previousPage)
 		previousPage.releaseImageResources()
+	}
+	if engine == runtimemodel.EngineJavaScript && onMutation != nil {
+		onMutation()
+	}
+
+	// Publish the parsed and styled Page before waiting for external scripts.
+	// Navigate keeps its completion contract, while the browser UI can paint and
+	// accept input through Browser.Page during slow defer/module fetches.
+	scripts, fetchedScriptErrors := loadScriptsForEngineWithBase(ctx, scriptResources, response.URL, baseURL, document, engine)
+	page.Scripts = scripts
+	page.ScriptErrors = append(page.ScriptErrors, fetchedScriptErrors...)
+	for _, scriptError := range fetchedScriptErrors {
+		page.DevTools.AddConsole(devtools.ConsoleError, "script", scriptError)
+	}
+	if err := ctx.Err(); err != nil {
+		b.mu.RLock()
+		active := navigationID == b.navigationID && b.page == page
+		b.mu.RUnlock()
+		close(navigationReady)
+		if active {
+			document.SetReadyState("complete")
+			if onMutation != nil {
+				onMutation()
+			}
+			return page, nil
+		}
+		return nil, err
+	}
+	pageRuntime := startRuntime(ctx, engineFactory, engine, page, runtimeClient, storageManager, b.storageSourceID, fetchLimiter, onMutation, b.currentTime, func(target *url.URL) error {
+		resolved := cloneURL(target)
+		go func() {
+			<-navigationReady
+			b.navigateFromRuntime(page, resolved)
+		}()
+		return nil
+	}, func(state string, target *url.URL) error {
+		return b.pushHistoryState(page, target, state)
+	}, func(state string, target *url.URL) error {
+		return b.replaceHistoryState(page, target, state)
+	}, func(delta int) error {
+		return b.queueHistoryTraversal(page, navigationReady, delta)
+	}, b.historyInfo)
+	document.SetReadyState("complete")
+	b.mu.Lock()
+	if navigationID != b.navigationID || b.page != page {
+		b.mu.Unlock()
+		close(navigationReady)
+		if pageRuntime != nil {
+			_ = pageRuntime.Stop()
+		}
+		return nil, context.Canceled
+	}
+	b.activeRuntime = pageRuntime
+	background = !b.active
+	childRuntimes = frameRuntimes(page)
+	b.mu.Unlock()
+	close(navigationReady)
+	if runtime, ok := pageRuntime.(backgroundRuntime); ok {
+		runtime.SetBackground(background)
+	}
+	for _, childRuntime := range childRuntimes {
+		if runtime, ok := childRuntime.(backgroundRuntime); ok {
+			runtime.SetBackground(background)
+		}
 	}
 	if engine == runtimemodel.EngineJavaScript {
 		dispatchImageResourceEvents(b, page)
