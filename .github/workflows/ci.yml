@@ -116,6 +116,9 @@ jobs:
       - name: Run v0.17.0 deterministic safety tests
         run: bash tests/v017-security.sh
 
+      - name: Run v0.18.0 browser-grade resource loading tests
+        run: bash tests/v018-resource-loading.sh
+
       - name: Run race tests with coverage
         run: go test -race -covermode=atomic -coverprofile=coverage.out ./...
 
