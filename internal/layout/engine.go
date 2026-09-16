@@ -1098,10 +1098,6 @@ func (e *engine) renderPositionedChild(node *dom.Node, style blockStyle) {
 	e.renderGridItem(node, style, childX, childY, usedWidth, usedHeight)
 }
 
-func collapseMargins(first, second float32) float32 {
-	return marginGroupFor(first).merge(marginGroupFor(second)).value()
-}
-
 type marginGroup struct {
 	positive float32
 	negative float32
