@@ -7,9 +7,23 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Grove-Computing/Growse/internal/browser"
+	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 )
 
 const linuxApplicationID = "io.github.grovecomputing.Growse"
+
+func TestDesktopBrowserUsesJavaScriptEngineByDefault(t *testing.T) {
+	state := browser.New(nil)
+	defer state.Close()
+	if err := configureDesktopBrowser(state); err != nil {
+		t.Fatal(err)
+	}
+	if got := state.Engine(); got != runtimemodel.EngineJavaScript {
+		t.Fatalf("desktop default engine = %q, want %q", got, runtimemodel.EngineJavaScript)
+	}
+}
 
 func TestLinuxDesktopIntegrationAssets(t *testing.T) {
 	assetDirectory := filepath.Join("..", "..", "packaging", "linux")

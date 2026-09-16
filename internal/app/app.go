@@ -2,6 +2,7 @@
 package app
 
 import (
+	"context"
 	"log"
 
 	gioapp "gioui.org/app"
@@ -73,6 +74,9 @@ func runWindow(window *gioapp.Window) error {
 			}
 			return isolated.New(engine)
 		}, storageManager.NewPageSession(), serviceWorkerManager)
+		if err := configureDesktopBrowser(state); err != nil {
+			log.Printf("既定Runtime Engineを設定できませんでした: %v", err)
+		}
 		return state
 	})
 	session.SetOnActiveMutation(window.Invalidate)
@@ -95,4 +99,9 @@ func runWindow(window *gioapp.Window) error {
 			event.Frame(gtx.Ops)
 		}
 	}
+}
+
+func configureDesktopBrowser(state *browser.Browser) error {
+	_, err := state.SetEngine(context.Background(), runtimemodel.EngineJavaScript)
+	return err
 }
