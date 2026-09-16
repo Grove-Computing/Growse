@@ -593,6 +593,7 @@ func applyFrameMutation(parent *Page, frameID, generation uint64, snapshot dom.D
 			return err
 		}
 		recomputePageStyles(frame.Page, current)
+		frame.Page.RecordDOMMutation(frame.Page.Document.Root.ID)
 		if onMutation != nil {
 			onMutation()
 		}

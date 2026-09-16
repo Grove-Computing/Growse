@@ -58,6 +58,17 @@ func TestComputedStyleMutationBoundsDirtyNodes(t *testing.T) {
 	}
 }
 
+func TestDOMMutationForcesLayoutWhenComputedStylesStayEqual(t *testing.T) {
+	page := &Page{StyleRevision: 9}
+	page.RecordComputedStyleChanges(style.Map{1: {}}, style.Map{1: {}})
+
+	got := page.RecordDOMMutation(1)
+	if got.Revision != 9 || got.Damage != RenderDamageLayout {
+		t.Fatalf("DOM invalidation header = %#v", got)
+	}
+	assertNodeIDs(t, got.LayoutRoots, []dom.NodeID{1})
+}
+
 func assertNodeIDs(t *testing.T, actual, expected []dom.NodeID) {
 	t.Helper()
 	if len(actual) != len(expected) {

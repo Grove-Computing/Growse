@@ -1690,6 +1690,72 @@ func TestTextInputReceivesFocusFromPointerPress(t *testing.T) {
 	}
 }
 
+func TestTextInputNestedInLabelReceivesFocusFromPointerPress(t *testing.T) {
+	document := dom.NewDocument()
+	form := document.CreateElement("form", nil)
+	label := document.CreateElement("label", nil)
+	inputNode := document.CreateElement("input", map[string]string{"type": "text", "value": "SSR"})
+	for _, edge := range [][2]*dom.Node{
+		{document.Root, form}, {form, label}, {label, document.CreateText("Name ")}, {label, inputNode},
+	} {
+		if err := document.AppendChild(edge[0], edge[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	page := &browser.Page{Document: document, ComputedStyles: style.ComputeWithEnvironment(document, nil, style.InteractionState{}, style.Environment{BrowserDefaults: true})}
+	ui := NewBrowserUI(&stubNavigator{page: page}, nil)
+	router := new(input.Router)
+	gtx := layout.Context{Ops: new(op.Ops), Source: router.Source(), Constraints: layout.Exact(image.Pt(800, 600)), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}}
+
+	ui.layoutDocument(gtx, page)
+	router.Frame(gtx.Ops)
+	editor := ui.inputEditors[inputNode.ID]
+	if editor == nil || editor.Text() != "SSR" {
+		t.Fatalf("nested input editor = %#v", editor)
+	}
+	router.Queue(pointer.Event{Buttons: pointer.ButtonPrimary, Kind: pointer.Press, Source: pointer.Mouse, Position: f32.Pt(40, 60)})
+	gtx.Reset()
+	ui.layoutDocument(gtx, page)
+	if !gtx.Focused(editor) || page.FocusTarget != inputNode.ID {
+		t.Fatalf("nested input focus = gio:%v page:%d, want true/%d", gtx.Focused(editor), page.FocusTarget, inputNode.ID)
+	}
+}
+
+func TestTextOnlyDOMMutationRebuildsCachedDisplayList(t *testing.T) {
+	document := dom.NewDocument()
+	paragraph := document.CreateElement("p", nil)
+	if err := document.AppendChild(document.Root, paragraph); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(paragraph, document.CreateText("not hydrated")); err != nil {
+		t.Fatal(err)
+	}
+	page := &browser.Page{Document: document, ComputedStyles: style.Compute(document, nil), StyleRevision: 1}
+	ui := NewBrowserUI(&stubNavigator{page: page}, nil)
+	if _, _, reused := ui.cachedDocumentFrame(page, 800, 600, 1); reused {
+		t.Fatal("initial frame unexpectedly reused")
+	}
+
+	if !document.SetTextContent(paragraph.ID, "hydrated") {
+		t.Fatal("text mutation failed")
+	}
+	page.StyleRevision++
+	page.RecordDOMMutation(paragraph.ID)
+	_, displayList, reused := ui.cachedDocumentFrame(page, 800, 600, 1)
+	if reused {
+		t.Fatal("text-only DOM mutation reused a stale display list")
+	}
+	found := false
+	for _, command := range displayList.Commands {
+		if textCommand, ok := command.(paintmodel.DrawText); ok && textCommand.Text == "hydrated" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("hydrated text was missing from display list: %#v", displayList.Commands)
+	}
+}
+
 func TestPaintOnlyAnimationFramesReuseLayoutTree(t *testing.T) {
 	document := dom.NewDocument()
 	target := document.CreateElement("div", nil)
