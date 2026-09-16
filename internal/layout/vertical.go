@@ -23,6 +23,9 @@ type verticalInlineItem struct {
 // text-orientation variants, ruby, and tate-chu-yoko remain deliberately out
 // of scope, but every emitted rectangle is shared by paint and hit testing.
 func (e *engine) addVerticalInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, container blockStyle, x, width float32) {
+	if !e.withinBudget(nodeID) {
+		return
+	}
 	inlineLimit, definite := resolveSize(container.height, e.viewportHeight, e.viewportHeight > 0)
 	if definite && container.boxSizing == stylemodel.BoxSizingBorderBox {
 		inlineLimit -= container.padding.Top + container.padding.Bottom + container.border.Top.Width + container.border.Bottom.Width
@@ -39,6 +42,9 @@ func (e *engine) addVerticalInlineRuns(nodeID dom.NodeID, tag string, runs []inl
 	columns := make([][]verticalInlineItem, 1)
 	used := []float32{0}
 	for _, item := range items {
+		if !e.withinBudget(nodeID) {
+			break
+		}
 		column := len(columns) - 1
 		if item.forceBreak {
 			if len(columns[column]) != 0 {
@@ -108,7 +114,7 @@ func (e *engine) addVerticalInlineRuns(nodeID dom.NodeID, tag string, runs []inl
 		maxInlineUsed = max(maxInlineUsed, used[columnIndex])
 		e.appendVerticalColumn(&box, columnItems, columnX, columnY, cross, width)
 	}
-	if len(box.Runs) != 0 {
+	if len(box.Runs) != 0 && e.withinBudget(nodeID) {
 		box.Text = joinVerticalText(box.Runs)
 		box.Height = maxInlineUsed
 		if definite {

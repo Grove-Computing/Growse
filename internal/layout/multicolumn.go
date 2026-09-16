@@ -391,10 +391,14 @@ func (e *engine) fragmentColumnGeometry(owner dom.NodeID, boxStart, decorationSt
 		movedNodes[decoration.NodeID] = struct{}{}
 	}
 	fragmentBounds := make(map[dom.NodeID]Rect)
+boxFragments:
 	for _, box := range originalBoxes {
 		for column, source := range ranges {
 			if !verticalRangesIntersect(box.Y, box.Y+box.Height, source.start, source.end) {
 				continue
+			}
+			if !e.withinBudget(owner) {
+				break boxFragments
 			}
 			copy := cloneColumnBox(box)
 			dx := float32(column) * (geometry.width + geometry.gap)
@@ -405,10 +409,14 @@ func (e *engine) fragmentColumnGeometry(owner dom.NodeID, boxStart, decorationSt
 			fragmentBounds[copy.NodeID] = unionTableRect(fragmentBounds[copy.NodeID], clippedVisualRect(copy.Rect(), copy.Clip))
 		}
 	}
+decorationFragments:
 	for _, decoration := range originalDecorations {
 		for column, source := range ranges {
 			if !verticalRangesIntersect(decoration.Y, decoration.Y+decoration.Height, source.start, source.end) {
 				continue
+			}
+			if !e.withinBudget(owner) {
+				break decorationFragments
 			}
 			copy := cloneColumnDecoration(decoration)
 			dx := float32(column) * (geometry.width + geometry.gap)
@@ -504,6 +512,9 @@ func (e *engine) addColumnRules(nodeID dom.NodeID, style blockStyle, geometry co
 		return
 	}
 	for column := 1; column < actualColumns; column++ {
+		if !e.withinBudget(nodeID) {
+			break
+		}
 		center := x + float32(column)*geometry.width + float32(column-1)*geometry.gap + geometry.gap/2
 		width := min(style.columnRule.Width, geometry.gap)
 		e.tree.Decorations = append(e.tree.Decorations, Decoration{

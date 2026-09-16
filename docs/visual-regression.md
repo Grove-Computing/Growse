@@ -77,7 +77,7 @@ bash tests/v017-conformance.sh
 
 ## v0.19.0 CSS Layout 2026 Differential
 
-`examples/css-layout-2026/differential.html`は720×520 CSS pxでGrid、Flexbox、nested overflowをfont非依存の色面へ固定する。2026-09-16にGoogle Chrome 153.0.8010.36とMozilla Firefox 156.0 / geckodriver 0.37.1から同じDOM landmark、computed display / position / overflow、geometry、document scroll extentを採取し、`testdata/differential-v019.json`へ保存した。
+`examples/css-layout-2026/differential.html`は720×520 CSS pxでGrid、Flexbox、nested overflowをfont非依存の色面へ固定する。2026-09-16にChromiumとFirefoxのreferenceとしてGoogle Chrome 153.0.8010.36、Mozilla Firefox 156.0 / geckodriver 0.37.1から同じDOM landmark、computed display / position / overflow、geometry、document scroll extentを採取し、`testdata/differential-v019.json`へ保存した。
 
 `TestCSSLayoutDifferentialMatchesChromiumAndFirefoxGeometryScrollAndVisualThreshold`はGrowseのbrowser UA profileから同じsnapshotを構築し、viewportとlandmark geometryを2 CSS pxまたは参照値の1%以内、semantic stateを完全一致、page / workspace / footerの色面raster差を各2%以下でGateする。nested scrollerの内部extentはscroll containerへ保持し、clipped descendantをdocument scroll extentへ漏らさない。
 

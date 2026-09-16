@@ -6,6 +6,7 @@ examples=(
   browser-grade-compat
   counter
   css3-core
+  css-layout-2026
   dashboard
   data-app
   devtools
@@ -30,6 +31,7 @@ go test \
   ./examples/browser-grade-compat \
   ./examples/counter \
   ./examples/css3-core \
+  ./examples/css-layout-2026 \
   ./examples/dashboard \
   ./examples/data-app \
   ./examples/devtools \
@@ -41,4 +43,4 @@ go test \
   ./examples/persistent-app \
   ./examples/todo
 
-echo "v0.18.0 Demo回帰検証成功: ${examples[*]} multi-tab-workspace"
+echo "v0.19.0 Demo回帰検証成功: ${examples[*]} multi-tab-workspace"
