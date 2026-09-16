@@ -1,6 +1,7 @@
 package browser
 
 import (
+	"context"
 	"image"
 	"testing"
 
@@ -69,8 +70,8 @@ func TestImageCompletionWithStableIntrinsicSizeIsPaintOnly(t *testing.T) {
 
 func TestImageCompletionRejectsStaleGeneration(t *testing.T) {
 	page := &Page{StyleRevision: 4, ImageResources: map[dom.NodeID]layout.ImageResource{}, Images: map[string]image.Image{}}
-	staleContext, stale := page.beginImageLoad(nil)
-	currentContext, current := page.beginImageLoad(nil)
+	staleContext, stale := page.beginImageLoad(context.Background())
+	currentContext, current := page.beginImageLoad(context.Background())
 	t.Cleanup(func() { page.cancelImageLoads() })
 	if staleContext.Err() == nil || currentContext.Err() != nil {
 		t.Fatalf("image generation contexts = stale:%v current:%v", staleContext.Err(), currentContext.Err())

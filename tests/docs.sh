@@ -158,7 +158,7 @@ require examples/modern-web-compat/index.html "Tailwind v4 real-site"
 require examples/modern-web-compat/index.html "/real-site/"
 require examples/modern-web-compat/index.html "Growse v0.18.0"
 require examples/browser-grade-compat/index.html "Browser-grade Compatibility"
-require examples/browser-grade-compat/corpus.json '"release": "v0.18.0"'
+require examples/browser-grade-compat/corpus.json '"release": "v0.19.0"'
 require Makefile "v018-resource-loading-test"
 require .github/workflows/ci.yml "Run v0.18.0 browser-grade resource loading tests"
 require tests/v018-resource-loading.sh "NextJSDelayedResourcesKeepSSRInteractiveThroughIncrementalCommits"

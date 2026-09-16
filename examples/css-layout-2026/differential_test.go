@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"image"
 	"image/color"
 	"os"
@@ -167,5 +166,5 @@ func overflowName(value style.Overflow) string {
 
 func mustJSON(value any) string {
 	encoded, _ := json.Marshal(value)
-	return fmt.Sprintf("%s", encoded)
+	return string(encoded)
 }
