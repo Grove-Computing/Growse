@@ -1,6 +1,9 @@
 package dom
 
-import "testing"
+import (
+	"sync"
+	"testing"
+)
 
 func TestDocumentSnapshotRoundTripPreservesIDsAndControlState(t *testing.T) {
 	document := NewDocument()
@@ -81,5 +84,40 @@ func TestDocumentSnapshotPreservesAndValidatesReadyState(t *testing.T) {
 	invalid.ReadyState = "stale"
 	if err := clone.ApplySnapshot(invalid); err == nil {
 		t.Fatal("invalid ready state was accepted")
+	}
+}
+
+func TestDocumentSnapshotAndLifecycleAreSafeDuringWorkerMutation(t *testing.T) {
+	document := NewDocument()
+	main := document.CreateElement("main", map[string]string{"id": "content"})
+	_ = document.AppendChild(document.Root, main)
+	workerSnapshot := document.Snapshot()
+
+	var workers sync.WaitGroup
+	workers.Add(2)
+	go func() {
+		defer workers.Done()
+		for range 500 {
+			_ = document.Snapshot()
+			_ = document.ReadyState()
+		}
+	}()
+	go func() {
+		defer workers.Done()
+		for index := range 500 {
+			workerSnapshot.ReadyState = "interactive"
+			if index%2 == 0 {
+				workerSnapshot.ReadyState = "complete"
+			}
+			if err := document.ApplySnapshot(workerSnapshot); err != nil {
+				return
+			}
+			document.SetReadyState("complete")
+		}
+	}()
+	workers.Wait()
+
+	if snapshot := document.Snapshot(); snapshot.Root.ID == 0 || document.ReadyState() != "complete" {
+		t.Fatalf("concurrent snapshot state = root:%d ready:%q", snapshot.Root.ID, document.ReadyState())
 	}
 }

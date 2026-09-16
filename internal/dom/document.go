@@ -3,10 +3,13 @@ package dom
 import (
 	"errors"
 	"strings"
+	"sync"
 )
 
 // Document owns a DOM tree and its node indexes.
 type Document struct {
+	snapshotMu sync.RWMutex
+
 	Root       *Node
 	readyState string
 
@@ -29,7 +32,12 @@ func NewDocument() *Document {
 
 // ReadyState reports the document loading lifecycle exposed to scripts.
 func (d *Document) ReadyState() string {
-	if d == nil || d.readyState == "" {
+	if d == nil {
+		return "loading"
+	}
+	d.snapshotMu.RLock()
+	defer d.snapshotMu.RUnlock()
+	if d.readyState == "" {
 		return "loading"
 	}
 	return d.readyState
@@ -37,7 +45,12 @@ func (d *Document) ReadyState() string {
 
 // SetReadyState advances the document loading lifecycle.
 func (d *Document) SetReadyState(state string) bool {
-	if d == nil || state != "loading" && state != "interactive" && state != "complete" || d.ReadyState() == state {
+	if d == nil || state != "loading" && state != "interactive" && state != "complete" {
+		return false
+	}
+	d.snapshotMu.Lock()
+	defer d.snapshotMu.Unlock()
+	if d.readyState == state {
 		return false
 	}
 	d.readyState = state

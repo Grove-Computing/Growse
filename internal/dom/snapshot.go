@@ -30,10 +30,19 @@ type NodeSnapshot struct {
 
 // Snapshot returns a detached, serializable copy of the current document.
 func (d *Document) Snapshot() DocumentSnapshot {
-	if d == nil || d.Root == nil {
+	if d == nil {
 		return DocumentSnapshot{}
 	}
-	return DocumentSnapshot{Root: snapshotNode(d.Root), NextID: d.nextID, ReadyState: d.ReadyState()}
+	d.snapshotMu.RLock()
+	defer d.snapshotMu.RUnlock()
+	if d.Root == nil {
+		return DocumentSnapshot{}
+	}
+	readyState := d.readyState
+	if readyState == "" {
+		readyState = "loading"
+	}
+	return DocumentSnapshot{Root: snapshotNode(d.Root), NextID: d.nextID, ReadyState: readyState}
 }
 
 // NewDocumentFromSnapshot validates snapshot and constructs an independent
@@ -52,6 +61,8 @@ func (d *Document) ApplySnapshot(snapshot DocumentSnapshot) error {
 	if d == nil {
 		return errors.New("apply DOM snapshot to nil document")
 	}
+	d.snapshotMu.Lock()
+	defer d.snapshotMu.Unlock()
 	if snapshot.Root.ID == 0 || snapshot.Root.Type != NodeDocument {
 		return errors.New("DOM snapshot root must be a non-zero document node")
 	}
