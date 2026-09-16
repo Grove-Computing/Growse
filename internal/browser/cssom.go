@@ -88,7 +88,12 @@ func cssomProperties(computed stylemodel.ComputedStyle, width, height float32) m
 		"border-top-width": px(computed.Border.Top.Width), "border-right-width": px(computed.Border.Right.Width),
 		"border-bottom-width": px(computed.Border.Bottom.Width), "border-left-width": px(computed.Border.Left.Width),
 		"flex-grow": numberCSS(computed.FlexGrow), "flex-shrink": numberCSS(computed.FlexShrink), "order": strconv.Itoa(computed.Order),
-		"row-gap": lengthPercentageCSS(computed.RowGap), "column-gap": lengthPercentageCSS(computed.ColumnGap),
+		"row-gap": lengthPercentageCSS(computed.RowGap), "column-gap": columnGapCSS(computed),
+		"column-count": columnCountCSS(computed.ColumnCount), "column-width": sizeValueCSS(computed.ColumnWidth),
+		"column-rule-width": px(computed.ColumnRule.Width), "column-rule-style": borderStyleCSS(computed.ColumnRule.Style), "column-rule-color": cssColor(computed.ColumnRule.Color),
+		"column-fill": columnFillCSS(computed.ColumnFill), "column-span": columnSpanCSS(computed.ColumnSpan),
+		"break-before": fragmentBreakCSS(computed.BreakBefore), "break-after": fragmentBreakCSS(computed.BreakAfter), "break-inside": fragmentBreakCSS(computed.BreakInside),
+		"widows": strconv.Itoa(computed.Widows), "orphans": strconv.Itoa(computed.Orphans),
 		"writing-mode": writingModeCSS(computed.WritingMode), "direction": directionCSS(computed.Direction),
 		"justify-content": justifyContentCSS(computed.JustifyContent, computed.JustifyContentSafety),
 		"align-content":   alignCSS(computed.AlignContent, computed.AlignContentSafety),
@@ -101,6 +106,62 @@ func cssomProperties(computed stylemodel.ComputedStyle, width, height float32) m
 		result[name] = value
 	}
 	return result
+}
+
+func columnGapCSS(computed stylemodel.ComputedStyle) string {
+	if computed.ColumnGapNormal {
+		return "normal"
+	}
+	return lengthPercentageCSS(computed.ColumnGap)
+}
+
+func columnCountCSS(value int) string {
+	if value < 1 {
+		return "auto"
+	}
+	return strconv.Itoa(value)
+}
+
+func sizeValueCSS(value stylemodel.SizeValue) string {
+	if value.Kind == stylemodel.SizeAuto {
+		return "auto"
+	}
+	return lengthPercentageCSS(value.Value)
+}
+
+func borderStyleCSS(value stylemodel.BorderStyle) string {
+	values := [...]string{"none", "solid", "dotted", "dashed", "double"}
+	if int(value) < len(values) {
+		return values[value]
+	}
+	return "none"
+}
+
+func columnFillCSS(value stylemodel.ColumnFill) string {
+	if value == stylemodel.ColumnFillAuto {
+		return "auto"
+	}
+	return "balance"
+}
+
+func columnSpanCSS(value stylemodel.ColumnSpan) string {
+	if value == stylemodel.ColumnSpanAll {
+		return "all"
+	}
+	return "none"
+}
+
+func fragmentBreakCSS(value stylemodel.FragmentBreak) string {
+	switch value {
+	case stylemodel.FragmentBreakAvoid:
+		return "avoid"
+	case stylemodel.FragmentBreakColumn:
+		return "column"
+	case stylemodel.FragmentBreakAvoidColumn:
+		return "avoid-column"
+	default:
+		return "auto"
+	}
 }
 
 func writingModeCSS(value stylemodel.WritingMode) string {

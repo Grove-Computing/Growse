@@ -561,6 +561,33 @@ const (
 	OverflowClip
 )
 
+// ColumnFill selects sequential or balanced multi-column fragmentation.
+type ColumnFill uint8
+
+const (
+	ColumnFillBalance ColumnFill = iota
+	ColumnFillAuto
+)
+
+// ColumnSpan controls whether an in-flow block interrupts every column.
+type ColumnSpan uint8
+
+const (
+	ColumnSpanNone ColumnSpan = iota
+	ColumnSpanAll
+)
+
+// FragmentBreak is the bounded screen-fragmentation subset shared by the
+// break-before, break-after, and break-inside properties.
+type FragmentBreak uint8
+
+const (
+	FragmentBreakAuto FragmentBreak = iota
+	FragmentBreakAvoid
+	FragmentBreakColumn
+	FragmentBreakAvoidColumn
+)
+
 // BackgroundImageKind identifies the single background layer supported by Growse.
 type BackgroundImageKind uint8
 
@@ -716,6 +743,17 @@ type ComputedStyle struct {
 	JustifySelfSafety    OverflowAlignment
 	RowGap               LengthPercentage
 	ColumnGap            LengthPercentage
+	ColumnGapNormal      bool
+	ColumnCount          int
+	ColumnWidth          SizeValue
+	ColumnRule           BorderSide
+	ColumnFill           ColumnFill
+	ColumnSpan           ColumnSpan
+	BreakBefore          FragmentBreak
+	BreakAfter           FragmentBreak
+	BreakInside          FragmentBreak
+	Widows               int
+	Orphans              int
 	GridTemplateColumns  []GridTrackSize
 	GridTemplateRows     []GridTrackSize
 	GridColumnsSubgrid   bool

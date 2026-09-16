@@ -154,6 +154,7 @@ func initialStyle() ComputedStyle {
 		DecorationColor: defaultTextColor, Opacity: 1, FlexShrink: 1,
 		ZIndexAuto: true,
 		AlignItems: AlignStretch, JustifyItems: AlignStretch, AlignContent: AlignStretch, AlignSelf: AlignAuto, JustifySelf: AlignAuto,
+		ColumnGapNormal: true, ColumnWidth: SizeValue{Kind: SizeAuto}, Widows: 2, Orphans: 2,
 		Width: SizeValue{Kind: SizeAuto}, Height: SizeValue{Kind: SizeAuto},
 		MinWidth: SizeValue{Kind: SizeAuto}, MinHeight: SizeValue{Kind: SizeAuto},
 		MaxWidth: SizeValue{Kind: SizeNone}, MaxHeight: SizeValue{Kind: SizeNone},
@@ -178,6 +179,7 @@ func inheritedStyle(parent ComputedStyle) ComputedStyle {
 		DecorationColor: parent.Color, Opacity: 1, FlexShrink: 1,
 		ZIndexAuto: true,
 		AlignItems: AlignStretch, JustifyItems: AlignStretch, AlignContent: AlignStretch, AlignSelf: AlignAuto, JustifySelf: AlignAuto,
+		ColumnGapNormal: true, ColumnWidth: SizeValue{Kind: SizeAuto}, Widows: parent.Widows, Orphans: parent.Orphans,
 		Width: SizeValue{Kind: SizeAuto}, Height: SizeValue{Kind: SizeAuto},
 		MinWidth: SizeValue{Kind: SizeAuto}, MinHeight: SizeValue{Kind: SizeAuto},
 		MaxWidth: SizeValue{Kind: SizeNone}, MaxHeight: SizeValue{Kind: SizeNone},
@@ -633,6 +635,7 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 	computed = applyTableProperties(computed, parent, winners, computed.CustomProperties, lengthContext)
 	computed = applyFlexProperties(computed, parent, winners, computed.CustomProperties, lengthContext)
 	computed = applyGridProperties(computed, parent, winners, computed.CustomProperties, lengthContext)
+	computed = applyColumnProperties(computed, parent, winners, computed.CustomProperties, lengthContext)
 	computed = applyPositionProperties(computed, parent, winners, computed.CustomProperties, lengthContext)
 	computed = applyShadowAndOutlineProperties(computed, parent, winners, computed.CustomProperties, lengthContext)
 	computed = applyTransformProperties(computed, parent, winners, computed.CustomProperties, lengthContext)
@@ -1316,6 +1319,10 @@ func expandedProperties(property string) []string {
 		return []string{"appearance"}
 	case "gap":
 		return []string{"row-gap", "column-gap"}
+	case "columns":
+		return []string{"column-width", "column-count"}
+	case "column-rule":
+		return []string{"column-rule-width", "column-rule-style", "column-rule-color"}
 	case "place-content":
 		return []string{"align-content", "justify-content"}
 	case "place-items":
