@@ -201,8 +201,8 @@ func build(document *dom.Document, computed stylemodel.Map, images map[dom.NodeI
 	}
 
 	tree := &Tree{
-		Width: viewportWidth, Background: 0xffffffff, ScrollX: scrollX, ScrollY: scrollY, StackingContexts: []StackingContext{{Parent: -1}},
-		Parents: make(map[dom.NodeID]dom.NodeID), Bounds: make(map[dom.NodeID]Rect),
+		Width: viewportWidth, ViewportHeight: viewportHeight, Background: 0xffffffff, ScrollX: scrollX, ScrollY: scrollY, StackingContexts: []StackingContext{{Parent: -1}},
+		Parents: make(map[dom.NodeID]dom.NodeID), Bounds: make(map[dom.NodeID]Rect), ScrollOffsets: make(map[dom.NodeID]ScrollOffset),
 	}
 	recordNodeParents(tree, document)
 	state := engine{
@@ -228,6 +228,8 @@ func build(document *dom.Document, computed stylemodel.Map, images map[dom.NodeI
 	}
 	applyWritingMetadata(tree, computed)
 	tree.Height = state.y + pageInset
+	initializeStickyConstraints(tree, computed)
+	applyInitialStickyOffsets(tree, computed)
 	tree.ScrollWidth, tree.ScrollHeight = tree.Width, tree.Height
 	for _, box := range tree.Boxes {
 		contentWidth := box.Width
@@ -1070,15 +1072,8 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 		}
 	}
 	e.y = boxTop + outerHeight + bottomMargin.value()
-	if style.layoutPosition == stylemodel.PositionRelative || style.layoutPosition == stylemodel.PositionSticky {
-		dx, dy := float32(0), float32(0)
-		if style.layoutPosition == stylemodel.PositionRelative {
-			dx, dy = relativeOffset(style.inset, width, containingHeight, heightDefinite, style.direction)
-		} else {
-			if top, ok := resolveSize(style.inset.Top, outerHeight, true); ok {
-				dy = max(e.scrollY+top-boxTop, float32(0))
-			}
-		}
+	if style.layoutPosition == stylemodel.PositionRelative {
+		dx, dy := relativeOffset(style.inset, width, containingHeight, heightDefinite, style.direction)
 		translateFlexGeometry(e.tree, geometryBoxStart, geometryDecorationStart, dx, dy, nil)
 	}
 	if len(style.transform) != 0 {
