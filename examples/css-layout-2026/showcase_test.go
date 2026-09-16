@@ -13,9 +13,9 @@ func TestCSSLayoutShowcaseServesSizingTableAndLateImage(t *testing.T) {
 	for _, route := range []struct {
 		path, contentType, marker string
 	}{
-		{"/", "text/html", "CSS Layout 2026"},
-		{"/style.css", "text/css", "table-layout: fixed"},
-		{"/app.mjs", "text/javascript", "COLLAPSED · AUTO"},
+		{"/", "text/html", "Flex, Grid &amp; Subgrid"},
+		{"/style.css", "text/css", "grid-template-columns: subgrid"},
+		{"/app.mjs", "text/javascript", "VERTICAL-LR · RTL · UNSAFE"},
 		{"/assets/late-layout.png", "image/png", ""},
 	} {
 		response, err := server.Client().Get(server.URL + route.path)
