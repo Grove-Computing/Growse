@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CSS Layout 2026</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="hero">
+    <p class="eyebrow">GROWSE · V0.19.0</p>
+    <h1>CSS Layout 2026</h1>
+    <p>Intrinsic sizing, replaced elements, and table geometry on one shared layout tree.</p>
+    <button id="table-toggle" type="button">Toggle table algorithm</button>
+    <strong id="table-status">SEPARATE · FIXED</strong>
+  </header>
+  <main>
+    <section class="panel sizing-panel">
+      <h2>Sizing &amp; replaced elements</h2>
+      <div class="ratio-row">
+        <div class="ratio-card">2 / 1 block</div>
+        <img class="late-image" src="/assets/late-layout.png" alt="late loaded gradient">
+        <input class="ratio-input" value="4 / 1 control" aria-label="ratio control">
+      </div>
+    </section>
+    <section class="panel table-panel">
+      <h2>Table formatting context</h2>
+      <table id="layout-table" class="showcase-table">
+        <caption>caption-side: bottom · fixed column tracks</caption>
+        <colgroup>
+          <col class="signal-column">
+          <col class="detail-column">
+          <col class="state-column">
+        </colgroup>
+        <thead><tr><th>Signal</th><th>Geometry contract</th><th>State</th></tr></thead>
+        <tbody>
+          <tr><td rowspan="2">Sizing</td><td>min / max / intrinsic contribution</td><td>stable</td></tr>
+          <tr><td>late image ancestor reflow</td><td>loaded</td></tr>
+          <tr><td>Table</td><td colspan="2">caption · groups · span · spacing · collapse</td></tr>
+        </tbody>
+      </table>
+    </section>
+  </main>
+  <script type="module" src="/app.mjs"></script>
+</body>
+</html>

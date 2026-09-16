@@ -53,6 +53,11 @@ type blockStyle struct {
 	decorationColor     uint32
 	opacity             float32
 	display             stylemodel.Display
+	tableLayout         stylemodel.TableLayout
+	borderCollapse      stylemodel.BorderCollapse
+	borderSpacingX      float32
+	borderSpacingY      float32
+	captionSide         stylemodel.CaptionSide
 	float               stylemodel.Float
 	clear               stylemodel.Clear
 	hidden              bool
@@ -370,6 +375,8 @@ func (e *engine) addInput(node *dom.Node, style blockStyle, x, width, containing
 	if resolved, ok := resolveSize(style.height, containingHeight, heightDefinite); ok {
 		usedHeight = resolved
 	}
+	usedWidth, usedHeight = applyPreferredAspectRatio(usedWidth, usedHeight, style)
+	usedWidth = constrainSize(usedWidth, style.minWidth, style.maxWidth, availableWidth, true)
 	usedHeight = constrainSize(usedHeight, style.minHeight, style.maxHeight, containingHeight, heightDefinite)
 	value := forms.CurrentValue(node)
 	inputType, _ := forms.EditableTextControlType(node)
@@ -595,6 +602,9 @@ func (e *engine) addSubmitButton(node *dom.Node, style blockStyle, x, width, con
 	if resolved, ok := resolveSize(style.height, containingHeight, heightDefinite); ok {
 		usedHeight = resolved
 	}
+	usedWidth, usedHeight = applyPreferredAspectRatio(usedWidth, usedHeight, style)
+	usedWidth = constrainSize(usedWidth, style.minWidth, style.maxWidth, width, true)
+	usedHeight = constrainSize(usedHeight, style.minHeight, style.maxHeight, containingHeight, heightDefinite)
 	e.tree.Boxes = append(e.tree.Boxes, Box{
 		Order: e.nextOrder(), StackingID: e.stackingID, NodeID: node.ID, Tag: node.TagName,
 		Text: label, Button: true, Disabled: forms.Disabled(node),
@@ -617,6 +627,9 @@ func (e *engine) addCheckable(node *dom.Node, style blockStyle, x, width, contai
 	if resolved, ok := resolveSize(style.height, containingHeight, heightDefinite); ok {
 		usedHeight = resolved
 	}
+	usedWidth, usedHeight = applyPreferredAspectRatio(usedWidth, usedHeight, style)
+	usedWidth = constrainSize(usedWidth, style.minWidth, style.maxWidth, width, true)
+	usedHeight = constrainSize(usedHeight, style.minHeight, style.maxHeight, containingHeight, heightDefinite)
 	state, _ := forms.CheckableState(node)
 	e.tree.Boxes = append(e.tree.Boxes, Box{
 		Order: e.nextOrder(), StackingID: e.stackingID, NodeID: node.ID, Tag: node.TagName,
@@ -644,6 +657,10 @@ func (e *engine) addSelect(node *dom.Node, style blockStyle, x, width, containin
 	if resolved, ok := resolveSize(style.height, containingHeight, heightDefinite); ok {
 		usedHeight = resolved
 	}
+	usedWidth, usedHeight = applyPreferredAspectRatio(usedWidth, usedHeight, style)
+	usedWidth = constrainSize(usedWidth, style.minWidth, style.maxWidth, availableWidth, true)
+	usedHeight = constrainSize(usedHeight, style.minHeight, style.maxHeight, containingHeight, heightDefinite)
+	usedWidth = min(max(usedWidth, float32(1)), max(availableWidth, float32(1)))
 	options := forms.SelectOptions(node)
 	selected := forms.SelectedIndex(node, options)
 	label := ""
@@ -661,6 +678,20 @@ func (e *engine) addSelect(node *dom.Node, style blockStyle, x, width, containin
 	})
 	e.tree.Bounds[node.ID] = Rect{X: x, Y: e.y, Width: usedWidth, Height: usedHeight}
 	e.y += usedHeight + style.margin.Bottom
+}
+
+func applyPreferredAspectRatio(width, height float32, style blockStyle) (float32, float32) {
+	if style.aspectRatio <= 0 {
+		return width, height
+	}
+	widthAuto := style.width.Kind == stylemodel.SizeAuto
+	heightAuto := style.height.Kind == stylemodel.SizeAuto
+	if heightAuto {
+		height = width / style.aspectRatio
+	} else if widthAuto {
+		width = height * style.aspectRatio
+	}
+	return width, height
 }
 
 func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containingHeight float32, heightDefinite bool, topMargin *float32) {
@@ -772,6 +803,13 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 		if style.boxSizing == stylemodel.BoxSizingContentBox {
 			declaredHeight -= style.padding.Top + style.padding.Bottom + verticalBorder
 		}
+	}
+	if !declaredHeightDefinite && style.aspectRatio > 0 {
+		declaredHeight = outerWidth / style.aspectRatio
+		if style.boxSizing == stylemodel.BoxSizingContentBox {
+			declaredHeight = max(declaredHeight-style.padding.Top-style.padding.Bottom-verticalBorder, float32(0))
+		}
+		declaredHeightDefinite = true
 	}
 	childContainingHeight := declaredHeight
 	if declaredHeightDefinite && style.boxSizing == stylemodel.BoxSizingBorderBox {
@@ -1328,7 +1366,11 @@ func (e *engine) collectInlineRunsWithOpacity(node, owner *dom.Node, opacity flo
 		return []inlineRun{{nodeID: node.ID, node: node, tag: node.TagName, style: style, atomic: true, image: true, opacity: opacity}}
 	}
 	if style.display == stylemodel.DisplayInlineBlock {
-		return []inlineRun{{nodeID: node.ID, tag: node.TagName, text: e.inlineText(node), style: style, atomic: true, opacity: opacity}}
+		run := inlineRun{nodeID: node.ID, tag: node.TagName, text: e.inlineText(node), style: style, atomic: true, opacity: opacity}
+		if node.TagName == "iframe" {
+			run.node = node
+		}
+		return []inlineRun{run}
 	}
 	if style.display == stylemodel.DisplayInlineFlex {
 		return []inlineRun{{nodeID: node.ID, node: node, tag: node.TagName, style: style, atomic: true, flex: true, opacity: opacity}}
@@ -1570,11 +1612,12 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 				token.width, token.height, token.baseline = e.resolveInlineGridSize(token.node, token.style, width)
 			} else {
 				token.width, token.height = resolveAtomicSize(token, width)
+				token.baseline = token.height
 			}
 			if usedWidth > 0 && usedWidth+token.width > lineWidth && wrapsWhitespace(token.style.whiteSpace) {
 				flushLine(false)
 			}
-			if token.flex || token.grid || token.image {
+			if token.node != nil {
 				token.widthOffset = usedWidth
 				atomicPlacements = append(atomicPlacements, token)
 				appendPiece(token, "", token.width)
@@ -1653,7 +1696,7 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 }
 
 func isBlockLevelDisplay(display stylemodel.Display) bool {
-	return display == stylemodel.DisplayBlock || display == stylemodel.DisplayFlowRoot || display == stylemodel.DisplayFlex || display == stylemodel.DisplayGrid
+	return display == stylemodel.DisplayBlock || display == stylemodel.DisplayFlowRoot || display == stylemodel.DisplayFlex || display == stylemodel.DisplayGrid || display == stylemodel.DisplayTableCaption
 }
 
 func tokenizeInlineRuns(runs []inlineRun) []inlineRun {
@@ -1740,6 +1783,15 @@ func resolveAtomicSize(run inlineRun, containingWidth float32) (float32, float32
 	height := run.style.fontSize * 1.4
 	if resolved, ok := resolveSize(run.style.height, 0, false); ok {
 		height = resolved
+	}
+	if run.style.aspectRatio > 0 {
+		widthSpecified := run.style.width.Kind != stylemodel.SizeAuto
+		heightSpecified := run.style.height.Kind != stylemodel.SizeAuto
+		if widthSpecified && !heightSpecified {
+			height = width / run.style.aspectRatio
+		} else if heightSpecified && !widthSpecified {
+			width = height * run.style.aspectRatio
+		}
 	}
 	height = constrainSize(height, run.style.minHeight, run.style.maxHeight, 0, false)
 	if run.style.boxSizing == stylemodel.BoxSizingContentBox {
@@ -1987,6 +2039,20 @@ func uaStyle(tag string) blockStyle {
 		style.display = stylemodel.DisplayInlineBlock
 		style.width = stylemodel.SizeValue{Kind: stylemodel.SizeLength, Value: stylemodel.LengthPercentage{Pixels: 300}}
 		style.height = stylemodel.SizeValue{Kind: stylemodel.SizeLength, Value: stylemodel.LengthPercentage{Pixels: 150}}
+	case "table":
+		style.display = stylemodel.DisplayTable
+	case "caption":
+		style.display = stylemodel.DisplayTableCaption
+	case "colgroup":
+		style.display = stylemodel.DisplayTableColumnGroup
+	case "col":
+		style.display = stylemodel.DisplayTableColumn
+	case "thead", "tbody", "tfoot":
+		style.display = stylemodel.DisplayTableRowGroup
+	case "tr":
+		style.display = stylemodel.DisplayTableRow
+	case "td", "th":
+		style.display = stylemodel.DisplayTableCell
 	case "li":
 		style.display = stylemodel.DisplayBlock
 		style.margin.Bottom = 6
@@ -2029,6 +2095,8 @@ func applyComputed(block blockStyle, computed stylemodel.ComputedStyle) blockSty
 	block.decorationColor = computed.DecorationColor
 	block.opacity = computed.Opacity
 	block.display = computed.Display
+	block.tableLayout, block.borderCollapse = computed.TableLayout, computed.BorderCollapse
+	block.borderSpacingX, block.borderSpacingY, block.captionSide = computed.BorderSpacingX, computed.BorderSpacingY, computed.CaptionSide
 	block.float = computed.Float
 	block.clear = computed.Clear
 	block.hidden = computed.Visibility == stylemodel.VisibilityHidden

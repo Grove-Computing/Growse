@@ -64,7 +64,10 @@ func cssomProperties(computed stylemodel.ComputedStyle, width, height float32) m
 	result := map[string]string{
 		"display": displayCSS(computed.Display), "position": positionCSS(computed.Position),
 		"visibility": visibilityCSS(computed.Visibility), "box-sizing": boxSizingCSS(computed.BoxSizing),
-		"font-size": px(computed.FontSize), "font-weight": strconv.Itoa(computed.FontWeight), "font-family": strings.Join(computed.FontFamilies, ", "),
+		"table-layout": tableLayoutCSS(computed.TableLayout), "border-collapse": borderCollapseCSS(computed.BorderCollapse),
+		"border-spacing": px(computed.BorderSpacingX) + " " + px(computed.BorderSpacingY), "caption-side": captionSideCSS(computed.CaptionSide),
+		"aspect-ratio": aspectRatioCSS(computed.AspectRatio),
+		"font-size":    px(computed.FontSize), "font-weight": strconv.Itoa(computed.FontWeight), "font-family": strings.Join(computed.FontFamilies, ", "),
 		"font-style": computed.FontStyle, "font-stretch": computed.FontStretch, "line-height": px(computed.LineHeight),
 		"text-align": textAlignCSS(computed.TextAlign), "text-transform": textTransformCSS(computed.TextTransform), "text-indent": lengthPercentageCSS(computed.TextIndent),
 		"letter-spacing": spacingCSS(computed.LetterSpacing), "word-spacing": spacingCSS(computed.WordSpacing),
@@ -258,11 +261,42 @@ func cssColor(value uint32) string {
 }
 
 func displayCSS(value stylemodel.Display) string {
-	values := [...]string{"inline", "block", "inline-block", "none", "flex", "inline-flex", "grid", "inline-grid"}
+	values := [...]string{
+		"inline", "block", "inline-block", "none", "flex", "inline-flex", "grid", "inline-grid", "contents",
+		"table", "table-row-group", "table-row", "table-cell", "table-caption", "table-column-group", "table-column", "flow-root",
+	}
 	if int(value) < len(values) {
 		return values[value]
 	}
 	return ""
+}
+
+func tableLayoutCSS(value stylemodel.TableLayout) string {
+	if value == stylemodel.TableLayoutFixed {
+		return "fixed"
+	}
+	return "auto"
+}
+
+func borderCollapseCSS(value stylemodel.BorderCollapse) string {
+	if value == stylemodel.BorderCollapseCollapse {
+		return "collapse"
+	}
+	return "separate"
+}
+
+func captionSideCSS(value stylemodel.CaptionSide) string {
+	if value == stylemodel.CaptionSideBottom {
+		return "bottom"
+	}
+	return "top"
+}
+
+func aspectRatioCSS(value float32) string {
+	if value <= 0 {
+		return "auto"
+	}
+	return numberCSS(value) + " / 1"
 }
 
 func positionCSS(value stylemodel.Position) string {

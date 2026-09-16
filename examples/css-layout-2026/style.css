@@ -1,0 +1,31 @@
+* { box-sizing: border-box; }
+html, body { background: #08111f; color: #e8f0ff; font-family: system-ui, sans-serif; }
+body { margin: 0; min-width: 320px; }
+.hero { padding: 28px 34px; background: #10233d; border-bottom: 2px solid #36c2b4; }
+.hero h1, .hero p, .ratio-card, .showcase-table td { color: #e8f0ff; }
+.eyebrow { margin: 0; color: #66e3d7; font-size: 12px; letter-spacing: 2px; }
+h1 { margin: 5px 0 7px; font-size: 34px; }
+.hero p { max-width: 760px; }
+button { margin: 8px 12px 0 0; padding: 9px 13px; border: 1px solid #66e3d7; background: #173453; color: #fff; }
+#table-status { color: #ffd166; font-size: 13px; }
+main { padding: 22px 34px 50px; }
+.panel { margin-bottom: 20px; padding: 18px; border: 1px solid #284a6f; background: #0d1b2d; }
+.panel h2 { margin-top: 0; color: #9fc7ff; }
+.ratio-row { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; }
+.ratio-card { width: 220px; height: auto; aspect-ratio: 2; padding: 14px; background: #214f75; border: 2px solid #66e3d7; }
+.late-image { width: 180px; height: auto; aspect-ratio: 2; object-fit: cover; border: 2px solid #ff9f68; }
+.ratio-input { width: 200px; height: auto; aspect-ratio: 4; padding: 8px; }
+.showcase-table { width: 100%; table-layout: fixed; border-spacing: 10px 7px; border-collapse: separate; background: #132842; }
+.showcase-table caption { caption-side: bottom; padding: 9px; color: #8da9c4; text-align: left; }
+.showcase-table .signal-column { width: 20%; }
+.showcase-table .detail-column { width: 55%; }
+.showcase-table .state-column { width: 25%; }
+.showcase-table th, .showcase-table td { padding: 10px; border: 1px solid #416b91; text-align: left; background: #183553; }
+.showcase-table th { color: #66e3d7; }
+.showcase-table.collapsed { border-collapse: collapse; border-spacing: 24px; }
+.showcase-table.auto { table-layout: auto; }
+@media (max-width: 620px) {
+  .hero, main { padding-left: 16px; padding-right: 16px; }
+  .ratio-row { display: block; }
+  .ratio-card, .late-image, .ratio-input { margin-bottom: 12px; max-width: 100%; }
+}

@@ -469,6 +469,13 @@ func (e *engine) flexIntrinsicSizes(node *dom.Node, style blockStyle, axis flexA
 	} else if resolved, ok := e.intrinsicKeywordSize(node, style.height, style, height, false); ok {
 		intrinsicHeight = resolved
 	}
+	if style.aspectRatio > 0 {
+		if style.height.Kind == stylemodel.SizeAuto && style.width.Kind != stylemodel.SizeAuto {
+			intrinsicHeight = intrinsicWidth / style.aspectRatio
+		} else if style.width.Kind == stylemodel.SizeAuto && style.height.Kind != stylemodel.SizeAuto {
+			intrinsicWidth = intrinsicHeight * style.aspectRatio
+		}
+	}
 	base := intrinsicWidth
 	if !axis.horizontal {
 		base = intrinsicHeight

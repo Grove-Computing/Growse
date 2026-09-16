@@ -255,28 +255,39 @@ func resolveAspectRatioWinner(current, parent float32, candidate winner, custom 
 	case globalInitial, globalUnset:
 		return 0
 	}
-	parts := strings.Fields(strings.ToLower(value))
-	if len(parts) == 1 && parts[0] == "auto" {
-		return 0
+	if parsed, valid := parseAspectRatio(value); valid {
+		return parsed
 	}
-	if len(parts) == 2 && parts[0] == "auto" {
-		value = parts[1]
+	return current
+}
+
+func parseAspectRatio(value string) (float32, bool) {
+	value = strings.TrimSpace(strings.ToLower(value))
+	if value == "auto" {
+		return 0, true
+	}
+	if strings.HasPrefix(value, "auto") {
+		remainder := strings.TrimSpace(strings.TrimPrefix(value, "auto"))
+		if remainder == "" {
+			return 0, true
+		}
+		value = remainder
 	}
 	ratioParts := strings.Split(strings.TrimSpace(value), "/")
 	numerator, err := strconv.ParseFloat(strings.TrimSpace(ratioParts[0]), 32)
 	if err != nil || numerator <= 0 || math.IsInf(numerator, 0) || math.IsNaN(numerator) {
-		return current
+		return 0, false
 	}
 	denominator := 1.0
 	if len(ratioParts) == 2 {
 		denominator, err = strconv.ParseFloat(strings.TrimSpace(ratioParts[1]), 32)
 	} else if len(ratioParts) > 2 {
-		return current
+		return 0, false
 	}
 	if err != nil || denominator <= 0 || math.IsInf(denominator, 0) || math.IsNaN(denominator) {
-		return current
+		return 0, false
 	}
-	return float32(numerator / denominator)
+	return float32(numerator / denominator), true
 }
 
 func winnerValue(candidate winner, custom map[string]string) (string, bool) {
