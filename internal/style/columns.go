@@ -10,7 +10,7 @@ const maxComputedColumnCount = 32
 func applyColumnProperties(computed, parent ComputedStyle, winners map[string]winner, custom map[string]string, context LengthContext) ComputedStyle {
 	computed.ColumnCount = resolveColumnCount(computed.ColumnCount, parent.ColumnCount, winners["column-count"], custom)
 	computed.ColumnWidth = resolveColumnWidth(computed.ColumnWidth, parent.ColumnWidth, winners["column-width"], custom, context)
-	computed.ColumnGapNormal = resolveColumnGapNormal(computed.ColumnGapNormal, parent.ColumnGapNormal, winners["column-gap"], custom)
+	computed.ColumnGapNormal = resolveGapNormal("column-gap", computed.ColumnGapNormal, parent.ColumnGapNormal, winners["column-gap"], custom)
 	computed.ColumnRule = resolveColumnRule(computed.ColumnRule, parent.ColumnRule, winners, custom, context, computed.Color)
 	computed.ColumnFill = resolveColumnFill(computed.ColumnFill, parent.ColumnFill, winners["column-fill"], custom)
 	computed.ColumnSpan = resolveColumnSpan(computed.ColumnSpan, parent.ColumnSpan, winners["column-span"], custom)
@@ -110,7 +110,7 @@ func columnShorthandComponent(value string, wantCount bool) (string, bool) {
 	return width, true
 }
 
-func resolveColumnGapNormal(current, parent bool, candidate winner, custom map[string]string) bool {
+func resolveGapNormal(property string, current, parent bool, candidate winner, custom map[string]string) bool {
 	value, ok := winnerValue(candidate, custom)
 	if !ok {
 		return current
@@ -127,7 +127,7 @@ func resolveColumnGapNormal(current, parent bool, candidate winner, custom map[s
 			return current
 		}
 		value = parts[0]
-		if len(parts) == 2 {
+		if property == "column-gap" && len(parts) == 2 {
 			value = parts[1]
 		}
 	}

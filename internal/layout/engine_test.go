@@ -328,8 +328,8 @@ func TestBuildPlacesInlineBlockAsAtomicInline(t *testing.T) {
 		t.Fatal(err)
 	}
 	tree := Build(document, style.Compute(document, stylesheet), 800)
-	if got, want := len(tree.Boxes), 1; got != want {
-		t.Fatalf("line count = %d, want %d", got, want)
+	if got := len(tree.Boxes); got < 2 {
+		t.Fatalf("line and atomic child box count = %d, want at least 2", got)
 	}
 	line := tree.Boxes[0]
 	if len(line.Runs) != 3 || line.Runs[1].NodeID != badge.ID || line.Runs[1].Width != 112 {

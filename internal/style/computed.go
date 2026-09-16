@@ -742,6 +742,7 @@ type ComputedStyle struct {
 	JustifySelf          Align
 	JustifySelfSafety    OverflowAlignment
 	RowGap               LengthPercentage
+	RowGapNormal         bool
 	ColumnGap            LengthPercentage
 	ColumnGapNormal      bool
 	ColumnCount          int

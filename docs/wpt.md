@@ -51,6 +51,13 @@ GrowseはWeb Platform Tests（WPT）をブラウザで直接実行せず、対�
 | `TestResizeAndIntersectionObserversRunAfterFrame` | `resize-observer/observe.html`、`intersection-observer/basic.html` | Resize / Intersection entryを固定FrameとViewportで比較 | device pixel box、cross-origin root、scroll marginは対象外 |
 | `TestImageCandidatesSelectPictureSourceByTypeMediaSizesAndScale` | `html/semantics/embedded-content/the-img-element/update-the-image-data/select-an-image-source.html` | `picture`、`srcset`、`sizes`、DPR候補選択をoffline image metadataで比較 | animated image、client hints、network priorityは対象外 |
 | `TestLoadWebFontsValidatesDescriptorsAndDecodesWOFF` | `css/css-fonts/font-face-src-local.html`、`css/css-font-loading/fontface-load.html` | `@font-face` descriptor、source fallback、WOFF decodeをbounded loaderで比較 | OS local font探索、FontFaceSet Promise、可変font axisは対象外 |
+| `TestWPTV019CSS2HorizontalMarginsDoNotCollapse` | `css/CSS2/margin-padding-clear/margin-collapse-001.xht` | Ahem stripe比較をinline box間のhorizontal margin geometryへ縮約 | Font raster比較を行わない |
+| `TestWPTV019FlexItemMarginsDoNotCollapse` | `css/css-flexbox/flex-margin-no-collapse.html` | column flex item間の50px + 50px marginを100px gapとして比較 | upstreamの赤いreference boxを数値geometryへ変換 |
+| `TestWPTV019SubgridUsesInheritedTracksAndOwnGap` | `css/css-grid/subgrid/grid-gap-001.html` | 親track継承とsubgrid固有gapをlandmark geometryで比較 | upstreamの全item matrixを2 itemへ縮約 |
+| `TestWPTV019BlockStartMapsAcrossWritingModes` | `css/css-writing-modes/logical-physical-mapping-001.html` | block-startをhorizontal-tb / vertical-rl / vertical-lrのphysical borderへ写像 | sideways-lrはv0.19.0対象外 |
+| `TestWPTV019StickyTopRespectsConstraintAndContainerEnd` | `css/css-position/sticky/position-sticky-top.html` | normal / stuck / container-endの3 phaseをaxis geometryへ縮約 | DOM scroll harnessを決定的な数値入力へ変換 |
+| `TestWPTV019OverflowClipCannotScroll` | `css/css-overflow/overflow-clip-cant-scroll.html` | overflow:clipがscroll containerを作らずoffsetを拒否することを比較 | onloadとscreenshotをlayout API assertionへ変換 |
+| `TestWPTV019MultiColumnFirstChildMarginDoesNotCollapse` | `css/css-multicol/multicol-margin-001.xht` | first childのblock-start marginがmulticol parent外へcollapseしないことを比較 | Ahem text分割を固定block geometryへ縮約 |
 
 Upstreamのファイル全体はコピーせず、assertionの意味と最小入力だけを移植する。ケースを追加または更新するときは、Revision、Source、適応内容、および意図的な差分をこの表へ記録する。
 
@@ -125,3 +132,9 @@ Upstreamのファイル全体はコピーせず、assertionの意味と最小入
 - screenshotは動的領域と許容font raster差をmaskし、Page全体と主要regionの2% thresholdを検証する。WPTのpixel harnessや公開networkは直接実行しない。
 - resource priority / cancel / backpressure、dirty propagation、layer promotion、damage region、frame coalescing、stale Page拒否はGrowseのbounded modelへ直接入力するUnit / Integration Testで固定する。
 - `tests/v017-conformance.sh`と`tests/v017-security.sh`はoffline fixtureと固定shuffle seedを使い、公開DNS、実時間resource、外部APIを合否条件にしない。
+
+## v0.19.0の選定範囲
+
+- CSS 2.1、Flexbox、Grid Level 2 Subgrid、Writing Modes、Position、Overflow、Multi-columnから、screen layoutのlandmark geometryへ縮約できるassertionを各1件以上選定する。
+- `internal/layout/wpt_v019_test.go`は固定Revisionのsource pathを各Test直前に記録し、Ahemやscreenshot比較を決定的なbox、track、axis、scroll、fragment geometryへ置換する。
+- sideways writing mode、print fragmentation、paged media、native scrollbar pixel parityはv0.19.0対象外とし、対応済み値のassertionを拡張解釈しない。

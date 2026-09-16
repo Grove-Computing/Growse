@@ -99,7 +99,7 @@ func TestAtomicInlineBaselineWrapAndHitGeometryAgree(t *testing.T) {
 	var line Box
 	for _, candidate := range tree.Boxes {
 		for _, run := range candidate.Runs {
-			if run.NodeID == badge.ID {
+			if run.NodeID == badge.ID && run.Atomic {
 				badgeRun, line = run, candidate
 			}
 		}

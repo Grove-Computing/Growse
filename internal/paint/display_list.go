@@ -241,6 +241,7 @@ type TextRun struct {
 	Tag       string
 	Text      string
 	Width     float32
+	Atomic    bool
 	OffsetX   float32
 	OffsetY   float32
 	CrossSize float32
@@ -428,7 +429,7 @@ func Build(tree *layout.Tree) *DisplayList {
 		command.Runs = make([]TextRun, 0, len(box.Runs))
 		for _, run := range box.Runs {
 			command.Runs = append(command.Runs, TextRun{
-				NodeID: run.NodeID, Tag: run.Tag, Text: run.Text, Width: run.Width,
+				NodeID: run.NodeID, Tag: run.Tag, Text: run.Text, Width: run.Width, Atomic: run.Atomic,
 				OffsetX: run.OffsetX, OffsetY: run.OffsetY, CrossSize: run.CrossSize,
 				FontSize: run.FontSize, Bold: run.Bold, Color: run.Color, Background: run.Background,
 				FontFamilies: append([]string(nil), run.FontFamilies...), FontStyle: run.FontStyle, FontStretch: run.FontStretch,

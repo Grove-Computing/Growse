@@ -117,6 +117,7 @@ type blockStyle struct {
 	justifySelf          stylemodel.Align
 	justifySelfSafety    stylemodel.OverflowAlignment
 	rowGap               stylemodel.LengthPercentage
+	rowGapNormal         bool
 	columnGap            stylemodel.LengthPercentage
 	columnGapNormal      bool
 	columnCount          int
@@ -160,6 +161,8 @@ type inlineRun struct {
 	widthOffset float32
 	height      float32
 	baseline    float32
+	boxWidth    float32
+	boxHeight   float32
 	opacity     float32
 }
 
@@ -1464,11 +1467,7 @@ func (e *engine) collectInlineRunsWithOpacity(node, owner *dom.Node, opacity flo
 		return []inlineRun{{nodeID: node.ID, node: node, tag: node.TagName, style: style, atomic: true, image: true, opacity: opacity}}
 	}
 	if style.display == stylemodel.DisplayInlineBlock {
-		run := inlineRun{nodeID: node.ID, tag: node.TagName, text: e.inlineText(node), style: style, atomic: true, opacity: opacity}
-		if node.TagName == "iframe" {
-			run.node = node
-		}
-		return []inlineRun{run}
+		return []inlineRun{{nodeID: node.ID, node: node, tag: node.TagName, style: style, atomic: true, opacity: opacity}}
 	}
 	if style.display == stylemodel.DisplayInlineFlex {
 		return []inlineRun{{nodeID: node.ID, node: node, tag: node.TagName, style: style, atomic: true, flex: true, opacity: opacity}}
@@ -1655,11 +1654,12 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 			if placement.image {
 				e.renderInlineImage(placement, placementX, placementY, width)
 			} else if placement.grid {
-				e.renderInlineGrid(placement, placementX, placementY)
+				placement.width, placement.height = placement.boxWidth, placement.boxHeight
+				e.renderInlineGrid(placement, placementX+placement.style.margin.Left, placementY+placement.style.margin.Top)
 			} else {
-				item := &flexLayoutItem{node: placement.node, style: placement.style, crossSize: placement.height}
-				item.algorithm = &flexItem{target: placement.width}
-				e.renderFlexItem(item, flexAxis{horizontal: true}, placementX, placementY, placement.width, placement.height)
+				item := &flexLayoutItem{node: placement.node, style: placement.style, crossSize: placement.boxHeight}
+				item.algorithm = &flexItem{target: placement.boxWidth}
+				e.renderFlexItem(item, flexAxis{horizontal: true}, placementX+placement.style.margin.Left, placementY+placement.style.margin.Top, placement.boxWidth, placement.boxHeight)
 			}
 		}
 		e.y += lineHeight
@@ -1676,12 +1676,18 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 	appendPiece := func(run inlineRun, text string, pieceWidth float32) {
 		textRun := TextRun{
 			NodeID: run.nodeID, Tag: run.tag, Text: text, Width: pieceWidth,
+			Atomic:   run.atomic,
 			FontSize: run.style.fontSize, Bold: run.style.bold,
 			FontFamilies: append([]string(nil), run.style.fontFamilies...), FontStyle: run.style.fontStyle, FontStretch: run.style.fontStretch,
 			LetterSpacing: run.style.letterSpacing, WordSpacing: run.style.wordSpacing, VerticalOffset: verticalAlignOffset(run.style),
 			Color: run.style.color, Background: run.style.background,
 			Decoration: run.style.decoration, DecorationColor: run.style.decorationColor, Opacity: run.opacity,
 			TextShadows: append([]stylemodel.Shadow(nil), run.style.textShadows...),
+		}
+		if run.atomic && run.node != nil {
+			// The placeholder owns inline advance only. The atomic box is painted
+			// separately at its border-box geometry, excluding its margins.
+			textRun.Background = 0
 		}
 		runHeight, runAscent := usedLineMetrics(run)
 		textRun.Baseline = e.y + runAscent - textRun.VerticalOffset
@@ -1709,12 +1715,20 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 			if token.image {
 				token.width, token.height, token.baseline = e.resolveInlineImageSize(token, width)
 			} else if token.flex {
-				token.width, token.height, token.baseline = e.resolveInlineFlexSize(token.node, token.style, width)
+				token.boxWidth, token.boxHeight, token.baseline = e.resolveInlineFlexSize(token.node, token.style, width)
+				token.width = token.boxWidth + token.style.margin.Left + token.style.margin.Right
+				token.height = token.boxHeight + token.style.margin.Top + token.style.margin.Bottom
+				token.baseline += token.style.margin.Top
 			} else if token.grid {
-				token.width, token.height, token.baseline = e.resolveInlineGridSize(token.node, token.style, width)
+				token.boxWidth, token.boxHeight, token.baseline = e.resolveInlineGridSize(token.node, token.style, width)
+				token.width = token.boxWidth + token.style.margin.Left + token.style.margin.Right
+				token.height = token.boxHeight + token.style.margin.Top + token.style.margin.Bottom
+				token.baseline += token.style.margin.Top
 			} else {
-				token.width, token.height = resolveAtomicSize(token, width)
-				token.baseline = token.height
+				token.boxWidth, token.boxHeight = resolveAtomicSize(token, width)
+				token.width = token.boxWidth + token.style.margin.Left + token.style.margin.Right
+				token.height = token.boxHeight + token.style.margin.Top + token.style.margin.Bottom
+				token.baseline = token.style.margin.Top + token.boxHeight
 			}
 			if usedWidth > 0 && usedWidth+token.width > lineWidth && wrapsWhitespace(token.style.whiteSpace) {
 				flushLine(false)
@@ -2229,7 +2243,8 @@ func applyComputed(block blockStyle, computed stylemodel.ComputedStyle) blockSty
 	block.order, block.flexGrow, block.flexShrink = computed.Order, computed.FlexGrow, computed.FlexShrink
 	block.flexBasis, block.alignSelf, block.justifySelf = computed.FlexBasis, computed.AlignSelf, computed.JustifySelf
 	block.alignSelfSafety, block.justifySelfSafety = computed.AlignSelfSafety, computed.JustifySelfSafety
-	block.rowGap, block.columnGap, block.columnGapNormal = computed.RowGap, computed.ColumnGap, computed.ColumnGapNormal
+	block.rowGap, block.rowGapNormal = computed.RowGap, computed.RowGapNormal
+	block.columnGap, block.columnGapNormal = computed.ColumnGap, computed.ColumnGapNormal
 	block.columnCount, block.columnWidth, block.columnRule, block.columnFill = computed.ColumnCount, computed.ColumnWidth, computed.ColumnRule, computed.ColumnFill
 	block.columnSpan, block.breakBefore, block.breakAfter, block.breakInside = computed.ColumnSpan, computed.BreakBefore, computed.BreakAfter, computed.BreakInside
 	block.widows, block.orphans = computed.Widows, computed.Orphans

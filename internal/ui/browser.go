@@ -3571,6 +3571,10 @@ func (ui *BrowserUI) layoutTextRun(gtx layout.Context, run paintmodel.TextRun, h
 	gtx.Constraints.Min.X = 0
 	gtx.Constraints.Min.Y = height
 	gtx.Constraints.Max.Y = height
+	if run.Atomic {
+		width := gtx.Dp(unit.Dp(max(run.Width, float32(1))))
+		return layout.Dimensions{Size: image.Pt(width, height), Baseline: height}
+	}
 	if run.Opacity < 1 {
 		defer paint.PushOpacity(gtx.Ops, max(run.Opacity, 0)).Pop()
 	}

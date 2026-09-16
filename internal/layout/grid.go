@@ -74,11 +74,15 @@ func (e *engine) addGridChildren(container *dom.Node, containerStyle blockStyle,
 	inherited, hasInherited := e.subgrids[container.ID]
 	columnLines, rowLines := containerStyle.gridColumnLines, containerStyle.gridRowLines
 	if containerStyle.gridColumnsSubgrid && hasInherited && len(inherited.columns) != 0 {
-		columnGap = inherited.columnGap
+		if containerStyle.columnGapNormal {
+			columnGap = inherited.columnGap
+		}
 		columnLines = mergeGridLineMaps(inherited.columnLines, columnLines)
 	}
 	if containerStyle.gridRowsSubgrid && hasInherited && len(inherited.rows) != 0 {
-		rowGap = inherited.rowGap
+		if containerStyle.rowGapNormal {
+			rowGap = inherited.rowGap
+		}
 		rowLines = mergeGridLineMaps(inherited.rowLines, rowLines)
 	}
 	columnTemplate := expandAutoRepeatTracks(containerStyle.gridTemplateColumns, inlineBasis, columnGap, len(items))
@@ -182,6 +186,9 @@ func (e *engine) addGridChildren(container *dom.Node, containerStyle blockStyle,
 		}
 	}
 	columns := append([]float32(nil), inherited.columns...)
+	if containerStyle.gridColumnsSubgrid && hasInherited && len(columns) != 0 {
+		columns = subgridTracksForGap(columns, inherited.columnGap, columnGap)
+	}
 	if !containerStyle.gridColumnsSubgrid || !hasInherited || len(columns) == 0 {
 		columns = resolveGridTracks(columnTemplate, containerStyle.gridAutoColumns, columnCount, inlineBasis, inlineDefinite, columnGap, columnMinContent, columnMaxContent)
 		for _, contribution := range columnSpans {
@@ -209,6 +216,9 @@ func (e *engine) addGridChildren(container *dom.Node, containerStyle blockStyle,
 		}
 	}
 	rows := append([]float32(nil), inherited.rows...)
+	if containerStyle.gridRowsSubgrid && hasInherited && len(rows) != 0 {
+		rows = subgridTracksForGap(rows, inherited.rowGap, rowGap)
+	}
 	if !containerStyle.gridRowsSubgrid || !hasInherited || len(rows) == 0 {
 		rows = resolveGridTracks(rowTemplate, containerStyle.gridAutoRows, rowCount, blockBasis, blockDefinite, rowGap, rowMaxContent, rowMaxContent)
 		for _, contribution := range rowSpans {
@@ -316,6 +326,25 @@ func (e *engine) addGridChildren(container *dom.Node, containerStyle blockStyle,
 	} else {
 		e.y = startY + rowOffset + trackSpanSize(rows, 0, len(rows), rowGap)
 	}
+}
+
+// subgridTracksForGap keeps inherited grid lines fixed while centering the
+// subgrid's own gap on each parent gap. Edge tracks receive half the gap
+// difference and interior tracks receive both adjacent halves.
+func subgridTracksForGap(inherited []float32, parentGap, subgridGap float32) []float32 {
+	tracks := append([]float32(nil), inherited...)
+	if len(tracks) < 2 || parentGap == subgridGap {
+		return tracks
+	}
+	halfDifference := (parentGap - subgridGap) / 2
+	for index := range tracks {
+		adjustment := halfDifference * 2
+		if index == 0 || index == len(tracks)-1 {
+			adjustment = halfDifference
+		}
+		tracks[index] = max(tracks[index]+adjustment, float32(0))
+	}
+	return tracks
 }
 
 func gridItemBaseline(item blockStyle) float32 {
