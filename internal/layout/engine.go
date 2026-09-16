@@ -231,7 +231,7 @@ func build(document *dom.Document, computed stylemodel.Map, images map[dom.NodeI
 	tree.ScrollWidth, tree.ScrollHeight = tree.Width, tree.Height
 	for _, box := range tree.Boxes {
 		contentWidth := box.Width
-		if len(box.Runs) != 0 {
+		if len(box.Runs) != 0 && box.WritingMode == stylemodel.WritingModeHorizontalTB {
 			contentWidth = 0
 			for _, run := range box.Runs {
 				contentWidth += run.Width
@@ -1527,6 +1527,10 @@ func (e *engine) addText(nodeID dom.NodeID, tag, text string, style blockStyle, 
 }
 
 func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, container blockStyle, x, width float32) {
+	if container.writingMode != stylemodel.WritingModeHorizontalTB {
+		e.addVerticalInlineRuns(nodeID, tag, runs, container, x, width)
+		return
+	}
 	var lineRuns []TextRun
 	var atomicPlacements []inlineRun
 	var lineText strings.Builder

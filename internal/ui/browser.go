@@ -2236,17 +2236,30 @@ func hitTestPaintedDisplayList(displayList *paintmodel.DisplayList, position lay
 	found := false
 	for index := position.First; index < len(displayList.Commands); index++ {
 		command := displayList.Commands[index]
-		nodeID, commandX, commandY, top, width, height, advance, runs := paintedCommandGeometry(command)
+		nodeID, commandX, commandY, top, width, height, advance, writingMode, runs := paintedCommandGeometry(command)
 		visualTop := cursorY + top
 		if width > 0 && height > 0 && x >= commandX && x < commandX+width && y >= visualTop && y < visualTop+height {
 			if len(runs) > 0 {
-				runX := commandX
-				for _, run := range runs {
-					if x >= runX && x < runX+run.Width {
-						nodeID = run.NodeID
-						break
+				if writingMode != stylemodel.WritingModeHorizontalTB {
+					for _, run := range runs {
+						crossSize := run.CrossSize
+						if crossSize <= 0 {
+							crossSize = width
+						}
+						if x >= commandX+run.OffsetX && x < commandX+run.OffsetX+crossSize && y >= visualTop+run.OffsetY && y < visualTop+run.OffsetY+run.Width {
+							nodeID = run.NodeID
+							break
+						}
 					}
-					runX += run.Width
+				} else {
+					runX := commandX
+					for _, run := range runs {
+						if x >= runX && x < runX+run.Width {
+							nodeID = run.NodeID
+							break
+						}
+						runX += run.Width
+					}
 				}
 			}
 			result = paintedDisplayHit{NodeID: nodeID, DocumentX: commandX + (x - commandX), DocumentY: commandY + (y - visualTop)}
@@ -2260,24 +2273,24 @@ func hitTestPaintedDisplayList(displayList *paintmodel.DisplayList, position lay
 	return result, found
 }
 
-func paintedCommandGeometry(command paintmodel.Command) (nodeID dom.NodeID, x, y, top, width, height, advance float32, runs []paintmodel.TextRun) {
+func paintedCommandGeometry(command paintmodel.Command) (nodeID dom.NodeID, x, y, top, width, height, advance float32, writingMode stylemodel.WritingMode, runs []paintmodel.TextRun) {
 	switch command := command.(type) {
 	case paintmodel.DrawText:
-		return command.NodeID, command.X, command.Y, command.Top, command.Width, command.Height, command.Top + command.Height, command.Runs
+		return command.NodeID, command.X, command.Y, command.Top, command.Width, command.Height, command.Top + command.Height, command.WritingMode, command.Runs
 	case paintmodel.DrawInput:
-		return command.NodeID, command.X, command.Y, command.Top, command.Width, command.Height, command.Top + command.Height, nil
+		return command.NodeID, command.X, command.Y, command.Top, command.Width, command.Height, command.Top + command.Height, command.WritingMode, nil
 	case paintmodel.DrawSelect:
-		return command.NodeID, command.X, command.Y, command.Top, command.Width, command.Height, command.Top + command.Height, nil
+		return command.NodeID, command.X, command.Y, command.Top, command.Width, command.Height, command.Top + command.Height, command.WritingMode, nil
 	case paintmodel.DrawCheckable:
-		return command.NodeID, command.X, command.Y, command.Top, command.Width, command.Height, command.Top + command.Height, nil
+		return command.NodeID, command.X, command.Y, command.Top, command.Width, command.Height, command.Top + command.Height, command.WritingMode, nil
 	case paintmodel.DrawButton:
-		return command.NodeID, command.X, command.Y, command.Top, command.Width, command.Height, command.Top + command.Height, nil
+		return command.NodeID, command.X, command.Y, command.Top, command.Width, command.Height, command.Top + command.Height, command.WritingMode, nil
 	case paintmodel.DrawBox:
-		return command.NodeID, command.X, command.Y, command.Top, command.Width, command.Height, command.Top, nil
+		return command.NodeID, command.X, command.Y, command.Top, command.Width, command.Height, command.Top, command.WritingMode, nil
 	case paintmodel.DrawImage:
-		return command.NodeID, command.X, command.Y, command.Top, command.Width, command.Height, command.Top + command.Height, nil
+		return command.NodeID, command.X, command.Y, command.Top, command.Width, command.Height, command.Top + command.Height, command.WritingMode, nil
 	default:
-		return 0, 0, 0, 0, 0, 0, 0, nil
+		return 0, 0, 0, 0, 0, 0, 0, stylemodel.WritingModeHorizontalTB, nil
 	}
 }
 
@@ -3121,6 +3134,9 @@ func (ui *BrowserUI) layoutDrawText(gtx layout.Context, command paintmodel.DrawT
 		if command.Background != 0 {
 			paint.FillShape(gtx.Ops, rgba(command.Background), clip.Rect{Max: gtx.Constraints.Min}.Op())
 		}
+		if command.WritingMode != stylemodel.WritingModeHorizontalTB {
+			return ui.layoutVerticalText(gtx, command)
+		}
 		if len(command.Runs) > 0 {
 			children := make([]layout.FlexChild, 0, len(command.Runs))
 			for _, run := range command.Runs {
@@ -3137,6 +3153,52 @@ func (ui *BrowserUI) layoutDrawText(gtx layout.Context, command paintmodel.DrawT
 
 		return ui.layoutShadowedText(gtx, command.Text, command.FontSize, command.Bold, command.FontFamilies, command.FontStyle, command.LetterSpacing, command.WordSpacing, command.Color, command.Decoration, command.DecorationColor, command.Baseline, command.TextShadows)
 	})
+}
+
+func (ui *BrowserUI) layoutVerticalText(gtx layout.Context, command paintmodel.DrawText) layout.Dimensions {
+	runs := append([]paintmodel.TextRun(nil), command.Runs...)
+	if len(runs) == 0 {
+		offsetY := float32(0)
+		for _, character := range []rune(command.Text) {
+			runs = append(runs, paintmodel.TextRun{
+				Text: string(character), Width: max(command.FontSize, float32(1)), FontSize: command.FontSize,
+				OffsetY: offsetY, CrossSize: command.Width,
+				Bold: command.Bold, FontFamilies: append([]string(nil), command.FontFamilies...), FontStyle: command.FontStyle,
+				FontStretch: command.FontStretch, LetterSpacing: command.LetterSpacing, WordSpacing: command.WordSpacing,
+				Color: command.Color, Background: command.Background, Decoration: command.Decoration,
+				DecorationColor: command.DecorationColor, Opacity: command.Opacity, TextShadows: append([]stylemodel.Shadow(nil), command.TextShadows...),
+			})
+			offsetY += max(command.FontSize, float32(1))
+		}
+	}
+	children := make([]layout.StackChild, 0, len(runs)+1)
+	children = append(children, layout.Expanded(func(gtx layout.Context) layout.Dimensions {
+		return layout.Dimensions{Size: gtx.Constraints.Min}
+	}))
+	for _, run := range runs {
+		run := run
+		children = append(children, layout.Stacked(func(gtx layout.Context) layout.Dimensions {
+			height := gtx.Dp(unit.Dp(max(run.Width, float32(1))))
+			crossSize := run.CrossSize
+			if crossSize <= 0 {
+				crossSize = command.Width
+			}
+			width := gtx.Dp(unit.Dp(max(crossSize, float32(1))))
+			offset := op.Offset(image.Pt(gtx.Dp(unit.Dp(run.OffsetX)), gtx.Dp(unit.Dp(run.OffsetY)))).Push(gtx.Ops)
+			defer offset.Pop()
+			gtx.Constraints = layout.Exact(image.Pt(width, height))
+			if run.Opacity < 1 {
+				defer paint.PushOpacity(gtx.Ops, max(run.Opacity, 0)).Pop()
+			}
+			if run.Background != 0 {
+				paint.FillShape(gtx.Ops, rgba(run.Background), clip.Rect{Max: image.Pt(width, height)}.Op())
+			}
+			return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				return ui.layoutShadowedText(gtx, run.Text, run.FontSize, run.Bold, run.FontFamilies, run.FontStyle, run.LetterSpacing, run.WordSpacing, run.Color, run.Decoration, run.DecorationColor, 0, run.TextShadows)
+			})
+		}))
+	}
+	return layout.Stack{Alignment: layout.NW}.Layout(gtx, children...)
 }
 
 func pushCSSMatrix(gtx layout.Context, matrix stylemodel.Matrix, originX, originY float32) op.TransformStack {

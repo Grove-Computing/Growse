@@ -51,12 +51,24 @@ func HitTest(tree *Tree, x, y float32) (dom.NodeID, bool) {
 			continue
 		}
 
-		runX := box.X
-		for _, run := range box.Runs {
-			if containsPoint(runX, box.Y, run.Width, box.Height, localX, localY) {
-				return run.NodeID, true
+		if box.WritingMode != stylemodel.WritingModeHorizontalTB {
+			for _, run := range box.Runs {
+				crossSize := run.CrossSize
+				if crossSize <= 0 {
+					crossSize = box.Width
+				}
+				if containsPoint(box.X+run.OffsetX, box.Y+run.OffsetY, crossSize, run.Width, localX, localY) {
+					return run.NodeID, true
+				}
 			}
-			runX += run.Width
+		} else {
+			runX := box.X
+			for _, run := range box.Runs {
+				if containsPoint(runX, box.Y, run.Width, box.Height, localX, localY) {
+					return run.NodeID, true
+				}
+				runX += run.Width
+			}
 		}
 		return box.NodeID, true
 	}

@@ -229,10 +229,13 @@ func (DrawImage) paintCommand() {}
 
 // TextRun is one styled fragment within a DrawText line.
 type TextRun struct {
-	NodeID dom.NodeID
-	Tag    string
-	Text   string
-	Width  float32
+	NodeID    dom.NodeID
+	Tag       string
+	Text      string
+	Width     float32
+	OffsetX   float32
+	OffsetY   float32
+	CrossSize float32
 
 	FontSize        float32
 	Bold            bool
@@ -419,6 +422,7 @@ func Build(tree *layout.Tree) *DisplayList {
 		for _, run := range box.Runs {
 			command.Runs = append(command.Runs, TextRun{
 				NodeID: run.NodeID, Tag: run.Tag, Text: run.Text, Width: run.Width,
+				OffsetX: run.OffsetX, OffsetY: run.OffsetY, CrossSize: run.CrossSize,
 				FontSize: run.FontSize, Bold: run.Bold, Color: run.Color, Background: run.Background,
 				FontFamilies: append([]string(nil), run.FontFamilies...), FontStyle: run.FontStyle, FontStretch: run.FontStretch,
 				LetterSpacing: run.LetterSpacing, WordSpacing: run.WordSpacing, VerticalOffset: run.VerticalOffset,

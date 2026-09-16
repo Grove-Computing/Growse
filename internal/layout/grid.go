@@ -28,6 +28,7 @@ type subgridContext struct {
 // Track construction and placement extend this entry point without falling back
 // to block/inline formatting for direct grid items.
 func (e *engine) addGridChildren(container *dom.Node, containerStyle blockStyle, x, width, containingHeight float32, heightDefinite bool) {
+	vertical := containerStyle.writingMode != stylemodel.WritingModeHorizontalTB
 	items := make([]gridLayoutItem, 0, len(container.Children))
 	positioned := make([]gridLayoutItem, 0)
 	for _, child := range container.Children {
@@ -62,8 +63,14 @@ func (e *engine) addGridChildren(container *dom.Node, containerStyle blockStyle,
 	if len(items) == 0 && len(positioned) == 0 {
 		return
 	}
-	columnGap := containerStyle.columnGap.Resolve(width)
-	rowGap := containerStyle.rowGap.Resolve(containingHeight)
+	inlineBasis, inlineDefinite := width, true
+	blockBasis, blockDefinite := containingHeight, heightDefinite
+	if vertical {
+		inlineBasis, inlineDefinite = containingHeight, heightDefinite
+		blockBasis, blockDefinite = width, true
+	}
+	columnGap := containerStyle.columnGap.Resolve(inlineBasis)
+	rowGap := containerStyle.rowGap.Resolve(blockBasis)
 	inherited, hasInherited := e.subgrids[container.ID]
 	columnLines, rowLines := containerStyle.gridColumnLines, containerStyle.gridRowLines
 	if containerStyle.gridColumnsSubgrid && hasInherited && len(inherited.columns) != 0 {
@@ -74,8 +81,8 @@ func (e *engine) addGridChildren(container *dom.Node, containerStyle blockStyle,
 		rowGap = inherited.rowGap
 		rowLines = mergeGridLineMaps(inherited.rowLines, rowLines)
 	}
-	columnTemplate := expandAutoRepeatTracks(containerStyle.gridTemplateColumns, width, columnGap, len(items))
-	rowTemplate := expandAutoRepeatTracks(containerStyle.gridTemplateRows, containingHeight, rowGap, len(items))
+	columnTemplate := expandAutoRepeatTracks(containerStyle.gridTemplateColumns, inlineBasis, columnGap, len(items))
+	rowTemplate := expandAutoRepeatTracks(containerStyle.gridTemplateRows, blockBasis, rowGap, len(items))
 	columnCount := len(columnTemplate)
 	if containerStyle.gridColumnsSubgrid && hasInherited && len(inherited.columns) != 0 {
 		columnCount = len(inherited.columns)
@@ -160,19 +167,23 @@ func (e *engine) addGridChildren(container *dom.Node, containerStyle blockStyle,
 		if item.style.gridColumnsSubgrid && e.addSubgridColumnContributions(item, columnLines, width, containingHeight, heightDefinite, columnMaxContent, columnMinContent, &columnSpans) {
 			continue
 		}
-		maxContent, _, minContent := e.flexIntrinsicSizes(item.node, item.style, flexAxis{horizontal: true}, width, width, containingHeight, heightDefinite)
-		horizontalMargin := item.style.margin.Left + item.style.margin.Right
+		maxContent, intrinsicHeight, minContent := e.flexIntrinsicSizes(item.node, item.style, flexAxis{horizontal: true}, width, width, containingHeight, heightDefinite)
+		axisMargin := item.style.margin.Left + item.style.margin.Right
+		if vertical {
+			maxContent, minContent = intrinsicHeight, intrinsicHeight
+			axisMargin = item.style.margin.Top + item.style.margin.Bottom
+		}
 		span := max(item.colEnd-item.colStart, 1)
 		if span == 1 {
-			columnMaxContent[item.colStart] = max(columnMaxContent[item.colStart], maxContent+horizontalMargin)
-			columnMinContent[item.colStart] = max(columnMinContent[item.colStart], minContent+horizontalMargin)
+			columnMaxContent[item.colStart] = max(columnMaxContent[item.colStart], maxContent+axisMargin)
+			columnMinContent[item.colStart] = max(columnMinContent[item.colStart], minContent+axisMargin)
 		} else {
-			columnSpans = append(columnSpans, gridSpanContribution{start: item.colStart, end: item.colEnd, required: max(maxContent, minContent) + horizontalMargin})
+			columnSpans = append(columnSpans, gridSpanContribution{start: item.colStart, end: item.colEnd, required: max(maxContent, minContent) + axisMargin})
 		}
 	}
 	columns := append([]float32(nil), inherited.columns...)
 	if !containerStyle.gridColumnsSubgrid || !hasInherited || len(columns) == 0 {
-		columns = resolveGridTracks(columnTemplate, containerStyle.gridAutoColumns, columnCount, width, true, columnGap, columnMinContent, columnMaxContent)
+		columns = resolveGridTracks(columnTemplate, containerStyle.gridAutoColumns, columnCount, inlineBasis, inlineDefinite, columnGap, columnMinContent, columnMaxContent)
 		for _, contribution := range columnSpans {
 			growGridSpan(columns, contribution, columnGap, columnTemplate, containerStyle.gridAutoColumns)
 		}
@@ -187,6 +198,10 @@ func (e *engine) addGridChildren(container *dom.Node, containerStyle blockStyle,
 		_, intrinsicHeight, _ := e.flexIntrinsicSizes(item.node, item.style, flexAxis{horizontal: true}, itemWidth, itemWidth, containingHeight, heightDefinite)
 		rowSpan := max(item.rowEnd-item.rowStart, 1)
 		required := intrinsicHeight + item.style.margin.Top + item.style.margin.Bottom
+		if vertical {
+			intrinsicWidth, _, _ := e.flexIntrinsicSizes(item.node, item.style, flexAxis{horizontal: true}, width, width, containingHeight, heightDefinite)
+			required = intrinsicWidth + item.style.margin.Left + item.style.margin.Right
+		}
 		if rowSpan == 1 {
 			rowMaxContent[item.rowStart] = max(rowMaxContent[item.rowStart], required)
 		} else {
@@ -195,18 +210,18 @@ func (e *engine) addGridChildren(container *dom.Node, containerStyle blockStyle,
 	}
 	rows := append([]float32(nil), inherited.rows...)
 	if !containerStyle.gridRowsSubgrid || !hasInherited || len(rows) == 0 {
-		rows = resolveGridTracks(rowTemplate, containerStyle.gridAutoRows, rowCount, containingHeight, heightDefinite, rowGap, rowMaxContent, rowMaxContent)
+		rows = resolveGridTracks(rowTemplate, containerStyle.gridAutoRows, rowCount, blockBasis, blockDefinite, rowGap, rowMaxContent, rowMaxContent)
 		for _, contribution := range rowSpans {
 			growGridSpan(rows, contribution, rowGap, rowTemplate, containerStyle.gridAutoRows)
 		}
 	}
 	startY := e.y
-	columnAlignment := resolveGridJustify(containerStyle.justifyContent, containerStyle, true)
-	columnOffset, distributedColumnGap := justifySpacing(columnAlignment, containerStyle.justifyContentSafety, width-trackSpanSize(columns, 0, len(columns), columnGap), len(columns), false)
+	columnAlignment := resolveGridJustify(containerStyle.justifyContent, containerStyle, !vertical)
+	columnOffset, distributedColumnGap := justifySpacing(columnAlignment, containerStyle.justifyContentSafety, inlineBasis-trackSpanSize(columns, 0, len(columns), columnGap), len(columns), false)
 	rowOffset, distributedRowGap := float32(0), float32(0)
-	if heightDefinite {
-		rowAlignment := resolveGridAlignment(containerStyle.alignContent, containerStyle, containerStyle, false)
-		rowOffset, distributedRowGap = alignContentSpacing(rowAlignment, containerStyle.alignContentSafety, containingHeight-trackSpanSize(rows, 0, len(rows), rowGap), len(rows))
+	if blockDefinite {
+		rowAlignment := resolveGridAlignment(containerStyle.alignContent, containerStyle, containerStyle, vertical)
+		rowOffset, distributedRowGap = alignContentSpacing(rowAlignment, containerStyle.alignContentSafety, blockBasis-trackSpanSize(rows, 0, len(rows), rowGap), len(rows))
 	}
 	columnGap += distributedColumnGap
 	rowGap += distributedRowGap
@@ -217,21 +232,39 @@ func (e *engine) addGridChildren(container *dom.Node, containerStyle blockStyle,
 			alignment = containerStyle.alignItems
 		}
 		alignment = resolveGridAlignment(alignment, containerStyle, item.style, false)
-		if alignment == stylemodel.AlignBaseline && item.rowEnd-item.rowStart == 1 && item.rowStart >= 0 && item.rowStart < len(rowBaselines) {
+		if !vertical && alignment == stylemodel.AlignBaseline && item.rowEnd-item.rowStart == 1 && item.rowStart >= 0 && item.rowStart < len(rowBaselines) {
 			rowBaselines[item.rowStart] = max(rowBaselines[item.rowStart], item.style.margin.Top+gridItemBaseline(item.style))
 		}
 	}
 	for _, item := range items {
-		itemX, cellY := x+columnOffset+trackOffset(columns, item.colStart, columnGap), startY+rowOffset+trackOffset(rows, item.rowStart, rowGap)
-		itemY := cellY
-		itemWidth, itemHeight := trackSpanSize(columns, item.colStart, item.colEnd, columnGap), trackSpanSize(rows, item.rowStart, item.rowEnd, rowGap)
-		itemX, itemY, itemWidth, itemHeight = e.alignGridItem(item.node, item.style, containerStyle, itemX, itemY, itemWidth, itemHeight)
+		columnSpan := trackSpanSize(columns, item.colStart, item.colEnd, columnGap)
+		rowSpan := trackSpanSize(rows, item.rowStart, item.rowEnd, rowGap)
+		itemX, itemY, itemWidth, itemHeight := float32(0), float32(0), columnSpan, rowSpan
+		cellY := startY + rowOffset + trackOffset(rows, item.rowStart, rowGap)
+		if vertical {
+			inlineOffset := columnOffset + trackOffset(columns, item.colStart, columnGap)
+			itemY = startY + inlineOffset
+			if containerStyle.direction == stylemodel.DirectionRTL {
+				itemY = startY + inlineBasis - inlineOffset - columnSpan
+			}
+			blockOffset := rowOffset + trackOffset(rows, item.rowStart, rowGap)
+			itemX = x + blockOffset
+			if containerStyle.writingMode == stylemodel.WritingModeVerticalRL {
+				itemX = x + width - blockOffset - rowSpan
+			}
+			itemWidth, itemHeight = rowSpan, columnSpan
+			itemX, itemY, itemWidth, itemHeight = e.alignGridItemVertical(item.node, item.style, containerStyle, itemX, itemY, itemWidth, itemHeight)
+			cellY = itemY
+		} else {
+			itemX, itemY = x+columnOffset+trackOffset(columns, item.colStart, columnGap), cellY
+			itemX, itemY, itemWidth, itemHeight = e.alignGridItem(item.node, item.style, containerStyle, itemX, itemY, itemWidth, itemHeight)
+		}
 		alignment := item.style.alignSelf
 		if alignment == stylemodel.AlignAuto {
 			alignment = containerStyle.alignItems
 		}
 		alignment = resolveGridAlignment(alignment, containerStyle, item.style, false)
-		if alignment == stylemodel.AlignBaseline && item.rowEnd-item.rowStart == 1 && item.rowStart >= 0 && item.rowStart < len(rowBaselines) {
+		if !vertical && alignment == stylemodel.AlignBaseline && item.rowEnd-item.rowStart == 1 && item.rowStart >= 0 && item.rowStart < len(rowBaselines) {
 			itemY = cellY + rowBaselines[item.rowStart] - gridItemBaseline(item.style)
 		}
 		if item.style.gridColumnsSubgrid || item.style.gridRowsSubgrid {
@@ -261,13 +294,28 @@ func (e *engine) addGridChildren(container *dom.Node, containerStyle blockStyle,
 		}
 		item.colStart, item.colEnd = min(item.colStart, len(columns)), min(item.colEnd, len(columns))
 		item.rowStart, item.rowEnd = min(item.rowStart, len(rows)), min(item.rowEnd, len(rows))
-		static := &Rect{
-			X: x + columnOffset + trackOffset(columns, item.colStart, columnGap),
-			Y: startY + rowOffset + trackOffset(rows, item.rowStart, rowGap),
+		static := &Rect{X: x + columnOffset + trackOffset(columns, item.colStart, columnGap), Y: startY + rowOffset + trackOffset(rows, item.rowStart, rowGap)}
+		if vertical {
+			inlineOffset := columnOffset + trackOffset(columns, item.colStart, columnGap)
+			columnSpan := trackSpanSize(columns, item.colStart, item.colEnd, columnGap)
+			static.Y = startY + inlineOffset
+			if containerStyle.direction == stylemodel.DirectionRTL {
+				static.Y = startY + inlineBasis - inlineOffset - columnSpan
+			}
+			blockOffset := rowOffset + trackOffset(rows, item.rowStart, rowGap)
+			rowSpan := trackSpanSize(rows, item.rowStart, item.rowEnd, rowGap)
+			static.X = x + blockOffset
+			if containerStyle.writingMode == stylemodel.WritingModeVerticalRL {
+				static.X = x + width - blockOffset - rowSpan
+			}
 		}
 		e.renderPositionedChildAt(item.node, item.style, static)
 	}
-	e.y = startY + rowOffset + trackSpanSize(rows, 0, len(rows), rowGap)
+	if vertical {
+		e.y = startY + columnOffset + trackSpanSize(columns, 0, len(columns), columnGap)
+	} else {
+		e.y = startY + rowOffset + trackSpanSize(rows, 0, len(rows), rowGap)
+	}
 }
 
 func gridItemBaseline(item blockStyle) float32 {
@@ -538,6 +586,41 @@ func (e *engine) alignGridItem(node *dom.Node, item, container blockStyle, x, y,
 	return x, y, max(width, float32(0)), max(height, float32(0))
 }
 
+func (e *engine) alignGridItemVertical(node *dom.Node, item, container blockStyle, x, y, cellWidth, cellHeight float32) (float32, float32, float32, float32) {
+	intrinsicWidth, intrinsicHeight, _ := e.flexIntrinsicSizes(node, item, flexAxis{horizontal: true}, cellWidth, cellWidth, cellHeight, true)
+	justify, justifySafety := item.justifySelf, item.justifySelfSafety
+	if justify == stylemodel.AlignAuto {
+		justify, justifySafety = container.justifyItems, container.justifyItemsSafety
+	}
+	align, alignSafety := item.alignSelf, item.alignSelfSafety
+	if align == stylemodel.AlignAuto {
+		align, alignSafety = container.alignItems, container.alignItemsSafety
+	}
+	justify = resolveGridAlignment(justify, container, item, false)
+	align = resolveGridAlignment(align, container, item, true)
+	width, widthDefinite := gridItemOuterSize(item.width, item, cellWidth, true)
+	height, heightDefinite := gridItemOuterSize(item.height, item, cellHeight, false)
+	availableWidth := max(cellWidth-item.margin.Left-item.margin.Right, float32(0))
+	availableHeight := max(cellHeight-item.margin.Top-item.margin.Bottom, float32(0))
+	if !widthDefinite {
+		if align == stylemodel.AlignStretch && !item.marginAuto.Left && !item.marginAuto.Right {
+			width = availableWidth
+		} else {
+			width = min(intrinsicWidth, availableWidth)
+		}
+	}
+	if !heightDefinite {
+		if justify == stylemodel.AlignStretch && !item.marginAuto.Top && !item.marginAuto.Bottom {
+			height = availableHeight
+		} else {
+			height = min(intrinsicHeight, availableHeight)
+		}
+	}
+	x += item.margin.Left + gridAlignmentOffset(availableWidth-width, align, alignSafety, item.marginAuto.Left, item.marginAuto.Right)
+	y += item.margin.Top + gridAlignmentOffset(availableHeight-height, justify, justifySafety, item.marginAuto.Top, item.marginAuto.Bottom)
+	return x, y, max(width, float32(0)), max(height, float32(0))
+}
+
 func gridItemOuterSize(value stylemodel.SizeValue, item blockStyle, basis float32, horizontal bool) (float32, bool) {
 	size, definite := resolveSize(value, basis, true)
 	if !definite || item.boxSizing == stylemodel.BoxSizingBorderBox {
@@ -801,6 +884,7 @@ func (e *engine) renderGridItem(node *dom.Node, style blockStyle, x, y, width, h
 	}
 	e.y, e.clip = savedY, savedClip
 	translateFlexGeometry(e.tree, startBoxes, startDecorations, x, y, savedClip)
+	e.tree.Bounds[node.ID] = Rect{X: x, Y: y, Width: width, Height: height}
 }
 
 func (e *engine) resolveInlineGridSize(node *dom.Node, containerStyle blockStyle, containingWidth float32) (float32, float32, float32) {

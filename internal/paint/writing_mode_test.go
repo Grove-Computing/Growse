@@ -17,7 +17,7 @@ func TestWritingModeAndDirectionSurviveDisplayList(t *testing.T) {
 		Boxes: []layout.Box{{
 			Order: 2, NodeID: 7, Text: "縦", Width: 20, Height: 40,
 			WritingMode: style.WritingModeVerticalRL, Direction: style.DirectionRTL,
-			Runs: []layout.TextRun{{NodeID: 8, Text: "縦", WritingMode: style.WritingModeVerticalLR, Direction: style.DirectionLTR}},
+			Runs: []layout.TextRun{{NodeID: 8, Text: "縦", OffsetX: 12, OffsetY: 6, CrossSize: 18, WritingMode: style.WritingModeVerticalLR, Direction: style.DirectionLTR}},
 		}},
 	}
 	list := Build(tree)
@@ -29,7 +29,7 @@ func TestWritingModeAndDirectionSurviveDisplayList(t *testing.T) {
 	if !ok || text.WritingMode != style.WritingModeVerticalRL || text.Direction != style.DirectionRTL {
 		t.Fatalf("paint text writing metadata = %#v", list.Commands[1])
 	}
-	if len(text.Runs) != 1 || text.Runs[0].WritingMode != style.WritingModeVerticalLR || text.Runs[0].Direction != style.DirectionLTR {
+	if len(text.Runs) != 1 || text.Runs[0].WritingMode != style.WritingModeVerticalLR || text.Runs[0].Direction != style.DirectionLTR || text.Runs[0].OffsetX != 12 || text.Runs[0].OffsetY != 6 || text.Runs[0].CrossSize != 18 {
 		t.Fatalf("paint run writing metadata = %#v", text.Runs)
 	}
 }

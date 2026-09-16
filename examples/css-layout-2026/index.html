@@ -10,11 +10,13 @@
   <header class="hero">
     <p class="eyebrow">GROWSE · V0.19.0</p>
     <h1>CSS Layout 2026</h1>
-    <p>Intrinsic sizing, replaced elements, and table geometry on one shared layout tree.</p>
+    <p>Flow, sizing, Flexbox, Grid, and vertical writing on one shared layout tree.</p>
     <button id="table-toggle" type="button">Toggle table algorithm</button>
     <strong id="table-status">SEPARATE · FIXED</strong>
     <button id="layout-toggle" type="button">Flip logical alignment</button>
     <strong id="layout-status">VERTICAL-RL · SAFE</strong>
+    <button id="writing-toggle" type="button">Flip vertical flow</button>
+    <strong id="writing-status">VERTICAL-RL · LTR</strong>
   </header>
   <main>
     <section class="panel sizing-panel">
@@ -59,6 +61,26 @@
         </div>
         <div class="logical-stage">
           <div class="logical-card">logical end / self-start</div>
+        </div>
+      </div>
+    </section>
+    <section class="panel writing-panel">
+      <h2>Writing Mode &amp; logical geometry</h2>
+      <p>Text, a replaced image, Flexbox, Grid, overflow, and pointer geometry share the same physical coordinates.</p>
+      <div id="writing-playground" class="writing-playground">
+        <div class="vertical-flow">
+          <strong>縦書きの列は論理方向へ進みます。</strong>
+          <span>画像の後も文字とoverflowが続きます。</span>
+        </div>
+        <div class="vertical-flex" aria-label="vertical flex example">
+          <span>甲一</span>
+          <img class="vertical-image" src="/assets/late-layout.png" alt="vertical gradient">
+          <span>乙二</span>
+        </div>
+        <div class="vertical-grid" aria-label="vertical grid example">
+          <span class="vertical-grid-a">甲一</span>
+          <span class="vertical-grid-b">乙二</span>
+          <span class="vertical-grid-c">丙三</span>
         </div>
       </div>
     </section>

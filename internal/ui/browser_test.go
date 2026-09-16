@@ -1327,6 +1327,20 @@ func TestHitTestPaintedDisplayListUsesVisibleCommandOrderAndScroll(t *testing.T)
 	}
 }
 
+func TestHitTestPaintedDisplayListUsesVerticalRunOffsets(t *testing.T) {
+	list := &paintmodel.DisplayList{Commands: []paintmodel.Command{
+		paintmodel.DrawText{
+			NodeID: 1, X: 20, Y: 40, Top: 40, Width: 60, Height: 100, WritingMode: style.WritingModeVerticalRL,
+			Runs: []paintmodel.TextRun{{NodeID: 2, OffsetX: 30, OffsetY: 18, CrossSize: 20, Width: 24}},
+		},
+	}}
+
+	hit, ok := hitTestPaintedDisplayList(list, layout.Position{First: 0}, image.Pt(55, 70), 1)
+	if !ok || hit.NodeID != 2 {
+		t.Fatalf("vertical painted hit = (%+v, %v), want run 2", hit, ok)
+	}
+}
+
 func TestPointerMoveAppliesAndClearsHoverStyle(t *testing.T) {
 	document := dom.NewDocument()
 	button := document.CreateElement("button", map[string]string{"id": "save"})
