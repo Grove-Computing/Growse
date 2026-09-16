@@ -349,3 +349,47 @@ func TestBuildGridReevaluatesAutoFillAndAutoFitAfterResize(t *testing.T) {
 		t.Fatalf("auto-fit did not collapse empty tracks: %#v", fitRect.Rect)
 	}
 }
+
+func TestBuildGridSpanningContributionCyclicPercentageAndAbsoluteChild(t *testing.T) {
+	document := dom.NewDocument()
+	grid := document.CreateElement("div", map[string]string{"class": "grid"})
+	spanning := document.CreateElement("div", map[string]string{"class": "spanning"})
+	witness := document.CreateElement("div", map[string]string{"class": "witness"})
+	percentage := document.CreateElement("div", map[string]string{"class": "percentage"})
+	positioned := document.CreateElement("div", map[string]string{"class": "positioned"})
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, grid},
+		[2]*dom.Node{grid, spanning},
+		[2]*dom.Node{grid, positioned},
+		[2]*dom.Node{grid, witness},
+		[2]*dom.Node{grid, percentage},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.grid { position:relative; display:grid; width:220px; grid-template-columns:100px auto; grid-template-rows:50% auto; gap:0 }
+.spanning { grid-column:1 / 3; grid-row:1; width:260px; height:40px; background-color:#ddd }
+.witness { grid-column:2; grid-row:2; background-color:#bbb }
+.percentage { grid-column:1; grid-row:2; height:20px; background-color:#aaa }
+.positioned { position:absolute; grid-column:2; grid-row:1; width:20px; height:10px; background-color:#c44 }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, stylemodel.Compute(document, stylesheet), 500)
+	gridRect := tree.Bounds[grid.ID]
+	spanRect := decorationForNode(t, tree, spanning.ID)
+	witnessRect := decorationForNode(t, tree, witness.ID)
+	percentageRect := decorationForNode(t, tree, percentage.ID)
+	positionedRect := decorationForNode(t, tree, positioned.ID)
+	if witnessRect.Width != 160 || witnessRect.X != gridRect.X+100 {
+		t.Fatalf("spanning contribution did not grow the auto track: span %#v witness %#v", spanRect.Rect, witnessRect.Rect)
+	}
+	if percentageRect.Y != gridRect.Y+40 {
+		t.Fatalf("indefinite cyclic percentage row = %#v, want second row after 40px intrinsic row", percentageRect.Rect)
+	}
+	if positionedRect.X != gridRect.X+100 || positionedRect.Y != gridRect.Y {
+		t.Fatalf("absolute grid static position = %#v, grid %#v", positionedRect.Rect, gridRect)
+	}
+	if spanRect.Y != gridRect.Y || witnessRect.Y != gridRect.Y+40 {
+		t.Fatalf("absolute child affected grid auto-placement: span %#v witness %#v", spanRect.Rect, witnessRect.Rect)
+	}
+}

@@ -7,21 +7,28 @@ import (
 	stylemodel "github.com/Grove-Computing/Growse/internal/style"
 )
 
+type gridLayoutItem struct {
+	node                               *dom.Node
+	style                              blockStyle
+	rowStart, rowEnd, colStart, colEnd int
+}
+
+type gridSpanContribution struct {
+	start, end int
+	required   float32
+}
+
 // addGridChildren establishes the initial one-column grid formatting context.
 // Track construction and placement extend this entry point without falling back
 // to block/inline formatting for direct grid items.
 func (e *engine) addGridChildren(container *dom.Node, containerStyle blockStyle, x, width, containingHeight float32, heightDefinite bool) {
-	type gridItem struct {
-		node                               *dom.Node
-		style                              blockStyle
-		rowStart, rowEnd, colStart, colEnd int
-	}
-	items := make([]gridItem, 0, len(container.Children))
+	items := make([]gridLayoutItem, 0, len(container.Children))
+	positioned := make([]gridLayoutItem, 0)
 	for _, child := range container.Children {
 		if child.Type == dom.NodeText {
 			if text := normalizeWhitespace(child.Text); text != "" {
 				anonymous := &dom.Node{ID: child.ID, Type: dom.NodeText, Text: text}
-				items = append(items, gridItem{node: anonymous, style: e.styleFor(container)})
+				items = append(items, gridLayoutItem{node: anonymous, style: e.styleFor(container)})
 			}
 			continue
 		}
@@ -39,9 +46,14 @@ func (e *engine) addGridChildren(container *dom.Node, containerStyle blockStyle,
 		} else if childStyle.display == stylemodel.DisplayInline || childStyle.display == stylemodel.DisplayInlineBlock {
 			childStyle.display = stylemodel.DisplayBlock
 		}
-		items = append(items, gridItem{node: child, style: childStyle})
+		item := gridLayoutItem{node: child, style: childStyle}
+		if childStyle.layoutPosition == stylemodel.PositionAbsolute || childStyle.layoutPosition == stylemodel.PositionFixed {
+			positioned = append(positioned, item)
+			continue
+		}
+		items = append(items, item)
 	}
-	if len(items) == 0 {
+	if len(items) == 0 && len(positioned) == 0 {
 		return
 	}
 	columnGap := containerStyle.columnGap.Resolve(width)
@@ -103,26 +115,39 @@ func (e *engine) addGridChildren(container *dom.Node, containerStyle blockStyle,
 		}
 	}
 	columnMaxContent, columnMinContent := make([]float32, columnCount), make([]float32, columnCount)
+	columnSpans := make([]gridSpanContribution, 0)
 	for _, item := range items {
 		maxContent, _, minContent := e.flexIntrinsicSizes(item.node, item.style, flexAxis{horizontal: true}, width, width, containingHeight, heightDefinite)
 		horizontalMargin := item.style.margin.Left + item.style.margin.Right
 		span := max(item.colEnd-item.colStart, 1)
-		for column := item.colStart; column < item.colEnd; column++ {
-			columnMaxContent[column] = max(columnMaxContent[column], (maxContent+horizontalMargin)/float32(span))
-			columnMinContent[column] = max(columnMinContent[column], (minContent+horizontalMargin)/float32(span))
+		if span == 1 {
+			columnMaxContent[item.colStart] = max(columnMaxContent[item.colStart], maxContent+horizontalMargin)
+			columnMinContent[item.colStart] = max(columnMinContent[item.colStart], minContent+horizontalMargin)
+		} else {
+			columnSpans = append(columnSpans, gridSpanContribution{start: item.colStart, end: item.colEnd, required: max(maxContent, minContent) + horizontalMargin})
 		}
 	}
 	columns := resolveGridTracks(columnTemplate, containerStyle.gridAutoColumns, columnCount, width, true, columnGap, columnMinContent, columnMaxContent)
+	for _, contribution := range columnSpans {
+		growGridSpan(columns, contribution, columnGap, columnTemplate, containerStyle.gridAutoColumns)
+	}
 	rowMaxContent := make([]float32, rowCount)
+	rowSpans := make([]gridSpanContribution, 0)
 	for _, item := range items {
 		itemWidth := trackSpanSize(columns, item.colStart, item.colEnd, columnGap)
 		_, intrinsicHeight, _ := e.flexIntrinsicSizes(item.node, item.style, flexAxis{horizontal: true}, itemWidth, itemWidth, containingHeight, heightDefinite)
 		rowSpan := max(item.rowEnd-item.rowStart, 1)
-		for row := item.rowStart; row < item.rowEnd; row++ {
-			rowMaxContent[row] = max(rowMaxContent[row], (intrinsicHeight+item.style.margin.Top+item.style.margin.Bottom)/float32(rowSpan))
+		required := intrinsicHeight + item.style.margin.Top + item.style.margin.Bottom
+		if rowSpan == 1 {
+			rowMaxContent[item.rowStart] = max(rowMaxContent[item.rowStart], required)
+		} else {
+			rowSpans = append(rowSpans, gridSpanContribution{start: item.rowStart, end: item.rowEnd, required: required})
 		}
 	}
 	rows := resolveGridTracks(rowTemplate, containerStyle.gridAutoRows, rowCount, containingHeight, heightDefinite, rowGap, rowMaxContent, rowMaxContent)
+	for _, contribution := range rowSpans {
+		growGridSpan(rows, contribution, rowGap, rowTemplate, containerStyle.gridAutoRows)
+	}
 	startY := e.y
 	columnOffset, distributedColumnGap := justifySpacing(containerStyle.justifyContent, max(width-trackSpanSize(columns, 0, len(columns), columnGap), float32(0)), len(columns), false)
 	rowOffset, distributedRowGap := float32(0), float32(0)
@@ -137,7 +162,73 @@ func (e *engine) addGridChildren(container *dom.Node, containerStyle blockStyle,
 		itemX, itemY, itemWidth, itemHeight = e.alignGridItem(item.node, item.style, containerStyle, itemX, itemY, itemWidth, itemHeight)
 		e.renderGridItem(item.node, item.style, itemX, itemY, itemWidth, itemHeight)
 	}
+	for _, item := range positioned {
+		if item.style.layoutPosition == stylemodel.PositionFixed {
+			e.renderPositionedChild(item.node, item.style)
+			continue
+		}
+		item.colStart, item.colEnd = resolveGridAxis(item.style.gridColumn, containerStyle.gridColumnLines, len(columns))
+		item.rowStart, item.rowEnd = resolveGridAxis(item.style.gridRow, containerStyle.gridRowLines, len(rows))
+		if item.colStart < 0 {
+			item.colStart = 0
+		}
+		if item.colEnd <= item.colStart {
+			item.colEnd = item.colStart + 1
+		}
+		if item.rowStart < 0 {
+			item.rowStart = 0
+		}
+		if item.rowEnd <= item.rowStart {
+			item.rowEnd = item.rowStart + 1
+		}
+		item.colStart, item.colEnd = min(item.colStart, len(columns)), min(item.colEnd, len(columns))
+		item.rowStart, item.rowEnd = min(item.rowStart, len(rows)), min(item.rowEnd, len(rows))
+		static := &Rect{
+			X: x + columnOffset + trackOffset(columns, item.colStart, columnGap),
+			Y: startY + rowOffset + trackOffset(rows, item.rowStart, rowGap),
+		}
+		e.renderPositionedChildAt(item.node, item.style, static)
+	}
 	e.y = startY + rowOffset + trackSpanSize(rows, 0, len(rows), rowGap)
+}
+
+// growGridSpan applies a spanning item's intrinsic contribution after the
+// non-spanning base sizes are known. Fixed tracks retain their authored size;
+// the remaining contribution is shared by the intrinsic/flexible tracks in
+// the span. This avoids losing pixels through the old per-track division.
+func growGridSpan(tracks []float32, contribution gridSpanContribution, gap float32, explicit, implicit []stylemodel.GridTrackSize) {
+	start, end := max(contribution.start, 0), min(contribution.end, len(tracks))
+	if end <= start {
+		return
+	}
+	shortfall := contribution.required - trackSpanSize(tracks, start, end, gap)
+	if shortfall <= 0 {
+		return
+	}
+	growable := make([]int, 0, end-start)
+	for index := start; index < end; index++ {
+		track := gridTrackAt(explicit, implicit, index)
+		if track.Kind != stylemodel.GridTrackLength {
+			growable = append(growable, index)
+		}
+	}
+	if len(growable) == 0 {
+		return
+	}
+	share := shortfall / float32(len(growable))
+	for _, index := range growable {
+		tracks[index] += share
+	}
+}
+
+func gridTrackAt(explicit, implicit []stylemodel.GridTrackSize, index int) stylemodel.GridTrackSize {
+	if index >= 0 && index < len(explicit) {
+		return explicit[index]
+	}
+	if len(implicit) != 0 && index >= len(explicit) {
+		return implicit[(index-len(explicit))%len(implicit)]
+	}
+	return stylemodel.GridTrackSize{Kind: stylemodel.GridTrackAuto}
 }
 
 func expandAutoRepeatTracks(tracks []stylemodel.GridTrackSize, basis, gap float32, itemCount int) []stylemodel.GridTrackSize {
@@ -314,6 +405,9 @@ func gridCellsFree(occupied map[[2]int]bool, rowStart, rowEnd, colStart, colEnd 
 }
 
 func trackSpanSize(tracks []float32, start, end int, gap float32) float32 {
+	if end <= start {
+		return 0
+	}
 	return trackOffset(tracks, end, gap) - trackOffset(tracks, start, gap) - gap
 }
 
