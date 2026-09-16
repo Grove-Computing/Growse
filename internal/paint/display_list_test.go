@@ -50,6 +50,43 @@ func TestBuildPreservesFlexOverflowGeometry(t *testing.T) {
 	}
 }
 
+func TestBuildPreservesMultiColumnFragmentIdentityAndGeometry(t *testing.T) {
+	document := dom.NewDocument()
+	paragraph := document.CreateElement("p", map[string]string{"class": "columns"})
+	if err := document.AppendChild(document.Root, paragraph); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(paragraph, document.CreateText(strings.Repeat("fragmented paint content ", 30))); err != nil {
+		t.Fatal(err)
+	}
+	stylesheet, err := css.Parse(strings.NewReader(`
+.columns { display:block; width:360px; margin:0; column-count:3; column-gap:18px; line-height:18px }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := layout.BuildWithViewport(document, style.Compute(document, stylesheet), 520, 600)
+	list := Build(tree)
+	identities := make(map[uint64]bool)
+	xPositions := make(map[int]bool)
+	textFragments := 0
+	for index, candidate := range list.Commands {
+		command, ok := candidate.(DrawText)
+		if !ok || command.NodeID != paragraph.ID {
+			continue
+		}
+		textFragments++
+		identities[list.CommandIDs[index]] = true
+		xPositions[int(command.X+0.5)] = true
+	}
+	if textFragments < 3 || len(identities) != textFragments || len(xPositions) != 3 {
+		t.Fatalf("painted fragments = count:%d ids:%d columns:%v", textFragments, len(identities), xPositions)
+	}
+	if list.ScrollWidth != tree.ScrollWidth || list.ScrollHeight != tree.ScrollHeight {
+		t.Fatalf("multi-column scroll geometry = list (%v,%v), tree (%v,%v)", list.ScrollWidth, list.ScrollHeight, tree.ScrollWidth, tree.ScrollHeight)
+	}
+}
+
 func TestBuildUsesScrolledContentGeometryAndFixedScrollportClip(t *testing.T) {
 	document := dom.NewDocument()
 	container := document.CreateElement("div", map[string]string{"class": "container"})

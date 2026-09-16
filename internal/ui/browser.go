@@ -1609,6 +1609,13 @@ func (ui *BrowserUI) layoutInspectorDetails(gtx layout.Context, snapshot devtool
 			fmt.Sprintf("  width %.2f  height %.2f", snapshot.Layout.Width, snapshot.Layout.Height),
 		)
 	}
+	lines = append(lines, "", fmt.Sprintf("Layout Fragments (%d)", len(snapshot.Fragments)))
+	if len(snapshot.Fragments) == 0 {
+		lines = append(lines, "  (none)")
+	}
+	for _, fragment := range snapshot.Fragments {
+		lines = append(lines, fmt.Sprintf("  %s #%d  x %.2f  y %.2f  %.2fx%.2f", fragment.Kind, fragment.ID, fragment.X, fragment.Y, fragment.Width, fragment.Height))
+	}
 	if snapshot.Truncated {
 		lines = append(lines, "", "Snapshot truncated at safety limit")
 	}

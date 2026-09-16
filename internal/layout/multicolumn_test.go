@@ -124,6 +124,9 @@ func TestMultiColumnHonorsBreakAfterAndAvoidInside(t *testing.T) {
 	if lastRect := tree.Bounds[last.ID]; lastRect.X < keptRect.X || lastRect.X == keptRect.X && lastRect.Y < keptRect.Y+keptRect.Height-0.01 {
 		t.Fatalf("content order after kept block = %#v, kept=%#v", lastRect, keptRect)
 	}
+	if tree.ScrollWidth <= 500 {
+		t.Fatalf("forced fragmentainer overflow was not included in scroll extent: %v", tree.ScrollWidth)
+	}
 }
 
 func TestMultiColumnRepeatsOneDOMNodeAsStablePaintAndHitFragments(t *testing.T) {
