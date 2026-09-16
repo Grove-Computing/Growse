@@ -1915,23 +1915,33 @@ func resolveAtomicSize(run inlineRun, containingWidth float32) (float32, float32
 	horizontal := run.style.padding.Left + run.style.padding.Right + run.style.border.Left.Width + run.style.border.Right.Width
 	vertical := run.style.padding.Top + run.style.padding.Bottom + run.style.border.Top.Width + run.style.border.Bottom.Width
 	width, _, _ := measureStyledText(normalizeWhitespace(run.text), run.style)
+	widthDefinite := false
 	if resolved, ok := resolveSize(run.style.width, containingWidth, true); ok {
 		width = resolved
+		widthDefinite = true
+	} else if run.style.boxSizing == stylemodel.BoxSizingBorderBox {
+		// box-sizing only changes how a declared size is interpreted. An auto
+		// intrinsic size still has to contain its padding and border.
+		width += horizontal
 	}
-	width = constrainSize(width, run.style.minWidth, run.style.maxWidth, containingWidth, true)
 	height := run.style.fontSize * 1.4
+	heightDefinite := false
 	if resolved, ok := resolveSize(run.style.height, 0, false); ok {
 		height = resolved
+		heightDefinite = true
+	} else if run.style.boxSizing == stylemodel.BoxSizingBorderBox {
+		height += vertical
 	}
 	if run.style.aspectRatio > 0 {
-		widthSpecified := run.style.width.Kind != stylemodel.SizeAuto
-		heightSpecified := run.style.height.Kind != stylemodel.SizeAuto
-		if widthSpecified && !heightSpecified {
+		if widthDefinite && !heightDefinite {
 			height = width / run.style.aspectRatio
-		} else if heightSpecified && !widthSpecified {
+			heightDefinite = true
+		} else if heightDefinite && !widthDefinite {
 			width = height * run.style.aspectRatio
+			widthDefinite = true
 		}
 	}
+	width = constrainSize(width, run.style.minWidth, run.style.maxWidth, containingWidth, true)
 	height = constrainSize(height, run.style.minHeight, run.style.maxHeight, 0, false)
 	if run.style.boxSizing == stylemodel.BoxSizingContentBox {
 		width += horizontal

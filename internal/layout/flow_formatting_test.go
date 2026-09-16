@@ -120,6 +120,44 @@ func TestAtomicInlineBaselineWrapAndHitGeometryAgree(t *testing.T) {
 	}
 }
 
+func TestInlineButtonAutoBorderBoxIncludesPaddingAndBorder(t *testing.T) {
+	document := dom.NewDocument()
+	header := document.CreateElement("header", nil)
+	button := document.CreateElement("button", map[string]string{"type": "button"})
+	status := document.CreateElement("strong", nil)
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, header}, [2]*dom.Node{header, button},
+		[2]*dom.Node{button, document.CreateText("Flip flow direction")},
+		[2]*dom.Node{header, status}, [2]*dom.Node{status, document.CreateText("LEFT FLOAT")},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`
+header { display:block }
+button { box-sizing:border-box; margin:8px 12px 0 0; padding:9px 13px; border:1px solid #66e3d7 }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, stylemodel.ComputeWithEnvironment(document, stylesheet, stylemodel.InteractionState{}, stylemodel.Environment{BrowserDefaults: true}), 800)
+	var buttonBox Box
+	var buttonRun TextRun
+	for _, box := range tree.Boxes {
+		if box.NodeID == button.ID && box.Button {
+			buttonBox = box
+		}
+		for _, run := range box.Runs {
+			if run.NodeID == button.ID && run.Atomic {
+				buttonRun = run
+			}
+		}
+	}
+	if buttonBox.Text != "Flip flow direction" || buttonBox.Width <= 120 || buttonBox.Height <= 30 {
+		t.Fatalf("auto border-box button omitted intrinsic padding/border: %#v", buttonBox)
+	}
+	if buttonRun.Width <= buttonBox.Width {
+		t.Fatalf("atomic button advance = %v, button width = %v; want margins included", buttonRun.Width, buttonBox.Width)
+	}
+}
+
 func TestInlineReplacedImageSharesLinePaintAndHitGeometry(t *testing.T) {
 	document := dom.NewDocument()
 	paragraph := document.CreateElement("p", map[string]string{"class": "line"})

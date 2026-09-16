@@ -99,6 +99,17 @@ func TestCSSLayoutShowcaseOperatesEveryMajorStageThroughJavaScriptReflow(t *test
 		if !exists || bounds.Width <= 0 || bounds.Height <= 0 || len(tree.Fallbacks) != 0 {
 			t.Fatalf("%s reflow geometry = %#v/%t fallbacks=%+v", operation.stage, bounds, exists, tree.Fallbacks)
 		}
+		toggle := showcaseNode(t, page, operation.toggle)
+		buttonPainted := false
+		for _, box := range tree.Boxes {
+			if box.NodeID == toggle.ID && box.Button && box.Text != "" && box.Width > 0 && box.Height > 0 {
+				buttonPainted = true
+				break
+			}
+		}
+		if !buttonPainted {
+			t.Fatalf("%s native button disappeared after reflow: bounds=%#v boxes=%#v", operation.toggle, tree.Bounds[toggle.ID], tree.Boxes)
+		}
 	}
 
 	page := engine.Page()

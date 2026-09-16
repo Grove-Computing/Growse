@@ -2520,19 +2520,19 @@ type paintedCommandVisual struct {
 func paintedCommandVisualFor(command paintmodel.Command) paintedCommandVisual {
 	switch command := command.(type) {
 	case paintmodel.DrawText:
-		return paintedCommandVisual{nodeID: command.NodeID, x: command.X, y: command.Y, top: command.Top, width: command.Width, height: command.Height, advance: max(command.Top+command.Height, float32(0)), writingMode: command.WritingMode, runs: command.Runs, clip: command.Clip, clips: command.Clips, transform: command.Transform}
+		return paintedCommandVisual{nodeID: command.NodeID, x: command.X, y: command.Y, top: command.Top, width: command.Width, height: command.Height, advance: max(command.Top+command.Height, paintmodel.MinimumCommandAdvance), writingMode: command.WritingMode, runs: command.Runs, clip: command.Clip, clips: command.Clips, transform: command.Transform}
 	case paintmodel.DrawInput:
-		return paintedCommandVisual{nodeID: command.NodeID, x: command.X, y: command.Y, top: command.Top, width: command.Width, height: command.Height, advance: max(command.Top+command.Height, float32(0)), writingMode: command.WritingMode, clip: command.Clip, clips: command.Clips, transform: command.Transform}
+		return paintedCommandVisual{nodeID: command.NodeID, x: command.X, y: command.Y, top: command.Top, width: command.Width, height: command.Height, advance: max(command.Top+command.Height, paintmodel.MinimumCommandAdvance), writingMode: command.WritingMode, clip: command.Clip, clips: command.Clips, transform: command.Transform}
 	case paintmodel.DrawSelect:
-		return paintedCommandVisual{nodeID: command.NodeID, x: command.X, y: command.Y, top: command.Top, width: command.Width, height: command.Height, advance: max(command.Top+command.Height, float32(0)), writingMode: command.WritingMode, clip: command.Clip, clips: command.Clips, transform: command.Transform}
+		return paintedCommandVisual{nodeID: command.NodeID, x: command.X, y: command.Y, top: command.Top, width: command.Width, height: command.Height, advance: max(command.Top+command.Height, paintmodel.MinimumCommandAdvance), writingMode: command.WritingMode, clip: command.Clip, clips: command.Clips, transform: command.Transform}
 	case paintmodel.DrawCheckable:
-		return paintedCommandVisual{nodeID: command.NodeID, x: command.X, y: command.Y, top: command.Top, width: command.Width, height: command.Height, advance: max(command.Top+command.Height, float32(0)), writingMode: command.WritingMode, clip: command.Clip, clips: command.Clips, transform: command.Transform}
+		return paintedCommandVisual{nodeID: command.NodeID, x: command.X, y: command.Y, top: command.Top, width: command.Width, height: command.Height, advance: max(command.Top+command.Height, paintmodel.MinimumCommandAdvance), writingMode: command.WritingMode, clip: command.Clip, clips: command.Clips, transform: command.Transform}
 	case paintmodel.DrawButton:
-		return paintedCommandVisual{nodeID: command.NodeID, x: command.X, y: command.Y, top: command.Top, width: command.Width, height: command.Height, advance: max(command.Top+command.Height, float32(0)), writingMode: command.WritingMode, clip: command.Clip, clips: command.Clips, transform: command.Transform}
+		return paintedCommandVisual{nodeID: command.NodeID, x: command.X, y: command.Y, top: command.Top, width: command.Width, height: command.Height, advance: max(command.Top+command.Height, paintmodel.MinimumCommandAdvance), writingMode: command.WritingMode, clip: command.Clip, clips: command.Clips, transform: command.Transform}
 	case paintmodel.DrawBox:
-		return paintedCommandVisual{nodeID: command.NodeID, x: command.X, y: command.Y, top: command.Top, width: command.Width, height: command.Height, advance: max(command.Top, float32(0)), writingMode: command.WritingMode, clip: command.Clip, clips: command.Clips, transform: command.Transform, radius: command.Radius}
+		return paintedCommandVisual{nodeID: command.NodeID, x: command.X, y: command.Y, top: command.Top, width: command.Width, height: command.Height, advance: max(command.Top, paintmodel.MinimumCommandAdvance), writingMode: command.WritingMode, clip: command.Clip, clips: command.Clips, transform: command.Transform, radius: command.Radius}
 	case paintmodel.DrawImage:
-		return paintedCommandVisual{nodeID: command.NodeID, x: command.X, y: command.Y, top: command.Top, width: command.Width, height: command.Height, advance: max(command.Top+command.Height, float32(0)), writingMode: command.WritingMode, clip: command.Clip, clips: command.Clips, transform: command.Transform, radius: command.Radius}
+		return paintedCommandVisual{nodeID: command.NodeID, x: command.X, y: command.Y, top: command.Top, width: command.Width, height: command.Height, advance: max(command.Top+command.Height, paintmodel.MinimumCommandAdvance), writingMode: command.WritingMode, clip: command.Clip, clips: command.Clips, transform: command.Transform, radius: command.Radius}
 	default:
 		return paintedCommandVisual{}
 	}
@@ -2704,7 +2704,7 @@ func layoutPaintCommand(gtx layout.Context, top, height float32, inset layout.In
 	offset := op.Offset(image.Pt(0, gtx.Dp(unit.Dp(top)))).Push(gtx.Ops)
 	dimensions := inset.Layout(gtx, widget)
 	offset.Pop()
-	dimensions.Size.Y = gtx.Dp(unit.Dp(max(top+height, float32(0))))
+	dimensions.Size.Y = gtx.Dp(unit.Dp(max(top+height, paintmodel.MinimumCommandAdvance)))
 	return dimensions
 }
 

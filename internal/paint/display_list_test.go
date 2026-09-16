@@ -154,22 +154,24 @@ func TestBuildPreservesPaintOrder(t *testing.T) {
 }
 
 func TestBuildUsesSignedOffsetsForNonMonotonicPaintGeometry(t *testing.T) {
-	tree := &layout.Tree{Width: 400, Height: 160, Boxes: []layout.Box{
+	tree := &layout.Tree{Width: 400, Height: 180, Boxes: []layout.Box{
 		{Order: 1, NodeID: 1, Text: "lower first", Y: 100, Width: 80, Height: 20},
 		{Order: 2, NodeID: 2, Text: "upper second", X: 100, Y: 20, Width: 80, Height: 20},
+		{Order: 3, NodeID: 3, Text: "lower third", Y: 140, Width: 80, Height: 20},
 	}}
 	list := Build(tree)
 	first := list.Commands[0].(DrawText)
 	second := list.Commands[1].(DrawText)
-	if first.Top != 100 || second.Top != -100 {
-		t.Fatalf("signed paint offsets = first:%v second:%v", first.Top, second.Top)
+	third := list.Commands[2].(DrawText)
+	if first.Top != 100 || second.Top != -100 || third.Top != 19 {
+		t.Fatalf("signed paint offsets = first:%v second:%v third:%v", first.Top, second.Top, third.Top)
 	}
 	cursor := float32(0)
-	for _, command := range []DrawText{first, second} {
+	for _, command := range []DrawText{first, second, third} {
 		if paintedY := cursor + command.Top; paintedY != command.Y {
 			t.Fatalf("painted y = %v, document y = %v", paintedY, command.Y)
 		}
-		cursor += max(command.Top+command.Height, float32(0))
+		cursor += max(command.Top+command.Height, MinimumCommandAdvance)
 	}
 }
 

@@ -1338,11 +1338,11 @@ func TestHitTestPaintedDisplayListUsesSignedBacktrackingOffset(t *testing.T) {
 	}
 }
 
-func TestLayoutPaintCommandClampsBacktrackingAdvance(t *testing.T) {
+func TestLayoutPaintCommandKeepsBacktrackedCommandsAddressable(t *testing.T) {
 	gtx := layout.Context{Ops: new(op.Ops), Constraints: layout.Exact(image.Pt(200, 200)), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}}
 	widget := func(layout.Context) layout.Dimensions { return layout.Dimensions{Size: image.Pt(40, 20)} }
-	if dimensions := layoutPaintCommand(gtx, -30, 20, layout.Inset{}, widget); dimensions.Size.Y != 0 {
-		t.Fatalf("fully backtracked advance = %d, want 0", dimensions.Size.Y)
+	if dimensions := layoutPaintCommand(gtx, -30, 20, layout.Inset{}, widget); dimensions.Size.Y != 1 {
+		t.Fatalf("fully backtracked advance = %d, want 1", dimensions.Size.Y)
 	}
 	if dimensions := layoutPaintCommand(gtx, -10, 20, layout.Inset{}, widget); dimensions.Size.Y != 10 {
 		t.Fatalf("partially backtracked advance = %d, want 10", dimensions.Size.Y)
