@@ -160,22 +160,22 @@ func TestCSSLayoutShowcaseNestedScrollSharesTransformClipAndHitGeometry(t *testi
 		t.Fatal("nested showcase did not scroll")
 	}
 	targetBounds := tree.Bounds[target.ID]
-	for _, decoration := range tree.Decorations {
-		if decoration.NodeID != target.ID {
+	for _, box := range tree.Boxes {
+		if box.NodeID != target.ID || !box.Button {
 			continue
 		}
-		x, y := decoration.Transform.TransformPoint(targetBounds.X+targetBounds.Width/2, targetBounds.Y+targetBounds.Height/2)
+		x, y := box.Transform.TransformPoint(targetBounds.X+targetBounds.Width/2, targetBounds.Y+targetBounds.Height/2)
 		hit, hitOK := layout.HitTest(tree, x, y)
 		hitNode, exists := document.NodeByID(hit)
 		for hitNode != nil && hitNode != target {
 			hitNode = hitNode.Parent
 		}
 		if !hitOK || !exists || hitNode != target {
-			t.Fatalf("nested showcase transformed hit = %d/%v target=%d raw=%#v bounds=%#v decoration=%#v container=%#v", hit, hitOK, target.ID, func() *dom.Node { node, _ := document.NodeByID(hit); return node }(), targetBounds, decoration, tree.ScrollContainers[scroller.ID])
+			t.Fatalf("nested showcase transformed hit = %d/%v target=%d raw=%#v bounds=%#v box=%#v container=%#v", hit, hitOK, target.ID, func() *dom.Node { node, _ := document.NodeByID(hit); return node }(), targetBounds, box, tree.ScrollContainers[scroller.ID])
 		}
 		return
 	}
-	t.Fatal("nested showcase target decoration is missing")
+	t.Fatal("nested showcase native button box is missing")
 }
 
 func TestCSSLayoutShowcaseUsesVerticalGlyphAndLogicalAxes(t *testing.T) {

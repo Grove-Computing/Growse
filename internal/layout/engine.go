@@ -649,7 +649,9 @@ func isCheckableControl(node *dom.Node) bool {
 }
 
 func isSubmitButtonControl(node *dom.Node) bool {
-	return forms.IsSubmitButton(node)
+	// Every <button> has native control geometry, regardless of whether its
+	// activation behavior is submit, reset, or an ordinary script event.
+	return node != nil && node.Type == dom.NodeElement && node.TagName == "button" || forms.IsSubmitButton(node)
 }
 
 func (e *engine) addSubmitButton(node *dom.Node, style blockStyle, x, width, containingHeight float32, heightDefinite bool) {
@@ -987,7 +989,7 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 					firstInFlow = false
 					continue
 				}
-				if isEditableTextControl(child) {
+				if isEditableTextControl(child) && !isInlineLevelDisplay(childStyle.display) {
 					flushInline()
 					e.addInput(child, childStyle, contentX, contentWidth, childContainingHeight, declaredHeightDefinite)
 					previousBlock = true
@@ -995,7 +997,7 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 					firstInFlow = false
 					continue
 				}
-				if isSelectControl(child) {
+				if isSelectControl(child) && !isInlineLevelDisplay(childStyle.display) {
 					flushInline()
 					e.addSelect(child, childStyle, contentX, contentWidth, childContainingHeight, declaredHeightDefinite)
 					previousBlock = true
@@ -1003,7 +1005,7 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 					firstInFlow = false
 					continue
 				}
-				if isCheckableControl(child) {
+				if isCheckableControl(child) && !isInlineLevelDisplay(childStyle.display) {
 					flushInline()
 					e.addCheckable(child, childStyle, contentX, contentWidth, childContainingHeight, declaredHeightDefinite)
 					previousBlock = true
@@ -1011,7 +1013,7 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 					firstInFlow = false
 					continue
 				}
-				if isSubmitButtonControl(child) {
+				if isSubmitButtonControl(child) && !isInlineLevelDisplay(childStyle.display) {
 					flushInline()
 					e.addSubmitButton(child, childStyle, contentX, contentWidth, childContainingHeight, declaredHeightDefinite)
 					previousBlock = true
@@ -1476,8 +1478,15 @@ func (e *engine) collectInlineRunsWithOpacity(node, owner *dom.Node, opacity flo
 	if isImageElement(node, e.images) {
 		return []inlineRun{{nodeID: node.ID, node: node, tag: node.TagName, style: style, atomic: true, image: true, opacity: opacity}}
 	}
+	if forms.IsSubmitButton(node) {
+		label := strings.TrimSpace(node.TextContent())
+		if node.TagName == "input" {
+			label, _ = node.Attribute("value")
+		}
+		return []inlineRun{{nodeID: node.ID, node: node, tag: node.TagName, text: label, style: style, atomic: true, opacity: opacity}}
+	}
 	if style.display == stylemodel.DisplayInlineBlock {
-		return []inlineRun{{nodeID: node.ID, node: node, tag: node.TagName, style: style, atomic: true, opacity: opacity}}
+		return []inlineRun{{nodeID: node.ID, node: node, tag: node.TagName, text: e.inlineText(node), style: style, atomic: true, opacity: opacity}}
 	}
 	if style.display == stylemodel.DisplayInlineFlex {
 		return []inlineRun{{nodeID: node.ID, node: node, tag: node.TagName, style: style, atomic: true, flex: true, opacity: opacity}}
@@ -1823,6 +1832,10 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 
 func isBlockLevelDisplay(display stylemodel.Display) bool {
 	return display == stylemodel.DisplayBlock || display == stylemodel.DisplayFlowRoot || display == stylemodel.DisplayFlex || display == stylemodel.DisplayGrid || display == stylemodel.DisplayTableCaption
+}
+
+func isInlineLevelDisplay(display stylemodel.Display) bool {
+	return display == stylemodel.DisplayInline || display == stylemodel.DisplayInlineBlock || display == stylemodel.DisplayInlineFlex || display == stylemodel.DisplayInlineGrid
 }
 
 func tokenizeInlineRuns(runs []inlineRun) []inlineRun {

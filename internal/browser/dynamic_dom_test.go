@@ -378,18 +378,28 @@ button:hover { color: red; font-size: 24px; padding: 8px; }
 	if normalTree.Boxes[0].Height == hoverTree.Boxes[0].Height {
 		t.Fatalf("layout height stayed %v after hover font and padding change", hoverTree.Boxes[0].Height)
 	}
-	draw, ok := hoverList.Commands[0].(paintmodel.DrawButton)
+	draw, ok := buttonPaintCommand(hoverList, button.ID)
 	if !ok || draw.Color != 0xff0000ff {
-		t.Fatalf("hover display command = %#v, want red button", hoverList.Commands[0])
+		t.Fatalf("hover display commands = %#v, want red button", hoverList.Commands)
 	}
 	if !browserState.ClearHover() {
 		t.Fatal("ClearHover() = false, want true")
 	}
 	restoredList := paintmodel.Build(layoutengine.Build(page.Document, page.ComputedStyles, 800))
-	restored, ok := restoredList.Commands[0].(paintmodel.DrawButton)
+	restored, ok := buttonPaintCommand(restoredList, button.ID)
 	if !ok || restored.Color == 0xff0000ff {
-		t.Fatalf("restored display command = %#v, want normal 16px text", restoredList.Commands[0])
+		t.Fatalf("restored display commands = %#v, want normal 16px text", restoredList.Commands)
 	}
+}
+
+func buttonPaintCommand(list *paintmodel.DisplayList, nodeID dom.NodeID) (paintmodel.DrawButton, bool) {
+	for _, command := range list.Commands {
+		button, ok := command.(paintmodel.DrawButton)
+		if ok && button.NodeID == nodeID {
+			return button, true
+		}
+	}
+	return paintmodel.DrawButton{}, false
 }
 
 func TestWebGoMutationAndHoverDiscardGridPositionAndTransformGeometry(t *testing.T) {

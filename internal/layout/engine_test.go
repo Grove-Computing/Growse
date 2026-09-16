@@ -626,14 +626,19 @@ func TestBuildCarriesDisabledAndReadonlyControlState(t *testing.T) {
 	}
 }
 
-func TestBuildCreatesSubmitButtonControls(t *testing.T) {
+func TestBuildCreatesButtonControls(t *testing.T) {
 	document := dom.NewDocument()
 	button := document.CreateElement("button", nil)
+	ordinary := document.CreateElement("button", map[string]string{"type": "button"})
 	input := document.CreateElement("input", map[string]string{"type": "submit", "value": "Save"})
-	appendNodes(t, document, [2]*dom.Node{document.Root, button}, [2]*dom.Node{button, document.CreateText("Send")}, [2]*dom.Node{document.Root, input})
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, button}, [2]*dom.Node{button, document.CreateText("Send")},
+		[2]*dom.Node{document.Root, ordinary}, [2]*dom.Node{ordinary, document.CreateText("Toggle")},
+		[2]*dom.Node{document.Root, input},
+	)
 
 	boxes := Build(document, style.Compute(document, nil), 800).Boxes
-	if len(boxes) != 2 || !boxes[0].Button || boxes[0].Text != "Send" || !boxes[1].Button || boxes[1].Text != "Save" {
+	if len(boxes) != 3 || !boxes[0].Button || boxes[0].Text != "Send" || !boxes[1].Button || boxes[1].Text != "Toggle" || !boxes[2].Button || boxes[2].Text != "Save" {
 		t.Fatalf("submit buttons = %#v", boxes)
 	}
 }

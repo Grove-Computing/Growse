@@ -1,12 +1,13 @@
 {
   "schemaVersion": 1,
-  "release": "v0.18.0",
-  "chromium": "140.0.7339.80",
+  "release": "v0.19.0",
+  "chromium": "153.0.8010.36",
+  "firefox": "156.0",
   "offline": true,
   "pages": [
     {
       "name": "nextjs-app-router",
-      "framework": "Next.js 15.4.6",
+      "framework": "Next.js 16.3.3 / React 19.2.8",
       "path": "/next/",
       "viewports": ["desktop", "narrow"],
       "devicePixelRatios": [1, 2],
@@ -14,11 +15,19 @@
     },
     {
       "name": "sveltekit-static",
-      "framework": "SvelteKit 2.37.0",
+      "framework": "SvelteKit 2.70.3 / Svelte 5.57.0",
       "path": "/svelte/",
       "viewports": ["desktop", "narrow"],
       "devicePixelRatios": [1, 2],
       "states": ["ssr", "resource-complete", "hydrated", "interaction", "scroll", "animation"]
+    },
+    {
+      "name": "tailwind-css",
+      "framework": "Tailwind CSS 4.1.12",
+      "path": "/tailwind/",
+      "viewports": ["desktop", "narrow"],
+      "devicePixelRatios": [1, 2],
+      "states": ["resource-complete", "interaction", "scroll"]
     }
   ]
 }

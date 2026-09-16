@@ -86,3 +86,5 @@ go test ./internal/conformance ./internal/layout ./examples/css-layout-2026 -cou
 ```
 
 参照更新時は両ブラウザのversion、720×520 content viewport、採取日を同時に更新する。片方だけの参照更新、threshold拡大、fontや動的領域を持つfixtureへの置換は行わない。
+
+`TestV019FrameworkCorpusDesktopNarrowHydrationInteractionAndScroll`はNext.js 16.3.3 / React 19.2.8、SvelteKit 2.70.3 / Svelte 5.57.0、Tailwind CSS 4.1.12のchecked-in artifactを対象にする。Next.js / SvelteKitはSSR root identityを保持したhydrationとevent後state、TailwindはCSS-only resource完了を起点に、1024px / 640px幅、document scroll、native buttonのPaint / Hit Testing、layout fallback不在を検証する。
