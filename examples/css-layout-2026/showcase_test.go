@@ -1,15 +1,21 @@
 package main
 
 import (
+	"context"
 	"io"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/Grove-Computing/Growse/internal/browser"
 	"github.com/Grove-Computing/Growse/internal/css"
 	"github.com/Grove-Computing/Growse/internal/dom"
 	htmlparser "github.com/Grove-Computing/Growse/internal/html"
 	"github.com/Grove-Computing/Growse/internal/layout"
+	"github.com/Grove-Computing/Growse/internal/network"
+	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
+	"github.com/Grove-Computing/Growse/internal/runtime/javascript"
 	"github.com/Grove-Computing/Growse/internal/style"
 )
 
@@ -36,6 +42,134 @@ func TestCSSLayoutShowcaseServesLayoutStagesAndLateImage(t *testing.T) {
 			t.Fatalf("GET %s = status:%d type:%q marker:%t err:%v", route.path, response.StatusCode, response.Header.Get("Content-Type"), strings.Contains(string(body), route.marker), readErr)
 		}
 	}
+}
+
+func TestCSSLayoutShowcaseOperatesEveryMajorStageThroughJavaScriptReflow(t *testing.T) {
+	server := httptest.NewServer(cssLayoutHandler())
+	defer server.Close()
+	engine := browser.NewWithEngineFactory(network.NewClientWithLimits(server.Client(), 4<<20), func(selected runtimemodel.Engine) runtimemodel.Runtime {
+		if selected == runtimemodel.EngineJavaScript {
+			return javascript.New()
+		}
+		return nil
+	})
+	defer engine.Close()
+	if _, err := engine.SetEngine(context.Background(), runtimemodel.EngineJavaScript); err != nil {
+		t.Fatal(err)
+	}
+	mutations := make(chan struct{}, 64)
+	engine.SetOnMutation(func() {
+		select {
+		case mutations <- struct{}{}:
+		default:
+		}
+	})
+	if _, err := engine.Navigate(context.Background(), server.URL+"/"); err != nil {
+		t.Fatal(err)
+	}
+	if !engine.UpdateViewport(1050, 700) {
+		t.Fatal("showcase desktop viewport was rejected")
+	}
+	waitForShowcaseText(t, engine, mutations, "flow-status", "LEFT FLOAT · CLEAR BOTH")
+	waitForShowcaseImage(t, engine, mutations)
+
+	for _, operation := range []struct {
+		toggle, status, want, stage string
+	}{
+		{toggle: "flow-toggle", status: "flow-status", want: "RIGHT FLOAT · FLOW ROOT", stage: "flow-stage"},
+		{toggle: "table-toggle", status: "table-status", want: "COLLAPSED · AUTO", stage: "layout-table"},
+		{toggle: "layout-toggle", status: "layout-status", want: "VERTICAL-LR · RTL · UNSAFE", stage: "layout-playground"},
+		{toggle: "writing-toggle", status: "writing-status", want: "VERTICAL-LR · RTL", stage: "writing-playground"},
+		{toggle: "position-toggle", status: "position-status", want: "SHIFTED · ROTATED · WIDER", stage: "position-playground"},
+		{toggle: "column-toggle", status: "column-status", want: "2 COLUMNS · AUTO FILL", stage: "column-stage"},
+	} {
+		page := engine.Page()
+		beforeRevision := page.StyleRevision
+		if !engine.DispatchClick(showcaseNode(t, page, operation.toggle).ID, 0, 0) {
+			t.Fatalf("%s did not handle click", operation.toggle)
+		}
+		waitForShowcaseText(t, engine, mutations, operation.status, operation.want)
+		page = engine.Page()
+		if page.StyleRevision <= beforeRevision {
+			t.Fatalf("%s style revision = %d, want > %d", operation.toggle, page.StyleRevision, beforeRevision)
+		}
+		tree := layout.BuildWithScrollAndResources(page.Document, page.ComputedStyles, page.ImageResources, page.WebFonts, 1050, 700, 0, 0)
+		stage := showcaseNode(t, page, operation.stage)
+		bounds, exists := tree.Bounds[stage.ID]
+		if !exists || bounds.Width <= 0 || bounds.Height <= 0 || len(tree.Fallbacks) != 0 {
+			t.Fatalf("%s reflow geometry = %#v/%t fallbacks=%+v", operation.stage, bounds, exists, tree.Fallbacks)
+		}
+	}
+
+	page := engine.Page()
+	flowFloatStyle, _ := page.ComputedStyles.For(showcaseSelector(t, page, ".flow-float"))
+	flowClearStyle, _ := page.ComputedStyles.For(showcaseSelector(t, page, ".flow-clear"))
+	tableStyle, _ := page.ComputedStyles.For(showcaseNode(t, page, "layout-table"))
+	logicalStyle, _ := page.ComputedStyles.For(showcaseSelector(t, page, ".logical-stage"))
+	verticalStyle, _ := page.ComputedStyles.For(showcaseSelector(t, page, ".vertical-flow"))
+	nestedScrollStyle, _ := page.ComputedStyles.For(showcaseSelector(t, page, ".nested-scroll"))
+	columnStyle, _ := page.ComputedStyles.For(showcaseNode(t, page, "column-stage"))
+	if flowFloatStyle.Float != style.FloatRight || flowClearStyle.Clear != style.ClearRight ||
+		tableStyle.TableLayout != style.TableLayoutAuto || tableStyle.BorderCollapse != style.BorderCollapseCollapse ||
+		logicalStyle.WritingMode != style.WritingModeVerticalLR || verticalStyle.WritingMode != style.WritingModeVerticalLR ||
+		nestedScrollStyle.Width.Kind != style.SizeLength || nestedScrollStyle.Width.Value.Pixels != 340 ||
+		columnStyle.ColumnCount != 2 || columnStyle.ColumnFill != style.ColumnFillAuto {
+		t.Fatalf("showcase alternate computed styles = float:%v clear:%v table:%v/%v logical:%v vertical:%v nested:%#v columns:%d/%v",
+			flowFloatStyle.Float, flowClearStyle.Clear, tableStyle.TableLayout, tableStyle.BorderCollapse,
+			logicalStyle.WritingMode, verticalStyle.WritingMode, nestedScrollStyle.Width, columnStyle.ColumnCount, columnStyle.ColumnFill)
+	}
+}
+
+func waitForShowcaseImage(t *testing.T, engine *browser.Browser, mutations <-chan struct{}) {
+	t.Helper()
+	deadline := time.NewTimer(3 * time.Second)
+	defer deadline.Stop()
+	for {
+		for _, resource := range engine.Page().ImageResources {
+			if resource.Loaded {
+				return
+			}
+		}
+		select {
+		case <-mutations:
+		case <-deadline.C:
+			t.Fatalf("late sizing image did not complete before the showcase gate: %+v", engine.Page().ImageResources)
+		}
+	}
+}
+
+func waitForShowcaseText(t *testing.T, engine *browser.Browser, mutations <-chan struct{}, id, want string) {
+	t.Helper()
+	deadline := time.NewTimer(3 * time.Second)
+	defer deadline.Stop()
+	for {
+		if page := engine.Page(); page != nil && showcaseNode(t, page, id).TextContent() == want {
+			return
+		}
+		select {
+		case <-mutations:
+		case <-deadline.C:
+			t.Fatalf("%s text did not become %q", id, want)
+		}
+	}
+}
+
+func showcaseNode(t *testing.T, page *browser.Page, id string) *dom.Node {
+	t.Helper()
+	node, exists := page.Document.GetElementByID(id)
+	if !exists {
+		t.Fatalf("showcase node #%s is missing", id)
+	}
+	return node
+}
+
+func showcaseSelector(t *testing.T, page *browser.Page, selector string) *dom.Node {
+	t.Helper()
+	node, exists := page.Document.QuerySelector(selector)
+	if !exists {
+		t.Fatalf("showcase selector %s is missing", selector)
+	}
+	return node
 }
 
 func TestCSSLayoutShowcaseBalancesColumnsAndSpans(t *testing.T) {
