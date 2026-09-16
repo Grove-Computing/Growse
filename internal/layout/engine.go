@@ -1055,6 +1055,11 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 	sizingHeight := contentHeight
 	if declaredHeightDefinite {
 		sizingHeight = declaredHeight
+	} else if style.boxSizing == stylemodel.BoxSizingBorderBox {
+		// An auto block grows around its content regardless of box-sizing.
+		// For border-box sizing, constraints apply to the outer box, so fold
+		// the vertical padding and borders into the natural sizing height.
+		sizingHeight += style.padding.Top + style.padding.Bottom + verticalBorder
 	}
 	sizingHeight = constrainSize(sizingHeight, style.minHeight, style.maxHeight, containingHeight, heightDefinite)
 	outerHeight := sizingHeight

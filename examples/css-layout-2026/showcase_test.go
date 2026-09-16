@@ -66,10 +66,12 @@ func TestCSSLayoutShowcaseBalancesColumnsAndSpans(t *testing.T) {
 	tree := layout.BuildWithScrollAndResources(document, computed, nil, layout.NewFontSetWithSystemFallback(nil), 1057, 700, 0, 0)
 	stageBounds, spanBounds := tree.Bounds[stage.ID], tree.Bounds[spanner.ID]
 	columns := make(map[int]bool)
+	cards := make([]*dom.Node, 0, 5)
 	for _, child := range stage.Children {
 		if child.Type != dom.NodeElement || child == spanner {
 			continue
 		}
+		cards = append(cards, child)
 		if bounds, exists := tree.Bounds[child.ID]; exists {
 			columns[int(bounds.X+0.5)] = true
 		}
@@ -103,6 +105,9 @@ func TestCSSLayoutShowcaseBalancesColumnsAndSpans(t *testing.T) {
 	}
 	if len(columns) < 3 || spanBounds.Width != stageBounds.Width-28 {
 		t.Fatalf("showcase columns = positions:%v stage:%#v span:%#v", columns, stageBounds, spanBounds)
+	}
+	if len(cards) < 2 || tree.Bounds[cards[0].ID].X == tree.Bounds[cards[1].ID].X {
+		t.Fatalf("balanced avoid cards did not use separate columns: %#v", cards)
 	}
 }
 

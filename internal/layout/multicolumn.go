@@ -97,7 +97,7 @@ func (e *engine) addColumnSegment(node *dom.Node, style blockStyle, children []*
 	if naturalEnd <= segmentTop {
 		return
 	}
-	ranges := e.planColumnRanges(node.ID, children, style, boxStart, segmentTop, naturalEnd, geometry.count, containingHeight, heightDefinite)
+	ranges := e.planColumnRanges(node.ID, children, style, boxStart, decorationStart, segmentTop, naturalEnd, geometry.count, containingHeight, heightDefinite)
 	if len(ranges) == 0 {
 		ranges = []columnSourceRange{{start: segmentTop, end: naturalEnd}}
 	}
@@ -141,7 +141,7 @@ func (e *engine) renderColumnWrapper(node *dom.Node, style blockStyle, children 
 	e.addBlock(wrapper, wrapperStyle, x, width, containingHeight, heightDefinite, &zero)
 }
 
-func (e *engine) planColumnRanges(owner dom.NodeID, children []*dom.Node, style blockStyle, boxStart int, top, end float32, requestedCount int, containingHeight float32, heightDefinite bool) []columnSourceRange {
+func (e *engine) planColumnRanges(owner dom.NodeID, children []*dom.Node, style blockStyle, boxStart, decorationStart int, top, end float32, requestedCount int, containingHeight float32, heightDefinite bool) []columnSourceRange {
 	naturalHeight := end - top
 	count := min(max(requestedCount, 1), maxMultiColumnCount)
 	targetHeight := naturalHeight / float32(count)
@@ -153,7 +153,7 @@ func (e *engine) planColumnRanges(owner dom.NodeID, children []*dom.Node, style 
 		return []columnSourceRange{{start: top, end: end}}
 	}
 
-	candidates := e.columnBreakCandidates(boxStart, top, end)
+	candidates := e.columnBreakCandidates(boxStart, decorationStart, top, end)
 	forced, avoided := e.columnBreakControls(children, top, end)
 	boundaries := []float32{top}
 	iterationLimitReported := false
@@ -205,7 +205,7 @@ func (e *engine) planColumnRanges(owner dom.NodeID, children []*dom.Node, style 
 	return ranges
 }
 
-func (e *engine) columnBreakCandidates(boxStart int, top, end float32) []float32 {
+func (e *engine) columnBreakCandidates(boxStart, decorationStart int, top, end float32) []float32 {
 	result := []float32{top, end}
 	for index := boxStart; index < len(e.tree.Boxes); index++ {
 		box := e.tree.Boxes[index]
@@ -213,6 +213,16 @@ func (e *engine) columnBreakCandidates(boxStart int, top, end float32) []float32
 			result = append(result, box.Y)
 		}
 		bottom := box.Y + box.Height
+		if bottom > top && bottom < end {
+			result = append(result, bottom)
+		}
+	}
+	for index := decorationStart; index < len(e.tree.Decorations); index++ {
+		decoration := e.tree.Decorations[index]
+		if decoration.Y > top && decoration.Y < end {
+			result = append(result, decoration.Y)
+		}
+		bottom := decoration.Y + decoration.Height
 		if bottom > top && bottom < end {
 			result = append(result, bottom)
 		}

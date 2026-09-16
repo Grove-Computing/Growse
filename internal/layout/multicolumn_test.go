@@ -54,6 +54,37 @@ func TestMultiColumnBalancesBlockAndInlineFragmentsWithRules(t *testing.T) {
 	}
 }
 
+func TestBlockAvoidCandidateEnclosesSystemFontContent(t *testing.T) {
+	document := dom.NewDocument()
+	card := document.CreateElement("article", map[string]string{"class": "card"})
+	title := document.CreateElement("strong", nil)
+	body := document.CreateElement("span", nil)
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, card},
+		[2]*dom.Node{card, title}, [2]*dom.Node{title, document.CreateText("01 · Balance")},
+		[2]*dom.Node{card, body}, [2]*dom.Node{body, document.CreateText("Column count, width, and gap resolve against one available inline size.")},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`
+* { box-sizing:border-box }
+.card { display:block; width:270px; min-height:82px; padding:11px; border:1px solid #416b91 }
+.card strong, .card span { display:block }
+.card strong { margin-bottom:6px }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := BuildWithScrollAndResources(document, stylemodel.Compute(document, stylesheet), nil, NewFontSetWithSystemFallback(nil), 500, 400, 0, 0)
+	cardBounds := tree.Bounds[card.ID]
+	for _, box := range tree.Boxes {
+		if box.NodeID != title.ID && box.NodeID != body.ID {
+			continue
+		}
+		if box.Y < cardBounds.Y-0.01 || box.Y+box.Height > cardBounds.Y+cardBounds.Height+0.01 {
+			t.Fatalf("system-font content escaped block bounds: card=%#v box=%#v", cardBounds, box)
+		}
+	}
+}
+
 func TestMultiColumnSpanAndForcedBreakStartNewFragmentainers(t *testing.T) {
 	document := dom.NewDocument()
 	container := document.CreateElement("section", map[string]string{"class": "columns"})
