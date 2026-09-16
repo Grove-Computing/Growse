@@ -894,6 +894,40 @@ func main() {}</script>`),
 	}
 }
 
+func TestRuntimeWorkerFailurePreservesCommittedPage(t *testing.T) {
+	pageURL := mustParseURL(t, "http://localhost/runtime-failure.html")
+	loader := stubLoader{response: &network.Response{
+		URL: pageURL, StatusCode: 200, ContentType: "text/html",
+		Body: []byte(`<h1 id="content">Readable</h1><script type="text/go">package main; func main() {}</script>`),
+	}}
+	runtime := &runtimeStub{}
+	browserState := NewWithRuntimeFactory(loader, func() runtimemodel.Runtime { return runtime })
+	mutations := 0
+	browserState.SetOnMutation(func() { mutations++ })
+
+	page, err := browserState.Navigate(context.Background(), pageURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime.environment.RuntimeFailure(errors.New("worker exited unexpectedly"))
+	runtime.environment.RuntimeFailure(errors.New("worker exited unexpectedly"))
+
+	content, exists := page.Document.GetElementByID("content")
+	if !exists || content.TextContent() != "Readable" || browserState.Page() != page {
+		t.Fatal("runtime worker failure discarded committed page content")
+	}
+	if page.RuntimeStarted || page.RuntimeError != "" {
+		t.Fatalf("runtime failure state = started:%t error:%q", page.RuntimeStarted, page.RuntimeError)
+	}
+	if mutations != 2 {
+		t.Fatalf("runtime failure invalidations = %d, want 2", mutations)
+	}
+	records := page.DevTools.Console()
+	if len(records) != 1 || records[0].Level != devtools.ConsoleError || records[0].Source != "runtime" || !strings.Contains(records[0].Message, "worker exited unexpectedly") {
+		t.Fatalf("runtime failure console = %+v", records)
+	}
+}
+
 func TestNavigateBlocksRuntimeForUntrustedOrigin(t *testing.T) {
 	pageURL := mustParseURL(t, "https://example.com/index.html")
 	loader := stubLoader{response: &network.Response{
@@ -939,6 +973,31 @@ func main() {}</script>`),
 	records := page.DevTools.Console()
 	if len(records) != 1 || records[0].Level != devtools.ConsoleError || records[0].Source != "runtime" || !strings.Contains(records[0].Message, "compile failed") {
 		t.Fatalf("runtime console records = %+v", records)
+	}
+}
+
+func TestJavaScriptRuntimeStartErrorPreservesCommittedPageWithoutTabError(t *testing.T) {
+	pageURL := mustParseURL(t, "https://example.test/index.html")
+	loader := stubLoader{response: &network.Response{
+		URL: pageURL, StatusCode: 200, ContentType: "text/html",
+		Body: []byte(`<h1 id="content">Readable</h1><script>for (;;) {}</script>`),
+	}}
+	runtime := &runtimeStub{startErr: errors.New("runtime.start timed out")}
+	browserState := NewWithEngineFactory(loader, func(engine runtimemodel.Engine) runtimemodel.Runtime { return runtime })
+	if _, err := browserState.SetEngine(context.Background(), runtimemodel.EngineJavaScript); err != nil {
+		t.Fatal(err)
+	}
+
+	page, err := browserState.Navigate(context.Background(), pageURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, exists := page.Document.GetElementByID("content")
+	if !exists || content.TextContent() != "Readable" || browserState.Page() != page {
+		t.Fatal("JavaScript start failure discarded committed page")
+	}
+	if page.RuntimeStarted || page.RuntimeError != "" || len(page.ScriptErrors) != 1 || !strings.Contains(page.ScriptErrors[0], "runtime.start timed out") {
+		t.Fatalf("JavaScript start failure = started:%t runtime:%q scripts:%v", page.RuntimeStarted, page.RuntimeError, page.ScriptErrors)
 	}
 }
 
