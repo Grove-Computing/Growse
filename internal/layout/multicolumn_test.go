@@ -86,6 +86,46 @@ func TestMultiColumnSpanAndForcedBreakStartNewFragmentainers(t *testing.T) {
 	}
 }
 
+func TestMultiColumnHonorsBreakAfterAndAvoidInside(t *testing.T) {
+	document := dom.NewDocument()
+	container := document.CreateElement("section", map[string]string{"class": "columns"})
+	first := document.CreateElement("div", map[string]string{"class": "item first"})
+	kept := document.CreateElement("div", map[string]string{"class": "item kept"})
+	last := document.CreateElement("div", map[string]string{"class": "item last"})
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, container},
+		[2]*dom.Node{container, first}, [2]*dom.Node{first, document.CreateText("first block")},
+		[2]*dom.Node{container, kept}, [2]*dom.Node{kept, document.CreateText("kept block")},
+		[2]*dom.Node{container, last}, [2]*dom.Node{last, document.CreateText("last block")},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.columns { display:block; width:340px; column-count:2; column-gap:20px }
+.item { display:block; height:44px; margin:0; background:#335577 }
+.first { break-after:column }
+.kept { height:70px; break-inside:avoid-column }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := BuildWithViewport(document, stylemodel.Compute(document, stylesheet), 500, 400)
+	firstRect, keptRect := tree.Bounds[first.ID], tree.Bounds[kept.ID]
+	if keptRect.X <= firstRect.X {
+		t.Fatalf("break-after did not advance a fragmentainer: first=%#v kept=%#v", firstRect, keptRect)
+	}
+	keptFragments := 0
+	for _, box := range tree.Boxes {
+		if box.NodeID == kept.ID {
+			keptFragments++
+		}
+	}
+	if keptFragments != 1 {
+		t.Fatalf("break-inside avoid split the kept block into %d visual fragments", keptFragments)
+	}
+	if lastRect := tree.Bounds[last.ID]; lastRect.X < keptRect.X || lastRect.X == keptRect.X && lastRect.Y < keptRect.Y+keptRect.Height-0.01 {
+		t.Fatalf("content order after kept block = %#v, kept=%#v", lastRect, keptRect)
+	}
+}
+
 func TestMultiColumnRepeatsOneDOMNodeAsStablePaintAndHitFragments(t *testing.T) {
 	document := dom.NewDocument()
 	paragraph := document.CreateElement("p", map[string]string{"class": "columns"})
