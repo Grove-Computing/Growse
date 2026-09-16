@@ -37,6 +37,13 @@ func main() {
 	}
 	root := os.Args[1]
 	switch filepath.Base(filepath.Clean(root)) {
+	case "css-layout-2026":
+		if err := runCSSLayout2026(root); err != nil {
+			fmt.Fprintln(os.Stderr, "Docker CSS Layout 2026 smoke failed:", err)
+			os.Exit(1)
+		}
+		fmt.Println("Docker CSS Layout 2026 smoke passed: showcase, dynamic controls, Chromium/Firefox differential reference")
+		return
 	case "browser-grade-compat":
 		if err := runBrowserGrade(root); err != nil {
 			fmt.Fprintln(os.Stderr, "Docker Browser-grade Compatibility smoke failed:", err)
@@ -57,6 +64,41 @@ func main() {
 		os.Exit(1)
 	}
 	fmt.Println("Docker Web Platform smoke passed: sandbox worker, JavaScript, Module, WASM, iframe, Service Worker")
+}
+
+func runCSSLayout2026(root string) error {
+	if info, err := os.Stat(root); err != nil || !info.IsDir() {
+		return fmt.Errorf("fixture directory is unavailable: %s", root)
+	}
+	markers := map[string][]string{
+		"index.html":        {"CSS Layout 2026", "Flow formatting context", "Flex, Grid &amp; Subgrid", "Multi-column &amp; fragmentation"},
+		"differential.html": {"css-layout-2026-desktop", "grid", "scroller", "flex-probe"},
+		"style.css":         {".flow-stage", ".subgrid", ".column-stage", ".position-playground"},
+		"app.mjs":           {"flow-toggle", "table-toggle", "layout-toggle", "writing-toggle", "position-toggle", "column-toggle"},
+	}
+	for name, required := range markers {
+		encoded, err := os.ReadFile(filepath.Join(root, name))
+		if err != nil {
+			return fmt.Errorf("read %s: %w", name, err)
+		}
+		for _, marker := range required {
+			if !bytes.Contains(encoded, []byte(marker)) {
+				return fmt.Errorf("%s is missing %q", name, marker)
+			}
+		}
+	}
+	var reference struct {
+		SchemaVersion int            `json:"schemaVersion"`
+		Fixture       string         `json:"fixture"`
+		Browsers      map[string]any `json:"browsers"`
+	}
+	if err := readJSON(filepath.Join(root, "testdata", "differential-v019.json"), &reference); err != nil {
+		return err
+	}
+	if reference.SchemaVersion != 1 || reference.Fixture != "differential.html" || reference.Browsers["chromium"] == nil || reference.Browsers["firefox"] == nil {
+		return fmt.Errorf("invalid CSS Layout 2026 differential reference: %+v", reference)
+	}
+	return nil
 }
 
 func runBrowserGrade(root string) error {

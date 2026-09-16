@@ -17,7 +17,7 @@ import (
 )
 
 // browserGradeCompatibilityHandler serves the pinned framework artifacts from
-// the sibling modern-web-compat fixture and overlays the v0.18.0 landing page.
+// the sibling modern-web-compat fixture and overlays the v0.19.0 landing page.
 func browserGradeCompatibilityHandler(root string) http.Handler {
 	mux := http.NewServeMux()
 	modernRoot := filepath.Join(root, "modern-web-compat")

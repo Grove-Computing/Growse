@@ -70,6 +70,7 @@ example_resources=(
   browser-grade-compat
   counter
   css3-core
+  css-layout-2026
   dashboard
   data-app
   devtools

@@ -66,6 +66,7 @@ for resource in \
     browser-grade-compat \
     counter \
     css3-core \
+    css-layout-2026 \
     dashboard \
     data-app \
     devtools \
@@ -88,7 +89,7 @@ for value in \
     "runner: windows-2025" \
     "name: Run platform tests" \
     "run: go test ./..." \
-    'scripts/package-gui.sh dist/package v0.18.0 "$GITHUB_RUN_NUMBER"' \
+    'scripts/package-gui.sh dist/package v0.19.0 "$GITHUB_RUN_NUMBER"' \
     'bash scripts/verify-gui-package.sh dist/package'
 do
     require_ci "$value"
