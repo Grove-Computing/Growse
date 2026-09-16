@@ -1,8 +1,10 @@
 package layout
 
 import (
+	"math"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Grove-Computing/Growse/internal/css"
 	"github.com/Grove-Computing/Growse/internal/dom"
@@ -197,6 +199,29 @@ func TestInlineReplacedImageSharesLinePaintAndHitGeometry(t *testing.T) {
 }
 
 func TestLayoutSafetyLimitsReturnFiniteFallbacks(t *testing.T) {
+	t.Run("time", func(t *testing.T) {
+		expired := time.Unix(100, 0)
+		tree := &Tree{}
+		state := engine{tree: tree, now: func() time.Time { return expired }, deadline: expired}
+		if state.withinBudget(6) {
+			t.Fatal("expired layout budget was accepted")
+		}
+		if !hasFallbackReason(tree, "layout time limit exceeded") {
+			t.Fatalf("time fallback = %#v", tree.Fallbacks)
+		}
+	})
+
+	t.Run("box", func(t *testing.T) {
+		tree := &Tree{Boxes: make([]Box, maxLayoutBoxes)}
+		state := engine{tree: tree}
+		if state.withinBudget(7) {
+			t.Fatal("exhausted box budget was accepted")
+		}
+		if !hasFallbackReason(tree, "layout box limit exceeded") {
+			t.Fatalf("box fallback = %#v", tree.Fallbacks)
+		}
+	})
+
 	t.Run("recursion", func(t *testing.T) {
 		document := dom.NewDocument()
 		parent := document.Root
@@ -234,6 +259,40 @@ func TestLayoutSafetyLimitsReturnFiniteFallbacks(t *testing.T) {
 			t.Fatalf("fragment limit = boxes:%d decorations:%d fallbacks:%#v", len(tree.Boxes), len(tree.Decorations), tree.Fallbacks)
 		}
 	})
+}
+
+func TestMalformedCSSValuesStillProduceFiniteLayout(t *testing.T) {
+	document := dom.NewDocument()
+	body := document.CreateElement("body", nil)
+	stress := document.CreateElement("main", map[string]string{"class": "stress"})
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, body},
+		[2]*dom.Node{body, stress},
+		[2]*dom.Node{stress, document.CreateText(strings.Repeat("bounded layout ", 512))},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.stress {
+  display:grid;
+  width:calc(100% / 0);
+  height:calc(infinity * 1px);
+  columns:999999 -4px;
+  grid-template-columns:repeat(999999999, minmax(-1px, 1fr));
+  gap:-999px;
+  writing-mode:sideways-rl;
+}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := BuildWithViewport(document, stylemodel.Compute(document, stylesheet), 800, 600)
+	values := []float32{tree.Width, tree.Height, tree.ScrollWidth, tree.ScrollHeight}
+	for _, box := range tree.Boxes {
+		values = append(values, box.X, box.Y, box.Width, box.Height)
+	}
+	for _, value := range values {
+		if math.IsNaN(float64(value)) || math.IsInf(float64(value), 0) {
+			t.Fatalf("non-finite layout value %v in tree %#v", value, tree)
+		}
+	}
 }
 
 func hasFallbackReason(tree *Tree, reason string) bool {

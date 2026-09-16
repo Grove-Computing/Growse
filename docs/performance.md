@@ -126,3 +126,21 @@ bash tests/v017-security.sh
 ```
 
 wall-clock値は`ubuntu-24.04-amd64-2vcpu`の固定runnerだけで比較し、異なるhostの値をRelease合否へ混在させない。安全上限、task starvation、cancel、stale generationは3つのshuffle seedで別途決定的に検証する。
+
+## v0.19.0 CSS Layout 2026 safety / performance
+
+`BenchmarkCSSLayout2026Showcase`は`examples/css-layout-2026`全体を1280×900のbrowser UA profileでLayoutする。Flow、Sizing / Table、Flex / Grid / Subgrid、vertical writing、Position / Overflow、Multi-columnを1 passに含み、Style計算とfile I/Oは計測外とする。
+
+```sh
+go test ./internal/layout -run '^$' \
+  -bench '^BenchmarkCSSLayout2026Showcase$' \
+  -benchmem -count=5
+```
+
+2026-09-16にLinux amd64、AMD Ryzen 7 8745HS、Go 1.26.6で5回測定した中央値は次のとおり。
+
+| Benchmark | 中央値 | Memory | Allocations |
+|---|---:|---:|---:|
+| `BenchmarkCSSLayout2026Showcase-16` | 2,542,474 ns/op | 6,731,565 B/op | 7,460 allocs/op |
+
+wall-clock baselineとは別に、1 Layout passを2秒、visual boxを32,768件、box / decoration fragment合計を65,536件、recursionを192段、line boxを16,384件、floatを4,096件、column fragmentainerを32件、balancing探索を64 iterationへ制限する。生成中に上限へ達したsubtreeは`layout time|box|fragment|recursion|line box|float|multi-column ... limit exceeded`のpayload-free fallbackを残して停止し、Page全体をpanicさせない。`TestLayoutSafetyLimitsReturnFiniteFallbacks`と`TestMalformedCSSValuesStillProduceFiniteLayout`が期限切れclock、件数上限、深いtree、過剰fragment、非妥当CSS値を決定的に検証する。

@@ -3,6 +3,7 @@ package layout
 import (
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/Grove-Computing/Growse/internal/dom"
@@ -22,6 +23,8 @@ const (
 	maxLayoutDepth = 192
 	maxLineBoxes   = 16384
 	maxFloatBoxes  = 4096
+	maxLayoutBoxes = 32768
+	maxLayoutTime  = 2 * time.Second
 )
 
 type blockStyle struct {
@@ -206,6 +209,7 @@ func BuildWithScrollAtRevision(document *dom.Document, computed stylemodel.Map, 
 }
 
 func build(document *dom.Document, computed stylemodel.Map, images map[dom.NodeID]ImageResource, fonts *FontSet, viewportWidth, viewportHeight, scrollX, scrollY float32) *Tree {
+	startedAt := time.Now()
 	pageInset := pagePadding
 	if usesBrowserViewport(document, computed) {
 		pageInset = 0
@@ -231,6 +235,8 @@ func build(document *dom.Document, computed stylemodel.Map, images map[dom.NodeI
 		scrollX:        scrollX,
 		scrollY:        scrollY,
 		subgrids:       make(map[dom.NodeID]subgridContext),
+		now:            time.Now,
+		deadline:       startedAt.Add(maxLayoutTime),
 	}
 	if document != nil {
 		if body := findElement(document.Root, "body"); body != nil {
@@ -335,6 +341,42 @@ type engine struct {
 	floats                        []floatRegion
 	subgrids                      map[dom.NodeID]subgridContext
 	depth                         int
+	now                           func() time.Time
+	deadline                      time.Time
+	boxLimitReported              bool
+	fragmentLimitReported         bool
+	timeLimitReported             bool
+}
+
+// withinBudget bounds work while geometry is being generated. The final
+// fragment cap remains a second line of defence for compound operations that
+// can emit more than one visual fragment at a time.
+func (e *engine) withinBudget(nodeID dom.NodeID) bool {
+	if e == nil || e.tree == nil {
+		return false
+	}
+	if len(e.tree.Boxes) >= maxLayoutBoxes {
+		if !e.boxLimitReported {
+			e.tree.addFallback(nodeID, "layout box limit exceeded")
+			e.boxLimitReported = true
+		}
+		return false
+	}
+	if len(e.tree.Boxes)+len(e.tree.Decorations) >= maxLayoutFragments {
+		if !e.fragmentLimitReported {
+			e.tree.addFallback(nodeID, "layout fragment limit exceeded")
+			e.fragmentLimitReported = true
+		}
+		return false
+	}
+	if e.now != nil && !e.deadline.IsZero() && !e.now().Before(e.deadline) {
+		if !e.timeLimitReported {
+			e.tree.addFallback(nodeID, "layout time limit exceeded")
+			e.timeLimitReported = true
+		}
+		return false
+	}
+	return true
 }
 
 func (e *engine) nextOrder() int {
@@ -344,7 +386,7 @@ func (e *engine) nextOrder() int {
 }
 
 func (e *engine) walk(node *dom.Node, x, width, containingHeight float32, heightDefinite bool) {
-	if node == nil {
+	if node == nil || !e.withinBudget(node.ID) {
 		return
 	}
 	switch node.Type {
@@ -767,6 +809,9 @@ func applyPreferredAspectRatio(width, height float32, style blockStyle) (float32
 }
 
 func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containingHeight float32, heightDefinite bool, topMargin *float32) {
+	if !e.withinBudget(node.ID) {
+		return
+	}
 	if e.depth >= maxLayoutDepth {
 		e.tree.addFallback(node.ID, "layout recursion limit exceeded")
 		return
@@ -953,6 +998,9 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 		}
 
 		for _, child := range e.flowChildren(node) {
+			if !e.withinBudget(child.ID) {
+				break
+			}
 			if child.Type == dom.NodeElement {
 				childStyle := e.styleFor(child)
 				if childStyle.display == stylemodel.DisplayNone {
@@ -1588,6 +1636,9 @@ func (e *engine) addText(nodeID dom.NodeID, tag, text string, style blockStyle, 
 }
 
 func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, container blockStyle, x, width float32) {
+	if !e.withinBudget(nodeID) {
+		return
+	}
 	if container.writingMode != stylemodel.WritingModeHorizontalTB {
 		e.addVerticalInlineRuns(nodeID, tag, runs, container, x, width)
 		return
@@ -1606,6 +1657,10 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 
 	flushLine := func(final bool) {
 		if len(lineRuns) == 0 {
+			return
+		}
+		if !e.withinBudget(nodeID) {
+			lineRuns = nil
 			return
 		}
 		if len(e.tree.Boxes) >= maxLineBoxes {
@@ -1730,6 +1785,9 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 	}
 
 	for _, token := range tokenizeInlineRuns(transformInlineRuns(runs)) {
+		if !e.withinBudget(nodeID) {
+			break
+		}
 		if token.atomic {
 			if token.image {
 				token.width, token.height, token.baseline = e.resolveInlineImageSize(token, width)
@@ -1803,6 +1861,9 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 		}
 		remaining := []rune(token.text)
 		for len(remaining) > 0 {
+			if !e.withinBudget(nodeID) {
+				break
+			}
 			available := lineWidth - usedWidth
 			characters := fittingRuneCount(remaining, available, token.style)
 			if characters < 1 {

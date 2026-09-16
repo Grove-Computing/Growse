@@ -2,11 +2,13 @@ package layout
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/Grove-Computing/Growse/internal/css"
 	"github.com/Grove-Computing/Growse/internal/dom"
+	htmlparser "github.com/Grove-Computing/Growse/internal/html"
 	"github.com/Grove-Computing/Growse/internal/style"
 )
 
@@ -18,6 +20,36 @@ func BenchmarkGridDashboardLayout(b *testing.B) {
 	b.ResetTimer()
 	for b.Loop() {
 		_ = BuildWithViewport(document, computed, 1280, 720)
+	}
+}
+
+// BenchmarkCSSLayout2026Showcase measures one full pass of the release
+// showcase, including Flow, Table, Flex, Grid/Subgrid, vertical writing,
+// positioned overflow, and multi-column fragmentation.
+func BenchmarkCSSLayout2026Showcase(b *testing.B) {
+	markup, err := os.ReadFile("../../examples/css-layout-2026/index.html")
+	if err != nil {
+		b.Fatal(err)
+	}
+	stylesheetSource, err := os.ReadFile("../../examples/css-layout-2026/style.css")
+	if err != nil {
+		b.Fatal(err)
+	}
+	document, err := htmlparser.Parse(strings.NewReader(string(markup)))
+	if err != nil {
+		b.Fatal(err)
+	}
+	stylesheet, err := css.Parse(strings.NewReader(string(stylesheetSource)))
+	if err != nil {
+		b.Fatal(err)
+	}
+	computed := style.ComputeWithEnvironment(document, stylesheet, style.InteractionState{}, style.Environment{
+		ViewportWidth: 1280, ViewportHeight: 900, RootFontSize: 16, ResolutionDPI: 96, BrowserDefaults: true,
+	})
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		_ = BuildWithViewport(document, computed, 1280, 900)
 	}
 }
 

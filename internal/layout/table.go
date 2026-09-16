@@ -44,6 +44,9 @@ func (e *engine) flowChildren(node *dom.Node) []*dom.Node {
 }
 
 func (e *engine) addTable(node *dom.Node, tableStyle blockStyle, x, availableWidth, containingHeight float32, heightDefinite bool) {
+	if !e.withinBudget(node.ID) {
+		return
+	}
 	e.y += tableStyle.margin.Top
 	x += tableStyle.margin.Left
 	availableWidth -= tableStyle.margin.Left + tableStyle.margin.Right
@@ -91,6 +94,9 @@ func (e *engine) addTable(node *dom.Node, tableStyle blockStyle, x, availableWid
 	rowHeights := make([]float32, len(rows))
 	for index := range cells {
 		cell := &cells[index]
+		if !e.withinBudget(cell.node.ID) {
+			break
+		}
 		cellWidth := max(trackOffset(columnWidths, cell.column+cell.colSpan, spacingX)-trackOffset(columnWidths, cell.column, spacingX)-spacingX, float32(1))
 		cellStyle := e.styleFor(cell.node)
 		_, intrinsicHeight, _ := e.flexIntrinsicSizes(cell.node, cellStyle, flexAxis{horizontal: true}, cellWidth, cellWidth, containingHeight, heightDefinite)
