@@ -1138,6 +1138,35 @@ func TestKeyboardShortcutsCycleTabsForwardAndBackward(t *testing.T) {
 	}
 }
 
+func TestAddressShortcutFocusesAndReplacesCurrentURL(t *testing.T) {
+	ui := NewBrowserUI(nil, nil)
+	ui.address.SetText("https://old.example/path")
+	router := new(input.Router)
+	gtx := layout.Context{
+		Ops:         new(op.Ops),
+		Source:      router.Source(),
+		Constraints: layout.Exact(image.Pt(800, 600)),
+		Metric:      unit.Metric{PxPerDp: 1, PxPerSp: 1},
+	}
+
+	ui.Layout(gtx)
+	router.Frame(gtx.Ops)
+	router.Queue(key.Event{Name: "L", Modifiers: key.ModShortcut, State: key.Press})
+	gtx.Reset()
+	ui.Layout(gtx)
+	if got := ui.address.SelectedText(); got != "https://old.example/path" {
+		t.Fatalf("Ctrl/Command+L selection = %q", got)
+	}
+
+	router.Frame(gtx.Ops)
+	router.Queue(key.EditEvent{Range: key.Range{Start: 0, End: ui.address.Len()}, Text: "https://new.example/"})
+	gtx.Reset()
+	ui.Layout(gtx)
+	if got := ui.address.Text(); got != "https://new.example/" {
+		t.Fatalf("address after shortcut edit = %q", got)
+	}
+}
+
 func (navigator *reloadRecordingNavigator) Reload(ctx context.Context) (*browser.Page, error) {
 	navigator.reloads <- false
 	select {
@@ -1278,6 +1307,23 @@ func TestDocumentPointIncludesListScrollOffset(t *testing.T) {
 	x, y, ok := ui.documentPoint(image.Pt(40, 18), displayList, 2)
 	if !ok || x != 20 || y != 75 {
 		t.Fatalf("documentPoint() = (%v, %v, %v), want (20, 75, true)", x, y, ok)
+	}
+}
+
+func TestHitTestPaintedDisplayListUsesVisibleCommandOrderAndScroll(t *testing.T) {
+	list := &paintmodel.DisplayList{Commands: []paintmodel.Command{
+		paintmodel.DrawText{NodeID: 1, X: 10, Y: 100, Top: 100, Width: 80, Height: 20},
+		paintmodel.DrawText{NodeID: 2, X: 10, Y: 20, Top: 0, Width: 80, Height: 20, Runs: []paintmodel.TextRun{{NodeID: 3, Width: 40}}},
+	}}
+
+	hit, ok := hitTestPaintedDisplayList(list, layout.Position{First: 0}, image.Pt(30, 125), 1)
+	if !ok || hit.NodeID != 3 || hit.DocumentX != 30 || hit.DocumentY != 25 {
+		t.Fatalf("painted hit = (%+v, %v), want run 3 at document (30,25)", hit, ok)
+	}
+
+	hit, ok = hitTestPaintedDisplayList(list, layout.Position{First: 1, Offset: 5}, image.Pt(60, 10), 1)
+	if !ok || hit.NodeID != 2 || hit.DocumentX != 60 || hit.DocumentY != 35 {
+		t.Fatalf("scrolled painted hit = (%+v, %v), want node 2 at document (60,35)", hit, ok)
 	}
 }
 
@@ -1466,6 +1512,162 @@ func TestPointerHoveringLinkDoesNotStartNavigation(t *testing.T) {
 	}
 }
 
+func TestPointerClickingLinkStartsNavigation(t *testing.T) {
+	document := dom.NewDocument()
+	anchor := document.CreateElement("a", map[string]string{"href": "/next"})
+	if err := document.AppendChild(document.Root, anchor); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(anchor, document.CreateText("Next")); err != nil {
+		t.Fatal(err)
+	}
+	pageURL, err := url.Parse("https://example.com/current")
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := &browser.Page{URL: pageURL, Document: document, ComputedStyles: style.Compute(document, nil)}
+	navigator := &recordingNavigator{stubNavigator: stubNavigator{page: page}, navigated: make(chan string, 1)}
+	ui := NewBrowserUI(navigator, nil)
+	router := new(input.Router)
+	gtx := layout.Context{Ops: new(op.Ops), Source: router.Source(), Constraints: layout.Exact(image.Pt(800, 600)), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}}
+	position := f32.Pt(float32(tabRailWidth)+40, float32(toolbarHeight)+40)
+
+	ui.Layout(gtx)
+	router.Frame(gtx.Ops)
+	router.Queue(pointer.Event{Kind: pointer.Press, Source: pointer.Mouse, Buttons: pointer.ButtonPrimary, Position: position})
+	gtx.Reset()
+	ui.Layout(gtx)
+	router.Frame(gtx.Ops)
+	router.Queue(pointer.Event{Kind: pointer.Release, Source: pointer.Mouse, Position: position})
+	gtx.Reset()
+	ui.Layout(gtx)
+
+	select {
+	case got := <-navigator.navigated:
+		if got != "https://example.com/next" {
+			t.Fatalf("pointer link navigation = %q", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("pointer click did not start link navigation")
+	}
+}
+
+func TestPointerClickingInlineLinkBesideStyledButtonStartsNavigation(t *testing.T) {
+	document := dom.NewDocument()
+	main := document.CreateElement("main", nil)
+	button := document.CreateElement("button", nil)
+	anchor := document.CreateElement("a", map[string]string{"href": "/next/about"})
+	if err := document.AppendChild(document.Root, main); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(main, button); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(button, document.CreateText("Increment")); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(main, document.CreateText("0")); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(main, anchor); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(anchor, document.CreateText("About")); err != nil {
+		t.Fatal(err)
+	}
+	stylesheet, err := css.Parse(strings.NewReader(`button { color:#fff; background:#2563eb; }`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pageURL, err := url.Parse("https://example.com/next/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := &browser.Page{URL: pageURL, Document: document, ComputedStyles: style.Compute(document, stylesheet)}
+	navigator := &recordingNavigator{stubNavigator: stubNavigator{page: page}, navigated: make(chan string, 1)}
+	ui := NewBrowserUI(navigator, nil)
+	router := new(input.Router)
+	gtx := layout.Context{Ops: new(op.Ops), Source: router.Source(), Constraints: layout.Exact(image.Pt(800, 600)), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}}
+
+	ui.Layout(gtx)
+	router.Frame(gtx.Ops)
+	var linkBox layoutengine.Box
+	var linkOffset float32
+	found := false
+	for _, box := range ui.layoutCache.tree.Boxes {
+		if box.NodeID == anchor.ID || box.Tag == "a" {
+			linkBox, linkOffset, found = box, box.Width/2, true
+			break
+		}
+		var offset float32
+		for _, run := range box.Runs {
+			if run.NodeID == anchor.ID || run.Tag == "a" {
+				linkBox, linkOffset, found = box, offset+run.Width/2, true
+				break
+			}
+			offset += run.Width
+		}
+		if found {
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("inline link box was not built: %#v", ui.layoutCache.tree.Boxes)
+	}
+	position := f32.Pt(float32(tabRailWidth)+linkBox.X+linkOffset, float32(toolbarHeight)+linkBox.Y+linkBox.Height/2)
+	router.Queue(pointer.Event{Kind: pointer.Press, Source: pointer.Mouse, Buttons: pointer.ButtonPrimary, Position: position})
+	gtx.Reset()
+	ui.Layout(gtx)
+	router.Frame(gtx.Ops)
+	router.Queue(pointer.Event{Kind: pointer.Release, Source: pointer.Mouse, Position: position})
+	gtx.Reset()
+	ui.Layout(gtx)
+
+	select {
+	case got := <-navigator.navigated:
+		if got != "https://example.com/next/about" {
+			t.Fatalf("inline link navigation = %q", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("inline link beside styled button did not start navigation")
+	}
+}
+
+func TestPointerClickingStyledButtonDispatchesEvent(t *testing.T) {
+	document := dom.NewDocument()
+	button := document.CreateElement("button", nil)
+	if err := document.AppendChild(document.Root, button); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(button, document.CreateText("Increment")); err != nil {
+		t.Fatal(err)
+	}
+	stylesheet, err := css.Parse(strings.NewReader(`button { color:#fff; background:#2563eb; }`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := &browser.Page{Document: document, ComputedStyles: style.Compute(document, stylesheet), Events: events.NewDispatcher()}
+	clicked := 0
+	page.Events.AddEventListener(button.ID, events.Click, func(events.Event) { clicked++ })
+	ui := NewBrowserUI(&stubNavigator{page: page}, nil)
+	router := new(input.Router)
+	gtx := layout.Context{Ops: new(op.Ops), Source: router.Source(), Constraints: layout.Exact(image.Pt(800, 600)), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}}
+	position := f32.Pt(float32(tabRailWidth)+40, float32(toolbarHeight)+40)
+
+	ui.Layout(gtx)
+	router.Frame(gtx.Ops)
+	router.Queue(pointer.Event{Kind: pointer.Press, Source: pointer.Mouse, Buttons: pointer.ButtonPrimary, Position: position})
+	gtx.Reset()
+	ui.Layout(gtx)
+	router.Frame(gtx.Ops)
+	router.Queue(pointer.Event{Kind: pointer.Release, Source: pointer.Mouse, Position: position})
+	gtx.Reset()
+	ui.Layout(gtx)
+	if clicked != 1 || page.FocusTarget != button.ID {
+		t.Fatalf("styled button pointer result = clicks:%d focus:%d", clicked, page.FocusTarget)
+	}
+}
+
 func TestTextInputReceivesFocusFromPointerPress(t *testing.T) {
 	document := dom.NewDocument()
 	inputNode := document.CreateElement("input", map[string]string{"type": "text"})
@@ -1502,6 +1704,72 @@ func TestTextInputReceivesFocusFromPointerPress(t *testing.T) {
 	}
 	if got, want := page.FocusTarget, inputNode.ID; got != want {
 		t.Fatalf("page focus target = %d, want %d", got, want)
+	}
+}
+
+func TestTextInputNestedInLabelReceivesFocusFromPointerPress(t *testing.T) {
+	document := dom.NewDocument()
+	form := document.CreateElement("form", nil)
+	label := document.CreateElement("label", nil)
+	inputNode := document.CreateElement("input", map[string]string{"type": "text", "value": "SSR"})
+	for _, edge := range [][2]*dom.Node{
+		{document.Root, form}, {form, label}, {label, document.CreateText("Name ")}, {label, inputNode},
+	} {
+		if err := document.AppendChild(edge[0], edge[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	page := &browser.Page{Document: document, ComputedStyles: style.ComputeWithEnvironment(document, nil, style.InteractionState{}, style.Environment{BrowserDefaults: true})}
+	ui := NewBrowserUI(&stubNavigator{page: page}, nil)
+	router := new(input.Router)
+	gtx := layout.Context{Ops: new(op.Ops), Source: router.Source(), Constraints: layout.Exact(image.Pt(800, 600)), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}}
+
+	ui.layoutDocument(gtx, page)
+	router.Frame(gtx.Ops)
+	editor := ui.inputEditors[inputNode.ID]
+	if editor == nil || editor.Text() != "SSR" {
+		t.Fatalf("nested input editor = %#v", editor)
+	}
+	router.Queue(pointer.Event{Buttons: pointer.ButtonPrimary, Kind: pointer.Press, Source: pointer.Mouse, Position: f32.Pt(40, 60)})
+	gtx.Reset()
+	ui.layoutDocument(gtx, page)
+	if !gtx.Focused(editor) || page.FocusTarget != inputNode.ID {
+		t.Fatalf("nested input focus = gio:%v page:%d, want true/%d", gtx.Focused(editor), page.FocusTarget, inputNode.ID)
+	}
+}
+
+func TestTextOnlyDOMMutationRebuildsCachedDisplayList(t *testing.T) {
+	document := dom.NewDocument()
+	paragraph := document.CreateElement("p", nil)
+	if err := document.AppendChild(document.Root, paragraph); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(paragraph, document.CreateText("not hydrated")); err != nil {
+		t.Fatal(err)
+	}
+	page := &browser.Page{Document: document, ComputedStyles: style.Compute(document, nil), StyleRevision: 1}
+	ui := NewBrowserUI(&stubNavigator{page: page}, nil)
+	if _, _, reused := ui.cachedDocumentFrame(page, 800, 600, 1); reused {
+		t.Fatal("initial frame unexpectedly reused")
+	}
+
+	if !document.SetTextContent(paragraph.ID, "hydrated") {
+		t.Fatal("text mutation failed")
+	}
+	page.StyleRevision++
+	page.RecordDOMMutation(paragraph.ID)
+	_, displayList, reused := ui.cachedDocumentFrame(page, 800, 600, 1)
+	if reused {
+		t.Fatal("text-only DOM mutation reused a stale display list")
+	}
+	found := false
+	for _, command := range displayList.Commands {
+		if textCommand, ok := command.(paintmodel.DrawText); ok && textCommand.Text == "hydrated" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("hydrated text was missing from display list: %#v", displayList.Commands)
 	}
 }
 

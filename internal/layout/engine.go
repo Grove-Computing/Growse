@@ -326,6 +326,10 @@ func (e *engine) walk(node *dom.Node, x, width, containingHeight float32, height
 			e.addBlock(node, style, x, width, containingHeight, heightDefinite, nil)
 			return
 		}
+		if hasNestedFormControl(node) {
+			e.addInlineContentWithControls(node, x, width, containingHeight, heightDefinite)
+			return
+		}
 		runs := e.collectInlineRuns(node, node)
 		if len(runs) != 0 {
 			e.addInlineRuns(node.ID, node.TagName, runs, style, x, width)
@@ -549,7 +553,7 @@ func (e *engine) addSubmitButton(node *dom.Node, style blockStyle, x, width, con
 		Order: e.nextOrder(), StackingID: e.stackingID, NodeID: node.ID, Tag: node.TagName,
 		Text: label, Button: true, Disabled: forms.Disabled(node),
 		Appearance: style.appearance, AccentColor: resolvedAccentColor(style), Cursor: style.cursor,
-		X: x, Y: e.y, Width: max(usedWidth, float32(1)), Height: max(usedHeight, float32(1)), Color: style.color,
+		X: x, Y: e.y, Width: max(usedWidth, float32(1)), Height: max(usedHeight, float32(1)), Color: style.color, Background: style.background,
 		Clip: cloneRect(e.clip), Clips: cloneClipRegions(e.clips), Opacity: e.opacity * style.opacity,
 		Transform: stylemodel.IdentityMatrix(), Hidden: style.hidden,
 	})
@@ -827,6 +831,13 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 					previousBottomMargin = childStyle.margin.Bottom
 					continue
 				}
+				if hasNestedFormControl(child) {
+					flushInline()
+					e.addInlineContentWithControls(child, contentX, contentWidth, childContainingHeight, declaredHeightDefinite)
+					previousBlock = true
+					previousBottomMargin = childStyle.margin.Bottom
+					continue
+				}
 			}
 			inlineRuns = append(inlineRuns, e.collectInlineRuns(child, node)...)
 		}
@@ -1012,6 +1023,73 @@ func constrainSize(value float32, minimum, maximum stylemodel.SizeValue, basis f
 
 func (e *engine) collectInlineRuns(node, owner *dom.Node) []inlineRun {
 	return e.collectInlineRunsWithOpacity(node, owner, e.opacity)
+}
+
+func hasNestedFormControl(node *dom.Node) bool {
+	if node == nil {
+		return false
+	}
+	for _, child := range node.Children {
+		if child == nil || child.Type != dom.NodeElement {
+			continue
+		}
+		if isEditableTextControl(child) || isSelectControl(child) || isCheckableControl(child) || isSubmitButtonControl(child) || hasNestedFormControl(child) {
+			return true
+		}
+	}
+	return false
+}
+
+// addInlineContentWithControls preserves nested form controls as interactive
+// boxes. The compact renderer currently promotes those controls onto their own
+// line instead of dropping them from an inline wrapper such as <label>.
+func (e *engine) addInlineContentWithControls(node *dom.Node, x, width, containingHeight float32, heightDefinite bool) {
+	if node == nil {
+		return
+	}
+	container := e.styleFor(node)
+	runs := e.generatedRuns(node, true, container)
+	flush := func() {
+		if len(runs) == 0 {
+			return
+		}
+		e.addInlineRuns(node.ID, node.TagName, runs, container, x, width)
+		runs = nil
+	}
+	for _, child := range node.Children {
+		if child == nil {
+			continue
+		}
+		if child.Type != dom.NodeElement {
+			runs = append(runs, e.collectInlineRuns(child, node)...)
+			continue
+		}
+		style := e.styleFor(child)
+		if style.display == stylemodel.DisplayNone {
+			continue
+		}
+		switch {
+		case isEditableTextControl(child):
+			flush()
+			e.addInput(child, style, x, width, containingHeight, heightDefinite)
+		case isSelectControl(child):
+			flush()
+			e.addSelect(child, style, x, width, containingHeight, heightDefinite)
+		case isCheckableControl(child):
+			flush()
+			e.addCheckable(child, style, x, width, containingHeight, heightDefinite)
+		case isSubmitButtonControl(child):
+			flush()
+			e.addSubmitButton(child, style, x, width, containingHeight, heightDefinite)
+		case hasNestedFormControl(child):
+			flush()
+			e.addInlineContentWithControls(child, x, width, containingHeight, heightDefinite)
+		default:
+			runs = append(runs, e.collectInlineRuns(child, node)...)
+		}
+	}
+	runs = append(runs, e.generatedRuns(node, false, container)...)
+	flush()
 }
 
 func (e *engine) collectInlineRunsWithOpacity(node, owner *dom.Node, opacity float32) []inlineRun {
@@ -1682,6 +1760,8 @@ func uaStyle(tag string) blockStyle {
 		style.margin.Bottom = 14
 	case "button":
 		style.bold = true
+	case "picture":
+		style.display = stylemodel.DisplayContents
 	case "iframe":
 		style.display = stylemodel.DisplayInlineBlock
 		style.width = stylemodel.SizeValue{Kind: stylemodel.SizeLength, Value: stylemodel.LengthPercentage{Pixels: 300}}
@@ -1694,7 +1774,7 @@ func uaStyle(tag string) blockStyle {
 		style.margin.Bottom = 14
 	case "a":
 		style.color = linkColor
-	case "head", "script", "style", "noscript", "template":
+	case "head", "script", "style", "noscript", "template", "source":
 		style.display = stylemodel.DisplayNone
 	}
 	return style

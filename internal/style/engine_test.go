@@ -489,12 +489,14 @@ func TestBrowserUAStylesheetProvidesDefaultsBelowAuthorOrigin(t *testing.T) {
 	heading := document.CreateElement("h1", nil)
 	input := document.CreateElement("input", nil)
 	hidden := document.CreateElement("section", map[string]string{"hidden": ""})
+	picture := document.CreateElement("picture", nil)
+	source := document.CreateElement("source", map[string]string{"type": "image/avif"})
 	table := document.CreateElement("table", nil)
 	row := document.CreateElement("tr", nil)
 	cell := document.CreateElement("td", nil)
 	for _, edge := range [][2]*dom.Node{
 		{document.Root, html}, {html, body}, {body, heading}, {body, input}, {body, hidden},
-		{body, table}, {table, row}, {row, cell},
+		{body, picture}, {picture, source}, {body, table}, {table, row}, {row, cell},
 	} {
 		appendNode(t, document, edge[0], edge[1])
 	}
@@ -515,6 +517,11 @@ func TestBrowserUAStylesheetProvidesDefaultsBelowAuthorOrigin(t *testing.T) {
 	}
 	if hiddenStyle.Display != DisplayNone {
 		t.Fatalf("browser hidden display = %v, want none", hiddenStyle.Display)
+	}
+	pictureStyle, _ := browserStyles.For(picture)
+	sourceStyle, _ := browserStyles.For(source)
+	if pictureStyle.Display != DisplayContents || sourceStyle.Display != DisplayNone {
+		t.Fatalf("browser picture/source displays = %v/%v, want contents/none", pictureStyle.Display, sourceStyle.Display)
 	}
 	tableStyle, _ := browserStyles.For(table)
 	rowStyle, _ := browserStyles.For(row)

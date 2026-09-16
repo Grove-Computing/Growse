@@ -10,4 +10,5 @@
   #__next { padding: 24px; }
   #next-counter { color: #ffffff; background: #2563eb; }
   #next-image { object-fit: cover; border-radius: 8px; }
+  #next-background { width: 96px; height: 48px; background-image: url("/assets/pixel.png"); background-size: cover; background-repeat: no-repeat; border-radius: 8px; }
 }

@@ -67,7 +67,8 @@ type cachedImageSurface struct {
 // consumers in the same generation.
 type imageResourceCache struct {
 	mu         sync.Mutex
-	fetchMu    sync.Mutex
+	ctx        context.Context
+	cancel     context.CancelFunc
 	entries    map[string]*cachedImageResource
 	surfaces   map[imageSurfaceCacheKey]*cachedImageSurface
 	bytes      int64
@@ -79,16 +80,21 @@ type imageResourceCache struct {
 	evictions  uint64
 	decodes    uint64
 	resizes    uint64
+	coalesced  uint64
+	canceled   uint64
+	rejected   uint64
 }
 
-type imageResourceCacheStats struct{ hits, misses, evictions, decodes, resizes uint64 }
+type imageResourceCacheStats struct{ hits, misses, evictions, decodes, resizes, coalesced, canceled, rejected uint64 }
 
 func newImageResourceCache() *imageResourceCache {
 	return newImageResourceCacheWithLimits(maxPageImageCacheBytes, maxPageImageResources)
 }
 
 func newImageResourceCacheWithLimits(maxBytes int64, maxEntries int) *imageResourceCache {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &imageResourceCache{
+		ctx: ctx, cancel: cancel,
 		entries: make(map[string]*cachedImageResource), surfaces: make(map[imageSurfaceCacheKey]*cachedImageSurface),
 		maxBytes: maxBytes, maxEntries: maxEntries,
 	}
@@ -99,38 +105,69 @@ func (cache *imageResourceCache) load(ctx context.Context, client ResourceLoader
 		return cachedImageResource{failure: imageLoadRequestFailure}
 	}
 	key := target.String()
-	cache.mu.Lock()
-	if existing := cache.entries[key]; existing != nil {
-		cache.hits++
-		cache.tick++
-		existing.lastUsed = cache.tick
-		ready := existing.ready
-		cache.mu.Unlock()
-		select {
-		case <-ready:
-			return cloneCachedImageResource(existing)
-		case <-ctx.Done():
-			return cachedImageResource{failure: imageLoadRequestFailure, err: ctx.Err()}
+	var entry *cachedImageResource
+	for {
+		cache.mu.Lock()
+		if existing := cache.entries[key]; existing != nil {
+			cache.hits++
+			if !existing.complete {
+				cache.coalesced++
+			}
+			cache.tick++
+			existing.lastUsed = cache.tick
+			ready := existing.ready
+			cache.mu.Unlock()
+			select {
+			case <-ready:
+				cache.mu.Lock()
+				reusable := cache.entries[key] == existing
+				cache.mu.Unlock()
+				if reusable {
+					return cloneCachedImageResource(existing)
+				}
+				if ctx.Err() != nil {
+					return cachedImageResource{failure: imageLoadRequestFailure, err: ctx.Err()}
+				}
+				continue
+			case <-ctx.Done():
+				cache.mu.Lock()
+				cache.canceled++
+				cache.mu.Unlock()
+				return cachedImageResource{failure: imageLoadRequestFailure, err: ctx.Err()}
+			}
 		}
-	}
-	cache.misses++
-	cache.evictLocked(0, 1)
-	if cache.maxEntries <= 0 || len(cache.entries)+len(cache.surfaces) >= cache.maxEntries {
+		cache.misses++
+		cache.evictLocked(0, 1)
+		if cache.maxEntries <= 0 || len(cache.entries)+len(cache.surfaces) >= cache.maxEntries {
+			cache.rejected++
+			cache.mu.Unlock()
+			return cachedImageResource{failure: imageLoadResourceLimit}
+		}
+		if !budget.claim(key) {
+			cache.rejected++
+			cache.mu.Unlock()
+			return cachedImageResource{failure: imageLoadResourceLimit}
+		}
+		cache.tick++
+		entry = &cachedImageResource{ready: make(chan struct{}), lastUsed: cache.tick}
+		cache.entries[key] = entry
 		cache.mu.Unlock()
-		return cachedImageResource{failure: imageLoadResourceLimit}
+		break
 	}
-	if !budget.claim(key) {
+	go cache.fetch(client, target, budget, key, entry)
+	select {
+	case <-entry.ready:
+		return cloneCachedImageResource(entry)
+	case <-ctx.Done():
+		cache.mu.Lock()
+		cache.canceled++
 		cache.mu.Unlock()
-		return cachedImageResource{failure: imageLoadResourceLimit}
+		return cachedImageResource{failure: imageLoadRequestFailure, err: ctx.Err()}
 	}
-	cache.tick++
-	entry := &cachedImageResource{ready: make(chan struct{}), lastUsed: cache.tick}
-	cache.entries[key] = entry
-	cache.mu.Unlock()
+}
 
-	cache.fetchMu.Lock()
-	response, err := client.Get(ctx, target)
-	cache.fetchMu.Unlock()
+func (cache *imageResourceCache) fetch(client ResourceLoader, target *url.URL, budget *imageDecodeBudget, key string, entry *cachedImageResource) {
+	response, err := client.Get(cache.ctx, target)
 	result := cachedImageResource{}
 	switch {
 	case err != nil || response == nil:
@@ -161,6 +198,12 @@ func (cache *imageResourceCache) load(ctx context.Context, client ResourceLoader
 	}
 
 	cache.mu.Lock()
+	if cache.entries[key] != entry {
+		entry.failure, entry.err, entry.complete = imageLoadRequestFailure, cache.ctx.Err(), true
+		close(entry.ready)
+		cache.mu.Unlock()
+		return
+	}
 	entry.body = result.body
 	entry.contentType = result.contentType
 	entry.decoded = result.decoded
@@ -176,14 +219,8 @@ func (cache *imageResourceCache) load(ctx context.Context, client ResourceLoader
 	entry.bytes = int64(len(result.body)) + int64(result.width)*int64(result.height)*4
 	cache.bytes += entry.bytes
 	close(entry.ready)
-	if ctx.Err() != nil {
-		cache.bytes -= entry.bytes
-		delete(cache.entries, key)
-	} else {
-		cache.evictLocked(cache.maxBytes, 0)
-	}
+	cache.evictLocked(cache.maxBytes, 0)
 	cache.mu.Unlock()
-	return result
 }
 
 func (cache *imageResourceCache) prepareSurface(ctx context.Context, source cachedImageResource, target *url.URL, node *dom.Node, deviceScale float32, budget *imageDecodeBudget) (image.Image, error) {
@@ -211,12 +248,16 @@ func (cache *imageResourceCache) prepareSurface(ctx context.Context, source cach
 		case <-ready:
 			return existing.image, existing.err
 		case <-ctx.Done():
+			cache.mu.Lock()
+			cache.canceled++
+			cache.mu.Unlock()
 			return nil, ctx.Err()
 		}
 	}
 	cache.misses++
 	cache.evictLocked(0, 1)
 	if cache.maxEntries <= 0 || len(cache.entries)+len(cache.surfaces) >= cache.maxEntries {
+		cache.rejected++
 		cache.mu.Unlock()
 		return nil, errors.New("image surface cache entry limit exceeded")
 	}
@@ -241,6 +282,7 @@ func (cache *imageResourceCache) prepareSurface(ctx context.Context, source cach
 	}
 	close(entry.ready)
 	if ctx.Err() != nil {
+		cache.canceled++
 		cache.bytes -= entry.bytes
 		delete(cache.surfaces, key)
 	} else {
@@ -296,6 +338,7 @@ func (cache *imageResourceCache) clear() {
 		return
 	}
 	cache.mu.Lock()
+	cancel := cache.cancel
 	cache.entries = make(map[string]*cachedImageResource)
 	cache.surfaces = make(map[imageSurfaceCacheKey]*cachedImageSurface)
 	cache.bytes = 0
@@ -305,7 +348,13 @@ func (cache *imageResourceCache) clear() {
 	cache.evictions = 0
 	cache.decodes = 0
 	cache.resizes = 0
+	cache.coalesced = 0
+	cache.canceled = 0
+	cache.rejected = 0
 	cache.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 }
 
 func (cache *imageResourceCache) statsSnapshot() imageResourceCacheStats {
@@ -314,7 +363,10 @@ func (cache *imageResourceCache) statsSnapshot() imageResourceCacheStats {
 	}
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
-	return imageResourceCacheStats{hits: cache.hits, misses: cache.misses, evictions: cache.evictions, decodes: cache.decodes, resizes: cache.resizes}
+	return imageResourceCacheStats{
+		hits: cache.hits, misses: cache.misses, evictions: cache.evictions, decodes: cache.decodes, resizes: cache.resizes,
+		coalesced: cache.coalesced, canceled: cache.canceled, rejected: cache.rejected,
+	}
 }
 
 func cloneCachedImageResource(entry *cachedImageResource) cachedImageResource {

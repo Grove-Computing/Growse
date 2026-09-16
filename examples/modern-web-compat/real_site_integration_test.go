@@ -42,6 +42,8 @@ func TestRealSiteFixtureLoadsGeneratedCSSImagesAnimationAndHydration(t *testing.
 	}
 	engine.UpdateViewport(1024, 720)
 	waitForFixtureText(t, engine, mutations, "real-site-hydration", "hydrated")
+	waitForFixtureImage(t, engine, mutations, "real-site-medium")
+	waitForFixtureImage(t, engine, mutations, "real-site-high-card")
 	page := engine.Page()
 	if page.Engine != runtimemodel.EngineJavaScript || page.Compatibility != browser.CompatibilityProfileModernWeb {
 		t.Fatalf("real-site compatibility profile = engine:%s profile:%s", page.Engine, page.Compatibility)

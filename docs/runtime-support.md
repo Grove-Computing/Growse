@@ -1,6 +1,6 @@
 # Runtime / Web API対応表
 
-この表はGrowse v0.17.0の実装を基準とする。GrowseはGoを既定Engineとし、Tab単位でJavaScriptへ切り替えられる。切り替えはtop-level、Frame、WASM、dynamic resource、observer、pending hydration / animation callbackを停止する完全なPage reloadであり、両Engineのobject、Page shaper、image cacheを共有しない。
+この表はGrowse v0.18.0の実装を基準とする。desktop appの新規TabはJavaScriptを既定Engineとし、Tab単位でGoへ切り替えられる。埋め込み用Browser APIは既存互換のためzero valueをGoとして扱う。切り替えはtop-level、Frame、WASM、dynamic resource、observer、pending hydration / animation callback、image / script resource queueを停止する完全なPage reloadであり、両Engineのobject、Page shaper、image cacheを共有しない。
 
 ## EngineとScript
 
@@ -8,19 +8,19 @@
 | --- | --- | --- |
 | Runtime | Yaegi worker | goja worker |
 | Script type | `text/go` | type省略、空type、`text/javascript`、`application/javascript`、`module` |
-| 既定選択 | 対応 | Tabの`JS` selectorで明示的に選択 |
+| 既定選択 | Browser APIのzero value、desktopの`Go` selector | desktop appの新規Tab |
 | inline / external | 対応 | 対応 |
 | external Origin | trusted loopbackかつsame-originだけ | HTTP(S)のsame-origin / cross-origin classic、CORS必須Module |
 | 実行順 | 文書順 | parser-blocking、`defer` / Module、`async`を区別 |
 | 実行境界 | Page / Frameごとの別process | Page / Frame / Service Workerごとの別process |
 
-選択していないEngineのScriptは取得しない。Go sourceは明示的な`text/go`に限定し、redirect後もtrusted loopbackかつsame-originでなければ実行しない。JavaScriptのinitial / dynamic script、modulepreload、hydrationはTabの`JS` selectorを利用者が明示選択した場合だけ有効にし、通常のHTTP(S) Pageでもredirect、status、MIME、mixed content、credentials、CORS、integrity、sizeを実行前に再検査する。
+選択していないEngineのScriptは取得しない。Go sourceは明示的な`text/go`に限定し、redirect後もtrusted loopbackかつsame-originでなければ実行しない。JavaScriptのinitial / dynamic script、modulepreload、hydrationはdesktopの既定JavaScript Tab、または`JS`へ明示切替したTabだけで有効にし、通常のHTTP(S) Pageでもredirect、status、MIME、mixed content、credentials、CORS、integrity、sizeを実行前に再検査する。
 
 classic / module sourceは1件2 MiB、Pageのinitial / dynamic script合計256件、JavaScript source合計32 MiBを上限とする。Module graphは512 module、深さ64、import mapは1件・1,024 mapping・256 KiBを上限とする。dynamic stylesheetは128件、preloadは256件までとし、同一Nodeの再prepare、失敗再試行、dynamic insertion chainを有限にする。
 
 ## Web API
 
-| API | Go | JavaScript | v0.17.0の範囲 |
+| API | Go | JavaScript | v0.18.0の範囲 |
 | --- | --- | --- | --- |
 | Console | `growse/console` | `console.log`、`info`、`warn`、`error` | Engine / context付きrecord、1件4 KiB、Page 1,000件 |
 | DOM検索・生成 | `growse/dom` | `getElementById`、`querySelector(All)`、`getElementsBy*`、`createElement`、`createTextNode` | 対応selectorとBrowser所有Node wrapperに限定 |
@@ -73,7 +73,7 @@ Request 1 MiB、Response 4 MiB、Header 100件 / 64 KiB、redirect 10回、Page 
 - Service Worker Background Sync、Push、Notification、navigation preload、module worker
 - DevTools REPL、source debugger、breakpoint、heap profiler
 
-goja、WASM、HTML、CSS、Web API、Next.js、SvelteKit、Tailwindの仕様全体や任意公開サイトの完全互換は保証しない。対応範囲は本書、v0.17.0定義、固定Chromium reference、Tailwind CSS v4実artifactを含むoffline fixture、Showcase、選定WPT / Integration / Differential Testで観測できるsubsetである。
+goja、WASM、HTML、CSS、Web API、Next.js、SvelteKit、Tailwindの仕様全体や任意公開サイトの完全互換は保証しない。対応範囲は本書、v0.18.0定義、固定Chromium reference、Tailwind CSS v4実artifactと遅延image / scriptを含むoffline fixture、Showcase、選定WPT / Integration / Differential Testで観測できるsubsetである。
 
 ## Security Boundary
 

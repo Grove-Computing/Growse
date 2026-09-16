@@ -148,6 +148,23 @@ func TestCollectJavaScriptRecognizesDefaultAndExplicitTypes(t *testing.T) {
 	}
 }
 
+func TestCollectJavaScriptPreservesScriptFetchPriority(t *testing.T) {
+	document, err := html.Parse(strings.NewReader(`
+		<script defer src="/first.js" fetchpriority="high"></script>
+		<script async src="/second.js" fetchpriority="LOW"></script>
+		<script type="module" src="/third.js" fetchpriority="unknown"></script>`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sources := collectScriptsForEngine(document.Root, runtimemodel.EngineJavaScript)
+	if got, want := len(sources), 3; got != want {
+		t.Fatalf("source count = %d, want %d", got, want)
+	}
+	if sources[0].fetchPriority != "high" || sources[1].fetchPriority != "LOW" || sources[2].fetchPriority != "unknown" {
+		t.Fatalf("fetch priorities = %#v", sources)
+	}
+}
+
 func TestJavaScriptModuleUsesCORSAndDeferredScheduling(t *testing.T) {
 	pageURL := mustParseURL(t, "https://site.example/page")
 	moduleURL := mustParseURL(t, "https://cdn.example/app.js")
@@ -328,6 +345,119 @@ func (loader *delayedScriptLoader) Get(ctx context.Context, target *url.URL) (*n
 		}
 	}
 	return loader.responses[target.String()], nil
+}
+
+type blockingScriptLoader struct {
+	started chan string
+	release chan struct{}
+}
+
+func (loader *blockingScriptLoader) Get(ctx context.Context, target *url.URL) (*network.Response, error) {
+	select {
+	case loader.started <- target.String():
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	select {
+	case <-loader.release:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	return &network.Response{URL: target, StatusCode: 200, ContentType: "text/javascript", Body: []byte(`loaded()`)}, nil
+}
+
+func TestDeferredScriptsFetchConcurrentlyWithinResourceQueue(t *testing.T) {
+	pageURL := mustParseURL(t, "https://site.example/page")
+	document, _ := html.Parse(strings.NewReader(`
+		<script defer src="/first.js"></script>
+		<script type="module" src="/second.js"></script>`))
+	loader := &blockingScriptLoader{started: make(chan string, 2), release: make(chan struct{})}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	type result struct {
+		scripts []Script
+		errors  []string
+	}
+	done := make(chan result, 1)
+	go func() {
+		scripts, loadErrors := loadScriptsForEngine(ctx, loader, pageURL, document, runtimemodel.EngineJavaScript)
+		done <- result{scripts: scripts, errors: loadErrors}
+	}()
+	released := false
+	defer func() {
+		if !released {
+			close(loader.release)
+		}
+	}()
+	started := make(map[string]bool)
+	for range 2 {
+		select {
+		case rawURL := <-loader.started:
+			started[rawURL] = true
+		case <-time.After(time.Second):
+			t.Fatal("deferred script requests were serialized")
+		}
+	}
+	close(loader.release)
+	released = true
+	select {
+	case loaded := <-done:
+		if len(loaded.errors) != 0 || len(loaded.scripts) != 2 {
+			t.Fatalf("scripts/errors = %#v / %#v", loaded.scripts, loaded.errors)
+		}
+		if loaded.scripts[0].DocumentOrder != 0 || loaded.scripts[1].DocumentOrder != 1 ||
+			loaded.scripts[0].Schedule != runtimemodel.ScriptDefer || loaded.scripts[1].Schedule != runtimemodel.ScriptDefer {
+			t.Fatalf("script ordering = %#v", loaded.scripts)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("deferred script loading did not finish")
+	}
+	if len(started) != 2 {
+		t.Fatalf("started script requests = %v", started)
+	}
+}
+
+func TestCanceledDeferredScriptFetchDoesNotReturnStaleScripts(t *testing.T) {
+	pageURL := mustParseURL(t, "https://site.example/page")
+	document, err := html.Parse(strings.NewReader(`
+		<script defer src="/first.js"></script>
+		<script type="module" src="/second.js"></script>`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	loader := &blockingScriptLoader{started: make(chan string, 2), release: make(chan struct{})}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	type result struct {
+		scripts []Script
+		errors  []string
+	}
+	done := make(chan result, 1)
+	go func() {
+		scripts, loadErrors := loadScriptsForEngine(ctx, loader, pageURL, document, runtimemodel.EngineJavaScript)
+		done <- result{scripts: scripts, errors: loadErrors}
+	}()
+	for range 2 {
+		select {
+		case <-loader.started:
+		case <-time.After(time.Second):
+			t.Fatal("deferred script fetch did not start")
+		}
+	}
+	cancel()
+	select {
+	case loaded := <-done:
+		if len(loaded.scripts) != 0 || len(loaded.errors) != 2 {
+			t.Fatalf("canceled scripts/errors = %#v / %#v", loaded.scripts, loaded.errors)
+		}
+		for _, loadError := range loaded.errors {
+			if !strings.Contains(loadError, "context canceled") {
+				t.Fatalf("canceled script error = %q", loadError)
+			}
+		}
+	case <-time.After(time.Second):
+		t.Fatal("canceled deferred script fetch did not return")
+	}
 }
 
 func TestAsyncClassicScriptsRecordFetchCompletionOrder(t *testing.T) {

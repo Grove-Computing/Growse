@@ -63,13 +63,20 @@ func TestModernWebCompatibilityShowcaseRunsEntirelyLocally(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitForFixtureText(t, engine, mutations, "next-hydration-marker", "hydrated")
+	waitForFixtureImage(t, engine, mutations, "next-image")
+	waitForFixtureImage(t, engine, mutations, "next-svg")
 	jsPage := engine.Page()
 	if len(jsPage.Fonts) != 1 || !jsPage.Fonts[0].Decoded {
 		t.Fatalf("showcase Web Font = %+v errors=%v", jsPage.Fonts, jsPage.FontErrors)
 	}
 	imageNode := fixtureNode(t, jsPage, "next-image")
-	if resource := jsPage.ImageResources[imageNode.ID]; !resource.Loaded || resource.Error != "" {
+	if resource := jsPage.ImageResources[imageNode.ID]; !resource.Loaded || resource.Error != "" || !strings.HasSuffix(resource.URL, "/assets/pixel.png") {
 		t.Fatalf("showcase picture/image = %+v errors=%v", resource, jsPage.ImageErrors)
+	}
+	backgroundNode := fixtureNode(t, jsPage, "next-background")
+	backgroundStyle, _ := jsPage.ComputedStyles.For(backgroundNode)
+	if backgroundStyle.BackgroundImage.Kind != style.BackgroundImageURL || !strings.HasSuffix(backgroundStyle.BackgroundImage.URL, "/assets/pixel.png") || jsPage.BackgroundImages[backgroundStyle.BackgroundImage.URL] == nil {
+		t.Fatalf("showcase CSS background = style:%+v images:%v errors:%v", backgroundStyle.BackgroundImage, jsPage.BackgroundImages, jsPage.BackgroundErrors)
 	}
 	svgNode := fixtureNode(t, jsPage, "next-svg")
 	if resource := jsPage.ImageResources[svgNode.ID]; !resource.Loaded || resource.IntrinsicWidth != 80 || resource.IntrinsicHeight != 48 {
@@ -98,6 +105,7 @@ func TestModernWebCompatibilityShowcaseRunsEntirelyLocally(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitForFixtureText(t, engine, mutations, "chunk-state", "chunk failure isolated")
+	waitForFixtureImageSettled(t, engine, mutations, "broken-image")
 	diagnosticPage := engine.Page()
 	if !engine.DispatchClick(fixtureNode(t, diagnosticPage, "hydration-error").ID, 0, 0) {
 		t.Fatal("hydration failure control was not handled")

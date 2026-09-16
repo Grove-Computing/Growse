@@ -12,6 +12,7 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -233,8 +234,12 @@ func (b *Browser) SetOnMutation(callback func()) {
 // navigation.
 func (b *Browser) Page() *Page {
 	b.mu.RLock()
-	defer b.mu.RUnlock()
-	return b.page
+	page := b.page
+	b.mu.RUnlock()
+	if page != nil && page.commitPendingImageLoad() {
+		dispatchImageResourceEvents(b, page)
+	}
+	return page
 }
 
 // Engine はこのTabが次のPage loadで使用するEngineを返す。
@@ -473,6 +478,7 @@ func (b *Browser) SetInputValue(nodeID dom.NodeID, value string) bool {
 	changed := forms.SetCurrentValue(node, value)
 	if changed {
 		recomputePageStyles(page, b.currentTime())
+		page.RecordDOMMutation(nodeID)
 	}
 	dispatcher := page.Events
 	b.mu.Unlock()
@@ -496,6 +502,7 @@ func (b *Browser) SetSelectValue(nodeID dom.NodeID, value string) bool {
 		return false
 	}
 	recomputePageStyles(page, b.currentTime())
+	page.RecordDOMMutation(nodeID)
 	dispatcher := page.Events
 	b.mu.Unlock()
 	if onMutation != nil {
@@ -523,6 +530,7 @@ func (b *Browser) ActivateCheckable(nodeID dom.NodeID) bool {
 		return false
 	}
 	recomputePageStyles(page, b.currentTime())
+	page.RecordDOMMutation(page.Document.Root.ID)
 	dispatcher := page.Events
 	b.mu.Unlock()
 	if onMutation != nil {
@@ -614,6 +622,7 @@ func (b *Browser) ResetForm(nodeID dom.NodeID) bool {
 	changed := b.page == page && forms.Reset(form)
 	if changed {
 		recomputePageStyles(page, b.currentTime())
+		page.RecordDOMMutation(form.ID)
 	}
 	b.mu.Unlock()
 	if changed && onMutation != nil {
@@ -762,22 +771,74 @@ func (b *Browser) UpdateViewport(width, height float32) bool {
 		loadContext, generation := page.beginImageLoad(context.Background())
 		policy := imageViewportPolicy(page.Document, page.ComputedStyles, baseURL, width, height)
 		budget := newImageDecodeBudgetWithImages(page.BackgroundImages)
-		resources, images, failures := loadReplacedImagesWithCache(loadContext, imageLoader, baseURL, page.Document, width, 1, policy, budget, page.imageCache)
-		inlineResources, inlineImages, inlineFailures := loadInlineSVGImagesWithBudget(page.Document, budget)
+		document := snapshotImageDocument(page.Document)
+		imageCache := page.imageCache
+		backgroundResources := backgroundImageResources(page.ComputedStyles)
+		backgroundPreloads := imagePreloadPriorities(document, baseURL)
+		if !documentHasViewportImageWork(document) && len(backgroundResources) == 0 {
+			committed := page.commitImageLoad(generation, make(map[dom.NodeID]layoutengine.ImageResource), make(map[string]image.Image), nil)
+			if committed && onMutation != nil {
+				onMutation()
+			}
+			return true
+		}
+		b.loadPageImagesAsync(loadContext, generation, page, imageLoader, baseURL, document, width, policy, budget, imageCache, backgroundResources, backgroundPreloads, true, onMutation)
+	}
+	return true
+}
+
+func (b *Browser) loadPageImagesAsync(loadContext context.Context, generation uint64, page *Page, imageLoader ResourceLoader, baseURL *url.URL, document *dom.Document, width float32, policy map[dom.NodeID]bool, budget *imageDecodeBudget, imageCache *imageResourceCache, backgroundResources []string, backgroundPreloads map[string]resourcePriority, loadBackgrounds bool, onMutation func()) {
+	go func() {
+		var resources map[dom.NodeID]layoutengine.ImageResource
+		var images, backgrounds map[string]image.Image
+		var failures, backgroundFailures []string
+		var group sync.WaitGroup
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			resources, images, failures = loadReplacedImagesWithCache(loadContext, imageLoader, baseURL, document, width, 1, policy, budget, imageCache)
+		}()
+		if loadBackgrounds {
+			group.Add(1)
+			go func() {
+				defer group.Done()
+				backgrounds, backgroundFailures = loadBackgroundImageResourcesWithCache(loadContext, imageLoader, backgroundResources, budget, imageCache, backgroundPreloads)
+			}()
+		}
+		group.Wait()
+		inlineResources, inlineImages, inlineFailures := loadInlineSVGImagesWithBudget(document, budget)
 		mergeImageResources(resources, images, inlineResources, inlineImages)
 		failures = append(failures, inlineFailures...)
 		b.mu.RLock()
 		active := b.page == page && page.Engine == runtimemodel.EngineJavaScript
 		b.mu.RUnlock()
-		committed := active && loadContext.Err() == nil && page.commitImageLoad(generation, resources, images, failures)
-		if committed {
-			dispatchImageResourceEvents(b, page)
-		}
-		if committed && onMutation != nil {
+		staged := active && loadContext.Err() == nil && page.stageImageLoad(generation, resources, images, failures, backgrounds, backgroundFailures, loadBackgrounds)
+		if staged && onMutation != nil {
 			onMutation()
 		}
+	}()
+}
+
+func documentHasViewportImageWork(document *dom.Document) bool {
+	if document == nil {
+		return false
 	}
-	return true
+	found := false
+	var visit func(*dom.Node)
+	visit = func(node *dom.Node) {
+		if node == nil || found {
+			return
+		}
+		if node.Type == dom.NodeElement && (node.TagName == "img" || node.TagName == "svg") {
+			found = true
+			return
+		}
+		for _, child := range node.Children {
+			visit(child)
+		}
+	}
+	visit(document.Root)
+	return found
 }
 
 // SetReducedMotion updates the browser preference exposed through the
@@ -1403,21 +1464,28 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	computedStyles, styleErrors := computeStableStylesWithDiagnostics(document, stylesheet, style.InteractionState{}, 1280, 720, reducedMotion, engine == runtimemodel.EngineJavaScript)
 	imageBudget := newImageDecodeBudget()
 	imageCache := newImageResourceCache()
-	backgroundImages, backgroundErrors := loadBackgroundImagesWithCache(ctx, imageResources, computedStyles, imageBudget, imageCache)
+	backgroundResources := backgroundImageResources(computedStyles)
+	backgroundPreloads := imagePreloadPriorities(document, baseURL)
+	backgroundImages := make(map[string]image.Image)
+	var backgroundErrors []string
+	if engine != runtimemodel.EngineJavaScript {
+		backgroundImages, backgroundErrors = loadBackgroundImageResourcesWithCache(ctx, imageResources, backgroundResources, imageBudget, imageCache, backgroundPreloads)
+	}
 	var replacedImages map[dom.NodeID]layoutengine.ImageResource
 	var decodedImages map[string]image.Image
 	var imageErrors []string
+	var imagePolicy map[dom.NodeID]bool
+	var imageDocument *dom.Document
 	var fonts []FontResource
 	var fontErrors []string
 	if engine == runtimemodel.EngineJavaScript {
-		imagePolicy := imageViewportPolicy(document, computedStyles, baseURL, 1280, 720)
-		replacedImages, decodedImages, imageErrors = loadReplacedImagesWithCache(ctx, imageResources, baseURL, document, 1280, 1, imagePolicy, imageBudget, imageCache)
-		inlineResources, inlineImages, inlineErrors := loadInlineSVGImagesWithBudget(document, imageBudget)
-		mergeImageResources(replacedImages, decodedImages, inlineResources, inlineImages)
-		imageErrors = append(imageErrors, inlineErrors...)
+		imagePolicy = imageViewportPolicy(document, computedStyles, baseURL, 1280, 720)
+		imageDocument = snapshotImageDocument(document)
+		replacedImages = make(map[dom.NodeID]layoutengine.ImageResource)
+		decodedImages = make(map[string]image.Image)
 		fonts, fontErrors = loadWebFonts(ctx, fontResources, response.URL, stylesheet)
 	}
-	scripts, scriptErrors := loadScriptsForEngineWithBase(ctx, scriptResources, response.URL, baseURL, document, engine)
+	var scriptErrors []string
 	var importMap map[string]string
 	if engine == runtimemodel.EngineJavaScript {
 		var importMapErrors []string
@@ -1453,7 +1521,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 		WebFonts:         layoutPageFonts(fonts, engine == runtimemodel.EngineJavaScript),
 		Engine:           engine,
 		Compatibility:    compatibilityProfileForEngine(engine),
-		Scripts:          scripts,
+		Scripts:          nil,
 		ImportMap:        importMap,
 		ScriptErrors:     scriptErrors,
 		DevTools:         pageStore,
@@ -1470,28 +1538,10 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	fetchLimiter := b.fetchLimiter
 	b.mu.RUnlock()
 	b.loadFrames(ctx, page, resourceClient, runtimeClient, engineFactory, engine, storageManager, fetchLimiter, onMutation, reducedMotion)
-	pageRuntime := startRuntime(ctx, engineFactory, engine, page, runtimeClient, storageManager, b.storageSourceID, fetchLimiter, onMutation, b.currentTime, func(target *url.URL) error {
-		resolved := cloneURL(target)
-		go func() {
-			<-navigationReady
-			b.navigateFromRuntime(page, resolved)
-		}()
-		return nil
-	}, func(state string, target *url.URL) error {
-		return b.pushHistoryState(page, target, state)
-	}, func(state string, target *url.URL) error {
-		return b.replaceHistoryState(page, target, state)
-	}, func(delta int) error {
-		return b.queueHistoryTraversal(page, navigationReady, delta)
-	}, b.historyInfo)
-	document.SetReadyState("complete")
 	if err := ctx.Err(); err != nil {
 		close(navigationReady)
 		page.Animations.Clear()
 		page.Transitions.Clear()
-		if pageRuntime != nil {
-			_ = pageRuntime.Stop()
-		}
 		_ = closePageFrames(page)
 		page.closeDevTools()
 		page.releaseImageResources()
@@ -1503,9 +1553,6 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 		close(navigationReady)
 		page.Animations.Clear()
 		page.Transitions.Clear()
-		if pageRuntime != nil {
-			_ = pageRuntime.Stop()
-		}
 		_ = closePageFrames(page)
 		page.closeDevTools()
 		page.releaseImageResources()
@@ -1517,7 +1564,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	b.nextPageID++
 	page.HistoryID = b.nextPageID
 	page.ScrollRevision = 1
-	b.activeRuntime = pageRuntime
+	b.activeRuntime = nil
 	b.page = page
 	if previousPage != nil && previousPage != page && previousPage.Animations != nil {
 		previousPage.Animations.Clear()
@@ -1559,13 +1606,17 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 		}
 		b.history.replaceEntry(&historyEntry{URL: page.URL, State: state, PageID: page.HistoryID})
 	}
+	// Snapshot child runtimes before releasing the Browser lock and waking a
+	// runtime-requested Navigation. The new Navigation may close this Page and
+	// clear page.Frames immediately after navigationReady is closed.
+	childRuntimes := frameRuntimes(page)
 	b.mu.Unlock()
 	committed = true
-	close(navigationReady)
-	if runtime, ok := pageRuntime.(backgroundRuntime); ok {
-		runtime.SetBackground(background)
+	if engine == runtimemodel.EngineJavaScript && (documentHasViewportImageWork(imageDocument) || len(backgroundResources) != 0) {
+		loadContext, generation := page.beginImageLoad(context.Background())
+		b.loadPageImagesAsync(loadContext, generation, page, imageResources, baseURL, imageDocument, 1280, imagePolicy, imageBudget, imageCache, backgroundResources, backgroundPreloads, true, onMutation)
 	}
-	for _, childRuntime := range frameRuntimes(page) {
+	for _, childRuntime := range childRuntimes {
 		if runtime, ok := childRuntime.(backgroundRuntime); ok {
 			runtime.SetBackground(background)
 		}
@@ -1576,6 +1627,70 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	if previousPage != nil && previousPage != page {
 		_ = closePageFrames(previousPage)
 		previousPage.releaseImageResources()
+	}
+	if engine == runtimemodel.EngineJavaScript && onMutation != nil {
+		onMutation()
+	}
+
+	// Publish the parsed and styled Page before waiting for external scripts.
+	// Navigate keeps its completion contract, while the browser UI can paint and
+	// accept input through Browser.Page during slow defer/module fetches.
+	scripts, fetchedScriptErrors := loadScriptsForEngineWithBase(ctx, scriptResources, response.URL, baseURL, document, engine)
+	page.Scripts = scripts
+	page.ScriptErrors = append(page.ScriptErrors, fetchedScriptErrors...)
+	for _, scriptError := range fetchedScriptErrors {
+		page.DevTools.AddConsole(devtools.ConsoleError, "script", scriptError)
+	}
+	if err := ctx.Err(); err != nil {
+		b.mu.RLock()
+		active := navigationID == b.navigationID && b.page == page
+		b.mu.RUnlock()
+		close(navigationReady)
+		if active {
+			document.SetReadyState("complete")
+			if onMutation != nil {
+				onMutation()
+			}
+			return page, nil
+		}
+		return nil, err
+	}
+	pageRuntime := startRuntime(ctx, engineFactory, engine, page, runtimeClient, storageManager, b.storageSourceID, fetchLimiter, onMutation, b.currentTime, func(target *url.URL) error {
+		resolved := cloneURL(target)
+		go func() {
+			<-navigationReady
+			b.navigateFromRuntime(page, resolved)
+		}()
+		return nil
+	}, func(state string, target *url.URL) error {
+		return b.pushHistoryState(page, target, state)
+	}, func(state string, target *url.URL) error {
+		return b.replaceHistoryState(page, target, state)
+	}, func(delta int) error {
+		return b.queueHistoryTraversal(page, navigationReady, delta)
+	}, b.historyInfo)
+	document.SetReadyState("complete")
+	b.mu.Lock()
+	if navigationID != b.navigationID || b.page != page {
+		b.mu.Unlock()
+		close(navigationReady)
+		if pageRuntime != nil {
+			_ = pageRuntime.Stop()
+		}
+		return nil, context.Canceled
+	}
+	b.activeRuntime = pageRuntime
+	background = !b.active
+	childRuntimes = frameRuntimes(page)
+	b.mu.Unlock()
+	close(navigationReady)
+	if runtime, ok := pageRuntime.(backgroundRuntime); ok {
+		runtime.SetBackground(background)
+	}
+	for _, childRuntime := range childRuntimes {
+		if runtime, ok := childRuntime.(backgroundRuntime); ok {
+			runtime.SetBackground(background)
+		}
 	}
 	if engine == runtimemodel.EngineJavaScript {
 		dispatchImageResourceEvents(b, page)
@@ -1834,6 +1949,7 @@ func startRuntime(ctx context.Context, factory runtimemodel.EngineFactory, engin
 			}
 			page.FocusTarget = validFocusTarget(page.Document, page.FocusTarget)
 			recomputePageStyles(page, runtimeNow())
+			page.RecordDOMMutation(page.Document.Root.ID)
 			if onMutation != nil {
 				onMutation()
 			}
@@ -1882,9 +1998,8 @@ func startRuntime(ctx context.Context, factory runtimemodel.EngineFactory, engin
 			if err == nil {
 				return
 			}
-			setRuntimeError(page, fmt.Sprintf("%s runtime worker failed: %v", engine, err))
+			recordRuntimeFailure(page, fmt.Sprintf("%s runtime worker failed: %v", engine, err))
 			page.cancelFrameLifecycle()
-			page.cancelImageLoads()
 			if onMutation != nil {
 				onMutation()
 			}
@@ -1943,12 +2058,23 @@ func startRuntime(ctx context.Context, factory runtimemodel.EngineFactory, engin
 		page.Sandbox = reporter.SandboxStatus()
 	}
 	if loadErr != nil {
-		setRuntimeError(page, fmt.Sprintf("load %s runtime: %v", engine, loadErr))
+		message := fmt.Sprintf("load %s runtime: %v", engine, loadErr)
+		if engine == runtimemodel.EngineJavaScript {
+			recordRuntimeFailure(page, message)
+		} else {
+			setRuntimeError(page, message)
+		}
 		_ = pageRuntime.Stop()
 		return nil
 	}
 	if err := pageRuntime.Start(ctx); err != nil {
-		setRuntimeError(page, fmt.Sprintf("start %s runtime: %v", engine, err))
+		message := fmt.Sprintf("start %s runtime: %v", engine, err)
+		if engine == runtimemodel.EngineJavaScript {
+			message = fmt.Sprintf("%s runtime worker failed: %v", engine, err)
+			recordRuntimeFailure(page, message)
+		} else {
+			setRuntimeError(page, message)
+		}
 		if page.windows != nil {
 			page.windows.unregister(page.window.Self)
 		}
@@ -1964,6 +2090,18 @@ func startRuntime(ctx context.Context, factory runtimemodel.EngineFactory, engin
 
 func setRuntimeError(page *Page, message string) {
 	page.RuntimeError = message
+	page.ensureDevTools().AddConsole(devtools.ConsoleError, "runtime", message)
+}
+
+func recordRuntimeFailure(page *Page, message string) {
+	if page == nil {
+		return
+	}
+	page.RuntimeStarted = false
+	if slices.Contains(page.ScriptErrors, message) || len(page.ScriptErrors) >= maxScriptsPerEngine {
+		return
+	}
+	page.ScriptErrors = append(page.ScriptErrors, message)
 	page.ensureDevTools().AddConsole(devtools.ConsoleError, "runtime", message)
 }
 

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "release": "v0.17.0",
+  "release": "v0.18.0",
   "chromium": "140.0.7339.80",
   "offline": true,
   "pages": [

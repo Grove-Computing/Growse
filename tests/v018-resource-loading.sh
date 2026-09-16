@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+go test ./internal/browser -run 'Test(NavigateReturnsWhileInitialImageIsPending|NavigationCancelsStaleResponsiveImageCompletion|PageCloseCancelsPendingResponsiveImage|DeferredScriptsFetchConcurrentlyWithinResourceQueue|CanceledDeferredScriptFetchDoesNotReturnStaleScripts|ImageResourceCacheKeepsSharedFetchWhenPriorGenerationIsCanceled|ImageResourceCacheIsReleasedOnEngineSwitch|ImageResourcePriorityCombinesPreloadFetchPriorityLazyAndViewport|ScriptResourcePriorityRespectsFetchPriorityWithoutChangingSchedule|ResourceQueueBoundsConcurrencyPendingWorkAndPreservesPriority)$' -count=1
+go test ./examples/modern-web-compat -run 'Test(NextJSDelayedResourcesKeepSSRInteractiveThroughIncrementalCommits|FrameworkFixturesKeepJavaScriptDisabledInGoEngine)$' -count=1
+
+echo "v0.18.0 Resource Loading検証成功: initial commit, incremental image, script hydration, priority, cancellation, Go Engine isolation"

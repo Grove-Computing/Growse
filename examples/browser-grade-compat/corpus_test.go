@@ -51,7 +51,7 @@ func TestBrowserGradeCorpusCoversFrameworkViewportDPRAndLifecycleMatrix(t *testi
 	if err := json.Unmarshal(encoded, &corpus); err != nil {
 		t.Fatal(err)
 	}
-	if corpus.SchemaVersion != 1 || corpus.Release != "v0.17.0" || corpus.Chromium == "" || !corpus.Offline || len(corpus.Pages) != 2 {
+	if corpus.SchemaVersion != 1 || corpus.Release != "v0.18.0" || corpus.Chromium == "" || !corpus.Offline || len(corpus.Pages) != 2 {
 		t.Fatalf("corpus header = %#v", corpus)
 	}
 	wantStates := []string{"ssr", "resource-complete", "hydrated", "interaction", "scroll", "animation"}

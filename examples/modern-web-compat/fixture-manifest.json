@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "release": "v0.17.0",
+  "release": "v0.18.0",
   "artifactPolicy": "checked-in deterministic build artifacts",
   "publicInternetRequired": false,
   "verificationCommand": "go test ./examples/modern-web-compat -run TestFixtureManifestIsCompleteAndUntampered",
@@ -19,10 +19,10 @@
       "licenses": ["MIT:Next.js", "MIT:React", "MIT:Tailwind CSS"],
       "sources": ["sources/normalize-framework-build.mjs", "sources/nextjs/next.config.mjs", "sources/nextjs/app/layout.jsx", "sources/nextjs/app/page.jsx", "sources/nextjs/app/globals.css"],
       "artifacts": [
-        {"path": "fixtures/nextjs/app.css", "sha256": "e561e437caa1677fe2436c9a1c838b20e00dccd29456e659f7294c0dbf97e4b1"},
+        {"path": "fixtures/nextjs/app.css", "sha256": "6d464e438497df4e6f59f5a25d60de307fa446e52fe17e7e344365e725bb199e"},
         {"path": "fixtures/nextjs/app.mjs", "sha256": "81e4ed5923ee7258f14a446c635b5114e066505ee05454d95d18546a909584eb"},
         {"path": "fixtures/nextjs/counter.chunk.mjs", "sha256": "76f7fc483f5ec353528e9842059d593e29711d51f45551cf0a96dd907c57a64d"},
-        {"path": "fixtures/nextjs/index.html", "sha256": "105452dad7a6d76c40a963e106ad897e72d94ff4e97bb277da7198fb59ff341d"},
+        {"path": "fixtures/nextjs/index.html", "sha256": "ebe1519e634cf04159c325559a2d758a3fb7b7da5fa3e2fca17117f5aabc6204"},
         {"path": "fixtures/nextjs/upstream-contract.mjs", "sha256": "c93c0fb576f3b9a5e2657645fab9ec83fea3d323338032ab4113493930500c1e"},
         {"path": "fixtures/nextjs/upstream.sha256", "sha256": "1e9da77b52fa4eb10e22c587601fcabbc317c911907ba23ecd36337c7371d974"}
       ]

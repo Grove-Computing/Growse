@@ -1190,6 +1190,11 @@ func parseGeneratedContent(value string) (string, bool) {
 
 func expandedProperties(property string) []string {
 	switch property {
+	case "background":
+		// The renderer currently supports the color component of the shorthand.
+		// Expanding it here keeps shorthand/longhand cascade order correct while
+		// unsupported image/position components remain localized.
+		return []string{"background-color"}
 	case "margin", "padding":
 		return []string{property + "-top", property + "-right", property + "-bottom", property + "-left"}
 	case "margin-block", "padding-block":

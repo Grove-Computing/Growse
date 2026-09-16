@@ -19,7 +19,8 @@ thead, tbody, tfoot { display: table-row-group; }
 tr { display: table-row; }
 td, th { display: table-cell; padding: 1px; }
 th { font-weight: bold; text-align: center; }
-head, link, meta, script, style, title, noscript, template, [hidden] { display: none; }
+head, link, meta, script, style, title, noscript, template, source, [hidden] { display: none; }
+picture { display: contents; }
 body { margin: 8px; color: #000; font-family: system-ui, sans-serif; font-size: 16px; }
 h1 { display: block; font-size: 2em; font-weight: bold; margin-block: .67em; }
 h2 { display: block; font-size: 1.5em; font-weight: bold; margin-block: .83em; }
