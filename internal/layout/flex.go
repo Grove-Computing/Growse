@@ -172,6 +172,7 @@ type flexLayoutItem struct {
 }
 
 func (e *engine) addFlexChildren(container *dom.Node, containerStyle blockStyle, x, width, containingHeight float32, heightDefinite bool) {
+	startY := e.y
 	axis := axisFor(containerStyle.flexDirection, containerStyle.flexWrap)
 	availableMain := width
 	if !axis.horizontal {
@@ -188,6 +189,7 @@ func (e *engine) addFlexChildren(container *dom.Node, containerStyle blockStyle,
 
 	items, byAlgorithm := e.collectFlexItems(container, axis, availableMain, width, containingHeight, heightDefinite)
 	if len(items) == 0 {
+		e.renderFlexPositionedChildren(container, containerStyle, axis, x, startY, width, containingHeight, heightDefinite)
 		return
 	}
 	algorithms := make([]*flexItem, 0, len(items))
@@ -349,6 +351,7 @@ func (e *engine) addFlexChildren(container *dom.Node, containerStyle blockStyle,
 	} else {
 		e.y += availableMain
 	}
+	e.renderFlexPositionedChildren(container, containerStyle, axis, x, startY, width, containingHeight, heightDefinite)
 }
 
 func (e *engine) collectFlexItems(container *dom.Node, axis flexAxis, availableMain, width, height float32, heightDefinite bool) ([]*flexLayoutItem, map[*flexItem]*flexLayoutItem) {
@@ -360,6 +363,9 @@ func (e *engine) collectFlexItems(container *dom.Node, axis flexAxis, availableM
 		}
 		style := e.styleFor(node)
 		if style.display == stylemodel.DisplayNone {
+			continue
+		}
+		if style.layoutPosition == stylemodel.PositionAbsolute || style.layoutPosition == stylemodel.PositionFixed {
 			continue
 		}
 		base, cross, minContent := e.flexIntrinsicSizes(node, style, axis, availableMain, width, height, heightDefinite)
@@ -416,6 +422,53 @@ func (e *engine) collectFlexItems(container *dom.Node, axis flexAxis, availableM
 		byAlgorithm[algorithm] = item
 	}
 	return items, byAlgorithm
+}
+
+func (e *engine) renderFlexPositionedChildren(container *dom.Node, containerStyle blockStyle, axis flexAxis, x, y, width, height float32, heightDefinite bool) {
+	for _, node := range container.Children {
+		if node.Type != dom.NodeElement {
+			continue
+		}
+		itemStyle := e.styleFor(node)
+		if itemStyle.display == stylemodel.DisplayNone || itemStyle.layoutPosition != stylemodel.PositionAbsolute && itemStyle.layoutPosition != stylemodel.PositionFixed {
+			continue
+		}
+		if itemStyle.layoutPosition == stylemodel.PositionFixed {
+			e.renderPositionedChild(node, itemStyle)
+			continue
+		}
+		mainSize, crossSize, _ := e.flexIntrinsicSizes(node, itemStyle, axis, width, width, height, heightDefinite)
+		mainAvailable, crossAvailable := width, crossSize
+		if axis.horizontal {
+			if heightDefinite {
+				crossAvailable = height
+			}
+		} else {
+			mainAvailable = mainSize
+			if heightDefinite {
+				mainAvailable = height
+			}
+			crossAvailable = width
+		}
+		mainFree := max(mainAvailable-mainSize, float32(0))
+		mainOffset, _ := justifySpacing(containerStyle.justifyContent, mainFree, 1, false)
+		if axis.reverse {
+			mainOffset = mainFree - mainOffset
+		}
+		alignment := itemStyle.alignSelf
+		if alignment == stylemodel.AlignAuto {
+			alignment = containerStyle.alignItems
+		}
+		if axis.crossFlip {
+			alignment = flipCrossAlignment(alignment)
+		}
+		crossOffset := gridAlignmentOffset(max(crossAvailable-crossSize, float32(0)), alignment, false, false)
+		static := &Rect{X: x + mainOffset, Y: y + crossOffset}
+		if !axis.horizontal {
+			static.X, static.Y = x+crossOffset, y+mainOffset
+		}
+		e.renderPositionedChildAt(node, itemStyle, static)
+	}
 }
 
 func (e *engine) flexIntrinsicSizes(node *dom.Node, style blockStyle, axis flexAxis, availableMain, width, height float32, heightDefinite bool) (float32, float32, float32) {

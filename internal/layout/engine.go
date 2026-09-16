@@ -1094,6 +1094,15 @@ func relativeOffset(inset stylemodel.Insets, width, height float32) (float32, fl
 }
 
 func (e *engine) renderPositionedChild(node *dom.Node, style blockStyle) {
+	e.renderPositionedChildAt(node, style, nil)
+}
+
+// renderPositionedChildAt resolves an out-of-flow box against its containing
+// block while retaining the formatting context's static position for auto
+// insets. Flex and grid containers provide that position after laying out
+// their in-flow items; ordinary block containers use the containing-block
+// origin by passing nil.
+func (e *engine) renderPositionedChildAt(node *dom.Node, style blockStyle, staticPosition *Rect) {
 	containingBlock := e.positionCB
 	if style.layoutPosition == stylemodel.PositionFixed || containingBlock == nil {
 		containingBlock = &Rect{X: e.scrollX, Y: e.scrollY, Width: e.viewportWidth, Height: e.viewportHeight}
@@ -1124,11 +1133,15 @@ func (e *engine) renderPositionedChild(node *dom.Node, style blockStyle) {
 		childX += left
 	} else if hasRight {
 		childX += containingBlock.Width - right - usedWidth
+	} else if staticPosition != nil && style.layoutPosition != stylemodel.PositionFixed {
+		childX = staticPosition.X
 	}
 	if hasTop {
 		childY += top
 	} else if hasBottom {
 		childY += containingBlock.Height - bottom - usedHeight
+	} else if staticPosition != nil && style.layoutPosition != stylemodel.PositionFixed {
+		childY = staticPosition.Y
 	}
 	if style.display == stylemodel.DisplayInline || style.display == stylemodel.DisplayInlineBlock || style.display == stylemodel.DisplayInlineFlex || style.display == stylemodel.DisplayInlineGrid {
 		style.display = stylemodel.DisplayBlock
