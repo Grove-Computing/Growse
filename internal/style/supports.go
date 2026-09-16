@@ -155,6 +155,58 @@ func supportsDeclaration(property, value string) bool {
 			}
 		}
 		return true
+	case "column-count":
+		if value == "auto" {
+			return true
+		}
+		count, err := strconv.Atoi(value)
+		return err == nil && count > 0
+	case "column-width":
+		if value == "auto" {
+			return true
+		}
+		length, ok := ResolveLength(value, context)
+		return ok && (length.Pixels > 0 || length.Percentage > 0)
+	case "columns":
+		count, countOK := columnShorthandComponent(value, true)
+		width, widthOK := columnShorthandComponent(value, false)
+		if !countOK || !widthOK {
+			return false
+		}
+		countValid := count == "auto"
+		if parsed, err := strconv.Atoi(count); err == nil && parsed > 0 {
+			countValid = true
+		}
+		widthLength, lengthOK := ResolveLength(width, context)
+		return countValid && (width == "auto" || lengthOK && (widthLength.Pixels > 0 || widthLength.Percentage > 0))
+	case "column-fill":
+		return value == "auto" || value == "balance"
+	case "column-span":
+		return value == "none" || value == "all"
+	case "break-before", "break-after":
+		return value == "auto" || value == "avoid" || value == "column" || value == "avoid-column"
+	case "break-inside":
+		return value == "auto" || value == "avoid" || value == "avoid-column"
+	case "widows", "orphans":
+		count, err := strconv.Atoi(value)
+		return err == nil && count > 0
+	case "column-rule", "column-rule-width", "column-rule-style", "column-rule-color":
+		component := strings.TrimPrefix(property, "column-rule-")
+		if property == "column-rule" {
+			return supportsLogicalBorderDeclaration(property, value, context)
+		}
+		switch component {
+		case "width":
+			_, ok := parseBorderWidth(value, context)
+			return ok
+		case "style":
+			_, ok := parseBorderStyle(value)
+			return ok
+		case "color":
+			_, ok := parseColor(value, defaultTextColor)
+			return ok
+		}
+		return false
 	case "grid-template-columns", "grid-template-rows":
 		if isSubgridValue(value) {
 			return true
@@ -291,6 +343,7 @@ func supportsProperty(property string) bool {
 		"inset-block", "inset-inline", "inset-block-start", "inset-block-end", "inset-inline-start", "inset-inline-end",
 		"overflow", "overflow-x", "overflow-y", "visibility", "opacity", "white-space", "writing-mode", "direction", "transform",
 		"flex", "flex-flow", "flex-basis", "flex-grow", "flex-shrink", "order", "gap", "row-gap", "column-gap", "justify-content", "align-content", "align-items", "justify-items", "align-self", "justify-self",
+		"columns", "column-count", "column-width", "column-rule", "column-rule-width", "column-rule-style", "column-rule-color", "column-fill", "column-span", "break-before", "break-after", "break-inside", "widows", "orphans",
 		"grid-template-columns", "grid-template-rows", "grid-auto-flow", "grid-column", "grid-row", "grid-area", "place-content", "place-items", "place-self", "container-type", "container-name":
 		return true
 	default:

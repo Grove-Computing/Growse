@@ -118,6 +118,17 @@ type blockStyle struct {
 	justifySelfSafety    stylemodel.OverflowAlignment
 	rowGap               stylemodel.LengthPercentage
 	columnGap            stylemodel.LengthPercentage
+	columnGapNormal      bool
+	columnCount          int
+	columnWidth          stylemodel.SizeValue
+	columnRule           stylemodel.BorderSide
+	columnFill           stylemodel.ColumnFill
+	columnSpan           stylemodel.ColumnSpan
+	breakBefore          stylemodel.FragmentBreak
+	breakAfter           stylemodel.FragmentBreak
+	breakInside          stylemodel.FragmentBreak
+	widows               int
+	orphans              int
 	gridTemplateColumns  []stylemodel.GridTrackSize
 	gridTemplateRows     []stylemodel.GridTrackSize
 	gridColumnsSubgrid   bool
@@ -910,6 +921,8 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 		e.addFlexChildren(node, style, contentX, contentWidth, childContainingHeight, declaredHeightDefinite)
 	} else if style.display == stylemodel.DisplayGrid {
 		e.addGridChildren(node, style, contentX, contentWidth, childContainingHeight, declaredHeightDefinite)
+	} else if usesMultiColumnLayout(style) {
+		positionedChildren = e.addMultiColumnChildren(node, style, contentX, contentWidth, childContainingHeight, declaredHeightDefinite)
 	} else {
 		inlineRuns := e.listMarkerRuns(node, style)
 		inlineRuns = append(inlineRuns, e.generatedRuns(node, true, style)...)
@@ -1042,6 +1055,11 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 	sizingHeight := contentHeight
 	if declaredHeightDefinite {
 		sizingHeight = declaredHeight
+	} else if style.boxSizing == stylemodel.BoxSizingBorderBox {
+		// An auto block grows around its content regardless of box-sizing.
+		// For border-box sizing, constraints apply to the outer box, so fold
+		// the vertical padding and borders into the natural sizing height.
+		sizingHeight += style.padding.Top + style.padding.Bottom + verticalBorder
 	}
 	sizingHeight = constrainSize(sizingHeight, style.minHeight, style.maxHeight, containingHeight, heightDefinite)
 	outerHeight := sizingHeight
@@ -1233,6 +1251,7 @@ func (group marginGroup) value() float32 { return group.positive + group.negativ
 
 func establishesBlockFormattingContext(style blockStyle) bool {
 	return style.display == stylemodel.DisplayFlowRoot || style.display == stylemodel.DisplayFlex || style.display == stylemodel.DisplayGrid ||
+		usesMultiColumnLayout(style) ||
 		style.float != stylemodel.FloatNone || style.layoutPosition == stylemodel.PositionAbsolute || style.layoutPosition == stylemodel.PositionFixed ||
 		overflowEstablishesFormattingContext(style.overflowX) || overflowEstablishesFormattingContext(style.overflowY)
 }
@@ -2210,7 +2229,10 @@ func applyComputed(block blockStyle, computed stylemodel.ComputedStyle) blockSty
 	block.order, block.flexGrow, block.flexShrink = computed.Order, computed.FlexGrow, computed.FlexShrink
 	block.flexBasis, block.alignSelf, block.justifySelf = computed.FlexBasis, computed.AlignSelf, computed.JustifySelf
 	block.alignSelfSafety, block.justifySelfSafety = computed.AlignSelfSafety, computed.JustifySelfSafety
-	block.rowGap, block.columnGap = computed.RowGap, computed.ColumnGap
+	block.rowGap, block.columnGap, block.columnGapNormal = computed.RowGap, computed.ColumnGap, computed.ColumnGapNormal
+	block.columnCount, block.columnWidth, block.columnRule, block.columnFill = computed.ColumnCount, computed.ColumnWidth, computed.ColumnRule, computed.ColumnFill
+	block.columnSpan, block.breakBefore, block.breakAfter, block.breakInside = computed.ColumnSpan, computed.BreakBefore, computed.BreakAfter, computed.BreakInside
+	block.widows, block.orphans = computed.Widows, computed.Orphans
 	block.gridTemplateColumns = append([]stylemodel.GridTrackSize(nil), computed.GridTemplateColumns...)
 	block.gridTemplateRows = append([]stylemodel.GridTrackSize(nil), computed.GridTemplateRows...)
 	block.gridColumnsSubgrid, block.gridRowsSubgrid = computed.GridColumnsSubgrid, computed.GridRowsSubgrid

@@ -11,10 +11,11 @@ import (
 )
 
 const (
-	MaxDOMNodes       = 2000
-	MaxDOMDepth       = 128
-	MaxDOMAttributes  = 64
-	MaxInspectorBytes = 4 * 1024
+	MaxDOMNodes        = 2000
+	MaxDOMDepth        = 128
+	MaxDOMAttributes   = 64
+	MaxInspectorBytes  = 4 * 1024
+	MaxLayoutFragments = 256
 )
 
 // Attribute is one sorted, bounded public DOM attribute.
@@ -45,6 +46,15 @@ type LayoutBox struct {
 	X, Y, Width, Height float32
 }
 
+// LayoutFragment is one paint-ordered visual fragment owned by the selected
+// DOM node. A node can own more than one fragment after inline or column
+// fragmentation even though Layout remains its aggregate bounding box.
+type LayoutFragment struct {
+	ID                  uint64
+	Kind                string
+	X, Y, Width, Height float32
+}
+
 // InspectorSnapshot is a bounded point-in-time view of the active document.
 type InspectorSnapshot struct {
 	Revision     uint64
@@ -53,6 +63,7 @@ type InspectorSnapshot struct {
 	SelectedNode *DOMNode
 	Styles       []StyleProperty
 	Layout       *LayoutBox
+	Fragments    []LayoutFragment
 	Truncated    bool
 }
 
@@ -113,11 +124,40 @@ func SnapshotInspectorAtRevision(document *dom.Document, styles stylemodel.Map, 
 				if bounds, ok := tree.Bounds[selected]; ok {
 					snapshot.Layout = &LayoutBox{X: bounds.X, Y: bounds.Y, Width: bounds.Width, Height: bounds.Height}
 				}
+				snapshot.Fragments, snapshot.Truncated = inspectorLayoutFragments(tree, selected, snapshot.Truncated)
 			}
 		}
 		break
 	}
 	return snapshot
+}
+
+func inspectorLayoutFragments(tree *layoutmodel.Tree, selected dom.NodeID, truncated bool) ([]LayoutFragment, bool) {
+	if tree == nil {
+		return nil, truncated
+	}
+	fragments := make([]LayoutFragment, 0)
+	for _, entry := range tree.OrderedPaintEntries() {
+		var fragment LayoutFragment
+		if entry.BoxIndex >= 0 {
+			box := tree.Boxes[entry.BoxIndex]
+			if box.NodeID != selected {
+				continue
+			}
+			fragment = LayoutFragment{ID: box.FragmentID, Kind: "box", X: box.X, Y: box.Y, Width: box.Width, Height: box.Height}
+		} else {
+			decoration := tree.Decorations[entry.DecorationIndex]
+			if decoration.NodeID != selected {
+				continue
+			}
+			fragment = LayoutFragment{ID: decoration.FragmentID, Kind: "decoration", X: decoration.X, Y: decoration.Y, Width: decoration.Width, Height: decoration.Height}
+		}
+		if len(fragments) == MaxLayoutFragments {
+			return fragments, true
+		}
+		fragments = append(fragments, fragment)
+	}
+	return fragments, truncated
 }
 
 func snapshotDOMNode(node *dom.Node, parentID dom.NodeID, depth int) DOMNode {

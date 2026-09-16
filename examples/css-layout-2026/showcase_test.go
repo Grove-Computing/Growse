@@ -19,9 +19,9 @@ func TestCSSLayoutShowcaseServesLayoutStagesAndLateImage(t *testing.T) {
 	for _, route := range []struct {
 		path, contentType, marker string
 	}{
-		{"/", "text/html", "Writing Mode &amp; logical geometry"},
-		{"/style.css", "text/css", ".nested-scroll"},
-		{"/app.mjs", "text/javascript", "POINTER TARGET · HIT"},
+		{"/", "text/html", "Multi-column &amp; fragmentation"},
+		{"/style.css", "text/css", ".column-stage"},
+		{"/app.mjs", "text/javascript", "2 COLUMNS · AUTO FILL"},
 		{"/assets/late-layout.png", "image/png", ""},
 	} {
 		response, err := server.Client().Get(server.URL + route.path)
@@ -33,6 +33,93 @@ func TestCSSLayoutShowcaseServesLayoutStagesAndLateImage(t *testing.T) {
 		if readErr != nil || response.StatusCode != 200 || !strings.Contains(response.Header.Get("Content-Type"), route.contentType) ||
 			route.marker != "" && !strings.Contains(string(body), route.marker) {
 			t.Fatalf("GET %s = status:%d type:%q marker:%t err:%v", route.path, response.StatusCode, response.Header.Get("Content-Type"), strings.Contains(string(body), route.marker), readErr)
+		}
+	}
+}
+
+func TestCSSLayoutShowcaseBalancesColumnsAndSpans(t *testing.T) {
+	htmlSource, err := cssLayoutAssets.ReadFile("index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cssSource, err := cssLayoutAssets.ReadFile("style.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := htmlparser.Parse(strings.NewReader(string(htmlSource)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stylesheet, err := css.Parse(strings.NewReader(string(cssSource)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage, ok := document.QuerySelector("#column-stage")
+	if !ok {
+		t.Fatal("multi-column stage is missing")
+	}
+	spanner, ok := document.QuerySelector(".column-spanner")
+	if !ok {
+		t.Fatal("column spanner is missing")
+	}
+	computed := style.ComputeWithEnvironment(document, stylesheet, style.InteractionState{}, style.Environment{ViewportWidth: 1057, ViewportHeight: 700, RootFontSize: 16, ResolutionDPI: 96})
+	tree := layout.BuildWithScrollAndResources(document, computed, nil, layout.NewFontSetWithSystemFallback(nil), 1057, 700, 0, 0)
+	stageBounds, spanBounds := tree.Bounds[stage.ID], tree.Bounds[spanner.ID]
+	columns := make(map[int]bool)
+	cards := make([]*dom.Node, 0, 5)
+	for _, child := range stage.Children {
+		if child.Type != dom.NodeElement || child == spanner {
+			continue
+		}
+		cards = append(cards, child)
+		if bounds, exists := tree.Bounds[child.ID]; exists {
+			columns[int(bounds.X+0.5)] = true
+		}
+		fragments := 0
+		for _, decoration := range tree.Decorations {
+			if decoration.NodeID == child.ID {
+				fragments++
+			}
+		}
+		if fragments != 1 {
+			t.Fatalf("break-inside card %d produced %d decoration fragments, bounds=%#v", child.ID, fragments, tree.Bounds[child.ID])
+		}
+		descendants := make(map[dom.NodeID]bool)
+		var collectDescendants func(*dom.Node)
+		collectDescendants = func(node *dom.Node) {
+			descendants[node.ID] = true
+			for _, descendant := range node.Children {
+				collectDescendants(descendant)
+			}
+		}
+		collectDescendants(child)
+		cardBounds := tree.Bounds[child.ID]
+		for _, box := range tree.Boxes {
+			if !descendants[box.NodeID] {
+				continue
+			}
+			if box.X < cardBounds.X-0.01 || box.X+box.Width > cardBounds.X+cardBounds.Width+0.01 {
+				t.Fatalf("break-inside card %d content escaped its fragment: card=%#v box=%#v", child.ID, cardBounds, box)
+			}
+		}
+	}
+	if len(columns) < 3 || spanBounds.Width != stageBounds.Width-28 {
+		t.Fatalf("showcase columns = positions:%v stage:%#v span:%#v", columns, stageBounds, spanBounds)
+	}
+	if len(cards) != 5 || tree.Bounds[cards[0].ID].X == tree.Bounds[cards[1].ID].X {
+		t.Fatalf("balanced avoid cards did not use separate columns: %#v", cards)
+	}
+	for _, group := range [][]*dom.Node{cards[:2], cards[2:]} {
+		for _, card := range group[1:] {
+			if delta := tree.Bounds[card.ID].Y - tree.Bounds[group[0].ID].Y; delta < -0.01 || delta > 0.01 {
+				t.Fatalf("balanced cards do not share a fragmentainer start: first=%#v card=%#v", tree.Bounds[group[0].ID], tree.Bounds[card.ID])
+			}
+		}
+	}
+	for _, card := range cards {
+		bounds := tree.Bounds[card.ID]
+		if bounds.Y+bounds.Height > stageBounds.Y+stageBounds.Height+0.01 {
+			t.Fatalf("column card escaped stage block-size: stage=%#v card=%#v", stageBounds, bounds)
 		}
 	}
 }
