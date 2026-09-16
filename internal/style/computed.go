@@ -23,6 +23,7 @@ const (
 	DisplayTableRowGroup
 	DisplayTableRow
 	DisplayTableCell
+	DisplayFlowRoot
 )
 
 // Float places a box at a side of the current block formatting context.

@@ -6,9 +6,20 @@ import (
 	"github.com/Grove-Computing/Growse/internal/dom"
 )
 
+const maxLayoutFragments = 65536
+
 func assignFragmentIdentities(tree *Tree) {
 	if tree == nil {
 		return
+	}
+	if len(tree.Boxes)+len(tree.Decorations) > maxLayoutFragments {
+		if len(tree.Boxes) > maxLayoutFragments {
+			tree.Boxes = tree.Boxes[:maxLayoutFragments]
+			tree.Decorations = nil
+		} else {
+			tree.Decorations = tree.Decorations[:maxLayoutFragments-len(tree.Boxes)]
+		}
+		tree.addFallback(0, "layout fragment limit exceeded")
 	}
 	boxOccurrences := make(map[dom.NodeID]uint64)
 	for index := range tree.Boxes {

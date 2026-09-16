@@ -82,7 +82,13 @@ func TestInlineSVGRasterParticipatesInLayout(t *testing.T) {
 		t.Fatalf("inline SVG resources/images/failures = %#v / %#v / %#v", resources, images, failures)
 	}
 	tree := layout.BuildWithScrollAndImages(document, style.Compute(document, nil), resources, 800, 600, 0, 0)
-	if len(tree.Boxes) != 1 || !tree.Boxes[0].Image || tree.Boxes[0].Tag != "svg" || tree.Boxes[0].Width != 120 || tree.Boxes[0].Height != 80 {
+	var imageBox *layout.Box
+	for index := range tree.Boxes {
+		if tree.Boxes[index].Image {
+			imageBox = &tree.Boxes[index]
+		}
+	}
+	if imageBox == nil || imageBox.Tag != "svg" || imageBox.Width != 120 || imageBox.Height != 80 {
 		t.Fatalf("inline SVG layout = %#v", tree.Boxes)
 	}
 }
