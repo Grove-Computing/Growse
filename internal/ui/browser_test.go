@@ -1310,6 +1310,23 @@ func TestDocumentPointIncludesListScrollOffset(t *testing.T) {
 	}
 }
 
+func TestHitTestPaintedDisplayListUsesVisibleCommandOrderAndScroll(t *testing.T) {
+	list := &paintmodel.DisplayList{Commands: []paintmodel.Command{
+		paintmodel.DrawText{NodeID: 1, X: 10, Y: 100, Top: 100, Width: 80, Height: 20},
+		paintmodel.DrawText{NodeID: 2, X: 10, Y: 20, Top: 0, Width: 80, Height: 20, Runs: []paintmodel.TextRun{{NodeID: 3, Width: 40}}},
+	}}
+
+	hit, ok := hitTestPaintedDisplayList(list, layout.Position{First: 0}, image.Pt(30, 125), 1)
+	if !ok || hit.NodeID != 3 || hit.DocumentX != 30 || hit.DocumentY != 25 {
+		t.Fatalf("painted hit = (%+v, %v), want run 3 at document (30,25)", hit, ok)
+	}
+
+	hit, ok = hitTestPaintedDisplayList(list, layout.Position{First: 1, Offset: 5}, image.Pt(60, 10), 1)
+	if !ok || hit.NodeID != 2 || hit.DocumentX != 60 || hit.DocumentY != 35 {
+		t.Fatalf("scrolled painted hit = (%+v, %v), want node 2 at document (60,35)", hit, ok)
+	}
+}
+
 func TestPointerMoveAppliesAndClearsHoverStyle(t *testing.T) {
 	document := dom.NewDocument()
 	button := document.CreateElement("button", map[string]string{"id": "save"})

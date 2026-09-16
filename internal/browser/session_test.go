@@ -795,6 +795,23 @@ func TestRuntimeAndNavigationErrorsRemainScopedToOwningTabs(t *testing.T) {
 	}
 }
 
+func TestJavaScriptScriptFailureDoesNotMarkCommittedTabAsNavigationError(t *testing.T) {
+	state := New(nil)
+	state.SetPage(&Page{URL: mustURL(t, "https://readable.test/"), ScriptErrors: []string{"javascript runtime worker failed"}})
+	session := NewSession(func() *Browser { return state })
+	tab, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	finished, err := session.FinishTabNavigation(tab.ID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if finished.Error || finished.Status != "取得完了" {
+		t.Fatalf("script-level runtime failure marked tab error: %+v", finished)
+	}
+}
+
 func TestSessionCloseReleasesAllTabGoroutinesCallbacksAndPages(t *testing.T) {
 	loaders := []*closeCancelLoader{
 		{started: make(chan struct{}), canceled: make(chan struct{})},

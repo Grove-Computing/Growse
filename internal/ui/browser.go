@@ -2152,19 +2152,13 @@ func (ui *BrowserUI) updateViewportHover(gtx layout.Context, page *browser.Page,
 		ui.updateLinkPreview(page, 0)
 		return
 	}
-	x, y, ok := ui.documentPoint(position, displayList, gtx.Metric.PxPerDp)
-	if !ok {
+	hit, ok := hitTestPaintedDisplayList(displayList, ui.pageList.Position, position, gtx.Metric.PxPerDp)
+	if !ok || tree == nil || tree.Revision != page.StyleRevision || displayList.Revision != page.StyleRevision {
 		ui.navigator.ClearHover()
 		ui.updateLinkPreview(page, 0)
 		return
 	}
-	hit, ok := layoutengine.HitTestWithRevision(tree, x, y)
-	if !ok || hit.Revision != page.StyleRevision || displayList.Revision != page.StyleRevision {
-		ui.navigator.ClearHover()
-		ui.updateLinkPreview(page, 0)
-		return
-	}
-	ui.navigator.UpdateHover(hit.NodeID, x, y)
+	ui.navigator.UpdateHover(hit.NodeID, hit.DocumentX, hit.DocumentY)
 	ui.updateLinkPreview(page, hit.NodeID)
 }
 
@@ -2197,12 +2191,8 @@ func (ui *BrowserUI) handleViewportClicks(gtx layout.Context, page *browser.Page
 		if click.Kind != gesture.KindClick || ui.pageList.List.Dragging() {
 			continue
 		}
-		x, y, ok := ui.documentPoint(click.Position, displayList, gtx.Metric.PxPerDp)
-		if !ok {
-			continue
-		}
-		hit, ok := layoutengine.HitTestWithRevision(tree, x, y)
-		if !ok || hit.Revision != page.StyleRevision || displayList.Revision != page.StyleRevision {
+		hit, ok := hitTestPaintedDisplayList(displayList, ui.pageList.Position, click.Position, gtx.Metric.PxPerDp)
+		if !ok || tree == nil || tree.Revision != page.StyleRevision || displayList.Revision != page.StyleRevision {
 			continue
 		}
 		nodeID := hit.NodeID
@@ -2210,7 +2200,7 @@ func (ui *BrowserUI) handleViewportClicks(gtx layout.Context, page *browser.Page
 			continue
 		}
 		ui.navigator.UpdateFocus(focusableNodeID(page.Document, nodeID))
-		if ui.navigator.DispatchClick(nodeID, x, y) {
+		if ui.navigator.DispatchClick(nodeID, hit.DocumentX, hit.DocumentY) {
 			continue
 		}
 		linkURL, target, ok := page.LinkDestination(nodeID)
@@ -2222,6 +2212,72 @@ func (ui *BrowserUI) handleViewportClicks(gtx layout.Context, page *browser.Page
 			continue
 		}
 		ui.startNavigation(linkURL.String())
+	}
+}
+
+type paintedDisplayHit struct {
+	NodeID               dom.NodeID
+	DocumentX, DocumentY float32
+}
+
+// hitTestPaintedDisplayList maps a viewport point to the command where Gio
+// actually painted it. Complex pages can contain paint-order entries whose
+// document Y positions are not monotonic. material.List lays those entries out
+// in command order, so hit-testing the layout tree would activate a different
+// element from the one visible beneath the pointer.
+func hitTestPaintedDisplayList(displayList *paintmodel.DisplayList, position layout.Position, point image.Point, pixelsPerDP float32) (paintedDisplayHit, bool) {
+	if displayList == nil || pixelsPerDP <= 0 || position.First < 0 || position.First >= len(displayList.Commands) {
+		return paintedDisplayHit{}, false
+	}
+	x := float32(point.X) / pixelsPerDP
+	y := float32(point.Y) / pixelsPerDP
+	cursorY := -float32(position.Offset) / pixelsPerDP
+	var result paintedDisplayHit
+	found := false
+	for index := position.First; index < len(displayList.Commands); index++ {
+		command := displayList.Commands[index]
+		nodeID, commandX, commandY, top, width, height, advance, runs := paintedCommandGeometry(command)
+		visualTop := cursorY + top
+		if width > 0 && height > 0 && x >= commandX && x < commandX+width && y >= visualTop && y < visualTop+height {
+			if len(runs) > 0 {
+				runX := commandX
+				for _, run := range runs {
+					if x >= runX && x < runX+run.Width {
+						nodeID = run.NodeID
+						break
+					}
+					runX += run.Width
+				}
+			}
+			result = paintedDisplayHit{NodeID: nodeID, DocumentX: commandX + (x - commandX), DocumentY: commandY + (y - visualTop)}
+			found = nodeID != 0
+		}
+		cursorY += advance
+		if cursorY > y && visualTop > y {
+			break
+		}
+	}
+	return result, found
+}
+
+func paintedCommandGeometry(command paintmodel.Command) (nodeID dom.NodeID, x, y, top, width, height, advance float32, runs []paintmodel.TextRun) {
+	switch command := command.(type) {
+	case paintmodel.DrawText:
+		return command.NodeID, command.X, command.Y, command.Top, command.Width, command.Height, command.Top + command.Height, command.Runs
+	case paintmodel.DrawInput:
+		return command.NodeID, command.X, command.Y, command.Top, command.Width, command.Height, command.Top + command.Height, nil
+	case paintmodel.DrawSelect:
+		return command.NodeID, command.X, command.Y, command.Top, command.Width, command.Height, command.Top + command.Height, nil
+	case paintmodel.DrawCheckable:
+		return command.NodeID, command.X, command.Y, command.Top, command.Width, command.Height, command.Top + command.Height, nil
+	case paintmodel.DrawButton:
+		return command.NodeID, command.X, command.Y, command.Top, command.Width, command.Height, command.Top + command.Height, nil
+	case paintmodel.DrawBox:
+		return command.NodeID, command.X, command.Y, command.Top, command.Width, command.Height, command.Top, nil
+	case paintmodel.DrawImage:
+		return command.NodeID, command.X, command.Y, command.Top, command.Width, command.Height, command.Top + command.Height, nil
+	default:
+		return 0, 0, 0, 0, 0, 0, 0, nil
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1973,9 +1974,8 @@ func startRuntime(ctx context.Context, factory runtimemodel.EngineFactory, engin
 			if err == nil {
 				return
 			}
-			setRuntimeError(page, fmt.Sprintf("%s runtime worker failed: %v", engine, err))
+			recordRuntimeFailure(page, fmt.Sprintf("%s runtime worker failed: %v", engine, err))
 			page.cancelFrameLifecycle()
-			page.cancelImageLoads()
 			if onMutation != nil {
 				onMutation()
 			}
@@ -2034,12 +2034,23 @@ func startRuntime(ctx context.Context, factory runtimemodel.EngineFactory, engin
 		page.Sandbox = reporter.SandboxStatus()
 	}
 	if loadErr != nil {
-		setRuntimeError(page, fmt.Sprintf("load %s runtime: %v", engine, loadErr))
+		message := fmt.Sprintf("load %s runtime: %v", engine, loadErr)
+		if engine == runtimemodel.EngineJavaScript {
+			recordRuntimeFailure(page, message)
+		} else {
+			setRuntimeError(page, message)
+		}
 		_ = pageRuntime.Stop()
 		return nil
 	}
 	if err := pageRuntime.Start(ctx); err != nil {
-		setRuntimeError(page, fmt.Sprintf("start %s runtime: %v", engine, err))
+		message := fmt.Sprintf("start %s runtime: %v", engine, err)
+		if engine == runtimemodel.EngineJavaScript {
+			message = fmt.Sprintf("%s runtime worker failed: %v", engine, err)
+			recordRuntimeFailure(page, message)
+		} else {
+			setRuntimeError(page, message)
+		}
 		if page.windows != nil {
 			page.windows.unregister(page.window.Self)
 		}
@@ -2055,6 +2066,18 @@ func startRuntime(ctx context.Context, factory runtimemodel.EngineFactory, engin
 
 func setRuntimeError(page *Page, message string) {
 	page.RuntimeError = message
+	page.ensureDevTools().AddConsole(devtools.ConsoleError, "runtime", message)
+}
+
+func recordRuntimeFailure(page *Page, message string) {
+	if page == nil {
+		return
+	}
+	page.RuntimeStarted = false
+	if slices.Contains(page.ScriptErrors, message) || len(page.ScriptErrors) >= maxScriptsPerEngine {
+		return
+	}
+	page.ScriptErrors = append(page.ScriptErrors, message)
 	page.ensureDevTools().AddConsole(devtools.ConsoleError, "runtime", message)
 }
 
