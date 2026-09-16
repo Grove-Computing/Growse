@@ -27,7 +27,7 @@ workerへ生のCookie、Authorization、Header集合、filesystem path、Browser
 
 Page、Frame、Service Workerの起動ごとにgenerationを増やす。Navigation、Frame navigation、Engine切り替え、close、timeout、crash後は旧generationのcallback、message、DOM snapshot、resource completion、observer recordを拒否する。通常停止はIPC stopと1秒の猶予を使い、応答しないprocessを終了する。Browser Session全体でworkerは32件までとし、上限超過は新しいRuntimeだけをfail closedする。
 
-Goは新規Tabの既定Engineであり、JavaScriptのinitial / dynamic script、Module、modulepreload、hydration callbackは利用者が`JS`を明示選択したgenerationだけへbrokerする。JavaScript Pageは外部script待機中もparse・style済みPageを先行公開し、imageをgeneration付き後続commitとして反映する。Goへ戻す場合はJavaScript worker、Frame、Module graph、dynamic resource、resource queue、observer、Event listenerを停止して完全reloadし、Browser所有のDOM / Style / Layout / Paintへ両Engineのobjectを混在させない。
+desktop appの新規TabはJavaScriptを既定Engineとし、initial / dynamic script、Module、modulepreload、hydration callbackを選択中のJavaScript generationだけへbrokerする。埋め込み用Browser APIのzero valueは既存互換のためGoを維持する。JavaScript Pageは外部script待機中もparse・style済みPageを先行公開し、imageをgeneration付き後続commitとして反映する。Goへ切り替える場合はJavaScript worker、Frame、Module graph、dynamic resource、resource queue、observer、Event listenerを停止して完全reloadし、Browser所有のDOM / Style / Layout / Paintへ両Engineのobjectを混在させない。
 
 Service Worker registrationとCache StorageはOrigin profile stateとして残すが、worker VMはidle 30秒で停止する。次のeventは保存済みscriptから新generationを起動し、Pageのcancelとは分離した期限付きevent contextで完了させる。
 
