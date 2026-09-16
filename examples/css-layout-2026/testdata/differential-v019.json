@@ -1,0 +1,93 @@
+{
+  "schemaVersion": 1,
+  "fixture": "differential.html",
+  "capturedAt": "2026-09-16",
+  "browsers": {
+    "chromium": {
+      "version": "Google Chrome 153.0.8010.36",
+      "snapshot": {
+        "scenario": "css-layout-2026-desktop",
+        "viewport": {"width": 720, "height": 520},
+        "domLandmarks": ["page", "header", "sidebar", "workspace", "card-a", "card-b", "card-c", "card-d", "footer", "scroller", "scroll-content", "flex-probe", "flex-a", "flex-b"],
+        "computed": {
+          "page": {"display": "grid", "position": "static", "overflowX": "visible", "overflowY": "visible"},
+          "header": {"display": "block", "position": "static", "overflowX": "visible", "overflowY": "visible"},
+          "sidebar": {"display": "block", "position": "static", "overflowX": "visible", "overflowY": "visible"},
+          "workspace": {"display": "grid", "position": "static", "overflowX": "visible", "overflowY": "visible"},
+          "card-a": {"display": "block", "position": "static", "overflowX": "visible", "overflowY": "visible"},
+          "card-b": {"display": "block", "position": "static", "overflowX": "visible", "overflowY": "visible"},
+          "card-c": {"display": "block", "position": "static", "overflowX": "visible", "overflowY": "visible"},
+          "card-d": {"display": "block", "position": "static", "overflowX": "visible", "overflowY": "visible"},
+          "footer": {"display": "flex", "position": "static", "overflowX": "visible", "overflowY": "visible"},
+          "scroller": {"display": "block", "position": "static", "overflowX": "auto", "overflowY": "auto"},
+          "scroll-content": {"display": "block", "position": "static", "overflowX": "visible", "overflowY": "visible"},
+          "flex-probe": {"display": "flex", "position": "static", "overflowX": "visible", "overflowY": "visible"},
+          "flex-a": {"display": "block", "position": "static", "overflowX": "visible", "overflowY": "visible"},
+          "flex-b": {"display": "block", "position": "static", "overflowX": "visible", "overflowY": "visible"}
+        },
+        "geometry": {
+          "page": {"x": 0, "y": 0, "width": 720, "height": 620},
+          "header": {"x": 20, "y": 20, "width": 680, "height": 80},
+          "sidebar": {"x": 20, "y": 120, "width": 180, "height": 260},
+          "workspace": {"x": 220, "y": 120, "width": 480, "height": 260},
+          "card-a": {"x": 230, "y": 130, "width": 140, "height": 250},
+          "card-b": {"x": 380, "y": 130, "width": 310, "height": 100},
+          "card-c": {"x": 380, "y": 240, "width": 140, "height": 140},
+          "card-d": {"x": 530, "y": 240, "width": 160, "height": 140},
+          "footer": {"x": 20, "y": 400, "width": 680, "height": 200},
+          "scroller": {"x": 40, "y": 420, "width": 300, "height": 140},
+          "scroll-content": {"x": 40, "y": 420, "width": 520, "height": 260},
+          "flex-probe": {"x": 360, "y": 420, "width": 320, "height": 140},
+          "flex-a": {"x": 360, "y": 420, "width": 100, "height": 80},
+          "flex-b": {"x": 480, "y": 420, "width": 200, "height": 120}
+        },
+        "scrollExtent": {"width": 720, "height": 620},
+        "focus": "",
+        "resources": {"fixture": "complete"}
+      }
+    },
+    "firefox": {
+      "version": "Mozilla Firefox 156.0 / geckodriver 0.37.1",
+      "snapshot": {
+        "scenario": "css-layout-2026-desktop",
+        "viewport": {"width": 720, "height": 520},
+        "domLandmarks": ["page", "header", "sidebar", "workspace", "card-a", "card-b", "card-c", "card-d", "footer", "scroller", "scroll-content", "flex-probe", "flex-a", "flex-b"],
+        "computed": {
+          "page": {"display": "grid", "position": "static", "overflowX": "visible", "overflowY": "visible"},
+          "header": {"display": "block", "position": "static", "overflowX": "visible", "overflowY": "visible"},
+          "sidebar": {"display": "block", "position": "static", "overflowX": "visible", "overflowY": "visible"},
+          "workspace": {"display": "grid", "position": "static", "overflowX": "visible", "overflowY": "visible"},
+          "card-a": {"display": "block", "position": "static", "overflowX": "visible", "overflowY": "visible"},
+          "card-b": {"display": "block", "position": "static", "overflowX": "visible", "overflowY": "visible"},
+          "card-c": {"display": "block", "position": "static", "overflowX": "visible", "overflowY": "visible"},
+          "card-d": {"display": "block", "position": "static", "overflowX": "visible", "overflowY": "visible"},
+          "footer": {"display": "flex", "position": "static", "overflowX": "visible", "overflowY": "visible"},
+          "scroller": {"display": "block", "position": "static", "overflowX": "auto", "overflowY": "auto"},
+          "scroll-content": {"display": "block", "position": "static", "overflowX": "visible", "overflowY": "visible"},
+          "flex-probe": {"display": "flex", "position": "static", "overflowX": "visible", "overflowY": "visible"},
+          "flex-a": {"display": "block", "position": "static", "overflowX": "visible", "overflowY": "visible"},
+          "flex-b": {"display": "block", "position": "static", "overflowX": "visible", "overflowY": "visible"}
+        },
+        "geometry": {
+          "page": {"x": 0, "y": 0, "width": 720, "height": 620},
+          "header": {"x": 20, "y": 20, "width": 680, "height": 80},
+          "sidebar": {"x": 20, "y": 120, "width": 180, "height": 260},
+          "workspace": {"x": 220, "y": 120, "width": 480, "height": 260},
+          "card-a": {"x": 230, "y": 130, "width": 140, "height": 250},
+          "card-b": {"x": 380, "y": 130, "width": 310, "height": 100},
+          "card-c": {"x": 380, "y": 240, "width": 140, "height": 140},
+          "card-d": {"x": 530, "y": 240, "width": 160, "height": 140},
+          "footer": {"x": 20, "y": 400, "width": 680, "height": 200},
+          "scroller": {"x": 40, "y": 420, "width": 300, "height": 140},
+          "scroll-content": {"x": 40, "y": 420, "width": 520, "height": 260},
+          "flex-probe": {"x": 360, "y": 420, "width": 320, "height": 140},
+          "flex-a": {"x": 360, "y": 420, "width": 100, "height": 80},
+          "flex-b": {"x": 480, "y": 420, "width": 200, "height": 120}
+        },
+        "scrollExtent": {"width": 720, "height": 620},
+        "focus": "",
+        "resources": {"fixture": "complete"}
+      }
+    }
+  }
+}

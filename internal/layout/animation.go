@@ -14,6 +14,10 @@ func Clone(tree *Tree) *Tree {
 	clone := *tree
 	clone.Decorations = append([]Decoration(nil), tree.Decorations...)
 	clone.Boxes = append([]Box(nil), tree.Boxes...)
+	for index := range clone.Decorations {
+		clone.Decorations[index].Clip = cloneRect(tree.Decorations[index].Clip)
+		clone.Decorations[index].Clips = cloneClipRegions(tree.Decorations[index].Clips)
+	}
 	clone.StackingContexts = append([]StackingContext(nil), tree.StackingContexts...)
 	clone.CompositingLayers = append([]CompositingLayer(nil), tree.CompositingLayers...)
 	for index := range clone.CompositingLayers {
@@ -30,6 +34,20 @@ func Clone(tree *Tree) *Tree {
 	}
 	for index := range clone.Boxes {
 		clone.Boxes[index].Runs = append([]TextRun(nil), tree.Boxes[index].Runs...)
+		clone.Boxes[index].Clip = cloneRect(tree.Boxes[index].Clip)
+		clone.Boxes[index].Clips = cloneClipRegions(tree.Boxes[index].Clips)
+	}
+	clone.StickyConstraints = make(map[dom.NodeID]StickyConstraint, len(tree.StickyConstraints))
+	for nodeID, constraint := range tree.StickyConstraints {
+		clone.StickyConstraints[nodeID] = constraint
+	}
+	clone.ScrollContainers = make(map[dom.NodeID]ScrollContainer, len(tree.ScrollContainers))
+	for nodeID, container := range tree.ScrollContainers {
+		clone.ScrollContainers[nodeID] = container
+	}
+	clone.ScrollOffsets = make(map[dom.NodeID]ScrollOffset, len(tree.ScrollOffsets))
+	for nodeID, offset := range tree.ScrollOffsets {
+		clone.ScrollOffsets[nodeID] = offset
 	}
 	return &clone
 }

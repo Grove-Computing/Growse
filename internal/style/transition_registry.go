@@ -2,6 +2,7 @@ package style
 
 import (
 	"reflect"
+	"sync"
 	"time"
 
 	animationmodel "github.com/Grove-Computing/Growse/internal/animation"
@@ -17,6 +18,7 @@ type transitionKey struct {
 // on one page. Author styles remain immutable while sampled values are
 // composited at frame time.
 type TransitionRegistry struct {
+	mu    sync.RWMutex
 	items map[transitionKey]*RunningTransition
 }
 
@@ -32,6 +34,8 @@ func (registry *TransitionRegistry) Reconcile(previous, next Map, current time.T
 	if registry == nil || previous == nil {
 		return
 	}
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
 	if registry.items == nil {
 		registry.items = make(map[transitionKey]*RunningTransition)
 	}
@@ -74,6 +78,8 @@ func (registry *TransitionRegistry) Apply(styles Map, current time.Time) Map {
 	if registry == nil {
 		return result
 	}
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
 
 	valuesByNode := make(map[dom.NodeID]AnimatedValues)
 	for key, running := range registry.items {
@@ -102,6 +108,8 @@ func (registry *TransitionRegistry) Active(current time.Time) bool {
 	if registry == nil {
 		return false
 	}
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
 	for _, running := range registry.items {
 		if running.Timing.Sample(running.StartTime, current).Phase != animationmodel.PhaseAfter {
 			return true
@@ -115,6 +123,8 @@ func (registry *TransitionRegistry) Count(nodeID dom.NodeID) int {
 	if registry == nil {
 		return 0
 	}
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
 	count := 0
 	for key := range registry.items {
 		if key.nodeID == nodeID {
@@ -129,6 +139,8 @@ func (registry *TransitionRegistry) ActiveNodes(current time.Time) []dom.NodeID 
 	if registry == nil {
 		return nil
 	}
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
 	seen := make(map[dom.NodeID]bool)
 	nodes := make([]dom.NodeID, 0, min(len(registry.items), MaxActiveAnimations))
 	for key, running := range registry.items {
@@ -147,6 +159,8 @@ func (registry *TransitionRegistry) ActiveNodes(current time.Time) []dom.NodeID 
 // Clear discards every running transition owned by the page.
 func (registry *TransitionRegistry) Clear() {
 	if registry != nil {
+		registry.mu.Lock()
+		defer registry.mu.Unlock()
 		registry.items = make(map[transitionKey]*RunningTransition)
 	}
 }

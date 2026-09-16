@@ -1,6 +1,7 @@
 package browser
 
 import (
+	"context"
 	"image"
 	"testing"
 
@@ -64,5 +65,25 @@ func TestImageCompletionWithStableIntrinsicSizeIsPaintOnly(t *testing.T) {
 	invalidation := page.ImageInvalidationSnapshot()
 	if invalidation.IntrinsicChanged || len(invalidation.LayoutAncestors) != 0 || page.StyleRevision != 3 {
 		t.Fatalf("paint-only completion invalidation/revision = %+v / %d", invalidation, page.StyleRevision)
+	}
+}
+
+func TestImageCompletionRejectsStaleGeneration(t *testing.T) {
+	page := &Page{StyleRevision: 4, ImageResources: map[dom.NodeID]layout.ImageResource{}, Images: map[string]image.Image{}}
+	staleContext, stale := page.beginImageLoad(context.Background())
+	currentContext, current := page.beginImageLoad(context.Background())
+	t.Cleanup(func() { page.cancelImageLoads() })
+	if staleContext.Err() == nil || currentContext.Err() != nil {
+		t.Fatalf("image generation contexts = stale:%v current:%v", staleContext.Err(), currentContext.Err())
+	}
+	resource := layout.ImageResource{URL: "https://example.com/current.png", Loaded: true, IntrinsicWidth: 20, IntrinsicHeight: 10}
+	if page.commitImageResourceLoad(stale, 1, resource, image.NewNRGBA(image.Rect(0, 0, 20, 10)), "") {
+		t.Fatal("stale image completion was committed")
+	}
+	if len(page.ImageResources) != 0 || page.StyleRevision != 4 {
+		t.Fatalf("stale image completion changed page: resources=%v revision=%d", page.ImageResources, page.StyleRevision)
+	}
+	if !page.commitImageResourceLoad(current, 1, resource, image.NewNRGBA(image.Rect(0, 0, 20, 10)), "") {
+		t.Fatal("current image completion was rejected")
 	}
 }

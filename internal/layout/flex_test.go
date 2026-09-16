@@ -334,6 +334,41 @@ func TestBuildFlexUsesPercentageFallbackAndAspectRatio(t *testing.T) {
 	}
 }
 
+func TestBuildFlexAbsoluteChildUsesStaticPositionWithoutAffectingItems(t *testing.T) {
+	document := dom.NewDocument()
+	container := document.CreateElement("div", map[string]string{"class": "container"})
+	first := document.CreateElement("div", map[string]string{"class": "item"})
+	positioned := document.CreateElement("div", map[string]string{"class": "positioned"})
+	second := document.CreateElement("div", map[string]string{"class": "item"})
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, container},
+		[2]*dom.Node{container, first},
+		[2]*dom.Node{container, positioned},
+		[2]*dom.Node{container, second},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.container { position:relative; display:flex; width:300px; height:100px; justify-content:center; align-items:center }
+.item { flex:0 0 100px; height:20px; background-color:#ddd }
+.positioned { position:absolute; width:40px; height:20px; background-color:#c44 }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, stylemodel.Compute(document, stylesheet), 500)
+	containerRect, ok := tree.Bounds[container.ID]
+	if !ok {
+		t.Fatalf("container bounds missing: %#v", tree.Bounds)
+	}
+	firstRect, secondRect := decorationForNode(t, tree, first.ID), decorationForNode(t, tree, second.ID)
+	positionedRect := decorationForNode(t, tree, positioned.ID)
+	if firstRect.X != containerRect.X+50 || secondRect.X != firstRect.X+100 {
+		t.Fatalf("absolute child affected flex items: container %#v first %#v second %#v", containerRect, firstRect.Rect, secondRect.Rect)
+	}
+	if positionedRect.X != containerRect.X+130 || positionedRect.Y != containerRect.Y+40 {
+		t.Fatalf("absolute static position = %#v, want centered in %#v", positionedRect.Rect, containerRect)
+	}
+}
+
 func TestBuildInlineFlexUsesFirstLineBaselineWithSurroundingText(t *testing.T) {
 	document := dom.NewDocument()
 	paragraph := document.CreateElement("p", nil)
@@ -448,7 +483,7 @@ func TestBuildFlexOverflowClipScrollAndHitTestingShareGeometry(t *testing.T) {
 	}
 	tree := Build(document, stylemodel.Compute(document, stylesheet), 160)
 	itemBox := decorationForNode(t, tree, item.ID)
-	if itemBox.Clip == nil || itemBox.Clip.Width != 100 || tree.ScrollWidth < itemBox.X+itemBox.Width {
+	if itemBox.Clip == nil || itemBox.Clip.Width != 100 || tree.ScrollWidth >= itemBox.X+itemBox.Width+pagePadding {
 		t.Fatalf("overflow geometry = item %#v, scroll width %v", itemBox, tree.ScrollWidth)
 	}
 	if _, ok := HitTest(tree, itemBox.X+150, itemBox.Y+1); ok {

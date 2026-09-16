@@ -34,6 +34,9 @@ func pageRenderSnapshot(ctx context.Context, page *Page, nodeID dom.NodeID) (run
 	clientWidth := maxFloat32(0, rect.Width-computed.Border.Left.Width-computed.Border.Right.Width)
 	clientHeight := maxFloat32(0, rect.Height-computed.Border.Top.Width-computed.Border.Bottom.Width)
 	scrollWidth, scrollHeight := clientWidth, clientHeight
+	if container, exists := tree.ScrollContainers[nodeID]; exists {
+		scrollWidth, scrollHeight = container.ScrollWidth, container.ScrollHeight
+	}
 	if node == page.Document.Root || node.TagName == "html" || node.TagName == "body" {
 		scrollWidth = maxFloat32(scrollWidth, tree.ScrollWidth)
 		scrollHeight = maxFloat32(scrollHeight, tree.ScrollHeight)
@@ -64,7 +67,10 @@ func cssomProperties(computed stylemodel.ComputedStyle, width, height float32) m
 	result := map[string]string{
 		"display": displayCSS(computed.Display), "position": positionCSS(computed.Position),
 		"visibility": visibilityCSS(computed.Visibility), "box-sizing": boxSizingCSS(computed.BoxSizing),
-		"font-size": px(computed.FontSize), "font-weight": strconv.Itoa(computed.FontWeight), "font-family": strings.Join(computed.FontFamilies, ", "),
+		"table-layout": tableLayoutCSS(computed.TableLayout), "border-collapse": borderCollapseCSS(computed.BorderCollapse),
+		"border-spacing": px(computed.BorderSpacingX) + " " + px(computed.BorderSpacingY), "caption-side": captionSideCSS(computed.CaptionSide),
+		"aspect-ratio": aspectRatioCSS(computed.AspectRatio),
+		"font-size":    px(computed.FontSize), "font-weight": strconv.Itoa(computed.FontWeight), "font-family": strings.Join(computed.FontFamilies, ", "),
 		"font-style": computed.FontStyle, "font-stretch": computed.FontStretch, "line-height": px(computed.LineHeight),
 		"text-align": textAlignCSS(computed.TextAlign), "text-transform": textTransformCSS(computed.TextTransform), "text-indent": lengthPercentageCSS(computed.TextIndent),
 		"letter-spacing": spacingCSS(computed.LetterSpacing), "word-spacing": spacingCSS(computed.WordSpacing),
@@ -82,12 +88,164 @@ func cssomProperties(computed stylemodel.ComputedStyle, width, height float32) m
 		"border-top-width": px(computed.Border.Top.Width), "border-right-width": px(computed.Border.Right.Width),
 		"border-bottom-width": px(computed.Border.Bottom.Width), "border-left-width": px(computed.Border.Left.Width),
 		"flex-grow": numberCSS(computed.FlexGrow), "flex-shrink": numberCSS(computed.FlexShrink), "order": strconv.Itoa(computed.Order),
-		"row-gap": lengthPercentageCSS(computed.RowGap), "column-gap": lengthPercentageCSS(computed.ColumnGap),
+		"row-gap": lengthPercentageCSS(computed.RowGap), "column-gap": columnGapCSS(computed),
+		"column-count": columnCountCSS(computed.ColumnCount), "column-width": sizeValueCSS(computed.ColumnWidth),
+		"column-rule-width": px(computed.ColumnRule.Width), "column-rule-style": borderStyleCSS(computed.ColumnRule.Style), "column-rule-color": cssColor(computed.ColumnRule.Color),
+		"column-fill": columnFillCSS(computed.ColumnFill), "column-span": columnSpanCSS(computed.ColumnSpan),
+		"break-before": fragmentBreakCSS(computed.BreakBefore), "break-after": fragmentBreakCSS(computed.BreakAfter), "break-inside": fragmentBreakCSS(computed.BreakInside),
+		"widows": strconv.Itoa(computed.Widows), "orphans": strconv.Itoa(computed.Orphans),
+		"writing-mode": writingModeCSS(computed.WritingMode), "direction": directionCSS(computed.Direction),
+		"justify-content": justifyContentCSS(computed.JustifyContent, computed.JustifyContentSafety),
+		"align-content":   alignCSS(computed.AlignContent, computed.AlignContentSafety),
+		"align-items":     alignCSS(computed.AlignItems, computed.AlignItemsSafety),
+		"justify-items":   alignCSS(computed.JustifyItems, computed.JustifyItemsSafety),
+		"align-self":      alignCSS(computed.AlignSelf, computed.AlignSelfSafety),
+		"justify-self":    alignCSS(computed.JustifySelf, computed.JustifySelfSafety),
 	}
 	for name, value := range computed.CustomProperties {
 		result[name] = value
 	}
 	return result
+}
+
+func columnGapCSS(computed stylemodel.ComputedStyle) string {
+	if computed.ColumnGapNormal {
+		return "normal"
+	}
+	return lengthPercentageCSS(computed.ColumnGap)
+}
+
+func columnCountCSS(value int) string {
+	if value < 1 {
+		return "auto"
+	}
+	return strconv.Itoa(value)
+}
+
+func sizeValueCSS(value stylemodel.SizeValue) string {
+	if value.Kind == stylemodel.SizeAuto {
+		return "auto"
+	}
+	return lengthPercentageCSS(value.Value)
+}
+
+func borderStyleCSS(value stylemodel.BorderStyle) string {
+	values := [...]string{"none", "solid", "dotted", "dashed", "double"}
+	if int(value) < len(values) {
+		return values[value]
+	}
+	return "none"
+}
+
+func columnFillCSS(value stylemodel.ColumnFill) string {
+	if value == stylemodel.ColumnFillAuto {
+		return "auto"
+	}
+	return "balance"
+}
+
+func columnSpanCSS(value stylemodel.ColumnSpan) string {
+	if value == stylemodel.ColumnSpanAll {
+		return "all"
+	}
+	return "none"
+}
+
+func fragmentBreakCSS(value stylemodel.FragmentBreak) string {
+	switch value {
+	case stylemodel.FragmentBreakAvoid:
+		return "avoid"
+	case stylemodel.FragmentBreakColumn:
+		return "column"
+	case stylemodel.FragmentBreakAvoidColumn:
+		return "avoid-column"
+	default:
+		return "auto"
+	}
+}
+
+func writingModeCSS(value stylemodel.WritingMode) string {
+	switch value {
+	case stylemodel.WritingModeVerticalRL:
+		return "vertical-rl"
+	case stylemodel.WritingModeVerticalLR:
+		return "vertical-lr"
+	default:
+		return "horizontal-tb"
+	}
+}
+
+func directionCSS(value stylemodel.Direction) string {
+	if value == stylemodel.DirectionRTL {
+		return "rtl"
+	}
+	return "ltr"
+}
+
+func justifyContentCSS(value stylemodel.JustifyContent, safety stylemodel.OverflowAlignment) string {
+	keyword := "flex-start"
+	switch value {
+	case stylemodel.JustifyFlexEnd:
+		keyword = "flex-end"
+	case stylemodel.JustifyStart:
+		keyword = "start"
+	case stylemodel.JustifyEnd:
+		keyword = "end"
+	case stylemodel.JustifyLeft:
+		keyword = "left"
+	case stylemodel.JustifyRight:
+		keyword = "right"
+	case stylemodel.JustifyCenter:
+		keyword = "center"
+	case stylemodel.JustifySpaceBetween:
+		keyword = "space-between"
+	case stylemodel.JustifySpaceAround:
+		keyword = "space-around"
+	case stylemodel.JustifySpaceEvenly:
+		keyword = "space-evenly"
+	}
+	return overflowAlignmentCSS(keyword, safety)
+}
+
+func alignCSS(value stylemodel.Align, safety stylemodel.OverflowAlignment) string {
+	keyword := "stretch"
+	switch value {
+	case stylemodel.AlignFlexStart:
+		keyword = "flex-start"
+	case stylemodel.AlignFlexEnd:
+		keyword = "flex-end"
+	case stylemodel.AlignStart:
+		keyword = "start"
+	case stylemodel.AlignEnd:
+		keyword = "end"
+	case stylemodel.AlignSelfStart:
+		keyword = "self-start"
+	case stylemodel.AlignSelfEnd:
+		keyword = "self-end"
+	case stylemodel.AlignCenter:
+		keyword = "center"
+	case stylemodel.AlignBaseline:
+		keyword = "baseline"
+	case stylemodel.AlignSpaceBetween:
+		keyword = "space-between"
+	case stylemodel.AlignSpaceAround:
+		keyword = "space-around"
+	case stylemodel.AlignSpaceEvenly:
+		keyword = "space-evenly"
+	case stylemodel.AlignAuto:
+		keyword = "auto"
+	}
+	return overflowAlignmentCSS(keyword, safety)
+}
+
+func overflowAlignmentCSS(keyword string, safety stylemodel.OverflowAlignment) string {
+	if safety == stylemodel.OverflowAlignmentSafe {
+		return "safe " + keyword
+	}
+	if safety == stylemodel.OverflowAlignmentUnsafe {
+		return "unsafe " + keyword
+	}
+	return keyword
 }
 
 func textAlignCSS(value stylemodel.TextAlign) string {
@@ -258,11 +416,42 @@ func cssColor(value uint32) string {
 }
 
 func displayCSS(value stylemodel.Display) string {
-	values := [...]string{"inline", "block", "inline-block", "none", "flex", "inline-flex", "grid", "inline-grid"}
+	values := [...]string{
+		"inline", "block", "inline-block", "none", "flex", "inline-flex", "grid", "inline-grid", "contents",
+		"table", "table-row-group", "table-row", "table-cell", "table-caption", "table-column-group", "table-column", "flow-root",
+	}
 	if int(value) < len(values) {
 		return values[value]
 	}
 	return ""
+}
+
+func tableLayoutCSS(value stylemodel.TableLayout) string {
+	if value == stylemodel.TableLayoutFixed {
+		return "fixed"
+	}
+	return "auto"
+}
+
+func borderCollapseCSS(value stylemodel.BorderCollapse) string {
+	if value == stylemodel.BorderCollapseCollapse {
+		return "collapse"
+	}
+	return "separate"
+}
+
+func captionSideCSS(value stylemodel.CaptionSide) string {
+	if value == stylemodel.CaptionSideBottom {
+		return "bottom"
+	}
+	return "top"
+}
+
+func aspectRatioCSS(value float32) string {
+	if value <= 0 {
+		return "auto"
+	}
+	return numberCSS(value) + " / 1"
 }
 
 func positionCSS(value stylemodel.Position) string {
@@ -288,7 +477,7 @@ func boxSizingCSS(value stylemodel.BoxSizing) string {
 }
 
 func overflowCSS(value stylemodel.Overflow) string {
-	values := [...]string{"visible", "hidden", "auto", "scroll"}
+	values := [...]string{"visible", "hidden", "auto", "scroll", "clip"}
 	if int(value) < len(values) {
 		return values[value]
 	}

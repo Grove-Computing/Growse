@@ -98,7 +98,13 @@ func TestBuildLaysOutPictureFallbackImage(t *testing.T) {
 	tree := BuildWithScrollAndImages(document, computed, map[dom.NodeID]ImageResource{
 		imageNode.ID: {URL: "https://example.com/hero.png", IntrinsicWidth: 32, IntrinsicHeight: 32, Loaded: true},
 	}, 800, 600, 0, 0)
-	if len(tree.Boxes) != 1 || !tree.Boxes[0].Image || tree.Boxes[0].NodeID != imageNode.ID || tree.Boxes[0].ImageURL != "https://example.com/hero.png" {
+	var imageBox *Box
+	for index := range tree.Boxes {
+		if tree.Boxes[index].Image {
+			imageBox = &tree.Boxes[index]
+		}
+	}
+	if imageBox == nil || imageBox.NodeID != imageNode.ID || imageBox.ImageURL != "https://example.com/hero.png" {
 		t.Fatalf("picture fallback boxes = %#v", tree.Boxes)
 	}
 }
@@ -322,8 +328,8 @@ func TestBuildPlacesInlineBlockAsAtomicInline(t *testing.T) {
 		t.Fatal(err)
 	}
 	tree := Build(document, style.Compute(document, stylesheet), 800)
-	if got, want := len(tree.Boxes), 1; got != want {
-		t.Fatalf("line count = %d, want %d", got, want)
+	if got := len(tree.Boxes); got < 2 {
+		t.Fatalf("line and atomic child box count = %d, want at least 2", got)
 	}
 	line := tree.Boxes[0]
 	if len(line.Runs) != 3 || line.Runs[1].NodeID != badge.ID || line.Runs[1].Width != 112 {
@@ -381,8 +387,8 @@ func TestBuildCarriesOverflowClipAndScrollExtentIntoHitTesting(t *testing.T) {
 	if len(tree.Boxes) != 2 || tree.Boxes[0].Clip == nil || tree.Boxes[1].Clip == nil {
 		t.Fatalf("clipped boxes = %#v", tree.Boxes)
 	}
-	if tree.ScrollWidth <= tree.Width {
-		t.Fatalf("scroll width = %v, want greater than viewport %v", tree.ScrollWidth, tree.Width)
+	if tree.ScrollWidth != tree.Width {
+		t.Fatalf("clipped descendant leaked into document scroll width = %v, viewport %v", tree.ScrollWidth, tree.Width)
 	}
 	outside := tree.Boxes[1]
 	if got, ok := HitTest(tree, outside.X+1, outside.Y+1); ok || got != 0 {
@@ -620,14 +626,19 @@ func TestBuildCarriesDisabledAndReadonlyControlState(t *testing.T) {
 	}
 }
 
-func TestBuildCreatesSubmitButtonControls(t *testing.T) {
+func TestBuildCreatesButtonControls(t *testing.T) {
 	document := dom.NewDocument()
 	button := document.CreateElement("button", nil)
+	ordinary := document.CreateElement("button", map[string]string{"type": "button"})
 	input := document.CreateElement("input", map[string]string{"type": "submit", "value": "Save"})
-	appendNodes(t, document, [2]*dom.Node{document.Root, button}, [2]*dom.Node{button, document.CreateText("Send")}, [2]*dom.Node{document.Root, input})
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, button}, [2]*dom.Node{button, document.CreateText("Send")},
+		[2]*dom.Node{document.Root, ordinary}, [2]*dom.Node{ordinary, document.CreateText("Toggle")},
+		[2]*dom.Node{document.Root, input},
+	)
 
 	boxes := Build(document, style.Compute(document, nil), 800).Boxes
-	if len(boxes) != 2 || !boxes[0].Button || boxes[0].Text != "Send" || !boxes[1].Button || boxes[1].Text != "Save" {
+	if len(boxes) != 3 || !boxes[0].Button || boxes[0].Text != "Send" || !boxes[1].Button || boxes[1].Text != "Toggle" || !boxes[2].Button || boxes[2].Text != "Save" {
 		t.Fatalf("submit buttons = %#v", boxes)
 	}
 }

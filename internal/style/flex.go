@@ -9,18 +9,20 @@ import (
 func applyFlexProperties(computed, parent ComputedStyle, winners map[string]winner, customProperties map[string]string, context LengthContext) ComputedStyle {
 	computed.FlexDirection = resolveFlexDirectionWinner(computed.FlexDirection, parent.FlexDirection, winners["flex-direction"], customProperties)
 	computed.FlexWrap = resolveFlexWrapWinner(computed.FlexWrap, parent.FlexWrap, winners["flex-wrap"], customProperties)
-	computed.JustifyContent = resolveJustifyWinner(computed.JustifyContent, parent.JustifyContent, winners["justify-content"], customProperties)
-	computed.AlignItems = resolveAlignWinner(computed.AlignItems, parent.AlignItems, AlignStretch, false, winners["align-items"], customProperties)
-	computed.JustifyItems = resolveAlignWinner(computed.JustifyItems, parent.JustifyItems, AlignStretch, false, justifyPlaceCandidate(winners["justify-items"]), customProperties)
-	computed.AlignContent = resolveAlignWinner(computed.AlignContent, parent.AlignContent, AlignStretch, true, winners["align-content"], customProperties)
-	computed.AlignSelf = resolveAlignWinner(computed.AlignSelf, parent.AlignSelf, AlignAuto, false, winners["align-self"], customProperties)
-	computed.JustifySelf = resolveAlignWinner(computed.JustifySelf, parent.JustifySelf, AlignAuto, false, justifyPlaceCandidate(winners["justify-self"]), customProperties)
+	computed.JustifyContent, computed.JustifyContentSafety = resolveJustifyWinner(computed.JustifyContent, parent.JustifyContent, computed.JustifyContentSafety, parent.JustifyContentSafety, winners["justify-content"], customProperties)
+	computed.AlignItems, computed.AlignItemsSafety = resolveAlignWinner(computed.AlignItems, parent.AlignItems, AlignStretch, computed.AlignItemsSafety, parent.AlignItemsSafety, false, winners["align-items"], customProperties)
+	computed.JustifyItems, computed.JustifyItemsSafety = resolveAlignWinner(computed.JustifyItems, parent.JustifyItems, AlignStretch, computed.JustifyItemsSafety, parent.JustifyItemsSafety, false, justifyPlaceCandidate(winners["justify-items"]), customProperties)
+	computed.AlignContent, computed.AlignContentSafety = resolveAlignWinner(computed.AlignContent, parent.AlignContent, AlignStretch, computed.AlignContentSafety, parent.AlignContentSafety, true, winners["align-content"], customProperties)
+	computed.AlignSelf, computed.AlignSelfSafety = resolveAlignWinner(computed.AlignSelf, parent.AlignSelf, AlignAuto, computed.AlignSelfSafety, parent.AlignSelfSafety, false, winners["align-self"], customProperties)
+	computed.JustifySelf, computed.JustifySelfSafety = resolveAlignWinner(computed.JustifySelf, parent.JustifySelf, AlignAuto, computed.JustifySelfSafety, parent.JustifySelfSafety, false, justifyPlaceCandidate(winners["justify-self"]), customProperties)
 	computed.Order = resolveIntegerWinner(computed.Order, parent.Order, 0, winners["order"], customProperties)
 	computed.FlexGrow = resolveFactorWinner("flex-grow", computed.FlexGrow, parent.FlexGrow, 0, winners["flex-grow"], customProperties)
 	computed.FlexShrink = resolveFactorWinner("flex-shrink", computed.FlexShrink, parent.FlexShrink, 1, winners["flex-shrink"], customProperties)
 	computed.FlexBasis = resolveBasisWinner(computed.FlexBasis, parent.FlexBasis, winners["flex-basis"], customProperties, context)
 	computed.RowGap = resolveGapWinner("row-gap", computed.RowGap, parent.RowGap, winners["row-gap"], customProperties, context)
 	computed.ColumnGap = resolveGapWinner("column-gap", computed.ColumnGap, parent.ColumnGap, winners["column-gap"], customProperties, context)
+	computed.RowGapNormal = resolveGapNormal("row-gap", computed.RowGapNormal, parent.RowGapNormal, winners["row-gap"], customProperties)
+	computed.ColumnGapNormal = resolveGapNormal("column-gap", computed.ColumnGapNormal, parent.ColumnGapNormal, winners["column-gap"], customProperties)
 	computed.AspectRatio = resolveAspectRatioWinner(computed.AspectRatio, parent.AspectRatio, winners["aspect-ratio"], customProperties)
 	return computed
 }
@@ -71,53 +73,65 @@ func resolveFlexWrapWinner(current, parent FlexWrap, candidate winner, custom ma
 	return current
 }
 
-func resolveJustifyWinner(current, parent JustifyContent, candidate winner, custom map[string]string) JustifyContent {
+func resolveJustifyWinner(current, parent JustifyContent, currentSafety, parentSafety OverflowAlignment, candidate winner, custom map[string]string) (JustifyContent, OverflowAlignment) {
 	value, ok := winnerValue(candidate, custom)
 	if !ok {
-		return current
+		return current, currentSafety
 	}
 	switch parseGlobalKeyword(value) {
 	case globalInherit:
-		return parent
+		return parent, parentSafety
 	case globalInitial, globalUnset:
-		return JustifyFlexStart
+		return JustifyFlexStart, OverflowAlignmentDefault
 	}
 	value = placeShorthandComponent(candidate.source, value, false)
+	value, safety, valid := parseOverflowAlignment(value)
+	if !valid {
+		return current, currentSafety
+	}
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "normal", "flex-start":
-		return JustifyFlexStart
+		return JustifyFlexStart, safety
 	case "flex-end":
-		return JustifyFlexEnd
+		return JustifyFlexEnd, safety
+	case "start":
+		return JustifyStart, safety
+	case "end":
+		return JustifyEnd, safety
+	case "left":
+		return JustifyLeft, safety
+	case "right":
+		return JustifyRight, safety
 	case "center":
-		return JustifyCenter
+		return JustifyCenter, safety
 	case "space-between":
-		return JustifySpaceBetween
+		return JustifySpaceBetween, safety
 	case "space-around":
-		return JustifySpaceAround
+		return JustifySpaceAround, safety
 	case "space-evenly":
-		return JustifySpaceEvenly
+		return JustifySpaceEvenly, safety
 	default:
-		return current
+		return current, currentSafety
 	}
 }
 
-func resolveAlignWinner(current, parent, initial Align, distributed bool, candidate winner, custom map[string]string) Align {
+func resolveAlignWinner(current, parent, initial Align, currentSafety, parentSafety OverflowAlignment, distributed bool, candidate winner, custom map[string]string) (Align, OverflowAlignment) {
 	value, ok := winnerValue(candidate, custom)
 	if !ok {
-		return current
+		return current, currentSafety
 	}
 	switch parseGlobalKeyword(value) {
 	case globalInherit:
-		return parent
+		return parent, parentSafety
 	case globalInitial, globalUnset:
-		return initial
+		return initial, OverflowAlignmentDefault
 	}
 	value = placeShorthandComponent(candidate.source, value, true)
-	parsed, valid := parseAlign(value, initial == AlignAuto, distributed)
+	parsed, safety, valid := parseAlign(value, initial == AlignAuto, distributed)
 	if valid {
-		return parsed
+		return parsed, safety
 	}
-	return current
+	return current, currentSafety
 }
 
 func placeShorthandComponent(source, value string, first bool) string {
@@ -255,28 +269,39 @@ func resolveAspectRatioWinner(current, parent float32, candidate winner, custom 
 	case globalInitial, globalUnset:
 		return 0
 	}
-	parts := strings.Fields(strings.ToLower(value))
-	if len(parts) == 1 && parts[0] == "auto" {
-		return 0
+	if parsed, valid := parseAspectRatio(value); valid {
+		return parsed
 	}
-	if len(parts) == 2 && parts[0] == "auto" {
-		value = parts[1]
+	return current
+}
+
+func parseAspectRatio(value string) (float32, bool) {
+	value = strings.TrimSpace(strings.ToLower(value))
+	if value == "auto" {
+		return 0, true
+	}
+	if strings.HasPrefix(value, "auto") {
+		remainder := strings.TrimSpace(strings.TrimPrefix(value, "auto"))
+		if remainder == "" {
+			return 0, true
+		}
+		value = remainder
 	}
 	ratioParts := strings.Split(strings.TrimSpace(value), "/")
 	numerator, err := strconv.ParseFloat(strings.TrimSpace(ratioParts[0]), 32)
 	if err != nil || numerator <= 0 || math.IsInf(numerator, 0) || math.IsNaN(numerator) {
-		return current
+		return 0, false
 	}
 	denominator := 1.0
 	if len(ratioParts) == 2 {
 		denominator, err = strconv.ParseFloat(strings.TrimSpace(ratioParts[1]), 32)
 	} else if len(ratioParts) > 2 {
-		return current
+		return 0, false
 	}
 	if err != nil || denominator <= 0 || math.IsInf(denominator, 0) || math.IsNaN(denominator) {
-		return current
+		return 0, false
 	}
-	return float32(numerator / denominator)
+	return float32(numerator / denominator), true
 }
 
 func winnerValue(candidate winner, custom map[string]string) (string, bool) {
@@ -334,29 +359,61 @@ func flexFlowComponent(value string, direction bool) (string, bool) {
 	return "nowrap", true
 }
 
-func parseAlign(value string, allowAuto, distributed bool) (Align, bool) {
+func parseAlign(value string, allowAuto, distributed bool) (Align, OverflowAlignment, bool) {
+	value, safety, valid := parseOverflowAlignment(value)
+	if !valid {
+		return 0, 0, false
+	}
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "normal", "stretch":
-		return AlignStretch, true
+		return AlignStretch, safety, true
 	case "flex-start":
-		return AlignFlexStart, true
+		return AlignFlexStart, safety, true
 	case "flex-end":
-		return AlignFlexEnd, true
+		return AlignFlexEnd, safety, true
+	case "start":
+		return AlignStart, safety, true
+	case "end":
+		return AlignEnd, safety, true
+	case "self-start":
+		return AlignSelfStart, safety, true
+	case "self-end":
+		return AlignSelfEnd, safety, true
 	case "center":
-		return AlignCenter, true
+		return AlignCenter, safety, true
 	case "baseline":
-		return AlignBaseline, true
+		return AlignBaseline, safety, true
 	case "space-between":
-		return AlignSpaceBetween, distributed
+		return AlignSpaceBetween, safety, distributed
 	case "space-around":
-		return AlignSpaceAround, distributed
+		return AlignSpaceAround, safety, distributed
 	case "space-evenly":
-		return AlignSpaceEvenly, distributed
+		return AlignSpaceEvenly, safety, distributed
 	case "auto":
-		return AlignAuto, allowAuto
+		return AlignAuto, safety, allowAuto
 	default:
-		return 0, false
+		return 0, 0, false
 	}
+}
+
+func parseOverflowAlignment(value string) (string, OverflowAlignment, bool) {
+	parts, valid := splitCSSSpaceSeparated(strings.ToLower(strings.TrimSpace(value)))
+	if !valid || len(parts) == 0 || len(parts) > 2 {
+		return "", OverflowAlignmentDefault, false
+	}
+	safety := OverflowAlignmentDefault
+	if parts[0] == "safe" || parts[0] == "unsafe" {
+		if len(parts) != 2 {
+			return "", OverflowAlignmentDefault, false
+		}
+		if parts[0] == "safe" {
+			safety = OverflowAlignmentSafe
+		} else {
+			safety = OverflowAlignmentUnsafe
+		}
+		parts = parts[1:]
+	}
+	return parts[0], safety, true
 }
 
 type flexShorthand struct {

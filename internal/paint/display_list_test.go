@@ -50,6 +50,90 @@ func TestBuildPreservesFlexOverflowGeometry(t *testing.T) {
 	}
 }
 
+func TestBuildPreservesMultiColumnFragmentIdentityAndGeometry(t *testing.T) {
+	document := dom.NewDocument()
+	paragraph := document.CreateElement("p", map[string]string{"class": "columns"})
+	if err := document.AppendChild(document.Root, paragraph); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(paragraph, document.CreateText(strings.Repeat("fragmented paint content ", 30))); err != nil {
+		t.Fatal(err)
+	}
+	stylesheet, err := css.Parse(strings.NewReader(`
+.columns { display:block; width:360px; margin:0; column-count:3; column-gap:18px; line-height:18px }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := layout.BuildWithViewport(document, style.Compute(document, stylesheet), 520, 600)
+	list := Build(tree)
+	identities := make(map[uint64]bool)
+	xPositions := make(map[int]bool)
+	textFragments := 0
+	for index, candidate := range list.Commands {
+		command, ok := candidate.(DrawText)
+		if !ok || command.NodeID != paragraph.ID {
+			continue
+		}
+		textFragments++
+		identities[list.CommandIDs[index]] = true
+		xPositions[int(command.X+0.5)] = true
+	}
+	if textFragments < 3 || len(identities) != textFragments || len(xPositions) != 3 {
+		t.Fatalf("painted fragments = count:%d ids:%d columns:%v", textFragments, len(identities), xPositions)
+	}
+	if list.ScrollWidth != tree.ScrollWidth || list.ScrollHeight != tree.ScrollHeight {
+		t.Fatalf("multi-column scroll geometry = list (%v,%v), tree (%v,%v)", list.ScrollWidth, list.ScrollHeight, tree.ScrollWidth, tree.ScrollHeight)
+	}
+}
+
+func TestBuildUsesScrolledContentGeometryAndFixedScrollportClip(t *testing.T) {
+	document := dom.NewDocument()
+	container := document.CreateElement("div", map[string]string{"class": "container"})
+	content := document.CreateElement("div", map[string]string{"class": "content"})
+	if err := document.AppendChild(document.Root, container); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(container, content); err != nil {
+		t.Fatal(err)
+	}
+	stylesheet, err := css.Parse(strings.NewReader(`
+.container { position:relative; width:100px; height:80px; overflow:auto; }
+.content { width:240px; height:160px; background:#777; }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	computed := style.Compute(document, stylesheet)
+	tree := layout.BuildWithViewport(document, computed, 640, 480)
+	containerRect := tree.Bounds[container.ID]
+	if dirty := layout.ApplyScrollContainerOffset(tree, computed, container.ID, 50, 30); len(dirty) == 0 {
+		t.Fatal("scroll offset did not dirty content")
+	}
+
+	var command DrawBox
+	found := false
+	for _, candidate := range Build(tree).Commands {
+		box, ok := candidate.(DrawBox)
+		if ok && box.NodeID == content.ID {
+			command, found = box, true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("scrolled content paint command is missing")
+	}
+	if command.X != containerRect.X-50 || command.Y != containerRect.Y-30 {
+		t.Fatalf("paint offset = (%v,%v), container = %#v", command.X, command.Y, containerRect)
+	}
+	if command.Clip == nil || command.Clip.X != containerRect.X || command.Clip.Y != containerRect.Y || command.Clip.Width != 100 || command.Clip.Height != 80 {
+		t.Fatalf("fixed scrollport clip = %#v, container = %#v", command.Clip, containerRect)
+	}
+	if hit, ok := layout.HitTest(tree, containerRect.X+10, containerRect.Y+10); !ok || hit != content.ID {
+		t.Fatalf("paint/hit geometry diverged after scroll: %d/%v", hit, ok)
+	}
+}
+
 func TestBuildPreservesPaintOrder(t *testing.T) {
 	tree := &layout.Tree{Width: 400, Height: 100, Boxes: []layout.Box{
 		{Text: "first", Y: 10, Runs: []layout.TextRun{{Text: "first", Color: 0x123456ff}}},
@@ -66,6 +150,28 @@ func TestBuildPreservesPaintOrder(t *testing.T) {
 	}
 	if len(first.Runs) != 1 || first.Runs[0].Color != 0x123456ff {
 		t.Fatalf("first runs = %#v, want preserved inline style", first.Runs)
+	}
+}
+
+func TestBuildUsesSignedOffsetsForNonMonotonicPaintGeometry(t *testing.T) {
+	tree := &layout.Tree{Width: 400, Height: 180, Boxes: []layout.Box{
+		{Order: 1, NodeID: 1, Text: "lower first", Y: 100, Width: 80, Height: 20},
+		{Order: 2, NodeID: 2, Text: "upper second", X: 100, Y: 20, Width: 80, Height: 20},
+		{Order: 3, NodeID: 3, Text: "lower third", Y: 140, Width: 80, Height: 20},
+	}}
+	list := Build(tree)
+	first := list.Commands[0].(DrawText)
+	second := list.Commands[1].(DrawText)
+	third := list.Commands[2].(DrawText)
+	if first.Top != 100 || second.Top != -100 || third.Top != 19 {
+		t.Fatalf("signed paint offsets = first:%v second:%v third:%v", first.Top, second.Top, third.Top)
+	}
+	cursor := float32(0)
+	for _, command := range []DrawText{first, second, third} {
+		if paintedY := cursor + command.Top; paintedY != command.Y {
+			t.Fatalf("painted y = %v, document y = %v", paintedY, command.Y)
+		}
+		cursor += max(command.Top+command.Height, MinimumCommandAdvance)
 	}
 }
 

@@ -154,6 +154,7 @@ func initialStyle() ComputedStyle {
 		DecorationColor: defaultTextColor, Opacity: 1, FlexShrink: 1,
 		ZIndexAuto: true,
 		AlignItems: AlignStretch, JustifyItems: AlignStretch, AlignContent: AlignStretch, AlignSelf: AlignAuto, JustifySelf: AlignAuto,
+		RowGapNormal: true, ColumnGapNormal: true, ColumnWidth: SizeValue{Kind: SizeAuto}, Widows: 2, Orphans: 2,
 		Width: SizeValue{Kind: SizeAuto}, Height: SizeValue{Kind: SizeAuto},
 		MinWidth: SizeValue{Kind: SizeAuto}, MinHeight: SizeValue{Kind: SizeAuto},
 		MaxWidth: SizeValue{Kind: SizeNone}, MaxHeight: SizeValue{Kind: SizeNone},
@@ -166,9 +167,10 @@ func inheritedStyle(parent ComputedStyle) ComputedStyle {
 	computed := ComputedStyle{
 		Color: parent.Color, FontSize: parent.FontSize, FontWeight: parent.FontWeight,
 		FontFamilies: append([]string(nil), parent.FontFamilies...), FontStyle: parent.FontStyle, FontStretch: parent.FontStretch, FontFaceIndex: parent.FontFaceIndex,
-		LineHeight: parent.LineHeight, WhiteSpace: parent.WhiteSpace, Visibility: parent.Visibility,
+		LineHeight: parent.LineHeight, WhiteSpace: parent.WhiteSpace, WritingMode: parent.WritingMode, Direction: parent.Direction, Visibility: parent.Visibility,
 		TextAlign: parent.TextAlign, TextTransform: parent.TextTransform, TextIndent: parent.TextIndent,
 		LetterSpacing: parent.LetterSpacing, WordSpacing: parent.WordSpacing, WordBreak: parent.WordBreak, OverflowWrap: parent.OverflowWrap,
+		BorderCollapse: parent.BorderCollapse, BorderSpacingX: parent.BorderSpacingX, BorderSpacingY: parent.BorderSpacingY, CaptionSide: parent.CaptionSide,
 		ListStyleType: parent.ListStyleType, ListStylePosition: parent.ListStylePosition, ListStyleImage: parent.ListStyleImage,
 		AccentColor: parent.AccentColor, AccentColorAuto: parent.AccentColorAuto, Cursor: parent.Cursor,
 		ObjectPosition:  BackgroundPosition{X: LengthPercentage{Percentage: 50}, Y: LengthPercentage{Percentage: 50}},
@@ -177,6 +179,7 @@ func inheritedStyle(parent ComputedStyle) ComputedStyle {
 		DecorationColor: parent.Color, Opacity: 1, FlexShrink: 1,
 		ZIndexAuto: true,
 		AlignItems: AlignStretch, JustifyItems: AlignStretch, AlignContent: AlignStretch, AlignSelf: AlignAuto, JustifySelf: AlignAuto,
+		RowGapNormal: true, ColumnGapNormal: true, ColumnWidth: SizeValue{Kind: SizeAuto}, Widows: parent.Widows, Orphans: parent.Orphans,
 		Width: SizeValue{Kind: SizeAuto}, Height: SizeValue{Kind: SizeAuto},
 		MinWidth: SizeValue{Kind: SizeAuto}, MinHeight: SizeValue{Kind: SizeAuto},
 		MaxWidth: SizeValue{Kind: SizeNone}, MaxHeight: SizeValue{Kind: SizeNone},
@@ -220,6 +223,20 @@ func applyUADefaults(tag string, computed ComputedStyle) ComputedStyle {
 		computed.Display = DisplayInlineBlock
 		computed.Width = SizeValue{Kind: SizeLength, Value: LengthPercentage{Pixels: 300}}
 		computed.Height = SizeValue{Kind: SizeLength, Value: LengthPercentage{Pixels: 150}}
+	case "table":
+		computed.Display = DisplayTable
+	case "caption":
+		computed.Display = DisplayTableCaption
+	case "colgroup":
+		computed.Display = DisplayTableColumnGroup
+	case "col":
+		computed.Display = DisplayTableColumn
+	case "thead", "tbody", "tfoot":
+		computed.Display = DisplayTableRowGroup
+	case "tr":
+		computed.Display = DisplayTableRow
+	case "td", "th":
+		computed.Display = DisplayTableCell
 	case "a":
 		computed.Color = 0x0969daff
 	case "pre":
@@ -311,6 +328,11 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 			winners[property] = selected
 		}
 	}
+	propertyContext := LengthContext{FontSize: parent.FontSize, RootFontSize: environment.RootFontSize, ViewportWidth: environment.ViewportWidth, ViewportHeight: environment.ViewportHeight, ContainerWidth: environment.ContainerWidth, ContainerHeight: environment.ContainerHeight}
+	computed.CustomProperties = registeredPropertyBase(parent.CustomProperties, stylesheet, propertyContext)
+	computed.CustomProperties = applyCustomProperties(computed.CustomProperties, winners, stylesheet, propertyContext, parent.CustomProperties)
+	computed = applyWritingProperties(computed, parent, winners, computed.CustomProperties)
+	winners = resolveLogicalWinners(winners, computed.WritingMode, computed.Direction, computed.CustomProperties)
 	for property, candidate := range winners {
 		if !candidate.important {
 			continue
@@ -320,9 +342,6 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 		}
 		computed.ImportantProperties[property] = true
 	}
-	propertyContext := LengthContext{FontSize: parent.FontSize, RootFontSize: environment.RootFontSize, ViewportWidth: environment.ViewportWidth, ViewportHeight: environment.ViewportHeight, ContainerWidth: environment.ContainerWidth, ContainerHeight: environment.ContainerHeight}
-	computed.CustomProperties = registeredPropertyBase(parent.CustomProperties, stylesheet, propertyContext)
-	computed.CustomProperties = applyCustomProperties(computed.CustomProperties, winners, stylesheet, propertyContext, parent.CustomProperties)
 	fontContext := LengthContext{
 		FontSize: parent.FontSize, RootFontSize: environment.RootFontSize,
 		ViewportWidth: environment.ViewportWidth, ViewportHeight: environment.ViewportHeight,
@@ -517,6 +536,7 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 	computed = applyVisualProperties(computed, parent, winners, fontContext)
 	if value, ok := winners["overflow-x"]; ok {
 		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
+			resolved = overflowShorthandComponent(value, resolved, false)
 			if parsed, valid := resolveOverflow(resolved, parent.OverflowX); valid {
 				computed.OverflowX = parsed
 			}
@@ -524,11 +544,13 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 	}
 	if value, ok := winners["overflow-y"]; ok {
 		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
+			resolved = overflowShorthandComponent(value, resolved, true)
 			if parsed, valid := resolveOverflow(resolved, parent.OverflowY); valid {
 				computed.OverflowY = parsed
 			}
 		}
 	}
+	computed.OverflowX, computed.OverflowY = normalizeOverflowAxes(computed.OverflowX, computed.OverflowY)
 	if value, ok := winners["display"]; ok {
 		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
 			if parsed, valid := resolveDisplay(resolved, parent.Display); valid {
@@ -538,14 +560,14 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 	}
 	if value, ok := winners["float"]; ok {
 		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
-			if parsed, valid := resolveFloatSide(resolved, parent.Float); valid {
+			if parsed, valid := resolveFloatSideWithAxes(resolved, parent.Float, computed.WritingMode, computed.Direction); valid {
 				computed.Float = parsed
 			}
 		}
 	}
 	if value, ok := winners["clear"]; ok {
 		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
-			if parsed, valid := resolveClear(resolved, parent.Clear); valid {
+			if parsed, valid := resolveClearWithAxes(resolved, parent.Clear, computed.WritingMode, computed.Direction); valid {
 				computed.Clear = parsed
 			}
 		}
@@ -610,8 +632,10 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 	computed.Padding = applyEdges(computed.Padding, parent.Padding, "padding", winners, computed.CustomProperties, lengthContext)
 	computed.Border = applyBorders(computed.Border, parent.Border, winners, computed.CustomProperties, lengthContext, computed.Color)
 	computed.BorderRadius = applyBorderRadii(computed.BorderRadius, parent.BorderRadius, winners, computed.CustomProperties, lengthContext)
+	computed = applyTableProperties(computed, parent, winners, computed.CustomProperties, lengthContext)
 	computed = applyFlexProperties(computed, parent, winners, computed.CustomProperties, lengthContext)
 	computed = applyGridProperties(computed, parent, winners, computed.CustomProperties, lengthContext)
+	computed = applyColumnProperties(computed, parent, winners, computed.CustomProperties, lengthContext)
 	computed = applyPositionProperties(computed, parent, winners, computed.CustomProperties, lengthContext)
 	computed = applyShadowAndOutlineProperties(computed, parent, winners, computed.CustomProperties, lengthContext)
 	computed = applyTransformProperties(computed, parent, winners, computed.CustomProperties, lengthContext)
@@ -702,6 +726,10 @@ func resolveDisplay(value string, parent Display) (Display, bool) {
 }
 
 func resolveFloatSide(value string, parent Float) (Float, bool) {
+	return resolveFloatSideWithAxes(value, parent, WritingModeHorizontalTB, DirectionLTR)
+}
+
+func resolveFloatSideWithAxes(value string, parent Float, writingMode WritingMode, direction Direction) (Float, bool) {
 	switch parseGlobalKeyword(value) {
 	case globalInherit:
 		return parent, true
@@ -711,16 +739,24 @@ func resolveFloatSide(value string, parent Float) (Float, bool) {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "none":
 		return FloatNone, true
-	case "left", "inline-start":
+	case "left":
 		return FloatLeft, true
-	case "right", "inline-end":
+	case "right":
 		return FloatRight, true
+	case "inline-start":
+		return floatForPhysicalSide(axesForWritingMode(writingMode, direction).inlineStart), true
+	case "inline-end":
+		return floatForPhysicalSide(axesForWritingMode(writingMode, direction).inlineEnd), true
 	default:
 		return FloatNone, false
 	}
 }
 
 func resolveClear(value string, parent Clear) (Clear, bool) {
+	return resolveClearWithAxes(value, parent, WritingModeHorizontalTB, DirectionLTR)
+}
+
+func resolveClearWithAxes(value string, parent Clear, writingMode WritingMode, direction Direction) (Clear, bool) {
 	switch parseGlobalKeyword(value) {
 	case globalInherit:
 		return parent, true
@@ -730,15 +766,27 @@ func resolveClear(value string, parent Clear) (Clear, bool) {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "none":
 		return ClearNone, true
-	case "left", "inline-start":
+	case "left":
 		return ClearLeft, true
-	case "right", "inline-end":
+	case "right":
 		return ClearRight, true
+	case "inline-start":
+		return clearForPhysicalSide(axesForWritingMode(writingMode, direction).inlineStart), true
+	case "inline-end":
+		return clearForPhysicalSide(axesForWritingMode(writingMode, direction).inlineEnd), true
 	case "both":
 		return ClearBoth, true
 	default:
 		return ClearNone, false
 	}
+}
+
+func floatForPhysicalSide(side physicalSide) Float {
+	return [...]Float{FloatTop, FloatRight, FloatBottom, FloatLeft}[side]
+}
+
+func clearForPhysicalSide(side physicalSide) Clear {
+	return [...]Clear{ClearTop, ClearRight, ClearBottom, ClearLeft}[side]
 }
 
 func resolveBoxSizing(value string, parent BoxSizing) (BoxSizing, bool) {
@@ -864,9 +912,44 @@ func resolveOverflow(value string, parent Overflow) (Overflow, bool) {
 		return OverflowAuto, true
 	case "scroll":
 		return OverflowScroll, true
+	case "clip":
+		return OverflowClip, true
 	default:
 		return 0, false
 	}
+}
+
+func overflowShorthandComponent(candidate winner, value string, vertical bool) string {
+	if candidate.source != "overflow" {
+		return value
+	}
+	parts, valid := splitCSSSpaceSeparated(value)
+	if !valid || len(parts) == 0 || len(parts) > 2 {
+		return value
+	}
+	if vertical && len(parts) == 2 {
+		return parts[1]
+	}
+	return parts[0]
+}
+
+func normalizeOverflowAxes(x, y Overflow) (Overflow, Overflow) {
+	nonScrollable := func(value Overflow) bool { return value == OverflowVisible || value == OverflowClip }
+	if nonScrollable(x) && !nonScrollable(y) {
+		if x == OverflowVisible {
+			x = OverflowAuto
+		} else {
+			x = OverflowHidden
+		}
+	}
+	if nonScrollable(y) && !nonScrollable(x) {
+		if y == OverflowVisible {
+			y = OverflowAuto
+		} else {
+			y = OverflowHidden
+		}
+	}
+	return x, y
 }
 
 func applyCustomProperties(inherited map[string]string, winners map[string]winner, stylesheet *css.Stylesheet, context LengthContext, parentValues map[string]string) map[string]string {
@@ -1197,41 +1280,22 @@ func expandedProperties(property string) []string {
 		return []string{"background-color"}
 	case "margin", "padding":
 		return []string{property + "-top", property + "-right", property + "-bottom", property + "-left"}
-	case "margin-block", "padding-block":
-		prefix := strings.TrimSuffix(property, "-block")
-		return []string{prefix + "-top", prefix + "-bottom"}
-	case "margin-inline", "padding-inline":
-		prefix := strings.TrimSuffix(property, "-inline")
-		return []string{prefix + "-left", prefix + "-right"}
-	case "margin-block-start", "padding-block-start":
-		return []string{strings.TrimSuffix(property, "-block-start") + "-top"}
-	case "margin-block-end", "padding-block-end":
-		return []string{strings.TrimSuffix(property, "-block-end") + "-bottom"}
-	case "margin-inline-start", "padding-inline-start":
-		return []string{strings.TrimSuffix(property, "-inline-start") + "-left"}
-	case "margin-inline-end", "padding-inline-end":
-		return []string{strings.TrimSuffix(property, "-inline-end") + "-right"}
+	case "margin-block", "padding-block", "margin-inline", "padding-inline",
+		"margin-block-start", "padding-block-start", "margin-block-end", "padding-block-end",
+		"margin-inline-start", "padding-inline-start", "margin-inline-end", "padding-inline-end":
+		return []string{property}
 	case "border":
 		return borderPropertyKeys("")
-	case "border-block":
-		return borderLogicalKeys([]string{"top", "bottom"}, "")
-	case "border-inline":
-		return borderLogicalKeys([]string{"left", "right"}, "")
-	case "border-block-width", "border-block-style", "border-block-color":
-		return borderLogicalKeys([]string{"top", "bottom"}, strings.TrimPrefix(property, "border-block-"))
-	case "border-inline-width", "border-inline-style", "border-inline-color":
-		return borderLogicalKeys([]string{"left", "right"}, strings.TrimPrefix(property, "border-inline-"))
-	case "border-block-start", "border-block-end", "border-inline-start", "border-inline-end":
-		side := map[string]string{"border-block-start": "top", "border-block-end": "bottom", "border-inline-start": "left", "border-inline-end": "right"}[property]
-		return borderLogicalKeys([]string{side}, "")
+	case "border-block", "border-inline",
+		"border-block-width", "border-block-style", "border-block-color",
+		"border-inline-width", "border-inline-style", "border-inline-color",
+		"border-block-start", "border-block-end", "border-inline-start", "border-inline-end":
+		return []string{property}
 	case "border-block-start-width", "border-block-start-style", "border-block-start-color",
 		"border-block-end-width", "border-block-end-style", "border-block-end-color",
 		"border-inline-start-width", "border-inline-start-style", "border-inline-start-color",
 		"border-inline-end-width", "border-inline-end-style", "border-inline-end-color":
-		parts := strings.Split(property, "-")
-		axis, edge, component := parts[1], parts[2], parts[3]
-		side := map[string]string{"block-start": "top", "block-end": "bottom", "inline-start": "left", "inline-end": "right"}[axis+"-"+edge]
-		return borderLogicalKeys([]string{side}, component)
+		return []string{property}
 	case "border-width", "border-style", "border-color":
 		component := strings.TrimPrefix(property, "border-")
 		return []string{"border-top-" + component, "border-right-" + component, "border-bottom-" + component, "border-left-" + component}
@@ -1241,14 +1305,8 @@ func expandedProperties(property string) []string {
 		return []string{"overflow-x", "overflow-y"}
 	case "border-radius":
 		return []string{"border-top-left-radius", "border-top-right-radius", "border-bottom-right-radius", "border-bottom-left-radius"}
-	case "border-start-start-radius":
-		return []string{"border-top-left-radius"}
-	case "border-start-end-radius":
-		return []string{"border-top-right-radius"}
-	case "border-end-start-radius":
-		return []string{"border-bottom-left-radius"}
-	case "border-end-end-radius":
-		return []string{"border-bottom-right-radius"}
+	case "border-start-start-radius", "border-start-end-radius", "border-end-start-radius", "border-end-end-radius":
+		return []string{property}
 	case "flex-flow":
 		return []string{"flex-direction", "flex-wrap"}
 	case "flex":
@@ -1261,6 +1319,10 @@ func expandedProperties(property string) []string {
 		return []string{"appearance"}
 	case "gap":
 		return []string{"row-gap", "column-gap"}
+	case "columns":
+		return []string{"column-width", "column-count"}
+	case "column-rule":
+		return []string{"column-rule-width", "column-rule-style", "column-rule-color"}
 	case "place-content":
 		return []string{"align-content", "justify-content"}
 	case "place-items":
@@ -1269,30 +1331,9 @@ func expandedProperties(property string) []string {
 		return []string{"align-self", "justify-self"}
 	case "inset":
 		return []string{"top", "right", "bottom", "left"}
-	case "inset-block":
-		return []string{"top", "bottom"}
-	case "inset-inline":
-		return []string{"left", "right"}
-	case "inset-block-start":
-		return []string{"top"}
-	case "inset-block-end":
-		return []string{"bottom"}
-	case "inset-inline-start":
-		return []string{"left"}
-	case "inset-inline-end":
-		return []string{"right"}
-	case "inline-size":
-		return []string{"width"}
-	case "block-size":
-		return []string{"height"}
-	case "min-inline-size":
-		return []string{"min-width"}
-	case "min-block-size":
-		return []string{"min-height"}
-	case "max-inline-size":
-		return []string{"max-width"}
-	case "max-block-size":
-		return []string{"max-height"}
+	case "inset-block", "inset-inline", "inset-block-start", "inset-block-end", "inset-inline-start", "inset-inline-end",
+		"inline-size", "block-size", "min-inline-size", "min-block-size", "max-inline-size", "max-block-size":
+		return []string{property}
 	case "outline":
 		return []string{"outline-width", "outline-style", "outline-color"}
 	case "transition":
@@ -1302,20 +1343,6 @@ func expandedProperties(property string) []string {
 	default:
 		return []string{property}
 	}
-}
-
-func borderLogicalKeys(sides []string, component string) []string {
-	components := []string{"width", "style", "color"}
-	if component != "" {
-		components = []string{component}
-	}
-	result := make([]string, 0, len(sides)*len(components))
-	for _, side := range sides {
-		for _, part := range components {
-			result = append(result, "border-"+side+"-"+part)
-		}
-	}
-	return result
 }
 
 func borderPropertyKeys(_ string) []string {
@@ -1662,6 +1689,14 @@ func parseDisplay(value string) (Display, bool) {
 		return DisplayTableRow, true
 	case "table-cell":
 		return DisplayTableCell, true
+	case "table-caption":
+		return DisplayTableCaption, true
+	case "table-column-group":
+		return DisplayTableColumnGroup, true
+	case "table-column":
+		return DisplayTableColumn, true
+	case "flow-root":
+		return DisplayFlowRoot, true
 	case "none":
 		return DisplayNone, true
 	default:

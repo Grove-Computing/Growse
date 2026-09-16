@@ -10,7 +10,7 @@ HTMLとCSSで画面を構築し、Tab単位の`Go` / `JS` selectorでWebGoまた
 | --- | --- |
 | ブラウジング | 左側Vertical Tab、URL入力、リンク遷移、same-document Routing、戻る、進む、再読込、Scroll復元 |
 | HTML / DOM | 要素の検索・生成・追加・削除、属性・class・Form値の操作 |
-| CSS Layout | Box Model、Flexbox、Grid、Position、Overflow、logical property、container query |
+| CSS Layout | Flow / Float、intrinsic sizing、Table、Flexbox、Grid / Subgrid、Writing Mode、Position / Sticky、Overflow、Multi-column |
 | CSS Paint | Color Level 4、Gradient、複数Background、Shadow、Opacity、2D Transform、bounded Filter / Blend |
 | Animation | CSS Transition、`@keyframes`、Easing、Iteration、Direction、Fill Mode、Pause、`prefers-reduced-motion` |
 | Form | Form Controls、Focus、Constraint Validation、GET / POST Submission |
@@ -49,7 +49,7 @@ wget -qO- https://github.com/Grove-Computing/Growse/releases/latest/download/ins
 Versionとインストール先を指定する場合は、環境変数を利用します。
 
 ```sh
-wget -qO- https://github.com/Grove-Computing/Growse/releases/latest/download/install.sh | GROWSE_VERSION=v0.18.0 GROWSE_INSTALL_DIR=/usr/local/bin bash
+wget -qO- https://github.com/Grove-Computing/Growse/releases/latest/download/install.sh | GROWSE_VERSION=v0.19.0 GROWSE_INSTALL_DIR=/usr/local/bin bash
 ```
 
 GUI Applicationの配置先は、`GROWSE_DATA_HOME`、`GROWSE_APPLICATIONS_DIR`、`GROWSE_WINDOWS_PROGRAMS_DIR`で変更できます。
@@ -59,7 +59,7 @@ GUI Applicationの配置先は、`GROWSE_DATA_HOME`、`GROWSE_APPLICATIONS_DIR`�
 Linux amd64のDocker imageを、GitHub Container Registryから取得できます。
 
 ```sh
-docker pull ghcr.io/grove-computing/growse:v0.18.0
+docker pull ghcr.io/grove-computing/growse:v0.19.0
 ```
 
 GrowseはGUI applicationのため、Containerから起動する場合はホストのDisplay ServerとGPU deviceを接続する必要があります。
@@ -115,6 +115,7 @@ python3 -m http.server 8080 --directory examples/data-app
 | External Web Platform | `go run ./examples/external-web-platform` | 外部classic / Module、dynamic import、WASM、same / cross-origin iframe、Service Worker offline、cross-origin CSS、sandbox |
 | Modern Web Compatibility | `go run ./examples/modern-web-compat` | Next.js / SvelteKit SSR、Tailwind CSS v4実artifact、SSR先行表示、段階的image更新、hydration、priority / cache / lifecycle診断 |
 | Browser-grade Compatibility | `go run ./examples/browser-grade-compat` | desktop / narrow・DPR 1 / 2 corpus、Chromium差分、visual / performance Gate、resource queue・dirty subtree・layer・damage診断 |
+| CSS Layout 2026 | `go run ./examples/css-layout-2026` | Flow、Sizing / Table、Flex / Grid / Subgrid、Writing Mode、Sticky / Overflow、Multi-column、動的reflow |
 
 WebGoソースは通常のGo build対象から除外するため、各Demoでは`_app.go`として配置しています。
 
@@ -129,6 +130,8 @@ External Web Platform Showcaseはtop-level、CDN、Frameを別のlocal Originで
 Modern Web Compatibility ShowcaseはNext.js / SvelteKit fixtureに加え、Tailwind CSS v4.1.12で実際に生成したstylesheetとSvelteKit SSR相当HTMLを`/real-site/`でlocalhostだけから配信します。desktop appでは既定のJavaScript Engineで、遅いscriptを待つ間のSSR先行表示、priority付きimage queue、段階的image commit、hydration、日本語、重複画像のdecode再利用、responsive grid、transform / opacity animationを確認できます。Go Engineへ切り替えた場合はSSR HTMLとEngine非依存resourceだけを表示し、JavaScriptを取得・実行しません。DevToolsはcache hit / miss / coalesced request / cancellation / rejectionをbody-free counterとして表示します。
 
 Browser-grade Compatibility Showcaseは同じ固定framework artifactをdesktop / narrow、DPR 1 / 2、SSR / resource完了 / hydration / interaction / scroll / animationのcorpusとして公開します。`tests/v017-conformance.sh`はChromium referenceとのDOM landmark、computed style、geometry、focus、resource、region別visual diffと固定runner性能をRelease Gateとして検証します。
+
+CSS Layout 2026 Showcaseはv0.19.0のscreen向けbaselineを1ページへ集約します。6個の操作ボタンでfloat / BFC、Table、Writing Mode / direction、relative / transform、Multi-columnを動的に切り替え、late image、nested scroll、Sticky、Paint / Hit Testingを同じrevisionで確認できます。固定Chromium 153とFirefox 156との差分fixture、選定WPT、Next.js / SvelteKit / Tailwind corpusはoffline CIで検証します。
 
 ## ブラウザの仕組み
 
@@ -212,6 +215,7 @@ DevToolsはRequest / Response body、Header、Cookie、Authorizationを保持し
 | [v0.16.0リリース定義](docs/v0.16.0.md) | v0.16.0 Real-site Rendering & Performance、Tailwind v4、CJK、image cache、差分AnimationのTheme、Scope、完了条件 |
 | [v0.17.0リリース定義](docs/v0.17.0.md) | v0.17.0 Browser-grade Web Compatibility、実framework corpus、media pipeline、incremental rendering、compositor、differential Gateの完了条件 |
 | [v0.18.0リリース定義](docs/v0.18.0.md) | v0.18.0 Browser-grade Resource Loading、非同期image commit、script lifecycle、priority、cache / cancel診断の完了条件 |
+| [v0.19.0リリース定義](docs/v0.19.0.md) | v0.19.0 CSS Layout 2026、Flow / Table / Flex / Grid / Subgrid / Writing Mode / Sticky / Multi-columnと仕様適合の完了条件 |
 
 ## 品質チェック
 
@@ -236,13 +240,13 @@ Go Modules、GitHub Actions、Docker base imageの依存関係は、Dependabot�
 
 ## セキュリティ
 
-v0.18.0のRuntime workerは外部JavaScriptとhydration resourceのhost作用をdefault denyにし、image / script queue、cache、dirty propagation、compositor layer、Animation callback、診断にもPage単位の上限を適用します。Navigation、Page close、Engine切替では進行中resourceをcancelしますが、実験的browserとして未知のnative/runtime/decoder脆弱性への完全耐性は保証しません。外部Go sourceは引き続きtrusted loopbackだけに限定されます。Growseを権限の高いユーザーや機密profileで実行しないでください。
+v0.19.0のRuntime workerは外部JavaScriptとhydration resourceのhost作用をdefault denyにし、image / script queue、cache、dirty propagation、compositor layer、Animation callback、診断にもPage単位の上限を適用します。Layoutも実行時間、box / fragment、recursion、line / float、column balancingへ上限を設けます。Navigation、Page close、Engine切替では進行中resourceをcancelしますが、実験的browserとして未知のnative/runtime/decoder脆弱性への完全耐性は保証しません。外部Go sourceは引き続きtrusted loopbackだけに限定されます。Growseを権限の高いユーザーや機密profileで実行しないでください。
 
 脆弱性の非公開報告方法、サポート対象、通信とResource LoadingのSecurity Boundaryは[SECURITY.md](SECURITY.md)を参照してください。
 
 ## リリース成果物
 
-`v0.18.0`のようなVersion tagをpushすると、GitHub Actionsが次の成果物、SHA-256 checksum、SPDX JSON SBOMをGitHub Releaseへ公開します。ArchiveとSBOMにはGitHub Artifact Attestation、Docker imageにはBuildKitのSBOMとSLSA Provenanceを付与します。
+`v0.19.0`のようなVersion tagをpushすると、GitHub Actionsが次の成果物、SHA-256 checksum、SPDX JSON SBOMをGitHub Releaseへ公開します。ArchiveとSBOMにはGitHub Artifact Attestation、Docker imageにはBuildKitのSBOMとSLSA Provenanceを付与します。
 
 - Linux amd64
 - macOS Intel

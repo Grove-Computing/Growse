@@ -316,8 +316,12 @@ func fontStretchScale(value string) float32 {
 }
 
 func usedLineMetrics(run inlineRun) (height, ascent float32) {
-	if run.flex && run.height > 0 {
-		return run.height, min(max(run.baseline, float32(0)), run.height)
+	if run.atomic && run.height > 0 {
+		ascent := run.baseline
+		if ascent <= 0 {
+			ascent = run.height
+		}
+		return run.height, min(max(ascent, float32(0)), run.height)
 	}
 	_, measuredHeight, measuredAscent := measureStyledText("Mg", run.style)
 	height = measuredHeight

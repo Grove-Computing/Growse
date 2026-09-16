@@ -349,3 +349,145 @@ func TestBuildGridReevaluatesAutoFillAndAutoFitAfterResize(t *testing.T) {
 		t.Fatalf("auto-fit did not collapse empty tracks: %#v", fitRect.Rect)
 	}
 }
+
+func TestBuildGridSpanningContributionCyclicPercentageAndAbsoluteChild(t *testing.T) {
+	document := dom.NewDocument()
+	grid := document.CreateElement("div", map[string]string{"class": "grid"})
+	spanning := document.CreateElement("div", map[string]string{"class": "spanning"})
+	witness := document.CreateElement("div", map[string]string{"class": "witness"})
+	percentage := document.CreateElement("div", map[string]string{"class": "percentage"})
+	positioned := document.CreateElement("div", map[string]string{"class": "positioned"})
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, grid},
+		[2]*dom.Node{grid, spanning},
+		[2]*dom.Node{grid, positioned},
+		[2]*dom.Node{grid, witness},
+		[2]*dom.Node{grid, percentage},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.grid { position:relative; display:grid; width:220px; grid-template-columns:100px auto; grid-template-rows:50% auto; gap:0 }
+.spanning { grid-column:1 / 3; grid-row:1; width:260px; height:40px; background-color:#ddd }
+.witness { grid-column:2; grid-row:2; background-color:#bbb }
+.percentage { grid-column:1; grid-row:2; height:20px; background-color:#aaa }
+.positioned { position:absolute; grid-column:2; grid-row:1; width:20px; height:10px; background-color:#c44 }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, stylemodel.Compute(document, stylesheet), 500)
+	gridRect := tree.Bounds[grid.ID]
+	spanRect := decorationForNode(t, tree, spanning.ID)
+	witnessRect := decorationForNode(t, tree, witness.ID)
+	percentageRect := decorationForNode(t, tree, percentage.ID)
+	positionedRect := decorationForNode(t, tree, positioned.ID)
+	if witnessRect.Width != 160 || witnessRect.X != gridRect.X+100 {
+		t.Fatalf("spanning contribution did not grow the auto track: span %#v witness %#v", spanRect.Rect, witnessRect.Rect)
+	}
+	if percentageRect.Y != gridRect.Y+40 {
+		t.Fatalf("indefinite cyclic percentage row = %#v, want second row after 40px intrinsic row", percentageRect.Rect)
+	}
+	if positionedRect.X != gridRect.X+100 || positionedRect.Y != gridRect.Y {
+		t.Fatalf("absolute grid static position = %#v, grid %#v", positionedRect.Rect, gridRect)
+	}
+	if spanRect.Y != gridRect.Y || witnessRect.Y != gridRect.Y+40 {
+		t.Fatalf("absolute child affected grid auto-placement: span %#v witness %#v", spanRect.Rect, witnessRect.Rect)
+	}
+}
+
+func TestBuildSubgridSharesParentTracksGapsNamedLinesAndContributions(t *testing.T) {
+	document := dom.NewDocument()
+	parent := document.CreateElement("div", map[string]string{"class": "parent"})
+	subgrid := document.CreateElement("div", map[string]string{"class": "subgrid"})
+	first := document.CreateElement("div", map[string]string{"class": "first"})
+	contributor := document.CreateElement("div", map[string]string{"class": "contributor"})
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, parent},
+		[2]*dom.Node{parent, subgrid},
+		[2]*dom.Node{subgrid, first},
+		[2]*dom.Node{subgrid, contributor},
+		[2]*dom.Node{contributor, document.CreateText("intrinsic contribution")},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.parent {
+  display:grid;
+  width:260px;
+  grid-template-columns:[left] 70px [content] auto [right];
+  grid-template-rows:[top] 30px [middle] 40px [bottom];
+  gap:12px 10px;
+}
+.subgrid {
+  display:grid;
+  grid-column:left / right;
+  grid-row:top / bottom;
+  grid-template-columns:subgrid [local-left] [local-middle] [local-right];
+  grid-template-rows:subgrid;
+}
+.first { grid-column:local-left / local-middle; grid-row:1; background-color:#bbb }
+.contributor { grid-column:content / right; grid-row:2; min-width:150px; background-color:#c44 }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, stylemodel.Compute(document, stylesheet), 500)
+	parentRect := tree.Bounds[parent.ID]
+	firstRect := decorationForNode(t, tree, first.ID)
+	contributorRect := decorationForNode(t, tree, contributor.ID)
+	if firstRect.X != parentRect.X || firstRect.Width != 70 || contributorRect.X != parentRect.X+80 {
+		t.Fatalf("subgrid columns/named lines = parent %#v first %#v contributor %#v", parentRect, firstRect.Rect, contributorRect.Rect)
+	}
+	if contributorRect.Width < 150 {
+		t.Fatalf("nested contribution did not grow inherited auto track: %#v", contributorRect.Rect)
+	}
+	if firstRect.Y != parentRect.Y || contributorRect.Y != parentRect.Y+42 || contributorRect.Height != 40 {
+		t.Fatalf("subgrid rows/gap = parent %#v first %#v contributor %#v", parentRect, firstRect.Rect, contributorRect.Rect)
+	}
+}
+
+func TestBuildAlignmentHandlesSafeUnsafeLogicalAxesAndGridBaseline(t *testing.T) {
+	document := dom.NewDocument()
+	vertical := document.CreateElement("div", map[string]string{"class": "vertical"})
+	verticalItem := document.CreateElement("div", map[string]string{"class": "vertical-item"})
+	safeGrid := document.CreateElement("div", map[string]string{"class": "overflow-grid safe"})
+	safeItem := document.CreateElement("div", map[string]string{"class": "overflow-item"})
+	unsafeGrid := document.CreateElement("div", map[string]string{"class": "overflow-grid unsafe"})
+	unsafeItem := document.CreateElement("div", map[string]string{"class": "overflow-item"})
+	baselineGrid := document.CreateElement("div", map[string]string{"class": "baseline-grid"})
+	large := document.CreateElement("div", map[string]string{"class": "large"})
+	small := document.CreateElement("div", map[string]string{"class": "small"})
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, vertical}, [2]*dom.Node{vertical, verticalItem},
+		[2]*dom.Node{document.Root, safeGrid}, [2]*dom.Node{safeGrid, safeItem},
+		[2]*dom.Node{document.Root, unsafeGrid}, [2]*dom.Node{unsafeGrid, unsafeItem},
+		[2]*dom.Node{document.Root, baselineGrid}, [2]*dom.Node{baselineGrid, large}, [2]*dom.Node{large, document.CreateText("Large")},
+		[2]*dom.Node{baselineGrid, small}, [2]*dom.Node{small, document.CreateText("small")},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.vertical { writing-mode:vertical-rl; display:flex; width:100px; height:100px; justify-content:end; align-items:start; background-color:#eee }
+.vertical-item { width:20px; height:20px; flex:none; background-color:#c44 }
+.overflow-grid { display:grid; width:100px; grid-template-columns:50px; grid-template-rows:20px; background-color:#eee }
+.overflow-item { width:80px; height:20px; background-color:#bbb }
+.safe .overflow-item { justify-self:safe center }
+.unsafe .overflow-item { justify-self:unsafe center }
+.baseline-grid { display:grid; width:200px; grid-template-columns:100px 100px; grid-template-rows:50px; align-items:baseline }
+.large { font-size:30px }
+.small { font-size:14px }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, stylemodel.Compute(document, stylesheet), 500)
+	verticalRect := decorationForNode(t, tree, vertical.ID)
+	verticalItemRect := decorationForNode(t, tree, verticalItem.ID)
+	if verticalItemRect.X != verticalRect.X+80 || verticalItemRect.Y != verticalRect.Y+80 {
+		t.Fatalf("vertical logical alignment = container %#v item %#v", verticalRect.Rect, verticalItemRect.Rect)
+	}
+	safeRect := decorationForNode(t, tree, safeItem.ID)
+	unsafeRect := decorationForNode(t, tree, unsafeItem.ID)
+	if unsafeRect.X != safeRect.X-15 {
+		t.Fatalf("safe/unsafe overflow alignment = safe %#v unsafe %#v", safeRect.Rect, unsafeRect.Rect)
+	}
+	largeText, smallText := boxForNode(t, tree, large.ID), boxForNode(t, tree, small.ID)
+	if largeText.Baseline != smallText.Baseline {
+		t.Fatalf("grid baselines = %v and %v", largeText.Baseline, smallText.Baseline)
+	}
+}

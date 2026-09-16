@@ -52,15 +52,27 @@ func TestNonInvertibleAnimatedTransformIsNotHitTested(t *testing.T) {
 func TestCloneKeepsCachedLayoutPaintStateImmutable(t *testing.T) {
 	nodeID := dom.NodeID(9)
 	original := &layoutmodel.Tree{
-		Decorations: []layoutmodel.Decoration{{NodeID: nodeID, Background: 0xff0000ff, Opacity: 1}},
-		Boxes:       []layoutmodel.Box{{NodeID: nodeID, Color: 0xff0000ff, Runs: []layoutmodel.TextRun{{NodeID: nodeID, Color: 0xff0000ff}}}},
+		Decorations:       []layoutmodel.Decoration{{NodeID: nodeID, Background: 0xff0000ff, Opacity: 1, Clip: &layoutmodel.Rect{Width: 30}, Clips: []layoutmodel.ClipRegion{{NodeID: nodeID, Rect: layoutmodel.Rect{Width: 30}}}}},
+		Boxes:             []layoutmodel.Box{{NodeID: nodeID, Color: 0xff0000ff, Runs: []layoutmodel.TextRun{{NodeID: nodeID, Color: 0xff0000ff}}, Clip: &layoutmodel.Rect{Width: 40}, Clips: []layoutmodel.ClipRegion{{NodeID: nodeID, Rect: layoutmodel.Rect{Width: 40}}}}},
+		ScrollContainers:  map[dom.NodeID]layoutmodel.ScrollContainer{nodeID: {NodeID: nodeID, ScrollWidth: 100}},
+		ScrollOffsets:     map[dom.NodeID]layoutmodel.ScrollOffset{nodeID: {X: 5}},
+		StickyConstraints: map[dom.NodeID]layoutmodel.StickyConstraint{nodeID: {AppliedX: 6}},
 	}
 	frame := layoutmodel.Clone(original)
+	frame.Decorations[0].Clip.Width = 1
+	frame.Decorations[0].Clips[0].Width = 1
+	frame.Boxes[0].Clip.Width = 1
+	frame.Boxes[0].Clips[0].Width = 1
+	frame.ScrollContainers[nodeID] = layoutmodel.ScrollContainer{ScrollWidth: 1}
+	frame.ScrollOffsets[nodeID] = layoutmodel.ScrollOffset{X: 1}
+	frame.StickyConstraints[nodeID] = layoutmodel.StickyConstraint{AppliedX: 1}
 	layoutmodel.ApplyAnimatedStyles(frame, stylemodel.Map{nodeID: {
 		Color: 0x0000ffff, BackgroundColor: 0x0000ffff, Opacity: 0.5,
 	}})
 	if original.Decorations[0].Background != 0xff0000ff || original.Decorations[0].Opacity != 1 ||
-		original.Boxes[0].Color != 0xff0000ff || original.Boxes[0].Runs[0].Color != 0xff0000ff {
+		original.Boxes[0].Color != 0xff0000ff || original.Boxes[0].Runs[0].Color != 0xff0000ff ||
+		original.Decorations[0].Clip.Width != 30 || original.Decorations[0].Clips[0].Width != 30 || original.Boxes[0].Clip.Width != 40 || original.Boxes[0].Clips[0].Width != 40 ||
+		original.ScrollContainers[nodeID].ScrollWidth != 100 || original.ScrollOffsets[nodeID].X != 5 || original.StickyConstraints[nodeID].AppliedX != 6 {
 		t.Fatalf("cached layout was mutated: %#v", original)
 	}
 }

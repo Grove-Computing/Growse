@@ -603,6 +603,9 @@ func (runtime *Runtime) evaluateModuleScript(ctx context.Context, name string, s
 		return scriptErr
 	})
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+			return fmt.Errorf("evaluate %s: module graph exceeded %s", name, timeout)
+		}
 		return err
 	}
 	select {

@@ -3,6 +3,7 @@ package layout
 import (
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/Grove-Computing/Growse/internal/dom"
@@ -19,102 +20,134 @@ const (
 	checkableSize  = float32(32)
 	buttonWidth    = float32(120)
 	textareaHeight = float32(96)
+	maxLayoutDepth = 192
+	maxLineBoxes   = 16384
+	maxFloatBoxes  = 4096
+	maxLayoutBoxes = 32768
+	maxLayoutTime  = 2 * time.Second
 )
 
 type blockStyle struct {
-	fonts               *FontSet
-	fontSize            float32
-	bold                bool
-	fontFamilies        []string
-	fontStyle           string
-	fontStretch         string
-	color               uint32
-	background          uint32
-	image               stylemodel.BackgroundImage
-	repeat              stylemodel.BackgroundRepeat
-	position            stylemodel.BackgroundPosition
-	backgroundSize      stylemodel.BackgroundSize
-	backgroundLayers    []stylemodel.BackgroundLayer
-	layoutPosition      stylemodel.Position
-	inset               stylemodel.Insets
-	zIndex              int
-	zIndexAuto          bool
-	boxShadows          []stylemodel.Shadow
-	textShadows         []stylemodel.Shadow
-	outline             stylemodel.BorderSide
-	outlineOffset       float32
-	transform           []stylemodel.TransformFunction
-	transformOrigin     stylemodel.BackgroundPosition
-	radius              stylemodel.BorderRadii
-	decoration          stylemodel.TextDecorationLine
-	decorationColor     uint32
-	opacity             float32
-	display             stylemodel.Display
-	float               stylemodel.Float
-	clear               stylemodel.Clear
-	hidden              bool
-	margin              stylemodel.Edges
-	padding             stylemodel.Edges
-	border              stylemodel.Borders
-	boxSizing           stylemodel.BoxSizing
-	width               stylemodel.SizeValue
-	height              stylemodel.SizeValue
-	minWidth            stylemodel.SizeValue
-	minHeight           stylemodel.SizeValue
-	maxWidth            stylemodel.SizeValue
-	maxHeight           stylemodel.SizeValue
-	lineHeight          float32
-	whiteSpace          stylemodel.WhiteSpace
-	textAlign           stylemodel.TextAlign
-	textTransform       stylemodel.TextTransform
-	textIndent          stylemodel.LengthPercentage
-	letterSpacing       float32
-	wordSpacing         float32
-	wordBreak           stylemodel.WordBreak
-	overflowWrap        stylemodel.OverflowWrap
-	verticalAlign       stylemodel.VerticalAlign
-	textOverflow        stylemodel.TextOverflow
-	objectFit           stylemodel.ObjectFit
-	objectPosition      stylemodel.BackgroundPosition
-	listStyleType       stylemodel.ListStyleType
-	listStylePosition   stylemodel.ListStylePosition
-	listStyleImage      string
-	appearance          stylemodel.Appearance
-	accentColor         uint32
-	accentColorAuto     bool
-	cursor              stylemodel.Cursor
-	filters             []stylemodel.Filter
-	backdropFilters     []stylemodel.Filter
-	mixBlendMode        stylemodel.BlendMode
-	overflowX           stylemodel.Overflow
-	overflowY           stylemodel.Overflow
-	flexDirection       stylemodel.FlexDirection
-	flexWrap            stylemodel.FlexWrap
-	justifyContent      stylemodel.JustifyContent
-	alignItems          stylemodel.Align
-	justifyItems        stylemodel.Align
-	alignContent        stylemodel.Align
-	order               int
-	flexGrow            float32
-	flexShrink          float32
-	flexBasis           stylemodel.FlexBasis
-	alignSelf           stylemodel.Align
-	justifySelf         stylemodel.Align
-	rowGap              stylemodel.LengthPercentage
-	columnGap           stylemodel.LengthPercentage
-	gridTemplateColumns []stylemodel.GridTrackSize
-	gridTemplateRows    []stylemodel.GridTrackSize
-	gridAutoColumns     []stylemodel.GridTrackSize
-	gridAutoRows        []stylemodel.GridTrackSize
-	gridColumnLines     map[string][]int
-	gridRowLines        map[string][]int
-	gridTemplateAreas   map[string]stylemodel.GridArea
-	gridColumn          stylemodel.GridPlacement
-	gridRow             stylemodel.GridPlacement
-	gridAreaName        string
-	gridAutoFlow        stylemodel.GridAutoFlow
-	marginAuto          stylemodel.AutoEdges
-	aspectRatio         float32
+	fonts                *FontSet
+	fontSize             float32
+	bold                 bool
+	fontFamilies         []string
+	fontStyle            string
+	fontStretch          string
+	color                uint32
+	background           uint32
+	image                stylemodel.BackgroundImage
+	repeat               stylemodel.BackgroundRepeat
+	position             stylemodel.BackgroundPosition
+	backgroundSize       stylemodel.BackgroundSize
+	backgroundLayers     []stylemodel.BackgroundLayer
+	layoutPosition       stylemodel.Position
+	inset                stylemodel.Insets
+	zIndex               int
+	zIndexAuto           bool
+	boxShadows           []stylemodel.Shadow
+	textShadows          []stylemodel.Shadow
+	outline              stylemodel.BorderSide
+	outlineOffset        float32
+	transform            []stylemodel.TransformFunction
+	transformOrigin      stylemodel.BackgroundPosition
+	radius               stylemodel.BorderRadii
+	decoration           stylemodel.TextDecorationLine
+	decorationColor      uint32
+	opacity              float32
+	display              stylemodel.Display
+	tableLayout          stylemodel.TableLayout
+	borderCollapse       stylemodel.BorderCollapse
+	borderSpacingX       float32
+	borderSpacingY       float32
+	captionSide          stylemodel.CaptionSide
+	float                stylemodel.Float
+	clear                stylemodel.Clear
+	hidden               bool
+	margin               stylemodel.Edges
+	padding              stylemodel.Edges
+	border               stylemodel.Borders
+	boxSizing            stylemodel.BoxSizing
+	width                stylemodel.SizeValue
+	height               stylemodel.SizeValue
+	minWidth             stylemodel.SizeValue
+	minHeight            stylemodel.SizeValue
+	maxWidth             stylemodel.SizeValue
+	maxHeight            stylemodel.SizeValue
+	lineHeight           float32
+	whiteSpace           stylemodel.WhiteSpace
+	writingMode          stylemodel.WritingMode
+	direction            stylemodel.Direction
+	textAlign            stylemodel.TextAlign
+	textTransform        stylemodel.TextTransform
+	textIndent           stylemodel.LengthPercentage
+	letterSpacing        float32
+	wordSpacing          float32
+	wordBreak            stylemodel.WordBreak
+	overflowWrap         stylemodel.OverflowWrap
+	verticalAlign        stylemodel.VerticalAlign
+	textOverflow         stylemodel.TextOverflow
+	objectFit            stylemodel.ObjectFit
+	objectPosition       stylemodel.BackgroundPosition
+	listStyleType        stylemodel.ListStyleType
+	listStylePosition    stylemodel.ListStylePosition
+	listStyleImage       string
+	appearance           stylemodel.Appearance
+	accentColor          uint32
+	accentColorAuto      bool
+	cursor               stylemodel.Cursor
+	filters              []stylemodel.Filter
+	backdropFilters      []stylemodel.Filter
+	mixBlendMode         stylemodel.BlendMode
+	overflowX            stylemodel.Overflow
+	overflowY            stylemodel.Overflow
+	flexDirection        stylemodel.FlexDirection
+	flexWrap             stylemodel.FlexWrap
+	justifyContent       stylemodel.JustifyContent
+	justifyContentSafety stylemodel.OverflowAlignment
+	alignItems           stylemodel.Align
+	alignItemsSafety     stylemodel.OverflowAlignment
+	justifyItems         stylemodel.Align
+	justifyItemsSafety   stylemodel.OverflowAlignment
+	alignContent         stylemodel.Align
+	alignContentSafety   stylemodel.OverflowAlignment
+	order                int
+	flexGrow             float32
+	flexShrink           float32
+	flexBasis            stylemodel.FlexBasis
+	alignSelf            stylemodel.Align
+	alignSelfSafety      stylemodel.OverflowAlignment
+	justifySelf          stylemodel.Align
+	justifySelfSafety    stylemodel.OverflowAlignment
+	rowGap               stylemodel.LengthPercentage
+	rowGapNormal         bool
+	columnGap            stylemodel.LengthPercentage
+	columnGapNormal      bool
+	columnCount          int
+	columnWidth          stylemodel.SizeValue
+	columnRule           stylemodel.BorderSide
+	columnFill           stylemodel.ColumnFill
+	columnSpan           stylemodel.ColumnSpan
+	breakBefore          stylemodel.FragmentBreak
+	breakAfter           stylemodel.FragmentBreak
+	breakInside          stylemodel.FragmentBreak
+	widows               int
+	orphans              int
+	gridTemplateColumns  []stylemodel.GridTrackSize
+	gridTemplateRows     []stylemodel.GridTrackSize
+	gridColumnsSubgrid   bool
+	gridRowsSubgrid      bool
+	gridAutoColumns      []stylemodel.GridTrackSize
+	gridAutoRows         []stylemodel.GridTrackSize
+	gridColumnLines      map[string][]int
+	gridRowLines         map[string][]int
+	gridTemplateAreas    map[string]stylemodel.GridArea
+	gridColumn           stylemodel.GridPlacement
+	gridRow              stylemodel.GridPlacement
+	gridAreaName         string
+	gridAutoFlow         stylemodel.GridAutoFlow
+	marginAuto           stylemodel.AutoEdges
+	aspectRatio          float32
 }
 
 type inlineRun struct {
@@ -126,10 +159,13 @@ type inlineRun struct {
 	atomic      bool
 	flex        bool
 	grid        bool
+	image       bool
 	width       float32
 	widthOffset float32
 	height      float32
 	baseline    float32
+	boxWidth    float32
+	boxHeight   float32
 	opacity     float32
 }
 
@@ -173,6 +209,7 @@ func BuildWithScrollAtRevision(document *dom.Document, computed stylemodel.Map, 
 }
 
 func build(document *dom.Document, computed stylemodel.Map, images map[dom.NodeID]ImageResource, fonts *FontSet, viewportWidth, viewportHeight, scrollX, scrollY float32) *Tree {
+	startedAt := time.Now()
 	pageInset := pagePadding
 	if usesBrowserViewport(document, computed) {
 		pageInset = 0
@@ -182,8 +219,8 @@ func build(document *dom.Document, computed stylemodel.Map, images map[dom.NodeI
 	}
 
 	tree := &Tree{
-		Width: viewportWidth, Background: 0xffffffff, ScrollX: scrollX, ScrollY: scrollY, StackingContexts: []StackingContext{{Parent: -1}},
-		Parents: make(map[dom.NodeID]dom.NodeID), Bounds: make(map[dom.NodeID]Rect),
+		Width: viewportWidth, ViewportHeight: viewportHeight, Background: 0xffffffff, ScrollX: scrollX, ScrollY: scrollY, StackingContexts: []StackingContext{{Parent: -1}},
+		Parents: make(map[dom.NodeID]dom.NodeID), Bounds: make(map[dom.NodeID]Rect), ScrollOffsets: make(map[dom.NodeID]ScrollOffset),
 	}
 	recordNodeParents(tree, document)
 	state := engine{
@@ -197,6 +234,9 @@ func build(document *dom.Document, computed stylemodel.Map, images map[dom.NodeI
 		viewportHeight: viewportHeight,
 		scrollX:        scrollX,
 		scrollY:        scrollY,
+		subgrids:       make(map[dom.NodeID]subgridContext),
+		now:            time.Now,
+		deadline:       startedAt.Add(maxLayoutTime),
 	}
 	if document != nil {
 		if body := findElement(document.Root, "body"); body != nil {
@@ -206,26 +246,69 @@ func build(document *dom.Document, computed stylemodel.Map, images map[dom.NodeI
 		}
 		state.walk(document.Root, pageInset, viewportWidth-pageInset*2, viewportHeight, viewportHeight > 0)
 	}
+	applyWritingMetadata(tree, computed)
 	tree.Height = state.y + pageInset
+	initializeScrollContainers(tree, computed)
+	initializeStickyConstraints(tree, computed)
+	applyInitialStickyOffsets(tree, computed)
 	tree.ScrollWidth, tree.ScrollHeight = tree.Width, tree.Height
 	for _, box := range tree.Boxes {
 		contentWidth := box.Width
-		if len(box.Runs) != 0 {
+		if len(box.Runs) != 0 && box.WritingMode == stylemodel.WritingModeHorizontalTB {
 			contentWidth = 0
 			for _, run := range box.Runs {
 				contentWidth += run.Width
 			}
 		}
-		tree.ScrollWidth = max(tree.ScrollWidth, box.X+contentWidth+pageInset)
-		tree.ScrollHeight = max(tree.ScrollHeight, box.Y+box.Height+pageInset)
+		right, bottom := box.X+contentWidth, box.Y+box.Height
+		if box.Clip != nil {
+			right = min(right, box.Clip.X+box.Clip.Width)
+			bottom = min(bottom, box.Clip.Y+box.Clip.Height)
+		}
+		tree.ScrollWidth = max(tree.ScrollWidth, right+pageInset)
+		tree.ScrollHeight = max(tree.ScrollHeight, bottom+pageInset)
 	}
 	for _, decoration := range tree.Decorations {
-		tree.ScrollWidth = max(tree.ScrollWidth, decoration.X+decoration.Width+pageInset)
-		tree.ScrollHeight = max(tree.ScrollHeight, decoration.Y+decoration.Height+pageInset)
+		right, bottom := decoration.X+decoration.Width, decoration.Y+decoration.Height
+		if decoration.Clip != nil {
+			right = min(right, decoration.Clip.X+decoration.Clip.Width)
+			bottom = min(bottom, decoration.Clip.Y+decoration.Clip.Height)
+		}
+		tree.ScrollWidth = max(tree.ScrollWidth, right+pageInset)
+		tree.ScrollHeight = max(tree.ScrollHeight, bottom+pageInset)
 	}
 	assignFragmentIdentities(tree)
 	buildCompositingLayers(tree, computed)
 	return tree
+}
+
+// applyWritingMetadata keeps the logical coordinate system attached to every
+// visual fragment. Geometry, paint, and hit testing can then consume one
+// layout result without consulting mutable computed-style state again.
+func applyWritingMetadata(tree *Tree, computed stylemodel.Map) {
+	if tree == nil {
+		return
+	}
+	for index := range tree.Decorations {
+		if style, ok := computed[tree.Decorations[index].NodeID]; ok {
+			tree.Decorations[index].WritingMode = style.WritingMode
+			tree.Decorations[index].Direction = style.Direction
+		}
+	}
+	for index := range tree.Boxes {
+		box := &tree.Boxes[index]
+		if style, ok := computed[box.NodeID]; ok {
+			box.WritingMode = style.WritingMode
+			box.Direction = style.Direction
+		}
+		for runIndex := range box.Runs {
+			run := &box.Runs[runIndex]
+			if style, ok := computed[run.NodeID]; ok {
+				run.WritingMode = style.WritingMode
+				run.Direction = style.Direction
+			}
+		}
+	}
 }
 
 func usesBrowserViewport(document *dom.Document, computed stylemodel.Map) bool {
@@ -253,8 +336,47 @@ type engine struct {
 	viewportWidth, viewportHeight float32
 	scrollX, scrollY              float32
 	positionCB                    *Rect
+	fixedCB                       *Rect
 	stackingID                    int
 	floats                        []floatRegion
+	subgrids                      map[dom.NodeID]subgridContext
+	depth                         int
+	now                           func() time.Time
+	deadline                      time.Time
+	boxLimitReported              bool
+	fragmentLimitReported         bool
+	timeLimitReported             bool
+}
+
+// withinBudget bounds work while geometry is being generated. The final
+// fragment cap remains a second line of defence for compound operations that
+// can emit more than one visual fragment at a time.
+func (e *engine) withinBudget(nodeID dom.NodeID) bool {
+	if e == nil || e.tree == nil {
+		return false
+	}
+	if len(e.tree.Boxes) >= maxLayoutBoxes {
+		if !e.boxLimitReported {
+			e.tree.addFallback(nodeID, "layout box limit exceeded")
+			e.boxLimitReported = true
+		}
+		return false
+	}
+	if len(e.tree.Boxes)+len(e.tree.Decorations) >= maxLayoutFragments {
+		if !e.fragmentLimitReported {
+			e.tree.addFallback(nodeID, "layout fragment limit exceeded")
+			e.fragmentLimitReported = true
+		}
+		return false
+	}
+	if e.now != nil && !e.deadline.IsZero() && !e.now().Before(e.deadline) {
+		if !e.timeLimitReported {
+			e.tree.addFallback(nodeID, "layout time limit exceeded")
+			e.timeLimitReported = true
+		}
+		return false
+	}
+	return true
 }
 
 func (e *engine) nextOrder() int {
@@ -264,7 +386,7 @@ func (e *engine) nextOrder() int {
 }
 
 func (e *engine) walk(node *dom.Node, x, width, containingHeight float32, heightDefinite bool) {
-	if node == nil {
+	if node == nil || !e.withinBudget(node.ID) {
 		return
 	}
 	switch node.Type {
@@ -365,6 +487,8 @@ func (e *engine) addInput(node *dom.Node, style blockStyle, x, width, containing
 	if resolved, ok := resolveSize(style.height, containingHeight, heightDefinite); ok {
 		usedHeight = resolved
 	}
+	usedWidth, usedHeight = applyPreferredAspectRatio(usedWidth, usedHeight, style)
+	usedWidth = constrainSize(usedWidth, style.minWidth, style.maxWidth, availableWidth, true)
 	usedHeight = constrainSize(usedHeight, style.minHeight, style.maxHeight, containingHeight, heightDefinite)
 	value := forms.CurrentValue(node)
 	inputType, _ := forms.EditableTextControlType(node)
@@ -403,18 +527,21 @@ func isEditableTextControl(node *dom.Node) bool {
 }
 
 func isImageElement(node *dom.Node, resources map[dom.NodeID]ImageResource) bool {
-	return node != nil && resources != nil && (node.TagName == "img" || node.TagName == "svg")
+	return node != nil && (node.TagName == "img" || node.TagName == "svg")
 }
 
-func (e *engine) addImage(node *dom.Node, style blockStyle, x, width, containingHeight float32, heightDefinite bool) {
+type resolvedImageGeometry struct {
+	resource                    ImageResource
+	outerWidth, outerHeight     float32
+	contentWidth, contentHeight float32
+}
+
+func (e *engine) resolveImageGeometry(node *dom.Node, style blockStyle, availableWidth, containingHeight float32, heightDefinite bool) resolvedImageGeometry {
 	resource, loaded := e.images[node.ID]
 	if !loaded {
 		alt, _ := node.Attribute("alt")
 		resource = ImageResource{Alt: alt, Error: "image resource is unavailable"}
 	}
-	e.y += style.margin.Top
-	x += style.margin.Left
-	availableWidth := max(width-style.margin.Left-style.margin.Right, float32(1))
 	attributeWidth, hasAttributeWidth := imageDimensionAttribute(node, "width")
 	attributeHeight, hasAttributeHeight := imageDimensionAttribute(node, "height")
 	intrinsicWidth, intrinsicHeight := resource.IntrinsicWidth, resource.IntrinsicHeight
@@ -463,6 +590,17 @@ func (e *engine) addImage(node *dom.Node, style blockStyle, x, width, containing
 		contentWidth = max(outerWidth-horizontal, float32(0))
 		contentHeight = max(outerHeight-vertical, float32(0))
 	}
+	return resolvedImageGeometry{resource: resource, outerWidth: outerWidth, outerHeight: outerHeight, contentWidth: contentWidth, contentHeight: contentHeight}
+}
+
+func (e *engine) addImage(node *dom.Node, style blockStyle, x, width, containingHeight float32, heightDefinite bool) {
+	e.y += style.margin.Top
+	x += style.margin.Left
+	availableWidth := max(width-style.margin.Left-style.margin.Right, float32(1))
+	geometry := e.resolveImageGeometry(node, style, availableWidth, containingHeight, heightDefinite)
+	resource := geometry.resource
+	outerWidth, outerHeight := geometry.outerWidth, geometry.outerHeight
+	contentWidth, contentHeight := geometry.contentWidth, geometry.contentHeight
 	contentX := x + style.border.Left.Width + style.padding.Left
 	contentY := e.y + style.border.Top.Width + style.padding.Top
 	imageRect := fitImageRect(contentX, contentY, contentWidth, contentHeight, resource.IntrinsicWidth, resource.IntrinsicHeight, style.objectFit, style.objectPosition)
@@ -479,6 +617,33 @@ func (e *engine) addImage(node *dom.Node, style blockStyle, x, width, containing
 	e.tree.Boxes = append(e.tree.Boxes, box)
 	e.tree.Bounds[node.ID] = Rect{X: x, Y: e.y, Width: box.Width, Height: box.Height}
 	e.y += box.Height + style.margin.Bottom
+}
+
+func (e *engine) resolveInlineImageSize(run inlineRun, containingWidth float32) (float32, float32, float32) {
+	geometry := e.resolveImageGeometry(run.node, run.style, max(containingWidth-run.style.margin.Left-run.style.margin.Right, float32(1)), 0, false)
+	width := geometry.outerWidth + run.style.margin.Left + run.style.margin.Right
+	height := geometry.outerHeight + run.style.margin.Top + run.style.margin.Bottom
+	return max(width, float32(1)), max(height, float32(1)), max(height-run.style.margin.Bottom, float32(0))
+}
+
+func (e *engine) renderInlineImage(run inlineRun, x, y, containingWidth float32) {
+	geometry := e.resolveImageGeometry(run.node, run.style, max(containingWidth-run.style.margin.Left-run.style.margin.Right, float32(1)), 0, false)
+	boxX, boxY := x+run.style.margin.Left, y+run.style.margin.Top
+	contentX := boxX + run.style.border.Left.Width + run.style.padding.Left
+	contentY := boxY + run.style.border.Top.Width + run.style.padding.Top
+	imageRect := fitImageRect(contentX, contentY, geometry.contentWidth, geometry.contentHeight, geometry.resource.IntrinsicWidth, geometry.resource.IntrinsicHeight, run.style.objectFit, run.style.objectPosition)
+	box := Box{
+		Order: e.nextOrder(), StackingID: e.stackingID, NodeID: run.node.ID, Tag: run.node.TagName,
+		Image: true, ImageURL: geometry.resource.URL, Alt: geometry.resource.Alt, ImageRect: imageRect,
+		ImageClip: Rect{X: contentX, Y: contentY, Width: geometry.contentWidth, Height: geometry.contentHeight}, ImageFailed: !geometry.resource.Loaded,
+		ObjectFit: run.style.objectFit, ObjectPos: run.style.objectPosition, ImageBorder: run.style.border, ImageRadius: resolveBorderRadii(run.style.radius, geometry.outerWidth, geometry.outerHeight),
+		X: boxX, Y: boxY, Width: max(geometry.outerWidth, float32(1)), Height: max(geometry.outerHeight, float32(1)),
+		FontSize: run.style.fontSize, FontFamilies: append([]string(nil), run.style.fontFamilies...), Bold: run.style.bold, Color: run.style.color, Background: run.style.background,
+		Clip: cloneRect(e.clip), Clips: cloneClipRegions(e.clips), Opacity: run.opacity, Cursor: run.style.cursor,
+		Transform: stylemodel.IdentityMatrix(), Hidden: run.style.hidden,
+	}
+	e.tree.Boxes = append(e.tree.Boxes, box)
+	e.tree.Bounds[run.node.ID] = Rect{X: box.X, Y: box.Y, Width: box.Width, Height: box.Height}
 }
 
 func imageDimensionAttribute(node *dom.Node, name string) (float32, bool) {
@@ -526,7 +691,9 @@ func isCheckableControl(node *dom.Node) bool {
 }
 
 func isSubmitButtonControl(node *dom.Node) bool {
-	return forms.IsSubmitButton(node)
+	// Every <button> has native control geometry, regardless of whether its
+	// activation behavior is submit, reset, or an ordinary script event.
+	return node != nil && node.Type == dom.NodeElement && node.TagName == "button" || forms.IsSubmitButton(node)
 }
 
 func (e *engine) addSubmitButton(node *dom.Node, style blockStyle, x, width, containingHeight float32, heightDefinite bool) {
@@ -549,6 +716,9 @@ func (e *engine) addSubmitButton(node *dom.Node, style blockStyle, x, width, con
 	if resolved, ok := resolveSize(style.height, containingHeight, heightDefinite); ok {
 		usedHeight = resolved
 	}
+	usedWidth, usedHeight = applyPreferredAspectRatio(usedWidth, usedHeight, style)
+	usedWidth = constrainSize(usedWidth, style.minWidth, style.maxWidth, width, true)
+	usedHeight = constrainSize(usedHeight, style.minHeight, style.maxHeight, containingHeight, heightDefinite)
 	e.tree.Boxes = append(e.tree.Boxes, Box{
 		Order: e.nextOrder(), StackingID: e.stackingID, NodeID: node.ID, Tag: node.TagName,
 		Text: label, Button: true, Disabled: forms.Disabled(node),
@@ -571,6 +741,9 @@ func (e *engine) addCheckable(node *dom.Node, style blockStyle, x, width, contai
 	if resolved, ok := resolveSize(style.height, containingHeight, heightDefinite); ok {
 		usedHeight = resolved
 	}
+	usedWidth, usedHeight = applyPreferredAspectRatio(usedWidth, usedHeight, style)
+	usedWidth = constrainSize(usedWidth, style.minWidth, style.maxWidth, width, true)
+	usedHeight = constrainSize(usedHeight, style.minHeight, style.maxHeight, containingHeight, heightDefinite)
 	state, _ := forms.CheckableState(node)
 	e.tree.Boxes = append(e.tree.Boxes, Box{
 		Order: e.nextOrder(), StackingID: e.stackingID, NodeID: node.ID, Tag: node.TagName,
@@ -598,6 +771,10 @@ func (e *engine) addSelect(node *dom.Node, style blockStyle, x, width, containin
 	if resolved, ok := resolveSize(style.height, containingHeight, heightDefinite); ok {
 		usedHeight = resolved
 	}
+	usedWidth, usedHeight = applyPreferredAspectRatio(usedWidth, usedHeight, style)
+	usedWidth = constrainSize(usedWidth, style.minWidth, style.maxWidth, availableWidth, true)
+	usedHeight = constrainSize(usedHeight, style.minHeight, style.maxHeight, containingHeight, heightDefinite)
+	usedWidth = min(max(usedWidth, float32(1)), max(availableWidth, float32(1)))
 	options := forms.SelectOptions(node)
 	selected := forms.SelectedIndex(node, options)
 	label := ""
@@ -617,7 +794,31 @@ func (e *engine) addSelect(node *dom.Node, style blockStyle, x, width, containin
 	e.y += usedHeight + style.margin.Bottom
 }
 
+func applyPreferredAspectRatio(width, height float32, style blockStyle) (float32, float32) {
+	if style.aspectRatio <= 0 {
+		return width, height
+	}
+	widthAuto := style.width.Kind == stylemodel.SizeAuto
+	heightAuto := style.height.Kind == stylemodel.SizeAuto
+	if heightAuto {
+		height = width / style.aspectRatio
+	} else if widthAuto {
+		width = height * style.aspectRatio
+	}
+	return width, height
+}
+
 func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containingHeight float32, heightDefinite bool, topMargin *float32) {
+	if !e.withinBudget(node.ID) {
+		return
+	}
+	if e.depth >= maxLayoutDepth {
+		e.tree.addFallback(node.ID, "layout recursion limit exceeded")
+		return
+	}
+	e.depth++
+	defer func() { e.depth-- }()
+
 	geometryBoxStart, geometryDecorationStart := len(e.tree.Boxes), len(e.tree.Decorations)
 	previousStackingID := e.stackingID
 	effectRequested := len(style.filters) != 0 || len(style.backdropFilters) != 0 || style.mixBlendMode != stylemodel.BlendNormal
@@ -627,8 +828,13 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 	}
 	previousOpacity := e.opacity
 	e.opacity *= style.opacity
+	firstCollapsibleChild := e.firstCollapsibleBlockChild(node, style)
 	if topMargin == nil {
-		e.y += style.margin.Top
+		top := marginGroupFor(style.margin.Top)
+		if firstCollapsibleChild != nil {
+			top = top.merge(e.collapsingTopMargin(firstCollapsibleChild, e.styleFor(firstCollapsibleChild), 0))
+		}
+		e.y += top.value()
 	} else {
 		e.y += *topMargin
 	}
@@ -676,6 +882,14 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 	if outerWidth < 1 {
 		outerWidth = 1
 	}
+	if free := max(width-style.margin.Left-style.margin.Right-outerWidth, float32(0)); free > 0 {
+		switch {
+		case style.marginAuto.Left && style.marginAuto.Right:
+			x += free / 2
+		case style.marginAuto.Left:
+			x += free
+		}
+	}
 	contentX := x + style.border.Left.Width + style.padding.Left
 	contentWidth := outerWidth - style.padding.Left - style.padding.Right - horizontalBorder
 	if contentWidth < 1 {
@@ -707,6 +921,13 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 			declaredHeight -= style.padding.Top + style.padding.Bottom + verticalBorder
 		}
 	}
+	if !declaredHeightDefinite && style.aspectRatio > 0 {
+		declaredHeight = outerWidth / style.aspectRatio
+		if style.boxSizing == stylemodel.BoxSizingContentBox {
+			declaredHeight = max(declaredHeight-style.padding.Top-style.padding.Bottom-verticalBorder, float32(0))
+		}
+		declaredHeightDefinite = true
+	}
 	childContainingHeight := declaredHeight
 	if declaredHeightDefinite && style.boxSizing == stylemodel.BoxSizingBorderBox {
 		childContainingHeight -= style.padding.Top + style.padding.Bottom + verticalBorder
@@ -716,25 +937,43 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 	}
 	previousClip := e.clip
 	previousClips := e.clips
-	previousPositionCB := e.positionCB
-	if style.layoutPosition != stylemodel.PositionStatic {
+	previousPositionCB, previousFixedCB := e.positionCB, e.fixedCB
+	outerFloats := e.floats
+	formattingContext := establishesBlockFormattingContext(style)
+	if formattingContext {
+		e.floats = nil
+	}
+	establishesPositionCB := style.layoutPosition != stylemodel.PositionStatic || len(style.transform) != 0
+	if establishesPositionCB {
 		cbHeight := childContainingHeight
 		if !declaredHeightDefinite {
 			cbHeight = containingHeight
 		}
 		e.positionCB = &Rect{X: x + style.border.Left.Width, Y: boxTop + style.border.Top.Width, Width: outerWidth - horizontalBorder, Height: max(cbHeight, float32(0))}
+		if len(style.transform) != 0 {
+			e.fixedCB = e.positionCB
+		}
 	}
-	if (style.overflowX != stylemodel.OverflowVisible || style.overflowY != stylemodel.OverflowVisible) && declaredHeightDefinite {
+	if style.overflowX != stylemodel.OverflowVisible || style.overflowY != stylemodel.OverflowVisible {
 		clipHeight := declaredHeight
 		if style.boxSizing == stylemodel.BoxSizingContentBox {
 			clipHeight += style.padding.Top + style.padding.Bottom
 		}
-		e.clip = intersectClip(previousClip, Rect{
+		clipRect := Rect{
 			X: x + style.border.Left.Width, Y: boxTop + style.border.Top.Width,
 			Width: outerWidth - horizontalBorder, Height: clipHeight,
+		}
+		const unboundedClip = float32(1 << 20)
+		if style.overflowX == stylemodel.OverflowVisible {
+			clipRect.X, clipRect.Width = -unboundedClip, unboundedClip*2
+		}
+		if style.overflowY == stylemodel.OverflowVisible || !declaredHeightDefinite {
+			clipRect.Y, clipRect.Height = -unboundedClip, unboundedClip*2
+		}
+		e.clip = intersectClip(previousClip, clipRect)
+		e.clips = append(cloneClipRegions(previousClips), ClipRegion{
+			Rect: clipRect, NodeID: node.ID, Radius: resolveBorderRadii(style.radius, clipRect.Width, clipRect.Height),
 		})
-		clipRect := *e.clip
-		e.clips = append(cloneClipRegions(previousClips), ClipRegion{Rect: clipRect, Radius: resolveBorderRadii(style.radius, clipRect.Width, clipRect.Height)})
 	}
 
 	var positionedChildren []*dom.Node
@@ -742,11 +981,14 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 		e.addFlexChildren(node, style, contentX, contentWidth, childContainingHeight, declaredHeightDefinite)
 	} else if style.display == stylemodel.DisplayGrid {
 		e.addGridChildren(node, style, contentX, contentWidth, childContainingHeight, declaredHeightDefinite)
+	} else if usesMultiColumnLayout(style) {
+		positionedChildren = e.addMultiColumnChildren(node, style, contentX, contentWidth, childContainingHeight, declaredHeightDefinite)
 	} else {
 		inlineRuns := e.listMarkerRuns(node, style)
 		inlineRuns = append(inlineRuns, e.generatedRuns(node, true, style)...)
 		previousBlock := false
-		previousBottomMargin := float32(0)
+		previousBottomMargin := marginGroup{}
+		firstInFlow := true
 		flushInline := func() {
 			if len(inlineRuns) != 0 {
 				e.addInlineRuns(node.ID, node.TagName, inlineRuns, style, contentX, contentWidth)
@@ -756,6 +998,9 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 		}
 
 		for _, child := range e.flowChildren(node) {
+			if !e.withinBudget(child.ID) {
+				break
+			}
 			if child.Type == dom.NodeElement {
 				childStyle := e.styleFor(child)
 				if childStyle.display == stylemodel.DisplayNone {
@@ -775,7 +1020,8 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 					flushInline()
 					e.addTable(child, childStyle, contentX, contentWidth, childContainingHeight, declaredHeightDefinite)
 					previousBlock = true
-					previousBottomMargin = childStyle.margin.Bottom
+					previousBottomMargin = marginGroupFor(childStyle.margin.Bottom)
+					firstInFlow = false
 					continue
 				}
 				if childStyle.layoutPosition == stylemodel.PositionAbsolute || childStyle.layoutPosition == stylemodel.PositionFixed {
@@ -783,66 +1029,87 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 					positionedChildren = append(positionedChildren, child)
 					continue
 				}
-				if isImageElement(child, e.images) {
+				if isImageElement(child, e.images) && childStyle.display != stylemodel.DisplayInline && childStyle.display != stylemodel.DisplayInlineBlock {
 					flushInline()
 					e.addImage(child, childStyle, contentX, contentWidth, childContainingHeight, declaredHeightDefinite)
 					previousBlock = true
-					previousBottomMargin = childStyle.margin.Bottom
+					previousBottomMargin = marginGroupFor(childStyle.margin.Bottom)
+					firstInFlow = false
 					continue
 				}
-				if isEditableTextControl(child) {
+				if isEditableTextControl(child) && !isInlineLevelDisplay(childStyle.display) {
 					flushInline()
 					e.addInput(child, childStyle, contentX, contentWidth, childContainingHeight, declaredHeightDefinite)
 					previousBlock = true
-					previousBottomMargin = childStyle.margin.Bottom
+					previousBottomMargin = marginGroupFor(childStyle.margin.Bottom)
+					firstInFlow = false
 					continue
 				}
-				if isSelectControl(child) {
+				if isSelectControl(child) && !isInlineLevelDisplay(childStyle.display) {
 					flushInline()
 					e.addSelect(child, childStyle, contentX, contentWidth, childContainingHeight, declaredHeightDefinite)
 					previousBlock = true
-					previousBottomMargin = childStyle.margin.Bottom
+					previousBottomMargin = marginGroupFor(childStyle.margin.Bottom)
+					firstInFlow = false
 					continue
 				}
-				if isCheckableControl(child) {
+				if isCheckableControl(child) && !isInlineLevelDisplay(childStyle.display) {
 					flushInline()
 					e.addCheckable(child, childStyle, contentX, contentWidth, childContainingHeight, declaredHeightDefinite)
 					previousBlock = true
-					previousBottomMargin = childStyle.margin.Bottom
+					previousBottomMargin = marginGroupFor(childStyle.margin.Bottom)
+					firstInFlow = false
 					continue
 				}
-				if isSubmitButtonControl(child) {
+				if isSubmitButtonControl(child) && !isInlineLevelDisplay(childStyle.display) {
 					flushInline()
 					e.addSubmitButton(child, childStyle, contentX, contentWidth, childContainingHeight, declaredHeightDefinite)
 					previousBlock = true
-					previousBottomMargin = childStyle.margin.Bottom
+					previousBottomMargin = marginGroupFor(childStyle.margin.Bottom)
+					firstInFlow = false
 					continue
 				}
 				if isBlockLevelDisplay(childStyle.display) {
 					flushInline()
-					if previousBlock {
-						e.y -= previousBottomMargin
-						collapsed := collapseMargins(previousBottomMargin, childStyle.margin.Top)
+					childTop := e.collapsingTopMargin(child, childStyle, 0)
+					if firstInFlow && firstCollapsibleChild == child {
+						zero := float32(0)
+						e.addBlock(child, childStyle, contentX, contentWidth, childContainingHeight, declaredHeightDefinite, &zero)
+					} else if previousBlock {
+						e.y -= previousBottomMargin.value()
+						collapsed := previousBottomMargin.merge(childTop).value()
 						e.addBlock(child, childStyle, contentX, contentWidth, childContainingHeight, declaredHeightDefinite, &collapsed)
 					} else {
 						e.addBlock(child, childStyle, contentX, contentWidth, childContainingHeight, declaredHeightDefinite, nil)
 					}
 					previousBlock = true
-					previousBottomMargin = childStyle.margin.Bottom
+					previousBottomMargin = e.collapsingBottomMargin(child, childStyle, 0)
+					firstInFlow = false
 					continue
 				}
 				if hasNestedFormControl(child) {
 					flushInline()
 					e.addInlineContentWithControls(child, contentX, contentWidth, childContainingHeight, declaredHeightDefinite)
 					previousBlock = true
-					previousBottomMargin = childStyle.margin.Bottom
+					previousBottomMargin = marginGroupFor(childStyle.margin.Bottom)
+					firstInFlow = false
 					continue
 				}
 			}
 			inlineRuns = append(inlineRuns, e.collectInlineRuns(child, node)...)
+			if child.Type != dom.NodeText || strings.TrimSpace(child.Text) != "" {
+				firstInFlow = false
+			}
 		}
 		inlineRuns = append(inlineRuns, e.generatedRuns(node, false, style)...)
 		flushInline()
+	}
+	localFloats := e.floats
+	if formattingContext {
+		for _, region := range localFloats {
+			e.y = max(e.y, region.Y+region.Height)
+		}
+		e.floats = outerFloats
 	}
 	e.clip = previousClip
 	e.clips = previousClips
@@ -851,6 +1118,11 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 	sizingHeight := contentHeight
 	if declaredHeightDefinite {
 		sizingHeight = declaredHeight
+	} else if style.boxSizing == stylemodel.BoxSizingBorderBox {
+		// An auto block grows around its content regardless of box-sizing.
+		// For border-box sizing, constraints apply to the outer box, so fold
+		// the vertical padding and borders into the natural sizing height.
+		sizingHeight += style.padding.Top + style.padding.Bottom + verticalBorder
 	}
 	sizingHeight = constrainSize(sizingHeight, style.minHeight, style.maxHeight, containingHeight, heightDefinite)
 	outerHeight := sizingHeight
@@ -874,22 +1146,25 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 			e.tree.addFallback(node.ID, "visual-effect-surface-limit")
 		}
 	}
-	if e.positionCB != nil && style.layoutPosition != stylemodel.PositionStatic {
+	if e.positionCB != nil && establishesPositionCB {
 		e.positionCB.Height = max(outerHeight-verticalBorder, float32(0))
 	}
 	for _, child := range positionedChildren {
 		e.renderPositionedChild(child, e.styleFor(child))
 	}
-	e.y = boxTop + outerHeight + style.margin.Bottom
-	if style.layoutPosition == stylemodel.PositionRelative || style.layoutPosition == stylemodel.PositionSticky {
-		dx, dy := float32(0), float32(0)
-		if style.layoutPosition == stylemodel.PositionRelative {
-			dx, dy = relativeOffset(style.inset, outerWidth, outerHeight)
-		} else {
-			if top, ok := resolveSize(style.inset.Top, outerHeight, true); ok {
-				dy = max(e.scrollY+top-boxTop, float32(0))
-			}
+	bottomMargin := marginGroupFor(style.margin.Bottom)
+	if last := e.lastCollapsibleBlockChild(node, style); last != nil {
+		childBottom := e.collapsingBottomMargin(last, e.styleFor(last), 0)
+		outerHeight = max(outerHeight-childBottom.value(), float32(0))
+		bottomMargin = bottomMargin.merge(childBottom)
+		e.tree.Bounds[node.ID] = Rect{X: x, Y: boxTop, Width: outerWidth, Height: outerHeight}
+		if decorationIndex >= 0 {
+			e.tree.Decorations[decorationIndex].Height = outerHeight
 		}
+	}
+	e.y = boxTop + outerHeight + bottomMargin.value()
+	if style.layoutPosition == stylemodel.PositionRelative {
+		dx, dy := relativeOffset(style.inset, width, containingHeight, heightDefinite, style.direction)
 		translateFlexGeometry(e.tree, geometryBoxStart, geometryDecorationStart, dx, dy, nil)
 	}
 	if len(style.transform) != 0 {
@@ -905,6 +1180,7 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 		}
 	}
 	e.positionCB = previousPositionCB
+	e.fixedCB = previousFixedCB
 	e.stackingID = previousStackingID
 	e.opacity = previousOpacity
 }
@@ -936,25 +1212,43 @@ func normalizeMatrix(matrix stylemodel.Matrix) stylemodel.Matrix {
 	return matrix
 }
 
-func relativeOffset(inset stylemodel.Insets, width, height float32) (float32, float32) {
+func relativeOffset(inset stylemodel.Insets, width, height float32, heightDefinite bool, direction stylemodel.Direction) (float32, float32) {
 	dx, dy := float32(0), float32(0)
-	if left, ok := resolveSize(inset.Left, width, true); ok {
+	left, hasLeft := resolveSize(inset.Left, width, true)
+	right, hasRight := resolveSize(inset.Right, width, true)
+	if hasLeft && (!hasRight || direction == stylemodel.DirectionLTR) {
 		dx = left
-	} else if right, ok := resolveSize(inset.Right, width, true); ok {
+	} else if hasRight {
 		dx = -right
 	}
-	if top, ok := resolveSize(inset.Top, height, true); ok {
+	if top, ok := resolveSize(inset.Top, height, heightDefinite); ok {
 		dy = top
-	} else if bottom, ok := resolveSize(inset.Bottom, height, true); ok {
+	} else if bottom, ok := resolveSize(inset.Bottom, height, heightDefinite); ok {
 		dy = -bottom
 	}
 	return dx, dy
 }
 
 func (e *engine) renderPositionedChild(node *dom.Node, style blockStyle) {
+	e.renderPositionedChildAt(node, style, nil)
+}
+
+// renderPositionedChildAt resolves an out-of-flow box against its containing
+// block while retaining the formatting context's static position for auto
+// insets. Flex and grid containers provide that position after laying out
+// their in-flow items; ordinary block containers use the containing-block
+// origin by passing nil.
+func (e *engine) renderPositionedChildAt(node *dom.Node, style blockStyle, staticPosition *Rect) {
 	containingBlock := e.positionCB
-	if style.layoutPosition == stylemodel.PositionFixed || containingBlock == nil {
-		containingBlock = &Rect{X: e.scrollX, Y: e.scrollY, Width: e.viewportWidth, Height: e.viewportHeight}
+	if style.layoutPosition == stylemodel.PositionFixed {
+		containingBlock = e.fixedCB
+		if containingBlock == nil {
+			containingBlock = &Rect{X: e.scrollX, Y: e.scrollY, Width: e.viewportWidth, Height: e.viewportHeight}
+		}
+	} else if containingBlock == nil {
+		// The initial containing block remains anchored at the document origin;
+		// unlike fixed positioning it must not follow the viewport scroll offset.
+		containingBlock = &Rect{Width: e.viewportWidth, Height: e.viewportHeight}
 	}
 	left, hasLeft := resolveSize(style.inset.Left, containingBlock.Width, true)
 	right, hasRight := resolveSize(style.inset.Right, containingBlock.Width, true)
@@ -982,11 +1276,15 @@ func (e *engine) renderPositionedChild(node *dom.Node, style blockStyle) {
 		childX += left
 	} else if hasRight {
 		childX += containingBlock.Width - right - usedWidth
+	} else if staticPosition != nil && style.layoutPosition != stylemodel.PositionFixed {
+		childX = staticPosition.X
 	}
 	if hasTop {
 		childY += top
 	} else if hasBottom {
 		childY += containingBlock.Height - bottom - usedHeight
+	} else if staticPosition != nil && style.layoutPosition != stylemodel.PositionFixed {
+		childY = staticPosition.Y
 	}
 	if style.display == stylemodel.DisplayInline || style.display == stylemodel.DisplayInlineBlock || style.display == stylemodel.DisplayInlineFlex || style.display == stylemodel.DisplayInlineGrid {
 		style.display = stylemodel.DisplayBlock
@@ -994,10 +1292,120 @@ func (e *engine) renderPositionedChild(node *dom.Node, style blockStyle) {
 	e.renderGridItem(node, style, childX, childY, usedWidth, usedHeight)
 }
 
-func collapseMargins(first, second float32) float32 {
-	positive := max(first, float32(0), second)
-	negative := min(first, float32(0), second)
-	return positive + negative
+type marginGroup struct {
+	positive float32
+	negative float32
+}
+
+func marginGroupFor(value float32) marginGroup {
+	if value >= 0 {
+		return marginGroup{positive: value}
+	}
+	return marginGroup{negative: value}
+}
+
+func (group marginGroup) merge(other marginGroup) marginGroup {
+	group.positive = max(group.positive, other.positive)
+	group.negative = min(group.negative, other.negative)
+	return group
+}
+
+func (group marginGroup) value() float32 { return group.positive + group.negative }
+
+func establishesBlockFormattingContext(style blockStyle) bool {
+	return style.display == stylemodel.DisplayFlowRoot || style.display == stylemodel.DisplayFlex || style.display == stylemodel.DisplayGrid ||
+		usesMultiColumnLayout(style) ||
+		style.float != stylemodel.FloatNone || style.layoutPosition == stylemodel.PositionAbsolute || style.layoutPosition == stylemodel.PositionFixed ||
+		overflowEstablishesFormattingContext(style.overflowX) || overflowEstablishesFormattingContext(style.overflowY)
+}
+
+func overflowEstablishesFormattingContext(value stylemodel.Overflow) bool {
+	return value != stylemodel.OverflowVisible && value != stylemodel.OverflowClip
+}
+
+func canCollapseBlockStart(style blockStyle) bool {
+	return style.display == stylemodel.DisplayBlock && !establishesBlockFormattingContext(style) && style.padding.Top == 0 && style.border.Top.Width == 0
+}
+
+func canCollapseBlockEnd(style blockStyle) bool {
+	return canCollapseBlockStart(style) && style.padding.Bottom == 0 && style.border.Bottom.Width == 0 &&
+		style.height.Kind == stylemodel.SizeAuto && style.minHeight.Kind == stylemodel.SizeAuto
+}
+
+func (e *engine) firstCollapsibleBlockChild(node *dom.Node, style blockStyle) *dom.Node {
+	if node == nil || !canCollapseBlockStart(style) {
+		return nil
+	}
+	for _, child := range e.flowChildren(node) {
+		if child == nil {
+			continue
+		}
+		if child.Type == dom.NodeText {
+			if strings.TrimSpace(child.Text) == "" {
+				continue
+			}
+			return nil
+		}
+		childStyle := e.styleFor(child)
+		if childStyle.display == stylemodel.DisplayNone || childStyle.float != stylemodel.FloatNone || childStyle.layoutPosition == stylemodel.PositionAbsolute || childStyle.layoutPosition == stylemodel.PositionFixed {
+			continue
+		}
+		if childStyle.display == stylemodel.DisplayBlock {
+			return child
+		}
+		return nil
+	}
+	return nil
+}
+
+func (e *engine) lastCollapsibleBlockChild(node *dom.Node, style blockStyle) *dom.Node {
+	if node == nil || !canCollapseBlockEnd(style) {
+		return nil
+	}
+	children := e.flowChildren(node)
+	for index := len(children) - 1; index >= 0; index-- {
+		child := children[index]
+		if child == nil {
+			continue
+		}
+		if child.Type == dom.NodeText {
+			if strings.TrimSpace(child.Text) == "" {
+				continue
+			}
+			return nil
+		}
+		childStyle := e.styleFor(child)
+		if childStyle.display == stylemodel.DisplayNone || childStyle.float != stylemodel.FloatNone || childStyle.layoutPosition == stylemodel.PositionAbsolute || childStyle.layoutPosition == stylemodel.PositionFixed {
+			continue
+		}
+		if childStyle.display == stylemodel.DisplayBlock {
+			return child
+		}
+		return nil
+	}
+	return nil
+}
+
+func (e *engine) collapsingTopMargin(node *dom.Node, style blockStyle, depth int) marginGroup {
+	result := marginGroupFor(style.margin.Top)
+	if depth >= maxLayoutDepth {
+		return result
+	}
+	if child := e.firstCollapsibleBlockChild(node, style); child != nil {
+		result = result.merge(e.collapsingTopMargin(child, e.styleFor(child), depth+1))
+	}
+	return result
+}
+
+func (e *engine) collapsingBottomMargin(node *dom.Node, style blockStyle, depth int) marginGroup {
+	result := marginGroupFor(style.margin.Bottom)
+	if depth >= maxLayoutDepth {
+		return result
+	}
+	if child := e.lastCollapsibleBlockChild(node, style); child != nil {
+		result = result.merge(e.collapsingBottomMargin(child, e.styleFor(child), depth+1))
+	}
+	return result
 }
 
 func resolveSize(value stylemodel.SizeValue, basis float32, basisDefinite bool) (float32, bool) {
@@ -1115,8 +1523,18 @@ func (e *engine) collectInlineRunsWithOpacity(node, owner *dom.Node, opacity flo
 		}
 		return result
 	}
+	if isImageElement(node, e.images) {
+		return []inlineRun{{nodeID: node.ID, node: node, tag: node.TagName, style: style, atomic: true, image: true, opacity: opacity}}
+	}
+	if forms.IsSubmitButton(node) {
+		label := strings.TrimSpace(node.TextContent())
+		if node.TagName == "input" {
+			label, _ = node.Attribute("value")
+		}
+		return []inlineRun{{nodeID: node.ID, node: node, tag: node.TagName, text: label, style: style, atomic: true, opacity: opacity}}
+	}
 	if style.display == stylemodel.DisplayInlineBlock {
-		return []inlineRun{{nodeID: node.ID, tag: node.TagName, text: e.inlineText(node), style: style, atomic: true, opacity: opacity}}
+		return []inlineRun{{nodeID: node.ID, node: node, tag: node.TagName, text: e.inlineText(node), style: style, atomic: true, opacity: opacity}}
 	}
 	if style.display == stylemodel.DisplayInlineFlex {
 		return []inlineRun{{nodeID: node.ID, node: node, tag: node.TagName, style: style, atomic: true, flex: true, opacity: opacity}}
@@ -1218,8 +1636,15 @@ func (e *engine) addText(nodeID dom.NodeID, tag, text string, style blockStyle, 
 }
 
 func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, container blockStyle, x, width float32) {
+	if !e.withinBudget(nodeID) {
+		return
+	}
+	if container.writingMode != stylemodel.WritingModeHorizontalTB {
+		e.addVerticalInlineRuns(nodeID, tag, runs, container, x, width)
+		return
+	}
 	var lineRuns []TextRun
-	var flexPlacements []inlineRun
+	var atomicPlacements []inlineRun
 	var lineText strings.Builder
 	var usedWidth, lineHeight, lineAscent float32
 	var pendingSpace *inlineRun
@@ -1232,6 +1657,15 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 
 	flushLine := func(final bool) {
 		if len(lineRuns) == 0 {
+			return
+		}
+		if !e.withinBudget(nodeID) {
+			lineRuns = nil
+			return
+		}
+		if len(e.tree.Boxes) >= maxLineBoxes {
+			e.tree.addFallback(nodeID, "line box limit exceeded")
+			lineRuns = nil
 			return
 		}
 		if final && container.textOverflow == stylemodel.TextOverflowEllipsis &&
@@ -1289,21 +1723,24 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 			Runs:        append([]TextRun(nil), lineRuns...),
 			Baseline:    e.y + lineAscent, Clip: cloneRect(e.clip), Clips: cloneClipRegions(e.clips),
 		})
-		for _, placement := range flexPlacements {
+		for _, placement := range atomicPlacements {
 			placementX, placementY := lineX+alignmentOffset+placement.widthOffset, e.y+lineAscent-placement.baseline
-			if placement.grid {
-				e.renderInlineGrid(placement, placementX, placementY)
+			if placement.image {
+				e.renderInlineImage(placement, placementX, placementY, width)
+			} else if placement.grid {
+				placement.width, placement.height = placement.boxWidth, placement.boxHeight
+				e.renderInlineGrid(placement, placementX+placement.style.margin.Left, placementY+placement.style.margin.Top)
 			} else {
-				item := &flexLayoutItem{node: placement.node, style: placement.style, crossSize: placement.height}
-				item.algorithm = &flexItem{target: placement.width}
-				e.renderFlexItem(item, flexAxis{horizontal: true}, placementX, placementY, placement.width, placement.height)
+				item := &flexLayoutItem{node: placement.node, style: placement.style, crossSize: placement.boxHeight}
+				item.algorithm = &flexItem{target: placement.boxWidth}
+				e.renderFlexItem(item, flexAxis{horizontal: true}, placementX+placement.style.margin.Left, placementY+placement.style.margin.Top, placement.boxWidth, placement.boxHeight)
 			}
 		}
 		e.y += lineHeight
 		lineRuns = lineRuns[:0]
 		lineText.Reset()
 		usedWidth, lineHeight, lineAscent, pendingSpace = 0, 0, 0, nil
-		flexPlacements = flexPlacements[:0]
+		atomicPlacements = atomicPlacements[:0]
 		if firstLine {
 			firstLine = false
 		}
@@ -1313,12 +1750,18 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 	appendPiece := func(run inlineRun, text string, pieceWidth float32) {
 		textRun := TextRun{
 			NodeID: run.nodeID, Tag: run.tag, Text: text, Width: pieceWidth,
+			Atomic:   run.atomic,
 			FontSize: run.style.fontSize, Bold: run.style.bold,
 			FontFamilies: append([]string(nil), run.style.fontFamilies...), FontStyle: run.style.fontStyle, FontStretch: run.style.fontStretch,
 			LetterSpacing: run.style.letterSpacing, WordSpacing: run.style.wordSpacing, VerticalOffset: verticalAlignOffset(run.style),
 			Color: run.style.color, Background: run.style.background,
 			Decoration: run.style.decoration, DecorationColor: run.style.decorationColor, Opacity: run.opacity,
 			TextShadows: append([]stylemodel.Shadow(nil), run.style.textShadows...),
+		}
+		if run.atomic && run.node != nil {
+			// The placeholder owns inline advance only. The atomic box is painted
+			// separately at its border-box geometry, excluding its margins.
+			textRun.Background = 0
 		}
 		runHeight, runAscent := usedLineMetrics(run)
 		textRun.Baseline = e.y + runAscent - textRun.VerticalOffset
@@ -1342,20 +1785,34 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 	}
 
 	for _, token := range tokenizeInlineRuns(transformInlineRuns(runs)) {
+		if !e.withinBudget(nodeID) {
+			break
+		}
 		if token.atomic {
-			if token.flex {
-				token.width, token.height, token.baseline = e.resolveInlineFlexSize(token.node, token.style, width)
+			if token.image {
+				token.width, token.height, token.baseline = e.resolveInlineImageSize(token, width)
+			} else if token.flex {
+				token.boxWidth, token.boxHeight, token.baseline = e.resolveInlineFlexSize(token.node, token.style, width)
+				token.width = token.boxWidth + token.style.margin.Left + token.style.margin.Right
+				token.height = token.boxHeight + token.style.margin.Top + token.style.margin.Bottom
+				token.baseline += token.style.margin.Top
 			} else if token.grid {
-				token.width, token.height, token.baseline = e.resolveInlineGridSize(token.node, token.style, width)
+				token.boxWidth, token.boxHeight, token.baseline = e.resolveInlineGridSize(token.node, token.style, width)
+				token.width = token.boxWidth + token.style.margin.Left + token.style.margin.Right
+				token.height = token.boxHeight + token.style.margin.Top + token.style.margin.Bottom
+				token.baseline += token.style.margin.Top
 			} else {
-				token.width, token.height = resolveAtomicSize(token, width)
+				token.boxWidth, token.boxHeight = resolveAtomicSize(token, width)
+				token.width = token.boxWidth + token.style.margin.Left + token.style.margin.Right
+				token.height = token.boxHeight + token.style.margin.Top + token.style.margin.Bottom
+				token.baseline = token.style.margin.Top + token.boxHeight
 			}
 			if usedWidth > 0 && usedWidth+token.width > lineWidth && wrapsWhitespace(token.style.whiteSpace) {
 				flushLine(false)
 			}
-			if token.flex || token.grid {
+			if token.node != nil {
 				token.widthOffset = usedWidth
-				flexPlacements = append(flexPlacements, token)
+				atomicPlacements = append(atomicPlacements, token)
 				appendPiece(token, "", token.width)
 			} else {
 				appendPiece(token, token.text, token.width)
@@ -1404,6 +1861,9 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 		}
 		remaining := []rune(token.text)
 		for len(remaining) > 0 {
+			if !e.withinBudget(nodeID) {
+				break
+			}
 			available := lineWidth - usedWidth
 			characters := fittingRuneCount(remaining, available, token.style)
 			if characters < 1 {
@@ -1432,7 +1892,11 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 }
 
 func isBlockLevelDisplay(display stylemodel.Display) bool {
-	return display == stylemodel.DisplayBlock || display == stylemodel.DisplayFlex || display == stylemodel.DisplayGrid
+	return display == stylemodel.DisplayBlock || display == stylemodel.DisplayFlowRoot || display == stylemodel.DisplayFlex || display == stylemodel.DisplayGrid || display == stylemodel.DisplayTableCaption
+}
+
+func isInlineLevelDisplay(display stylemodel.Display) bool {
+	return display == stylemodel.DisplayInline || display == stylemodel.DisplayInlineBlock || display == stylemodel.DisplayInlineFlex || display == stylemodel.DisplayInlineGrid
 }
 
 func tokenizeInlineRuns(runs []inlineRun) []inlineRun {
@@ -1512,14 +1976,33 @@ func resolveAtomicSize(run inlineRun, containingWidth float32) (float32, float32
 	horizontal := run.style.padding.Left + run.style.padding.Right + run.style.border.Left.Width + run.style.border.Right.Width
 	vertical := run.style.padding.Top + run.style.padding.Bottom + run.style.border.Top.Width + run.style.border.Bottom.Width
 	width, _, _ := measureStyledText(normalizeWhitespace(run.text), run.style)
+	widthDefinite := false
 	if resolved, ok := resolveSize(run.style.width, containingWidth, true); ok {
 		width = resolved
+		widthDefinite = true
+	} else if run.style.boxSizing == stylemodel.BoxSizingBorderBox {
+		// box-sizing only changes how a declared size is interpreted. An auto
+		// intrinsic size still has to contain its padding and border.
+		width += horizontal
 	}
-	width = constrainSize(width, run.style.minWidth, run.style.maxWidth, containingWidth, true)
 	height := run.style.fontSize * 1.4
+	heightDefinite := false
 	if resolved, ok := resolveSize(run.style.height, 0, false); ok {
 		height = resolved
+		heightDefinite = true
+	} else if run.style.boxSizing == stylemodel.BoxSizingBorderBox {
+		height += vertical
 	}
+	if run.style.aspectRatio > 0 {
+		if widthDefinite && !heightDefinite {
+			height = width / run.style.aspectRatio
+			heightDefinite = true
+		} else if heightDefinite && !widthDefinite {
+			width = height * run.style.aspectRatio
+			widthDefinite = true
+		}
+	}
+	width = constrainSize(width, run.style.minWidth, run.style.maxWidth, containingWidth, true)
 	height = constrainSize(height, run.style.minHeight, run.style.maxHeight, 0, false)
 	if run.style.boxSizing == stylemodel.BoxSizingContentBox {
 		width += horizontal
@@ -1766,6 +2249,20 @@ func uaStyle(tag string) blockStyle {
 		style.display = stylemodel.DisplayInlineBlock
 		style.width = stylemodel.SizeValue{Kind: stylemodel.SizeLength, Value: stylemodel.LengthPercentage{Pixels: 300}}
 		style.height = stylemodel.SizeValue{Kind: stylemodel.SizeLength, Value: stylemodel.LengthPercentage{Pixels: 150}}
+	case "table":
+		style.display = stylemodel.DisplayTable
+	case "caption":
+		style.display = stylemodel.DisplayTableCaption
+	case "colgroup":
+		style.display = stylemodel.DisplayTableColumnGroup
+	case "col":
+		style.display = stylemodel.DisplayTableColumn
+	case "thead", "tbody", "tfoot":
+		style.display = stylemodel.DisplayTableRowGroup
+	case "tr":
+		style.display = stylemodel.DisplayTableRow
+	case "td", "th":
+		style.display = stylemodel.DisplayTableCell
 	case "li":
 		style.display = stylemodel.DisplayBlock
 		style.margin.Bottom = 6
@@ -1808,6 +2305,8 @@ func applyComputed(block blockStyle, computed stylemodel.ComputedStyle) blockSty
 	block.decorationColor = computed.DecorationColor
 	block.opacity = computed.Opacity
 	block.display = computed.Display
+	block.tableLayout, block.borderCollapse = computed.TableLayout, computed.BorderCollapse
+	block.borderSpacingX, block.borderSpacingY, block.captionSide = computed.BorderSpacingX, computed.BorderSpacingY, computed.CaptionSide
 	block.float = computed.Float
 	block.clear = computed.Clear
 	block.hidden = computed.Visibility == stylemodel.VisibilityHidden
@@ -1819,6 +2318,7 @@ func applyComputed(block blockStyle, computed stylemodel.ComputedStyle) blockSty
 	block.minWidth, block.minHeight = computed.MinWidth, computed.MinHeight
 	block.maxWidth, block.maxHeight = computed.MaxWidth, computed.MaxHeight
 	block.lineHeight, block.whiteSpace = computed.LineHeight, computed.WhiteSpace
+	block.writingMode, block.direction = computed.WritingMode, computed.Direction
 	block.textAlign, block.textTransform, block.textIndent = computed.TextAlign, computed.TextTransform, computed.TextIndent
 	block.letterSpacing, block.wordSpacing = computed.LetterSpacing, computed.WordSpacing
 	block.wordBreak, block.overflowWrap = computed.WordBreak, computed.OverflowWrap
@@ -1832,11 +2332,19 @@ func applyComputed(block blockStyle, computed stylemodel.ComputedStyle) blockSty
 	block.overflowX, block.overflowY = computed.OverflowX, computed.OverflowY
 	block.flexDirection, block.flexWrap = computed.FlexDirection, computed.FlexWrap
 	block.justifyContent, block.alignItems, block.justifyItems, block.alignContent = computed.JustifyContent, computed.AlignItems, computed.JustifyItems, computed.AlignContent
+	block.justifyContentSafety, block.alignItemsSafety = computed.JustifyContentSafety, computed.AlignItemsSafety
+	block.justifyItemsSafety, block.alignContentSafety = computed.JustifyItemsSafety, computed.AlignContentSafety
 	block.order, block.flexGrow, block.flexShrink = computed.Order, computed.FlexGrow, computed.FlexShrink
 	block.flexBasis, block.alignSelf, block.justifySelf = computed.FlexBasis, computed.AlignSelf, computed.JustifySelf
-	block.rowGap, block.columnGap = computed.RowGap, computed.ColumnGap
+	block.alignSelfSafety, block.justifySelfSafety = computed.AlignSelfSafety, computed.JustifySelfSafety
+	block.rowGap, block.rowGapNormal = computed.RowGap, computed.RowGapNormal
+	block.columnGap, block.columnGapNormal = computed.ColumnGap, computed.ColumnGapNormal
+	block.columnCount, block.columnWidth, block.columnRule, block.columnFill = computed.ColumnCount, computed.ColumnWidth, computed.ColumnRule, computed.ColumnFill
+	block.columnSpan, block.breakBefore, block.breakAfter, block.breakInside = computed.ColumnSpan, computed.BreakBefore, computed.BreakAfter, computed.BreakInside
+	block.widows, block.orphans = computed.Widows, computed.Orphans
 	block.gridTemplateColumns = append([]stylemodel.GridTrackSize(nil), computed.GridTemplateColumns...)
 	block.gridTemplateRows = append([]stylemodel.GridTrackSize(nil), computed.GridTemplateRows...)
+	block.gridColumnsSubgrid, block.gridRowsSubgrid = computed.GridColumnsSubgrid, computed.GridRowsSubgrid
 	block.gridAutoColumns = append([]stylemodel.GridTrackSize(nil), computed.GridAutoColumns...)
 	block.gridAutoRows = append([]stylemodel.GridTrackSize(nil), computed.GridAutoRows...)
 	block.gridColumnLines = computed.GridColumnLines

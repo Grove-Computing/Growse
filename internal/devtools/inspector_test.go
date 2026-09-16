@@ -5,10 +5,48 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Grove-Computing/Growse/internal/css"
 	"github.com/Grove-Computing/Growse/internal/dom"
 	layoutmodel "github.com/Grove-Computing/Growse/internal/layout"
 	stylemodel "github.com/Grove-Computing/Growse/internal/style"
 )
+
+func TestSnapshotInspectorListsMultiColumnVisualFragments(t *testing.T) {
+	document := dom.NewDocument()
+	paragraph := document.CreateElement("p", map[string]string{"class": "columns"})
+	if err := document.AppendChild(document.Root, paragraph); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(paragraph, document.CreateText(strings.Repeat("fragmented inspector content ", 30))); err != nil {
+		t.Fatal(err)
+	}
+	stylesheet, err := css.Parse(strings.NewReader(`
+.columns { display:block; width:360px; margin:0; column-count:3; column-gap:18px; line-height:18px }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	styles := stylemodel.Compute(document, stylesheet)
+	tree := layoutmodel.BuildWithViewport(document, styles, 520, 600)
+	snapshot := SnapshotInspector(document, styles, tree, paragraph.ID)
+	boxFragments := 0
+	identities := make(map[uint64]bool)
+	xPositions := make(map[int]bool)
+	for _, fragment := range snapshot.Fragments {
+		if fragment.Kind != "box" {
+			continue
+		}
+		boxFragments++
+		identities[fragment.ID] = true
+		xPositions[int(fragment.X+0.5)] = true
+	}
+	if boxFragments < 3 || len(identities) != boxFragments || len(xPositions) != 3 {
+		t.Fatalf("inspector fragments = count:%d ids:%d columns:%v all:%+v", boxFragments, len(identities), xPositions, snapshot.Fragments)
+	}
+	if snapshot.Layout == nil || snapshot.Layout.Width != 360 {
+		t.Fatalf("aggregate layout = %+v", snapshot.Layout)
+	}
+}
 
 func TestSnapshotInspectorPreservesTreeAndRedactsPassword(t *testing.T) {
 	document := dom.NewDocument()
@@ -73,6 +111,22 @@ func TestSnapshotInspectorLimitsNodeCount(t *testing.T) {
 	snapshot := SnapshotInspector(document, nil, nil, 0)
 	if !snapshot.Truncated || len(snapshot.Nodes) != MaxDOMNodes {
 		t.Fatalf("snapshot = nodes:%d truncated:%v", len(snapshot.Nodes), snapshot.Truncated)
+	}
+}
+
+func TestSnapshotInspectorLimitsLayoutFragments(t *testing.T) {
+	document := dom.NewDocument()
+	selected := document.CreateElement("p", nil)
+	if err := document.AppendChild(document.Root, selected); err != nil {
+		t.Fatal(err)
+	}
+	tree := &layoutmodel.Tree{Bounds: map[dom.NodeID]layoutmodel.Rect{selected.ID: {Width: 10, Height: 10}}}
+	for index := 0; index < MaxLayoutFragments+1; index++ {
+		tree.Boxes = append(tree.Boxes, layoutmodel.Box{NodeID: selected.ID, FragmentID: uint64(index + 1), Width: 10, Height: 10})
+	}
+	snapshot := SnapshotInspector(document, nil, tree, selected.ID)
+	if !snapshot.Truncated || len(snapshot.Fragments) != MaxLayoutFragments {
+		t.Fatalf("fragment snapshot = count:%d truncated:%v", len(snapshot.Fragments), snapshot.Truncated)
 	}
 }
 

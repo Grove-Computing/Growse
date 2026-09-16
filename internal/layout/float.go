@@ -11,6 +11,10 @@ type floatRegion struct {
 }
 
 func (e *engine) addFloat(node *dom.Node, style blockStyle, containingX, containingWidth, containingHeight float32, heightDefinite bool) {
+	if len(e.floats) >= maxFloatBoxes {
+		e.tree.addFallback(node.ID, "float box limit exceeded")
+		return
+	}
 	outerWidth, outerHeight, _ := e.flexIntrinsicSizes(node, style, flexAxis{horizontal: true}, containingWidth, containingWidth, containingHeight, heightDefinite)
 	if isImageElement(node, e.images) {
 		ratio := style.aspectRatio
@@ -32,7 +36,14 @@ func (e *engine) addFloat(node *dom.Node, style blockStyle, containingX, contain
 
 	y := e.y
 	var x float32
+	if style.float == stylemodel.FloatBottom && heightDefinite {
+		y = max(e.y, containingHeight-outerHeight)
+	}
 	for {
+		if style.float == stylemodel.FloatTop || style.float == stylemodel.FloatBottom {
+			x = containingX
+			break
+		}
 		left, right := e.floatEdges(containingX, containingWidth, y, outerHeight)
 		if right-left >= outerWidth {
 			if style.float == stylemodel.FloatRight {
@@ -107,7 +118,11 @@ func (e *engine) nextFloatBottom(y float32) float32 {
 
 func (e *engine) clearFloats(clear stylemodel.Clear) {
 	for _, region := range e.floats {
-		matches := clear == stylemodel.ClearBoth || clear == stylemodel.ClearLeft && region.side == stylemodel.FloatLeft || clear == stylemodel.ClearRight && region.side == stylemodel.FloatRight
+		matches := clear == stylemodel.ClearBoth ||
+			clear == stylemodel.ClearLeft && region.side == stylemodel.FloatLeft ||
+			clear == stylemodel.ClearRight && region.side == stylemodel.FloatRight ||
+			clear == stylemodel.ClearTop && region.side == stylemodel.FloatTop ||
+			clear == stylemodel.ClearBottom && region.side == stylemodel.FloatBottom
 		if matches {
 			e.y = max(e.y, region.Y+region.Height)
 		}

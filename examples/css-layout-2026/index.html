@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CSS Layout 2026</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="hero">
+    <p class="eyebrow">GROWSE · V0.19.0</p>
+    <h1>CSS Layout 2026</h1>
+    <p>Flow, sizing, Flexbox, Grid, and vertical writing on one shared layout tree.</p>
+    <button id="flow-toggle" type="button">Flip flow direction</button>
+    <strong id="flow-status">LEFT FLOAT · CLEAR BOTH</strong>
+    <button id="table-toggle" type="button">Toggle table algorithm</button>
+    <strong id="table-status">SEPARATE · FIXED</strong>
+    <button id="layout-toggle" type="button">Flip logical alignment</button>
+    <strong id="layout-status">VERTICAL-RL · SAFE</strong>
+    <button id="writing-toggle" type="button">Flip vertical flow</button>
+    <strong id="writing-status">VERTICAL-RL · LTR</strong>
+    <button id="position-toggle" type="button">Shift positioned scroll</button>
+    <strong id="position-status">NESTED SCROLL · TRANSFORMED</strong>
+    <button id="column-toggle" type="button">Toggle columns</button>
+    <strong id="column-status">3 COLUMNS · BALANCED</strong>
+  </header>
+  <main>
+    <section class="panel flow-panel">
+      <h2>Flow formatting context</h2>
+      <div id="flow-stage" class="flow-stage">
+        <aside class="flow-float">FLOAT</aside>
+        <p class="flow-copy">Inline content wraps beside the float while block flow keeps document order.</p>
+        <div class="flow-clear">CLEAR · margin collapse boundary</div>
+        <div class="flow-root"><span class="flow-root-float">FLOW-ROOT FLOAT</span><span>contained formatting context</span></div>
+      </div>
+    </section>
+    <section class="panel sizing-panel">
+      <h2>Sizing &amp; replaced elements</h2>
+      <div class="ratio-row">
+        <div class="ratio-card">2 / 1 block</div>
+        <img class="late-image" src="/assets/late-layout.png" alt="late loaded gradient">
+        <input class="ratio-input" value="4 / 1 control" aria-label="ratio control">
+      </div>
+    </section>
+    <section class="panel table-panel">
+      <h2>Table formatting context</h2>
+      <table id="layout-table" class="showcase-table">
+        <caption>caption-side: bottom · fixed column tracks</caption>
+        <colgroup>
+          <col class="signal-column">
+          <col class="detail-column">
+          <col class="state-column">
+        </colgroup>
+        <thead><tr><th>Signal</th><th>Geometry contract</th><th>State</th></tr></thead>
+        <tbody>
+          <tr><td rowspan="2">Sizing</td><td>min / max / intrinsic contribution</td><td>stable</td></tr>
+          <tr><td>late image ancestor reflow</td><td>loaded</td></tr>
+          <tr><td>Table</td><td colspan="2">caption · groups · span · spacing · collapse</td></tr>
+        </tbody>
+      </table>
+    </section>
+    <section class="panel flex-grid-panel">
+      <h2>Flex, Grid &amp; Subgrid</h2>
+      <div id="layout-playground" class="layout-playground">
+        <div class="flex-stage">
+          <div class="flex-card flex-tall">baseline</div>
+          <div class="flex-card">wrap</div>
+          <div class="flex-card">freeze</div>
+          <div class="absolute-card">absolute</div>
+        </div>
+        <div class="parent-grid">
+          <div class="subgrid-card">
+            <span class="subgrid-label">inherited track</span>
+            <strong class="subgrid-value">named line · shared gap</strong>
+          </div>
+        </div>
+        <div class="logical-stage">
+          <div class="logical-card">logical end / self-start</div>
+        </div>
+      </div>
+    </section>
+    <section class="panel writing-panel">
+      <h2>Writing Mode &amp; logical geometry</h2>
+      <p>Text, a replaced image, Flexbox, Grid, overflow, and pointer geometry share the same physical coordinates.</p>
+      <div id="writing-playground" class="writing-playground">
+        <div class="vertical-flow">
+          <strong>縦書きの列は論理方向へ進みます。</strong>
+          <span>画像の後も文字とoverflowが続きます。</span>
+        </div>
+        <div class="vertical-flex" aria-label="vertical flex example">
+          <span>甲一</span>
+          <img class="vertical-image" src="/assets/late-layout.png" alt="vertical gradient">
+          <span>乙二</span>
+        </div>
+        <div class="vertical-grid" aria-label="vertical grid example">
+          <span class="vertical-grid-a">甲一</span>
+          <span class="vertical-grid-b">乙二</span>
+          <span class="vertical-grid-c">丙三</span>
+        </div>
+      </div>
+    </section>
+    <section class="panel column-panel">
+      <h2>Multi-column &amp; fragmentation</h2>
+      <p>Balanced inline and block content shares stable fragments with paint, hit testing, Inspector, and scroll extent.</p>
+      <div id="column-stage" class="column-stage">
+        <article class="column-card"><strong>01 · Balance</strong><span>Column count, width, and gap resolve against one available inline size.</span></article>
+        <article class="column-card"><strong>02 · Avoid</strong><span>This card uses break-inside to stay together when a valid boundary exists.</span></article>
+        <h3 class="column-spanner">COLUMN-SPAN · ALL</h3>
+        <article class="column-card column-break"><strong>03 · Forced break</strong><span>A column boundary starts before this block while later content keeps document order.</span></article>
+        <article class="column-card"><strong>04 · Shared geometry</strong><span>Every painted fragment keeps its DOM identity and clipped hit region.</span></article>
+        <article class="column-card"><strong>05 · Finite</strong><span>Balancing and generated fragmentainers stop at deterministic safety limits.</span></article>
+      </div>
+    </section>
+    <section class="panel position-panel">
+      <h2>Position, overflow &amp; pointer geometry</h2>
+      <p>Wheel the rounded inner scrollport, then toggle its transform. Sticky, fixed, clipping, paint, and pointer targeting keep one geometry.</p>
+      <div id="position-playground" class="position-playground">
+        <div class="relative-probe">relative + opposing inset</div>
+        <div class="absolute-probe">absolute</div>
+        <div class="fixed-probe">fixed CB</div>
+        <div class="nested-scroll" aria-label="nested scroll example">
+          <div class="scroll-content">
+            <strong class="sticky-probe">sticky top / left</strong>
+            <button class="scroll-target" type="button">pointer target</button>
+            <span class="scroll-end">container end</span>
+          </div>
+        </div>
+        <div class="overflow-clip"><span>overflow:clip keeps this wide content outside pointer reach</span></div>
+      </div>
+    </section>
+  </main>
+  <script type="module" src="/app.mjs"></script>
+</body>
+</html>

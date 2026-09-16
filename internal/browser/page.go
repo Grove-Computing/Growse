@@ -97,7 +97,9 @@ type Page struct {
 	imageCache         *imageResourceCache
 	imageDirty         ImageInvalidation
 	fontMu             sync.Mutex
+	fontGeneration     uint64
 	fontDirty          FontInvalidation
+	styleMu            sync.Mutex
 	renderMu           sync.Mutex
 	renderMetrics      RenderMetrics
 	renderDirty        RenderInvalidation

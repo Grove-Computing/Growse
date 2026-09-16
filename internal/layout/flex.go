@@ -21,6 +21,32 @@ func axisFor(direction stylemodel.FlexDirection, wrap stylemodel.FlexWrap) flexA
 	return axis
 }
 
+func axisForStyle(style blockStyle) flexAxis {
+	row := style.flexDirection == stylemodel.FlexDirectionRow || style.flexDirection == stylemodel.FlexDirectionRowReverse
+	horizontal := row == (style.writingMode == stylemodel.WritingModeHorizontalTB)
+	reverseKeyword := style.flexDirection == stylemodel.FlexDirectionRowReverse || style.flexDirection == stylemodel.FlexDirectionColumnReverse
+	mainStartAtEnd := logicalStartAtEnd(style.writingMode, style.direction, horizontal)
+	crossStartAtEnd := logicalStartAtEnd(style.writingMode, style.direction, !horizontal)
+	return flexAxis{
+		horizontal: horizontal,
+		reverse:    mainStartAtEnd != reverseKeyword,
+		crossFlip:  crossStartAtEnd != (style.flexWrap == stylemodel.FlexWrapReverse),
+	}
+}
+
+func logicalStartAtEnd(writingMode stylemodel.WritingMode, direction stylemodel.Direction, horizontal bool) bool {
+	if writingMode == stylemodel.WritingModeHorizontalTB {
+		if horizontal {
+			return direction == stylemodel.DirectionRTL
+		}
+		return false
+	}
+	if horizontal {
+		return writingMode == stylemodel.WritingModeVerticalRL
+	}
+	return direction == stylemodel.DirectionRTL
+}
+
 type flexItem struct {
 	index        int
 	order        int
@@ -172,7 +198,8 @@ type flexLayoutItem struct {
 }
 
 func (e *engine) addFlexChildren(container *dom.Node, containerStyle blockStyle, x, width, containingHeight float32, heightDefinite bool) {
-	axis := axisFor(containerStyle.flexDirection, containerStyle.flexWrap)
+	startY := e.y
+	axis := axisForStyle(containerStyle)
 	availableMain := width
 	if !axis.horizontal {
 		availableMain = -1
@@ -188,6 +215,7 @@ func (e *engine) addFlexChildren(container *dom.Node, containerStyle blockStyle,
 
 	items, byAlgorithm := e.collectFlexItems(container, axis, availableMain, width, containingHeight, heightDefinite)
 	if len(items) == 0 {
+		e.renderFlexPositionedChildren(container, containerStyle, axis, x, startY, width, containingHeight, heightDefinite)
 		return
 	}
 	algorithms := make([]*flexItem, 0, len(items))
@@ -225,7 +253,8 @@ func (e *engine) addFlexChildren(container *dom.Node, containerStyle blockStyle,
 		lineCrossSizes[0] = max(lineCrossSizes[0], availableCross)
 		totalCross = lineCrossSizes[0]
 	}
-	crossOffset, crossSpacing := alignContentSpacing(containerStyle.alignContent, availableCross-totalCross, len(lines))
+	contentAlignment := resolveFlexCrossAlignment(containerStyle.alignContent, containerStyle, containerStyle, axis)
+	crossOffset, crossSpacing := alignContentSpacing(contentAlignment, containerStyle.alignContentSafety, availableCross-totalCross, len(lines))
 	if containerStyle.alignContent == stylemodel.AlignStretch && availableCross > totalCross && len(lines) > 0 {
 		extra := (availableCross - totalCross) / float32(len(lines))
 		for index := range lineCrossSizes {
@@ -248,12 +277,13 @@ func (e *engine) addFlexChildren(container *dom.Node, containerStyle blockStyle,
 	for _, lineIndex := range lineIndices {
 		line := &lines[lineIndex]
 		lineUsed, autoMargins := mainLineUsage(line, mainGap, byAlgorithm)
-		freeMain := max(availableMain-lineUsed, float32(0))
+		freeMain := availableMain - lineUsed
 		autoShare := float32(0)
-		if autoMargins > 0 {
+		if autoMargins > 0 && freeMain > 0 {
 			autoShare = freeMain / float32(autoMargins)
 		}
-		mainOffset, distributedGap := justifySpacing(containerStyle.justifyContent, freeMain, len(line.items), autoMargins > 0)
+		mainAlignment := resolveFlexJustify(containerStyle.justifyContent, containerStyle, axis)
+		mainOffset, distributedGap := justifySpacing(mainAlignment, containerStyle.justifyContentSafety, freeMain, len(line.items), autoMargins > 0)
 		mainCursor := mainOffset
 		if axis.reverse {
 			mainCursor = availableMain - mainOffset
@@ -275,7 +305,7 @@ func (e *engine) addFlexChildren(container *dom.Node, containerStyle blockStyle,
 				mainEnd = autoShare
 			}
 			usedCrossStart, usedCrossEnd := item.crossStart, item.crossEnd
-			freeCross := max(lineCrossSizes[lineIndex]-item.crossSize-usedCrossStart-usedCrossEnd, float32(0))
+			freeCross := lineCrossSizes[lineIndex] - item.crossSize - usedCrossStart - usedCrossEnd
 			crossAutoCount := 0
 			if item.crossAutoStart {
 				crossAutoCount++
@@ -283,7 +313,7 @@ func (e *engine) addFlexChildren(container *dom.Node, containerStyle blockStyle,
 			if item.crossAutoEnd {
 				crossAutoCount++
 			}
-			if crossAutoCount > 0 {
+			if crossAutoCount > 0 && freeCross > 0 {
 				share := freeCross / float32(crossAutoCount)
 				if item.crossAutoStart {
 					usedCrossStart = share
@@ -293,13 +323,13 @@ func (e *engine) addFlexChildren(container *dom.Node, containerStyle blockStyle,
 				}
 			}
 			alignment := item.style.alignSelf
+			alignmentSafety := item.style.alignSelfSafety
 			if alignment == stylemodel.AlignAuto {
 				alignment = containerStyle.alignItems
+				alignmentSafety = containerStyle.alignItemsSafety
 			}
-			if axis.crossFlip {
-				alignment = flipCrossAlignment(alignment)
-			}
-			if alignment == stylemodel.AlignStretch && item.crossAutoSize && crossAutoCount == 0 {
+			alignment = resolveFlexCrossAlignment(alignment, containerStyle, item.style, axis)
+			if alignment == stylemodel.AlignStretch && item.crossAutoSize && crossAutoCount == 0 && freeCross > 0 {
 				item.crossSize = max(lineCrossSizes[lineIndex]-usedCrossStart-usedCrossEnd, float32(0))
 				freeCross = 0
 			}
@@ -307,9 +337,13 @@ func (e *engine) addFlexChildren(container *dom.Node, containerStyle blockStyle,
 			if crossAutoCount == 0 {
 				switch alignment {
 				case stylemodel.AlignFlexEnd:
-					crossPosition += freeCross
+					if freeCross >= 0 || alignmentSafety == stylemodel.OverflowAlignmentUnsafe {
+						crossPosition += freeCross
+					}
 				case stylemodel.AlignCenter:
-					crossPosition += freeCross / 2
+					if freeCross >= 0 || alignmentSafety == stylemodel.OverflowAlignmentUnsafe {
+						crossPosition += freeCross / 2
+					}
 				case stylemodel.AlignBaseline:
 					if axis.horizontal {
 						crossPosition = max(lineBaseline-item.baseline, usedCrossStart)
@@ -349,6 +383,7 @@ func (e *engine) addFlexChildren(container *dom.Node, containerStyle blockStyle,
 	} else {
 		e.y += availableMain
 	}
+	e.renderFlexPositionedChildren(container, containerStyle, axis, x, startY, width, containingHeight, heightDefinite)
 }
 
 func (e *engine) collectFlexItems(container *dom.Node, axis flexAxis, availableMain, width, height float32, heightDefinite bool) ([]*flexLayoutItem, map[*flexItem]*flexLayoutItem) {
@@ -360,6 +395,9 @@ func (e *engine) collectFlexItems(container *dom.Node, axis flexAxis, availableM
 		}
 		style := e.styleFor(node)
 		if style.display == stylemodel.DisplayNone {
+			continue
+		}
+		if style.layoutPosition == stylemodel.PositionAbsolute || style.layoutPosition == stylemodel.PositionFixed {
 			continue
 		}
 		base, cross, minContent := e.flexIntrinsicSizes(node, style, axis, availableMain, width, height, heightDefinite)
@@ -418,6 +456,54 @@ func (e *engine) collectFlexItems(container *dom.Node, axis flexAxis, availableM
 	return items, byAlgorithm
 }
 
+func (e *engine) renderFlexPositionedChildren(container *dom.Node, containerStyle blockStyle, axis flexAxis, x, y, width, height float32, heightDefinite bool) {
+	for _, node := range container.Children {
+		if node.Type != dom.NodeElement {
+			continue
+		}
+		itemStyle := e.styleFor(node)
+		if itemStyle.display == stylemodel.DisplayNone || itemStyle.layoutPosition != stylemodel.PositionAbsolute && itemStyle.layoutPosition != stylemodel.PositionFixed {
+			continue
+		}
+		if itemStyle.layoutPosition == stylemodel.PositionFixed {
+			e.renderPositionedChild(node, itemStyle)
+			continue
+		}
+		mainSize, crossSize, _ := e.flexIntrinsicSizes(node, itemStyle, axis, width, width, height, heightDefinite)
+		mainAvailable, crossAvailable := width, crossSize
+		if axis.horizontal {
+			if heightDefinite {
+				crossAvailable = height
+			}
+		} else {
+			mainAvailable = mainSize
+			if heightDefinite {
+				mainAvailable = height
+			}
+			crossAvailable = width
+		}
+		mainFree := mainAvailable - mainSize
+		mainAlignment := resolveFlexJustify(containerStyle.justifyContent, containerStyle, axis)
+		mainOffset, _ := justifySpacing(mainAlignment, containerStyle.justifyContentSafety, mainFree, 1, false)
+		if axis.reverse {
+			mainOffset = mainFree - mainOffset
+		}
+		alignment := itemStyle.alignSelf
+		alignmentSafety := itemStyle.alignSelfSafety
+		if alignment == stylemodel.AlignAuto {
+			alignment = containerStyle.alignItems
+			alignmentSafety = containerStyle.alignItemsSafety
+		}
+		alignment = resolveFlexCrossAlignment(alignment, containerStyle, itemStyle, axis)
+		crossOffset := gridAlignmentOffset(crossAvailable-crossSize, alignment, alignmentSafety, false, false)
+		static := &Rect{X: x + mainOffset, Y: y + crossOffset}
+		if !axis.horizontal {
+			static.X, static.Y = x+crossOffset, y+mainOffset
+		}
+		e.renderPositionedChildAt(node, itemStyle, static)
+	}
+}
+
 func (e *engine) flexIntrinsicSizes(node *dom.Node, style blockStyle, axis flexAxis, availableMain, width, height float32, heightDefinite bool) (float32, float32, float32) {
 	text := normalizeWhitespace(e.inlineText(node))
 	textWidth, textHeight, _ := measureStyledText(text, style)
@@ -436,8 +522,15 @@ func (e *engine) flexIntrinsicSizes(node *dom.Node, style blockStyle, axis flexA
 		textWidth, textHeight = checkableSize, checkableSize
 		minTextWidth = checkableSize
 	} else if isSubmitButtonControl(node) {
-		textWidth, textHeight = buttonWidth, inputHeight
-		minTextWidth = buttonWidth
+		label := text
+		if node.TagName == "input" {
+			label, _ = node.Attribute("value")
+		}
+		if label == "" {
+			label = "Submit"
+		}
+		textWidth, textHeight, _ = measureStyledText(label, style)
+		minTextWidth = textWidth
 	} else if isImageElement(node, e.images) {
 		resource := e.images[node.ID]
 		textWidth, textHeight = resource.IntrinsicWidth, resource.IntrinsicHeight
@@ -468,6 +561,13 @@ func (e *engine) flexIntrinsicSizes(node *dom.Node, style blockStyle, axis flexA
 		}
 	} else if resolved, ok := e.intrinsicKeywordSize(node, style.height, style, height, false); ok {
 		intrinsicHeight = resolved
+	}
+	if style.aspectRatio > 0 {
+		if style.height.Kind == stylemodel.SizeAuto && style.width.Kind != stylemodel.SizeAuto {
+			intrinsicHeight = intrinsicWidth / style.aspectRatio
+		} else if style.width.Kind == stylemodel.SizeAuto && style.height.Kind != stylemodel.SizeAuto {
+			intrinsicWidth = intrinsicHeight * style.aspectRatio
+		}
 	}
 	base := intrinsicWidth
 	if !axis.horizontal {
@@ -545,10 +645,11 @@ func (e *engine) renderFlexItem(item *flexLayoutItem, axis flexAxis, x, y, mainS
 	}
 	e.y, e.clip = savedY, savedClip
 	translateFlexGeometry(e.tree, startBoxes, startDecorations, x, y, savedClip)
+	e.tree.Bounds[item.node.ID] = Rect{X: x, Y: y, Width: outerWidth, Height: outerHeight}
 }
 
 func (e *engine) resolveInlineFlexSize(node *dom.Node, containerStyle blockStyle, containingWidth float32) (float32, float32, float32) {
-	axis := axisFor(containerStyle.flexDirection, containerStyle.flexWrap)
+	axis := axisForStyle(containerStyle)
 	mainSize, crossSize := float32(0), float32(0)
 	itemCount := 0
 	baseline := float32(0)
@@ -614,6 +715,27 @@ func pixelSize(value float32) stylemodel.SizeValue {
 }
 
 func translateFlexGeometry(tree *Tree, boxStart, decorationStart int, x, y float32, parentClip *Rect) {
+	movedNodes := make(map[dom.NodeID]struct{})
+	for index := boxStart; index < len(tree.Boxes); index++ {
+		movedNodes[tree.Boxes[index].NodeID] = struct{}{}
+	}
+	for index := decorationStart; index < len(tree.Decorations); index++ {
+		movedNodes[tree.Decorations[index].NodeID] = struct{}{}
+	}
+	translatedBounds := make(map[dom.NodeID]struct{})
+	translateBounds := func(nodeID dom.NodeID) {
+		if _, translated := translatedBounds[nodeID]; translated {
+			return
+		}
+		bounds, exists := tree.Bounds[nodeID]
+		if !exists {
+			return
+		}
+		bounds.X += x
+		bounds.Y += y
+		tree.Bounds[nodeID] = bounds
+		translatedBounds[nodeID] = struct{}{}
+	}
 	translateClip := func(clip *Rect) *Rect {
 		if clip != nil {
 			clip.X += x
@@ -627,10 +749,31 @@ func translateFlexGeometry(tree *Tree, boxStart, decorationStart int, x, y float
 		}
 		return intersectClip(parentClip, *clip)
 	}
+	translateClips := func(clips []ClipRegion) {
+		for index := range clips {
+			_, ownerMoves := movedNodes[clips[index].NodeID]
+			if clips[index].NodeID == 0 || ownerMoves {
+				clips[index].X += x
+				clips[index].Y += y
+			}
+		}
+	}
+	resolvedClip := func(current *Rect, clips []ClipRegion) *Rect {
+		if len(clips) == 0 {
+			return translateClip(current)
+		}
+		current = intersectClipRegions(clips)
+		if parentClip != nil {
+			current = intersectClip(parentClip, *current)
+		}
+		return current
+	}
 	for index := boxStart; index < len(tree.Boxes); index++ {
+		translateBounds(tree.Boxes[index].NodeID)
 		tree.Boxes[index].X += x
 		tree.Boxes[index].Y += y
 		tree.Boxes[index].Baseline += y
+		tree.Boxes[index].Transform = translatedTransform(tree.Boxes[index].Transform, x, y)
 		if tree.Boxes[index].Image {
 			tree.Boxes[index].ImageRect.X += x
 			tree.Boxes[index].ImageRect.Y += y
@@ -640,20 +783,16 @@ func translateFlexGeometry(tree *Tree, boxStart, decorationStart int, x, y float
 		for runIndex := range tree.Boxes[index].Runs {
 			tree.Boxes[index].Runs[runIndex].Baseline += y
 		}
-		tree.Boxes[index].Clip = translateClip(tree.Boxes[index].Clip)
-		for clipIndex := range tree.Boxes[index].Clips {
-			tree.Boxes[index].Clips[clipIndex].X += x
-			tree.Boxes[index].Clips[clipIndex].Y += y
-		}
+		translateClips(tree.Boxes[index].Clips)
+		tree.Boxes[index].Clip = resolvedClip(tree.Boxes[index].Clip, tree.Boxes[index].Clips)
 	}
 	for index := decorationStart; index < len(tree.Decorations); index++ {
+		translateBounds(tree.Decorations[index].NodeID)
 		tree.Decorations[index].X += x
 		tree.Decorations[index].Y += y
-		tree.Decorations[index].Clip = translateClip(tree.Decorations[index].Clip)
-		for clipIndex := range tree.Decorations[index].Clips {
-			tree.Decorations[index].Clips[clipIndex].X += x
-			tree.Decorations[index].Clips[clipIndex].Y += y
-		}
+		tree.Decorations[index].Transform = translatedTransform(tree.Decorations[index].Transform, x, y)
+		translateClips(tree.Decorations[index].Clips)
+		tree.Decorations[index].Clip = resolvedClip(tree.Decorations[index].Clip, tree.Decorations[index].Clips)
 	}
 }
 
@@ -680,8 +819,8 @@ func mainLineUsage(line *flexLine, gap float32, items map[*flexItem]*flexLayoutI
 	return used, autoMargins
 }
 
-func justifySpacing(alignment stylemodel.JustifyContent, free float32, itemCount int, hasAutoMargins bool) (float32, float32) {
-	if free <= 0 || itemCount == 0 || hasAutoMargins {
+func justifySpacing(alignment stylemodel.JustifyContent, safety stylemodel.OverflowAlignment, free float32, itemCount int, hasAutoMargins bool) (float32, float32) {
+	if itemCount == 0 || hasAutoMargins || free < 0 && safety != stylemodel.OverflowAlignmentUnsafe {
 		return 0, 0
 	}
 	switch alignment {
@@ -690,21 +829,25 @@ func justifySpacing(alignment stylemodel.JustifyContent, free float32, itemCount
 	case stylemodel.JustifyCenter:
 		return free / 2, 0
 	case stylemodel.JustifySpaceBetween:
-		if itemCount > 1 {
+		if free > 0 && itemCount > 1 {
 			return 0, free / float32(itemCount-1)
 		}
 	case stylemodel.JustifySpaceAround:
-		spacing := free / float32(itemCount)
-		return spacing / 2, spacing
+		if free > 0 {
+			spacing := free / float32(itemCount)
+			return spacing / 2, spacing
+		}
 	case stylemodel.JustifySpaceEvenly:
-		spacing := free / float32(itemCount+1)
-		return spacing, spacing
+		if free > 0 {
+			spacing := free / float32(itemCount+1)
+			return spacing, spacing
+		}
 	}
 	return 0, 0
 }
 
-func alignContentSpacing(alignment stylemodel.Align, free float32, lineCount int) (float32, float32) {
-	if free <= 0 || lineCount == 0 {
+func alignContentSpacing(alignment stylemodel.Align, safety stylemodel.OverflowAlignment, free float32, lineCount int) (float32, float32) {
+	if lineCount == 0 || free < 0 && safety != stylemodel.OverflowAlignmentUnsafe {
 		return 0, 0
 	}
 	switch alignment {
@@ -713,25 +856,72 @@ func alignContentSpacing(alignment stylemodel.Align, free float32, lineCount int
 	case stylemodel.AlignCenter:
 		return free / 2, 0
 	case stylemodel.AlignSpaceBetween:
-		if lineCount > 1 {
+		if free > 0 && lineCount > 1 {
 			return 0, free / float32(lineCount-1)
 		}
 	case stylemodel.AlignSpaceAround:
-		spacing := free / float32(lineCount)
-		return spacing / 2, spacing
+		if free > 0 {
+			spacing := free / float32(lineCount)
+			return spacing / 2, spacing
+		}
 	case stylemodel.AlignSpaceEvenly:
-		spacing := free / float32(lineCount+1)
-		return spacing, spacing
+		if free > 0 {
+			spacing := free / float32(lineCount+1)
+			return spacing, spacing
+		}
 	}
 	return 0, 0
 }
 
-func flipCrossAlignment(alignment stylemodel.Align) stylemodel.Align {
-	if alignment == stylemodel.AlignFlexStart {
+func resolveFlexJustify(alignment stylemodel.JustifyContent, container blockStyle, axis flexAxis) stylemodel.JustifyContent {
+	desiredAtEnd, logical := false, false
+	switch alignment {
+	case stylemodel.JustifyStart:
+		desiredAtEnd, logical = logicalStartAtEnd(container.writingMode, container.direction, axis.horizontal), true
+	case stylemodel.JustifyEnd:
+		desiredAtEnd, logical = !logicalStartAtEnd(container.writingMode, container.direction, axis.horizontal), true
+	case stylemodel.JustifyLeft:
+		desiredAtEnd, logical = false, axis.horizontal
+	case stylemodel.JustifyRight:
+		desiredAtEnd, logical = true, axis.horizontal
+	}
+	if !logical {
+		return alignment
+	}
+	if desiredAtEnd == axis.reverse {
+		return stylemodel.JustifyFlexStart
+	}
+	return stylemodel.JustifyFlexEnd
+}
+
+func resolveFlexCrossAlignment(alignment stylemodel.Align, container, item blockStyle, axis flexAxis) stylemodel.Align {
+	switch alignment {
+	case stylemodel.AlignFlexStart:
+		if axis.crossFlip {
+			return stylemodel.AlignFlexEnd
+		}
+		return stylemodel.AlignFlexStart
+	case stylemodel.AlignFlexEnd:
+		if axis.crossFlip {
+			return stylemodel.AlignFlexStart
+		}
+		return stylemodel.AlignFlexEnd
+	case stylemodel.AlignStart:
+		return physicalEdgeAlignment(logicalStartAtEnd(container.writingMode, container.direction, !axis.horizontal))
+	case stylemodel.AlignEnd:
+		return physicalEdgeAlignment(!logicalStartAtEnd(container.writingMode, container.direction, !axis.horizontal))
+	case stylemodel.AlignSelfStart:
+		return physicalEdgeAlignment(logicalStartAtEnd(item.writingMode, item.direction, !axis.horizontal))
+	case stylemodel.AlignSelfEnd:
+		return physicalEdgeAlignment(!logicalStartAtEnd(item.writingMode, item.direction, !axis.horizontal))
+	default:
+		return alignment
+	}
+}
+
+func physicalEdgeAlignment(atEnd bool) stylemodel.Align {
+	if atEnd {
 		return stylemodel.AlignFlexEnd
 	}
-	if alignment == stylemodel.AlignFlexEnd {
-		return stylemodel.AlignFlexStart
-	}
-	return alignment
+	return stylemodel.AlignFlexStart
 }

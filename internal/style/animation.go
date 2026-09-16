@@ -4,6 +4,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	animationmodel "github.com/Grove-Computing/Growse/internal/animation"
@@ -62,6 +63,7 @@ type AnimationStack struct {
 // Reconcile is called after style recalculation so DOM and interaction changes
 // update animation definitions without restarting an unchanged animation.
 type AnimationRegistry struct {
+	mu     sync.RWMutex
 	stacks map[dom.NodeID]*AnimationStack
 }
 
@@ -75,6 +77,8 @@ func (registry *AnimationRegistry) Reconcile(styles Map, current time.Time) {
 	if registry == nil {
 		return
 	}
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
 	if registry.stacks == nil {
 		registry.stacks = make(map[dom.NodeID]*AnimationStack)
 	}
@@ -107,7 +111,12 @@ func (registry *AnimationRegistry) Reconcile(styles Map, current time.Time) {
 
 // Sample evaluates the animations attached to one element.
 func (registry *AnimationRegistry) Sample(nodeID dom.NodeID, current time.Time) []SampledAnimation {
-	if registry == nil || registry.stacks[nodeID] == nil {
+	if registry == nil {
+		return nil
+	}
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+	if registry.stacks[nodeID] == nil {
 		return nil
 	}
 	return registry.stacks[nodeID].Sample(current)
@@ -115,7 +124,12 @@ func (registry *AnimationRegistry) Sample(nodeID dom.NodeID, current time.Time) 
 
 // Count reports the executable animation count for one element.
 func (registry *AnimationRegistry) Count(nodeID dom.NodeID) int {
-	if registry == nil || registry.stacks[nodeID] == nil {
+	if registry == nil {
+		return 0
+	}
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+	if registry.stacks[nodeID] == nil {
 		return 0
 	}
 	return registry.stacks[nodeID].Len()
@@ -126,6 +140,8 @@ func (registry *AnimationRegistry) Total() int {
 	if registry == nil {
 		return 0
 	}
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
 	total := 0
 	for _, stack := range registry.stacks {
 		total += stack.Len()
@@ -139,6 +155,8 @@ func (registry *AnimationRegistry) ActiveNodes(current time.Time) []dom.NodeID {
 	if registry == nil {
 		return nil
 	}
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
 	nodes := make([]dom.NodeID, 0, min(len(registry.stacks), MaxActiveAnimations))
 	for nodeID, stack := range registry.stacks {
 		for _, running := range stack.items {
@@ -159,6 +177,8 @@ func (registry *AnimationRegistry) Clear() {
 	if registry == nil {
 		return
 	}
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
 	registry.stacks = make(map[dom.NodeID]*AnimationStack)
 }
 
