@@ -45,3 +45,14 @@ positionToggle.addEventListener("click", () => {
 document.querySelector(".scroll-target").addEventListener("click", () => {
   positionStatus.textContent = "POINTER TARGET · HIT";
 });
+
+const columnToggle = document.getElementById("column-toggle");
+const columnStage = document.getElementById("column-stage");
+const columnStatus = document.getElementById("column-status");
+let alternateColumns = false;
+
+columnToggle.addEventListener("click", () => {
+  alternateColumns = !alternateColumns;
+  columnStage.setAttribute("class", alternateColumns ? "column-stage alternate" : "column-stage");
+  columnStatus.textContent = alternateColumns ? "2 COLUMNS · AUTO FILL" : "3 COLUMNS · BALANCED";
+});

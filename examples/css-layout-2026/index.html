@@ -19,6 +19,8 @@
     <strong id="writing-status">VERTICAL-RL · LTR</strong>
     <button id="position-toggle" type="button">Shift positioned scroll</button>
     <strong id="position-status">NESTED SCROLL · TRANSFORMED</strong>
+    <button id="column-toggle" type="button">Toggle columns</button>
+    <strong id="column-status">3 COLUMNS · BALANCED</strong>
   </header>
   <main>
     <section class="panel sizing-panel">
@@ -84,6 +86,18 @@
           <span class="vertical-grid-b">乙二</span>
           <span class="vertical-grid-c">丙三</span>
         </div>
+      </div>
+    </section>
+    <section class="panel column-panel">
+      <h2>Multi-column &amp; fragmentation</h2>
+      <p>Balanced inline and block content shares stable fragments with paint, hit testing, Inspector, and scroll extent.</p>
+      <div id="column-stage" class="column-stage">
+        <article class="column-card"><strong>01 · Balance</strong><span>Column count, width, and gap resolve against one available inline size.</span></article>
+        <article class="column-card"><strong>02 · Avoid</strong><span>This card uses break-inside to stay together when a valid boundary exists.</span></article>
+        <h3 class="column-spanner">COLUMN-SPAN · ALL</h3>
+        <article class="column-card column-break"><strong>03 · Forced break</strong><span>A column boundary starts before this block while later content keeps document order.</span></article>
+        <article class="column-card"><strong>04 · Shared geometry</strong><span>Every painted fragment keeps its DOM identity and clipped hit region.</span></article>
+        <article class="column-card"><strong>05 · Finite</strong><span>Balancing and generated fragmentainers stop at deterministic safety limits.</span></article>
       </div>
     </section>
     <section class="panel position-panel">

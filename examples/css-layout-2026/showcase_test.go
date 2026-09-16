@@ -19,9 +19,9 @@ func TestCSSLayoutShowcaseServesLayoutStagesAndLateImage(t *testing.T) {
 	for _, route := range []struct {
 		path, contentType, marker string
 	}{
-		{"/", "text/html", "Writing Mode &amp; logical geometry"},
-		{"/style.css", "text/css", ".nested-scroll"},
-		{"/app.mjs", "text/javascript", "POINTER TARGET · HIT"},
+		{"/", "text/html", "Multi-column &amp; fragmentation"},
+		{"/style.css", "text/css", ".column-stage"},
+		{"/app.mjs", "text/javascript", "2 COLUMNS · AUTO FILL"},
 		{"/assets/late-layout.png", "image/png", ""},
 	} {
 		response, err := server.Client().Get(server.URL + route.path)
@@ -34,6 +34,47 @@ func TestCSSLayoutShowcaseServesLayoutStagesAndLateImage(t *testing.T) {
 			route.marker != "" && !strings.Contains(string(body), route.marker) {
 			t.Fatalf("GET %s = status:%d type:%q marker:%t err:%v", route.path, response.StatusCode, response.Header.Get("Content-Type"), strings.Contains(string(body), route.marker), readErr)
 		}
+	}
+}
+
+func TestCSSLayoutShowcaseBalancesColumnsAndSpans(t *testing.T) {
+	htmlSource, err := cssLayoutAssets.ReadFile("index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cssSource, err := cssLayoutAssets.ReadFile("style.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := htmlparser.Parse(strings.NewReader(string(htmlSource)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stylesheet, err := css.Parse(strings.NewReader(string(cssSource)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage, ok := document.QuerySelector("#column-stage")
+	if !ok {
+		t.Fatal("multi-column stage is missing")
+	}
+	spanner, ok := document.QuerySelector(".column-spanner")
+	if !ok {
+		t.Fatal("column spanner is missing")
+	}
+	tree := layout.BuildWithViewport(document, style.Compute(document, stylesheet), 1050, 700)
+	stageBounds, spanBounds := tree.Bounds[stage.ID], tree.Bounds[spanner.ID]
+	columns := make(map[int]bool)
+	for _, child := range stage.Children {
+		if child.Type != dom.NodeElement || child == spanner {
+			continue
+		}
+		if bounds, exists := tree.Bounds[child.ID]; exists {
+			columns[int(bounds.X+0.5)] = true
+		}
+	}
+	if len(columns) < 3 || spanBounds.Width != stageBounds.Width-28 {
+		t.Fatalf("showcase columns = positions:%v stage:%#v span:%#v", columns, stageBounds, spanBounds)
 	}
 }
 
