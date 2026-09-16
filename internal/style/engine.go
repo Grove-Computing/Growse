@@ -169,6 +169,7 @@ func inheritedStyle(parent ComputedStyle) ComputedStyle {
 		LineHeight: parent.LineHeight, WhiteSpace: parent.WhiteSpace, Visibility: parent.Visibility,
 		TextAlign: parent.TextAlign, TextTransform: parent.TextTransform, TextIndent: parent.TextIndent,
 		LetterSpacing: parent.LetterSpacing, WordSpacing: parent.WordSpacing, WordBreak: parent.WordBreak, OverflowWrap: parent.OverflowWrap,
+		BorderCollapse: parent.BorderCollapse, BorderSpacingX: parent.BorderSpacingX, BorderSpacingY: parent.BorderSpacingY, CaptionSide: parent.CaptionSide,
 		ListStyleType: parent.ListStyleType, ListStylePosition: parent.ListStylePosition, ListStyleImage: parent.ListStyleImage,
 		AccentColor: parent.AccentColor, AccentColorAuto: parent.AccentColorAuto, Cursor: parent.Cursor,
 		ObjectPosition:  BackgroundPosition{X: LengthPercentage{Percentage: 50}, Y: LengthPercentage{Percentage: 50}},
@@ -220,6 +221,20 @@ func applyUADefaults(tag string, computed ComputedStyle) ComputedStyle {
 		computed.Display = DisplayInlineBlock
 		computed.Width = SizeValue{Kind: SizeLength, Value: LengthPercentage{Pixels: 300}}
 		computed.Height = SizeValue{Kind: SizeLength, Value: LengthPercentage{Pixels: 150}}
+	case "table":
+		computed.Display = DisplayTable
+	case "caption":
+		computed.Display = DisplayTableCaption
+	case "colgroup":
+		computed.Display = DisplayTableColumnGroup
+	case "col":
+		computed.Display = DisplayTableColumn
+	case "thead", "tbody", "tfoot":
+		computed.Display = DisplayTableRowGroup
+	case "tr":
+		computed.Display = DisplayTableRow
+	case "td", "th":
+		computed.Display = DisplayTableCell
 	case "a":
 		computed.Color = 0x0969daff
 	case "pre":
@@ -610,6 +625,7 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 	computed.Padding = applyEdges(computed.Padding, parent.Padding, "padding", winners, computed.CustomProperties, lengthContext)
 	computed.Border = applyBorders(computed.Border, parent.Border, winners, computed.CustomProperties, lengthContext, computed.Color)
 	computed.BorderRadius = applyBorderRadii(computed.BorderRadius, parent.BorderRadius, winners, computed.CustomProperties, lengthContext)
+	computed = applyTableProperties(computed, parent, winners, computed.CustomProperties, lengthContext)
 	computed = applyFlexProperties(computed, parent, winners, computed.CustomProperties, lengthContext)
 	computed = applyGridProperties(computed, parent, winners, computed.CustomProperties, lengthContext)
 	computed = applyPositionProperties(computed, parent, winners, computed.CustomProperties, lengthContext)
@@ -1662,6 +1678,12 @@ func parseDisplay(value string) (Display, bool) {
 		return DisplayTableRow, true
 	case "table-cell":
 		return DisplayTableCell, true
+	case "table-caption":
+		return DisplayTableCaption, true
+	case "table-column-group":
+		return DisplayTableColumnGroup, true
+	case "table-column":
+		return DisplayTableColumn, true
 	case "flow-root":
 		return DisplayFlowRoot, true
 	case "none":

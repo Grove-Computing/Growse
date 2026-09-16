@@ -23,7 +23,34 @@ const (
 	DisplayTableRowGroup
 	DisplayTableRow
 	DisplayTableCell
+	DisplayTableCaption
+	DisplayTableColumnGroup
+	DisplayTableColumn
 	DisplayFlowRoot
+)
+
+// TableLayout selects the automatic or first-row fixed table sizing algorithm.
+type TableLayout uint8
+
+const (
+	TableLayoutAuto TableLayout = iota
+	TableLayoutFixed
+)
+
+// BorderCollapse selects separated or shared table cell borders.
+type BorderCollapse uint8
+
+const (
+	BorderCollapseSeparate BorderCollapse = iota
+	BorderCollapseCollapse
+)
+
+// CaptionSide places a table caption before or after the row grid.
+type CaptionSide uint8
+
+const (
+	CaptionSideTop CaptionSide = iota
+	CaptionSideBottom
 )
 
 // Float places a box at a side of the current block formatting context.
@@ -617,6 +644,11 @@ type ComputedStyle struct {
 	OverflowX           Overflow
 	OverflowY           Overflow
 	Display             Display
+	TableLayout         TableLayout
+	BorderCollapse      BorderCollapse
+	BorderSpacingX      float32
+	BorderSpacingY      float32
+	CaptionSide         CaptionSide
 	Float               Float
 	Clear               Clear
 	ContainerType       ContainerType

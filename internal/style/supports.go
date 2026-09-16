@@ -113,6 +113,27 @@ func supportsDeclaration(property, value string) bool {
 		return ok
 	case "box-sizing":
 		return value == "content-box" || value == "border-box"
+	case "aspect-ratio":
+		_, ok := parseAspectRatio(value)
+		return ok
+	case "table-layout":
+		return value == "auto" || value == "fixed"
+	case "border-collapse":
+		return value == "separate" || value == "collapse"
+	case "caption-side":
+		return value == "top" || value == "bottom"
+	case "border-spacing":
+		parts, ok := splitCSSSpaceSeparated(value)
+		if !ok || len(parts) < 1 || len(parts) > 2 {
+			return false
+		}
+		for _, part := range parts {
+			length, valid := ResolveLength(part, context)
+			if !valid || length.Percentage != 0 || length.Pixels < 0 {
+				return false
+			}
+		}
+		return true
 	case "overflow", "overflow-x", "overflow-y":
 		_, ok := resolveOverflow(value, OverflowVisible)
 		return ok
@@ -211,7 +232,8 @@ func supportsProperty(property string) bool {
 	switch property {
 	case "display", "color", "background-color", "background-image", "background-origin", "background-clip", "font", "font-size", "font-weight", "font-family", "font-style", "font-stretch", "line-height", "letter-spacing", "word-spacing", "text-indent", "text-align", "text-transform", "word-break", "overflow-wrap", "vertical-align", "text-overflow",
 		"object-fit", "object-position", "list-style", "list-style-type", "list-style-position", "list-style-image", "appearance", "-webkit-appearance", "accent-color", "cursor", "filter", "backdrop-filter", "mix-blend-mode",
-		"width", "height", "min-width", "min-height", "max-width", "max-height", "box-sizing", "position", "top", "right", "bottom", "left", "z-index", "float", "clear",
+		"width", "height", "min-width", "min-height", "max-width", "max-height", "box-sizing", "aspect-ratio", "position", "top", "right", "bottom", "left", "z-index", "float", "clear",
+		"table-layout", "border-collapse", "border-spacing", "caption-side",
 		"margin", "margin-top", "margin-right", "margin-bottom", "margin-left", "padding", "padding-top", "padding-right", "padding-bottom", "padding-left",
 		"border", "border-width", "border-style", "border-color", "border-top", "border-right", "border-bottom", "border-left", "border-radius", "outline",
 		"overflow", "overflow-x", "overflow-y", "visibility", "opacity", "white-space", "transform",
