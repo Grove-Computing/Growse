@@ -13,6 +13,7 @@ import (
 type Tree struct {
 	Revision          uint64
 	Width             float32
+	ViewportHeight    float32
 	Height            float32
 	Background        uint32
 	Decorations       []Decoration
@@ -25,7 +26,37 @@ type Tree struct {
 	CompositingLayers []CompositingLayer
 	Parents           map[dom.NodeID]dom.NodeID
 	Bounds            map[dom.NodeID]Rect
+	StickyConstraints map[dom.NodeID]StickyConstraint
+	ScrollContainers  map[dom.NodeID]ScrollContainer
+	ScrollOffsets     map[dom.NodeID]ScrollOffset
 	Fallbacks         []Fallback
+}
+
+// ScrollOffset is the physical scroll position of one nested scroll container.
+type ScrollOffset struct{ X, Y float32 }
+
+// ScrollContainer shares one node's scrollport, overflow policy, extent, and
+// current offset between layout, CSSOM, paint updates, and hit testing.
+type ScrollContainer struct {
+	NodeID                    dom.NodeID
+	Viewport                  Rect
+	ScrollWidth, ScrollHeight float32
+	Offset                    ScrollOffset
+	OverflowX, OverflowY      stylemodel.Overflow
+}
+
+// StickyConstraint retains normal-flow geometry and the two independently
+// selected scroll containers needed to recompute sticky placement without a
+// full layout pass.
+type StickyConstraint struct {
+	Normal            Rect
+	ContainingBlock   Rect
+	ContainingBlockID dom.NodeID
+	XScrollContainer  dom.NodeID
+	YScrollContainer  dom.NodeID
+	Inset             stylemodel.Insets
+	AppliedX          float32
+	AppliedY          float32
 }
 
 // Fallback records a bounded, payload-free layout/paint safety decision.
@@ -83,6 +114,7 @@ type CompositingLayer struct {
 // ClipRegion is one nested rectangular or rounded clipping boundary.
 type ClipRegion struct {
 	Rect
+	NodeID dom.NodeID
 	Radius BorderRadii
 }
 

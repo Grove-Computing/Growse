@@ -558,6 +558,7 @@ const (
 	OverflowHidden
 	OverflowAuto
 	OverflowScroll
+	OverflowClip
 )
 
 // BackgroundImageKind identifies the single background layer supported by Growse.

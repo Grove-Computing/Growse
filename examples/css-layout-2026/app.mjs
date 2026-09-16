@@ -30,3 +30,18 @@ writingToggle.addEventListener("click", () => {
   writingPlayground.setAttribute("class", alternateWriting ? "writing-playground alternate" : "writing-playground");
   writingStatus.textContent = alternateWriting ? "VERTICAL-LR · RTL" : "VERTICAL-RL · LTR";
 });
+
+const positionToggle = document.getElementById("position-toggle");
+const positionPlayground = document.getElementById("position-playground");
+const positionStatus = document.getElementById("position-status");
+let alternatePosition = false;
+
+positionToggle.addEventListener("click", () => {
+  alternatePosition = !alternatePosition;
+  positionPlayground.setAttribute("class", alternatePosition ? "position-playground alternate" : "position-playground");
+  positionStatus.textContent = alternatePosition ? "SHIFTED · ROTATED · WIDER" : "NESTED SCROLL · TRANSFORMED";
+});
+
+document.querySelector(".scroll-target").addEventListener("click", () => {
+  positionStatus.textContent = "POINTER TARGET · HIT";
+});

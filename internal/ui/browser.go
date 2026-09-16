@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"math"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 	"unicode"
@@ -21,6 +22,7 @@ import (
 	"gioui.org/font"
 	"gioui.org/font/gofont"
 	"gioui.org/gesture"
+	"gioui.org/io/event"
 	"gioui.org/io/key"
 	"gioui.org/io/pointer"
 	"gioui.org/layout"
@@ -108,6 +110,9 @@ type BrowserUI struct {
 	gopherCursorReady bool
 	pointerTag        pointerTag
 	pointer           pointerState
+	nestedScrollPage  *browser.Page
+	nestedScrollTags  map[dom.NodeID]*nestedScrollTag
+	nestedScroll      map[dom.NodeID]layoutengine.ScrollOffset
 	backIcon          *widget.Icon
 	forwardIcon       *widget.Icon
 	reloadIcon        *widget.Icon
@@ -121,6 +126,7 @@ type BrowserUI struct {
 	selectButtons     map[dom.NodeID]*widget.Clickable
 	checkableButtons  map[dom.NodeID]*widget.Clickable
 	formButtons       map[dom.NodeID]*widget.Clickable
+	formPointerClicks map[dom.NodeID]int
 	layoutBuild       func(*dom.Document, stylemodel.Map, float32, float32, float32, float32) *layoutengine.Tree
 	layoutBuildImages func(*dom.Document, stylemodel.Map, map[dom.NodeID]layoutengine.ImageResource, float32, float32, float32, float32) *layoutengine.Tree
 	layoutBuildFonts  func(*dom.Document, stylemodel.Map, map[dom.NodeID]layoutengine.ImageResource, *layoutengine.FontSet, float32, float32, float32, float32) *layoutengine.Tree
@@ -183,7 +189,12 @@ type tabRenderState struct {
 	selectButtons    map[dom.NodeID]*widget.Clickable
 	checkableButtons map[dom.NodeID]*widget.Clickable
 	formButtons      map[dom.NodeID]*widget.Clickable
+	nestedScrollPage *browser.Page
+	nestedScrollTags map[dom.NodeID]*nestedScrollTag
+	nestedScroll     map[dom.NodeID]layoutengine.ScrollOffset
 }
+
+type nestedScrollTag struct{ nodeID dom.NodeID }
 
 // Navigator is the browser capability used by the UI.
 type Navigator interface {
@@ -320,6 +331,9 @@ func NewBrowserUIWithTabsAndUpdater(navigator Navigator, tabs TabController, inv
 		selectButtons:     make(map[dom.NodeID]*widget.Clickable),
 		checkableButtons:  make(map[dom.NodeID]*widget.Clickable),
 		formButtons:       make(map[dom.NodeID]*widget.Clickable),
+		formPointerClicks: make(map[dom.NodeID]int),
+		nestedScrollTags:  make(map[dom.NodeID]*nestedScrollTag),
+		nestedScroll:      make(map[dom.NodeID]layoutengine.ScrollOffset),
 		tabRowButtons:     make(map[browser.TabID]*widget.Clickable),
 		tabCloseButtons:   make(map[browser.TabID]*widget.Clickable),
 		tabShortcutDown:   make(map[key.Name]bool),
@@ -1004,6 +1018,7 @@ func (ui *BrowserUI) syncActiveTabChrome() {
 			layoutCache: ui.layoutCache, scrollRevision: ui.scrollRevision, pagePosition: ui.pageList.Position,
 			inputEditors: ui.inputEditors, inputFocused: ui.inputFocused, inputCommitted: ui.inputCommitted,
 			selectButtons: ui.selectButtons, checkableButtons: ui.checkableButtons, formButtons: ui.formButtons,
+			nestedScrollPage: ui.nestedScrollPage, nestedScrollTags: ui.nestedScrollTags, nestedScroll: ui.nestedScroll,
 		}
 	}
 	ui.displayedTabID = active.ID
@@ -1020,6 +1035,9 @@ func (ui *BrowserUI) syncActiveTabChrome() {
 		ui.selectButtons = state.selectButtons
 		ui.checkableButtons = state.checkableButtons
 		ui.formButtons = state.formButtons
+		ui.nestedScrollPage = state.nestedScrollPage
+		ui.nestedScrollTags = state.nestedScrollTags
+		ui.nestedScroll = state.nestedScroll
 	} else {
 		ui.layoutCache = documentLayoutCache{}
 		ui.scrollRevision = 0
@@ -1029,6 +1047,9 @@ func (ui *BrowserUI) syncActiveTabChrome() {
 		ui.selectButtons = make(map[dom.NodeID]*widget.Clickable)
 		ui.checkableButtons = make(map[dom.NodeID]*widget.Clickable)
 		ui.formButtons = make(map[dom.NodeID]*widget.Clickable)
+		ui.nestedScrollPage = nil
+		ui.nestedScrollTags = make(map[dom.NodeID]*nestedScrollTag)
+		ui.nestedScroll = make(map[dom.NodeID]layoutengine.ScrollOffset)
 	}
 	if page := navigator.Page(); page != nil {
 		if page.URL != nil {
@@ -1087,6 +1108,9 @@ func (ui *BrowserUI) consumeNavigationResult() {
 			ui.selectButtons = make(map[dom.NodeID]*widget.Clickable)
 			ui.checkableButtons = make(map[dom.NodeID]*widget.Clickable)
 			ui.formButtons = make(map[dom.NodeID]*widget.Clickable)
+			ui.nestedScrollPage = nil
+			ui.nestedScrollTags = make(map[dom.NodeID]*nestedScrollTag)
+			ui.nestedScroll = make(map[dom.NodeID]layoutengine.ScrollOffset)
 			if result.err != nil {
 				ui.status = "読み込みエラー: " + result.err.Error()
 				ui.pageStatus = ui.status
@@ -1814,6 +1838,7 @@ func (ui *BrowserUI) layoutViewport(gtx layout.Context) layout.Dimensions {
 
 func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layout.Dimensions {
 	paint.Fill(gtx.Ops, color.NRGBA{R: 255, G: 255, B: 255, A: 255})
+	ui.syncNestedScrollPage(page)
 	ui.installPageFonts(page)
 	ui.imagePaintCache.prepare(page)
 	if ui.scrollRevision != page.ScrollRevision {
@@ -1866,10 +1891,13 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 			page.RecordRenderEvent(browser.RenderDisplayListReuse)
 		}
 	}
+	documentPosition := ui.pageList.Position
+	nestedScrollConsumed := ui.handleNestedScrollEvents(gtx, page, tree, displayList)
 	dirtySnapshot := page.RenderInvalidationSnapshot()
 	page.RecordCompositorSnapshot(len(dirtySnapshot.StyleNodes), len(displayList.Layers), len(displayList.DamageRegions))
 	paint.Fill(gtx.Ops, rgba(displayList.Background))
 	ui.updateViewportHover(gtx, page, tree, displayList)
+	clear(ui.formPointerClicks)
 	ui.handleViewportClicks(gtx, page, tree, displayList)
 
 	area := clip.Rect{Max: gtx.Constraints.Max}.Push(gtx.Ops)
@@ -1893,6 +1921,10 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 			return layout.Dimensions{}
 		}
 	})
+	if nestedScrollConsumed {
+		ui.pageList.Position = documentPosition
+	}
+	ui.registerNestedScrollTargets(gtx, tree, displayList)
 	pass := pointer.PassOp{}.Push(gtx.Ops)
 	ui.viewportClick.Add(gtx.Ops)
 	pass.Pop()
@@ -1914,6 +1946,189 @@ func (ui *BrowserUI) persistHistoryScroll() {
 	if navigator, ok := ui.navigator.(historyScrollNavigator); ok {
 		navigator.UpdateHistoryScroll(ui.pageList.Position.First, ui.pageList.Position.Offset)
 	}
+}
+
+func (ui *BrowserUI) syncNestedScrollPage(page *browser.Page) {
+	if ui.nestedScrollPage == page {
+		return
+	}
+	ui.nestedScrollPage = page
+	ui.nestedScrollTags = make(map[dom.NodeID]*nestedScrollTag)
+	ui.nestedScroll = make(map[dom.NodeID]layoutengine.ScrollOffset)
+}
+
+func (ui *BrowserUI) applyNestedScrollOffsets(tree *layoutengine.Tree, styles stylemodel.Map) {
+	if tree == nil {
+		return
+	}
+	for nodeID, offset := range ui.nestedScroll {
+		layoutengine.ApplyScrollContainerOffset(tree, styles, nodeID, offset.X, offset.Y)
+		if container, exists := tree.ScrollContainers[nodeID]; exists {
+			ui.nestedScroll[nodeID] = container.Offset
+		} else {
+			delete(ui.nestedScroll, nodeID)
+		}
+	}
+}
+
+func (ui *BrowserUI) handleNestedScrollEvents(gtx layout.Context, page *browser.Page, tree *layoutengine.Tree, displayList *paintmodel.DisplayList) bool {
+	if tree == nil || page == nil || displayList == nil {
+		return false
+	}
+	if ui.nestedScrollTags == nil {
+		ui.nestedScrollTags = make(map[dom.NodeID]*nestedScrollTag)
+	}
+	if ui.nestedScroll == nil {
+		ui.nestedScroll = make(map[dom.NodeID]layoutengine.ScrollOffset)
+	}
+	pixelsPerDP := gtx.Metric.PxPerDp
+	if pixelsPerDP <= 0 {
+		pixelsPerDP = 1
+	}
+	dirty := false
+	for nodeID, container := range tree.ScrollContainers {
+		tag := ui.nestedScrollTags[nodeID]
+		if tag == nil {
+			tag = &nestedScrollTag{nodeID: nodeID}
+			ui.nestedScrollTags[nodeID] = tag
+		}
+		maxX := max(container.ScrollWidth-container.Viewport.Width, float32(0))
+		maxY := max(container.ScrollHeight-container.Viewport.Height, float32(0))
+		filter := pointer.Filter{Target: tag, Kinds: pointer.Scroll}
+		if userScrollableOverflow(container.OverflowX) && maxX > 0 {
+			filter.ScrollX = nestedScrollRange(container.Offset.X, maxX, pixelsPerDP)
+		}
+		if userScrollableOverflow(container.OverflowY) && maxY > 0 {
+			filter.ScrollY = nestedScrollRange(container.Offset.Y, maxY, pixelsPerDP)
+		}
+		for {
+			raw, ok := gtx.Event(filter)
+			if !ok {
+				break
+			}
+			event, ok := raw.(pointer.Event)
+			if !ok || event.Kind != pointer.Scroll {
+				continue
+			}
+			requestedX := container.Offset.X + event.Scroll.X/pixelsPerDP
+			requestedY := container.Offset.Y + event.Scroll.Y/pixelsPerDP
+			changed := layoutengine.ApplyScrollContainerOffset(tree, page.ComputedStyles, nodeID, requestedX, requestedY)
+			if len(changed) == 0 {
+				continue
+			}
+			container = tree.ScrollContainers[nodeID]
+			ui.nestedScroll[nodeID] = container.Offset
+			if ui.layoutCache.baseTree != nil {
+				layoutengine.ApplyScrollContainerOffset(ui.layoutCache.baseTree, page.ComputedStyles, nodeID, container.Offset.X, container.Offset.Y)
+			}
+			dirty = true
+		}
+	}
+	if !dirty {
+		return false
+	}
+	paintmodel.ApplyAnimatedLayout(displayList, tree)
+	ui.layoutCache.tree = layoutengine.Clone(tree)
+	ui.layoutCache.displayList = displayList
+	ui.invalidate()
+	return true
+}
+
+func nestedScrollRange(offset, maximum, pixelsPerDP float32) pointer.ScrollRange {
+	const limit = 1 << 20
+	minimumPixels := max(int(math.Floor(float64(-offset*pixelsPerDP))), -limit)
+	maximumPixels := min(int(math.Ceil(float64((maximum-offset)*pixelsPerDP))), limit)
+	return pointer.ScrollRange{Min: minimumPixels, Max: maximumPixels}
+}
+
+func userScrollableOverflow(value stylemodel.Overflow) bool {
+	return value == stylemodel.OverflowAuto || value == stylemodel.OverflowScroll
+}
+
+func (ui *BrowserUI) registerNestedScrollTargets(gtx layout.Context, tree *layoutengine.Tree, displayList *paintmodel.DisplayList) {
+	if tree == nil || displayList == nil || len(tree.ScrollContainers) == 0 {
+		return
+	}
+	pixelsPerDP := gtx.Metric.PxPerDp
+	if pixelsPerDP <= 0 {
+		pixelsPerDP = 1
+	}
+	documentScrollY := documentScrollOffset(displayList, ui.pageList.Position, pixelsPerDP)
+	type target struct {
+		nodeID dom.NodeID
+		depth  int
+	}
+	targets := make([]target, 0, len(tree.ScrollContainers))
+	for nodeID, container := range tree.ScrollContainers {
+		maxX := max(container.ScrollWidth-container.Viewport.Width, float32(0))
+		maxY := max(container.ScrollHeight-container.Viewport.Height, float32(0))
+		if !userScrollableOverflow(container.OverflowX) || maxX == 0 {
+			maxX = 0
+		}
+		if !userScrollableOverflow(container.OverflowY) || maxY == 0 {
+			maxY = 0
+		}
+		if maxX == 0 && maxY == 0 {
+			continue
+		}
+		depth := 0
+		for ancestor := tree.Parents[nodeID]; ancestor != 0; ancestor = tree.Parents[ancestor] {
+			depth++
+		}
+		targets = append(targets, target{nodeID: nodeID, depth: depth})
+	}
+	sort.Slice(targets, func(left, right int) bool {
+		if targets[left].depth != targets[right].depth {
+			return targets[left].depth < targets[right].depth
+		}
+		return targets[left].nodeID < targets[right].nodeID
+	})
+	for _, target := range targets {
+		container := tree.ScrollContainers[target.nodeID]
+		matrix := nestedScrollTransform(tree, target.nodeID)
+		minX, minY, maxX, maxY := transformedRectBounds(container.Viewport, matrix)
+		minY, maxY = minY-documentScrollY, maxY-documentScrollY
+		rectangle := image.Rect(
+			gtx.Dp(unit.Dp(minX)), gtx.Dp(unit.Dp(minY)),
+			gtx.Dp(unit.Dp(maxX)), gtx.Dp(unit.Dp(maxY)),
+		).Intersect(image.Rectangle{Max: gtx.Constraints.Max})
+		if rectangle.Empty() {
+			continue
+		}
+		tag := ui.nestedScrollTags[target.nodeID]
+		if tag == nil {
+			tag = &nestedScrollTag{nodeID: target.nodeID}
+			ui.nestedScrollTags[target.nodeID] = tag
+		}
+		area := clip.Rect(rectangle).Push(gtx.Ops)
+		event.Op(gtx.Ops, tag)
+		area.Pop()
+	}
+}
+
+func nestedScrollTransform(tree *layoutengine.Tree, nodeID dom.NodeID) stylemodel.Matrix {
+	for _, decoration := range tree.Decorations {
+		if decoration.NodeID == nodeID {
+			return decoration.Transform
+		}
+	}
+	for _, box := range tree.Boxes {
+		if box.NodeID == nodeID {
+			return box.Transform
+		}
+	}
+	return stylemodel.IdentityMatrix()
+}
+
+func transformedRectBounds(rectangle layoutengine.Rect, matrix stylemodel.Matrix) (float32, float32, float32, float32) {
+	if matrix == (stylemodel.Matrix{}) {
+		matrix = stylemodel.IdentityMatrix()
+	}
+	x1, y1 := matrix.TransformPoint(rectangle.X, rectangle.Y)
+	x2, y2 := matrix.TransformPoint(rectangle.X+rectangle.Width, rectangle.Y)
+	x3, y3 := matrix.TransformPoint(rectangle.X+rectangle.Width, rectangle.Y+rectangle.Height)
+	x4, y4 := matrix.TransformPoint(rectangle.X, rectangle.Y+rectangle.Height)
+	return min(x1, x2, x3, x4), min(y1, y2, y3, y4), max(x1, x2, x3, x4), max(y1, y2, y3, y4)
 }
 
 func (ui *BrowserUI) cachedDocumentFrame(page *browser.Page, viewportWidth, viewportHeight, pxPerDp float32) (*layoutengine.Tree, *paintmodel.DisplayList, bool) {
@@ -2036,13 +2251,16 @@ func (ui *BrowserUI) buildDocumentTree(page *browser.Page, styles stylemodel.Map
 	}
 	buildTree := func(scrollY float32) *layoutengine.Tree {
 		page.RecordRenderEvent(browser.RenderLayoutBuild)
+		var tree *layoutengine.Tree
 		if ui.layoutBuildFonts != nil && (page.ImageResources != nil || page.WebFonts != nil) {
-			return ui.layoutBuildFonts(page.Document, styles, page.ImageResources, page.WebFonts, viewportWidth, viewportHeight, 0, scrollY)
+			tree = ui.layoutBuildFonts(page.Document, styles, page.ImageResources, page.WebFonts, viewportWidth, viewportHeight, 0, scrollY)
+		} else if page.ImageResources != nil && ui.layoutBuildImages != nil {
+			tree = ui.layoutBuildImages(page.Document, styles, page.ImageResources, viewportWidth, viewportHeight, 0, scrollY)
+		} else {
+			tree = build(page.Document, styles, viewportWidth, viewportHeight, 0, scrollY)
 		}
-		if page.ImageResources != nil && ui.layoutBuildImages != nil {
-			return ui.layoutBuildImages(page.Document, styles, page.ImageResources, viewportWidth, viewportHeight, 0, scrollY)
-		}
-		return build(page.Document, styles, viewportWidth, viewportHeight, 0, scrollY)
+		ui.applyNestedScrollOffsets(tree, styles)
+		return tree
 	}
 	tree := buildTree(0)
 	tree.Revision = page.StyleRevision
@@ -2195,24 +2413,32 @@ func (ui *BrowserUI) handleViewportClicks(gtx layout.Context, page *browser.Page
 		if !ok || tree == nil || tree.Revision != page.StyleRevision || displayList.Revision != page.StyleRevision {
 			continue
 		}
-		nodeID := hit.NodeID
-		if _, handledByButton := ui.formButtons[nodeID]; handledByButton {
-			continue
-		}
+		ui.dispatchPaintedClick(page, hit)
+	}
+}
+
+func (ui *BrowserUI) dispatchPaintedClick(page *browser.Page, hit paintedDisplayHit) {
+	nodeID := hit.NodeID
+	if _, handledByButton := ui.formButtons[nodeID]; handledByButton {
 		ui.navigator.UpdateFocus(focusableNodeID(page.Document, nodeID))
 		if ui.navigator.DispatchClick(nodeID, hit.DocumentX, hit.DocumentY) {
-			continue
+			ui.formPointerClicks[nodeID]++
 		}
-		linkURL, target, ok := page.LinkDestination(nodeID)
-		if !ok {
-			continue
-		}
-		if target == "_blank" {
-			ui.openURLInNewTab(linkURL)
-			continue
-		}
-		ui.startNavigation(linkURL.String())
+		return
 	}
+	ui.navigator.UpdateFocus(focusableNodeID(page.Document, nodeID))
+	if ui.navigator.DispatchClick(nodeID, hit.DocumentX, hit.DocumentY) {
+		return
+	}
+	linkURL, target, ok := page.LinkDestination(nodeID)
+	if !ok {
+		return
+	}
+	if target == "_blank" {
+		ui.openURLInNewTab(linkURL)
+		return
+	}
+	ui.startNavigation(linkURL.String())
 }
 
 type paintedDisplayHit struct {
@@ -2235,26 +2461,29 @@ func hitTestPaintedDisplayList(displayList *paintmodel.DisplayList, position lay
 	var result paintedDisplayHit
 	found := false
 	for index := position.First; index < len(displayList.Commands); index++ {
-		command := displayList.Commands[index]
-		nodeID, commandX, commandY, top, width, height, advance, writingMode, runs := paintedCommandGeometry(command)
-		visualTop := cursorY + top
-		if width > 0 && height > 0 && x >= commandX && x < commandX+width && y >= visualTop && y < visualTop+height {
-			if len(runs) > 0 {
-				if writingMode != stylemodel.WritingModeHorizontalTB {
-					for _, run := range runs {
+		visual := paintedCommandVisualFor(displayList.Commands[index])
+		visualTop := cursorY + visual.top
+		documentX, documentY := x, visual.y+(y-visualTop)
+		localX, localY, valid := inversePaintedPoint(visual.transform, documentX, documentY)
+		if valid && paintedPointInsideClips(visual.clip, visual.clips, localX, localY) &&
+			paintedContainsRoundedRect(layoutengine.Rect{X: visual.x, Y: visual.y, Width: visual.width, Height: visual.height}, visual.radius, localX, localY) {
+			nodeID := visual.nodeID
+			if len(visual.runs) > 0 {
+				if visual.writingMode != stylemodel.WritingModeHorizontalTB {
+					for _, run := range visual.runs {
 						crossSize := run.CrossSize
 						if crossSize <= 0 {
-							crossSize = width
+							crossSize = visual.width
 						}
-						if x >= commandX+run.OffsetX && x < commandX+run.OffsetX+crossSize && y >= visualTop+run.OffsetY && y < visualTop+run.OffsetY+run.Width {
+						if localX >= visual.x+run.OffsetX && localX < visual.x+run.OffsetX+crossSize && localY >= visual.y+run.OffsetY && localY < visual.y+run.OffsetY+run.Width {
 							nodeID = run.NodeID
 							break
 						}
 					}
 				} else {
-					runX := commandX
-					for _, run := range runs {
-						if x >= runX && x < runX+run.Width {
+					runX := visual.x
+					for _, run := range visual.runs {
+						if localX >= runX && localX < runX+run.Width {
 							nodeID = run.NodeID
 							break
 						}
@@ -2262,36 +2491,97 @@ func hitTestPaintedDisplayList(displayList *paintmodel.DisplayList, position lay
 					}
 				}
 			}
-			result = paintedDisplayHit{NodeID: nodeID, DocumentX: commandX + (x - commandX), DocumentY: commandY + (y - visualTop)}
+			result = paintedDisplayHit{NodeID: nodeID, DocumentX: documentX, DocumentY: documentY}
 			found = nodeID != 0
 		}
-		cursorY += advance
-		if cursorY > y && visualTop > y {
-			break
-		}
+		cursorY += visual.advance
 	}
 	return result, found
 }
 
-func paintedCommandGeometry(command paintmodel.Command) (nodeID dom.NodeID, x, y, top, width, height, advance float32, writingMode stylemodel.WritingMode, runs []paintmodel.TextRun) {
+type paintedCommandVisual struct {
+	nodeID                            dom.NodeID
+	x, y, top, width, height, advance float32
+	writingMode                       stylemodel.WritingMode
+	runs                              []paintmodel.TextRun
+	clip                              *layoutengine.Rect
+	clips                             []layoutengine.ClipRegion
+	transform                         stylemodel.Matrix
+	radius                            layoutengine.BorderRadii
+}
+
+func paintedCommandVisualFor(command paintmodel.Command) paintedCommandVisual {
 	switch command := command.(type) {
 	case paintmodel.DrawText:
-		return command.NodeID, command.X, command.Y, command.Top, command.Width, command.Height, command.Top + command.Height, command.WritingMode, command.Runs
+		return paintedCommandVisual{nodeID: command.NodeID, x: command.X, y: command.Y, top: command.Top, width: command.Width, height: command.Height, advance: command.Top + command.Height, writingMode: command.WritingMode, runs: command.Runs, clip: command.Clip, clips: command.Clips, transform: command.Transform}
 	case paintmodel.DrawInput:
-		return command.NodeID, command.X, command.Y, command.Top, command.Width, command.Height, command.Top + command.Height, command.WritingMode, nil
+		return paintedCommandVisual{nodeID: command.NodeID, x: command.X, y: command.Y, top: command.Top, width: command.Width, height: command.Height, advance: command.Top + command.Height, writingMode: command.WritingMode, clip: command.Clip, clips: command.Clips, transform: command.Transform}
 	case paintmodel.DrawSelect:
-		return command.NodeID, command.X, command.Y, command.Top, command.Width, command.Height, command.Top + command.Height, command.WritingMode, nil
+		return paintedCommandVisual{nodeID: command.NodeID, x: command.X, y: command.Y, top: command.Top, width: command.Width, height: command.Height, advance: command.Top + command.Height, writingMode: command.WritingMode, clip: command.Clip, clips: command.Clips, transform: command.Transform}
 	case paintmodel.DrawCheckable:
-		return command.NodeID, command.X, command.Y, command.Top, command.Width, command.Height, command.Top + command.Height, command.WritingMode, nil
+		return paintedCommandVisual{nodeID: command.NodeID, x: command.X, y: command.Y, top: command.Top, width: command.Width, height: command.Height, advance: command.Top + command.Height, writingMode: command.WritingMode, clip: command.Clip, clips: command.Clips, transform: command.Transform}
 	case paintmodel.DrawButton:
-		return command.NodeID, command.X, command.Y, command.Top, command.Width, command.Height, command.Top + command.Height, command.WritingMode, nil
+		return paintedCommandVisual{nodeID: command.NodeID, x: command.X, y: command.Y, top: command.Top, width: command.Width, height: command.Height, advance: command.Top + command.Height, writingMode: command.WritingMode, clip: command.Clip, clips: command.Clips, transform: command.Transform}
 	case paintmodel.DrawBox:
-		return command.NodeID, command.X, command.Y, command.Top, command.Width, command.Height, command.Top, command.WritingMode, nil
+		return paintedCommandVisual{nodeID: command.NodeID, x: command.X, y: command.Y, top: command.Top, width: command.Width, height: command.Height, advance: command.Top, writingMode: command.WritingMode, clip: command.Clip, clips: command.Clips, transform: command.Transform, radius: command.Radius}
 	case paintmodel.DrawImage:
-		return command.NodeID, command.X, command.Y, command.Top, command.Width, command.Height, command.Top + command.Height, command.WritingMode, nil
+		return paintedCommandVisual{nodeID: command.NodeID, x: command.X, y: command.Y, top: command.Top, width: command.Width, height: command.Height, advance: command.Top + command.Height, writingMode: command.WritingMode, clip: command.Clip, clips: command.Clips, transform: command.Transform, radius: command.Radius}
 	default:
-		return 0, 0, 0, 0, 0, 0, 0, stylemodel.WritingModeHorizontalTB, nil
+		return paintedCommandVisual{}
 	}
+}
+
+func inversePaintedPoint(matrix stylemodel.Matrix, x, y float32) (float32, float32, bool) {
+	if matrix == (stylemodel.Matrix{}) {
+		matrix = stylemodel.IdentityMatrix()
+	}
+	inverse, valid := matrix.Inverse()
+	if !valid {
+		return 0, 0, false
+	}
+	localX, localY := inverse.TransformPoint(x, y)
+	return localX, localY, true
+}
+
+func paintedPointInsideClips(clip *layoutengine.Rect, clips []layoutengine.ClipRegion, x, y float32) bool {
+	if clip != nil && !paintedContainsRect(*clip, x, y) {
+		return false
+	}
+	for _, region := range clips {
+		if !paintedContainsRoundedRect(region.Rect, region.Radius, x, y) {
+			return false
+		}
+	}
+	return true
+}
+
+func paintedContainsRoundedRect(rectangle layoutengine.Rect, radius layoutengine.BorderRadii, x, y float32) bool {
+	if !paintedContainsRect(rectangle, x, y) {
+		return false
+	}
+	type corner struct {
+		radius           layoutengine.CornerRadius
+		centerX, centerY float32
+		inside           bool
+	}
+	corners := []corner{
+		{radius.TopLeft, rectangle.X + radius.TopLeft.X, rectangle.Y + radius.TopLeft.Y, x < rectangle.X+radius.TopLeft.X && y < rectangle.Y+radius.TopLeft.Y},
+		{radius.TopRight, rectangle.X + rectangle.Width - radius.TopRight.X, rectangle.Y + radius.TopRight.Y, x > rectangle.X+rectangle.Width-radius.TopRight.X && y < rectangle.Y+radius.TopRight.Y},
+		{radius.BottomRight, rectangle.X + rectangle.Width - radius.BottomRight.X, rectangle.Y + rectangle.Height - radius.BottomRight.Y, x > rectangle.X+rectangle.Width-radius.BottomRight.X && y > rectangle.Y+rectangle.Height-radius.BottomRight.Y},
+		{radius.BottomLeft, rectangle.X + radius.BottomLeft.X, rectangle.Y + rectangle.Height - radius.BottomLeft.Y, x < rectangle.X+radius.BottomLeft.X && y > rectangle.Y+rectangle.Height-radius.BottomLeft.Y},
+	}
+	for _, corner := range corners {
+		if corner.radius.X <= 0 || corner.radius.Y <= 0 || !corner.inside {
+			continue
+		}
+		dx, dy := (x-corner.centerX)/corner.radius.X, (y-corner.centerY)/corner.radius.Y
+		return dx*dx+dy*dy <= 1
+	}
+	return true
+}
+
+func paintedContainsRect(rectangle layoutengine.Rect, x, y float32) bool {
+	return rectangle.Width > 0 && rectangle.Height > 0 && x >= rectangle.X && x < rectangle.X+rectangle.Width && y >= rectangle.Y && y < rectangle.Y+rectangle.Height
 }
 
 func (ui *BrowserUI) openURLInNewTab(target *url.URL) {
@@ -2838,12 +3128,18 @@ func (ui *BrowserUI) layoutDrawInput(gtx layout.Context, command paintmodel.Draw
 	}
 	right := unit.Dp(rightValue)
 	return layout.Inset{Top: unit.Dp(command.Top), Left: left, Right: right}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-		cursorArea := clip.Rect{Max: image.Pt(gtx.Dp(unit.Dp(command.Width)), gtx.Dp(unit.Dp(command.Height)))}.Push(gtx.Ops)
-		cssCursor(command.Cursor).Add(gtx.Ops)
-		defer cursorArea.Pop()
+		if command.Transform != (stylemodel.Matrix{}) && command.Transform != stylemodel.IdentityMatrix() {
+			defer pushCSSMatrix(gtx, command.Transform, command.X, command.Y).Pop()
+		}
 		if command.Clip != nil {
 			defer commandClip(gtx, command.Clip, command.X, command.Y).Push(gtx.Ops).Pop()
 		}
+		for _, region := range command.Clips {
+			defer commandRoundedClip(gtx, region, command.X, command.Y).Push(gtx.Ops).Pop()
+		}
+		cursorArea := clip.Rect{Max: image.Pt(gtx.Dp(unit.Dp(command.Width)), gtx.Dp(unit.Dp(command.Height)))}.Push(gtx.Ops)
+		cssCursor(command.Cursor).Add(gtx.Ops)
+		defer cursorArea.Pop()
 		if command.Opacity < 1 {
 			defer paint.PushOpacity(gtx.Ops, max(command.Opacity, 0)).Pop()
 		}
@@ -2929,12 +3225,18 @@ func (ui *BrowserUI) layoutDrawSelect(gtx layout.Context, command paintmodel.Dra
 	viewportWidth := float32(gtx.Constraints.Max.X) / gtx.Metric.PxPerDp
 	right := unit.Dp(max(viewportWidth-command.X-command.Width, float32(0)))
 	return layout.Inset{Top: unit.Dp(command.Top), Left: left, Right: right}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-		cursorArea := clip.Rect{Max: image.Pt(gtx.Dp(unit.Dp(command.Width)), gtx.Dp(unit.Dp(command.Height)))}.Push(gtx.Ops)
-		cssCursor(command.Cursor).Add(gtx.Ops)
-		defer cursorArea.Pop()
+		if command.Transform != (stylemodel.Matrix{}) && command.Transform != stylemodel.IdentityMatrix() {
+			defer pushCSSMatrix(gtx, command.Transform, command.X, command.Y).Pop()
+		}
 		if command.Clip != nil {
 			defer commandClip(gtx, command.Clip, command.X, command.Y).Push(gtx.Ops).Pop()
 		}
+		for _, region := range command.Clips {
+			defer commandRoundedClip(gtx, region, command.X, command.Y).Push(gtx.Ops).Pop()
+		}
+		cursorArea := clip.Rect{Max: image.Pt(gtx.Dp(unit.Dp(command.Width)), gtx.Dp(unit.Dp(command.Height)))}.Push(gtx.Ops)
+		cssCursor(command.Cursor).Add(gtx.Ops)
+		defer cursorArea.Pop()
 		if command.Opacity < 1 {
 			defer paint.PushOpacity(gtx.Ops, max(command.Opacity, 0)).Pop()
 		}
@@ -2973,12 +3275,18 @@ func (ui *BrowserUI) layoutDrawCheckable(gtx layout.Context, command paintmodel.
 	viewportWidth := float32(gtx.Constraints.Max.X) / gtx.Metric.PxPerDp
 	right := unit.Dp(max(viewportWidth-command.X-command.Width, float32(0)))
 	return layout.Inset{Top: unit.Dp(command.Top), Left: left, Right: right}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-		cursorArea := clip.Rect{Max: image.Pt(gtx.Dp(unit.Dp(command.Width)), gtx.Dp(unit.Dp(command.Height)))}.Push(gtx.Ops)
-		cssCursor(command.Cursor).Add(gtx.Ops)
-		defer cursorArea.Pop()
+		if command.Transform != (stylemodel.Matrix{}) && command.Transform != stylemodel.IdentityMatrix() {
+			defer pushCSSMatrix(gtx, command.Transform, command.X, command.Y).Pop()
+		}
 		if command.Clip != nil {
 			defer commandClip(gtx, command.Clip, command.X, command.Y).Push(gtx.Ops).Pop()
 		}
+		for _, region := range command.Clips {
+			defer commandRoundedClip(gtx, region, command.X, command.Y).Push(gtx.Ops).Pop()
+		}
+		cursorArea := clip.Rect{Max: image.Pt(gtx.Dp(unit.Dp(command.Width)), gtx.Dp(unit.Dp(command.Height)))}.Push(gtx.Ops)
+		cssCursor(command.Cursor).Add(gtx.Ops)
+		defer cursorArea.Pop()
 		if command.Opacity < 1 {
 			defer paint.PushOpacity(gtx.Ops, max(command.Opacity, 0)).Pop()
 		}
@@ -3025,12 +3333,18 @@ func (ui *BrowserUI) layoutDrawButton(gtx layout.Context, command paintmodel.Dra
 	viewportWidth := float32(gtx.Constraints.Max.X) / gtx.Metric.PxPerDp
 	right := unit.Dp(max(viewportWidth-command.X-command.Width, float32(0)))
 	return layout.Inset{Top: unit.Dp(command.Top), Left: left, Right: right}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-		cursorArea := clip.Rect{Max: image.Pt(gtx.Dp(unit.Dp(command.Width)), gtx.Dp(unit.Dp(command.Height)))}.Push(gtx.Ops)
-		cssCursor(command.Cursor).Add(gtx.Ops)
-		defer cursorArea.Pop()
+		if command.Transform != (stylemodel.Matrix{}) && command.Transform != stylemodel.IdentityMatrix() {
+			defer pushCSSMatrix(gtx, command.Transform, command.X, command.Y).Pop()
+		}
 		if command.Clip != nil {
 			defer commandClip(gtx, command.Clip, command.X, command.Y).Push(gtx.Ops).Pop()
 		}
+		for _, region := range command.Clips {
+			defer commandRoundedClip(gtx, region, command.X, command.Y).Push(gtx.Ops).Pop()
+		}
+		cursorArea := clip.Rect{Max: image.Pt(gtx.Dp(unit.Dp(command.Width)), gtx.Dp(unit.Dp(command.Height)))}.Push(gtx.Ops)
+		cssCursor(command.Cursor).Add(gtx.Ops)
+		defer cursorArea.Pop()
 		if command.Opacity < 1 {
 			defer paint.PushOpacity(gtx.Ops, max(command.Opacity, 0)).Pop()
 		}
@@ -3043,6 +3357,10 @@ func (ui *BrowserUI) layoutDrawButton(gtx layout.Context, command paintmodel.Dra
 			ui.formButtons[command.NodeID] = button
 		}
 		for button.Clicked(gtx) {
+			if pending := ui.formPointerClicks[command.NodeID]; pending > 0 {
+				ui.formPointerClicks[command.NodeID] = pending - 1
+				continue
+			}
 			if ui.navigator != nil {
 				ui.navigator.UpdateFocus(command.NodeID)
 				ui.navigator.DispatchClick(command.NodeID, command.X, command.Y)

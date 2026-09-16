@@ -34,6 +34,9 @@ func pageRenderSnapshot(ctx context.Context, page *Page, nodeID dom.NodeID) (run
 	clientWidth := maxFloat32(0, rect.Width-computed.Border.Left.Width-computed.Border.Right.Width)
 	clientHeight := maxFloat32(0, rect.Height-computed.Border.Top.Width-computed.Border.Bottom.Width)
 	scrollWidth, scrollHeight := clientWidth, clientHeight
+	if container, exists := tree.ScrollContainers[nodeID]; exists {
+		scrollWidth, scrollHeight = container.ScrollWidth, container.ScrollHeight
+	}
 	if node == page.Document.Root || node.TagName == "html" || node.TagName == "body" {
 		scrollWidth = maxFloat32(scrollWidth, tree.ScrollWidth)
 		scrollHeight = maxFloat32(scrollHeight, tree.ScrollHeight)
@@ -413,7 +416,7 @@ func boxSizingCSS(value stylemodel.BoxSizing) string {
 }
 
 func overflowCSS(value stylemodel.Overflow) string {
-	values := [...]string{"visible", "hidden", "auto", "scroll"}
+	values := [...]string{"visible", "hidden", "auto", "scroll", "clip"}
 	if int(value) < len(values) {
 		return values[value]
 	}

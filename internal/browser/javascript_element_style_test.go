@@ -94,6 +94,46 @@ func TestJavaScriptCSSOMReadsBrowserStyleAndLayoutRevision(t *testing.T) {
 	}
 }
 
+func TestCSSOMReportsElementScrollExtentAndOverflowClip(t *testing.T) {
+	pageURL := mustParseURL(t, "https://app.example/overflow-cssom")
+	loader := stubLoader{response: &network.Response{
+		URL: pageURL, StatusCode: 200, ContentType: "text/html",
+		Body: []byte(`<html><head><style>
+			#target { width:100px; height:80px; overflow:auto; }
+			#content { width:240px; height:160px; }
+			#clipped { overflow:clip; }
+		</style></head><body><main id="target"><div id="content"></div></main><aside id="clipped"></aside></body></html>`),
+	}}
+	browserState := New(loader)
+	t.Cleanup(func() { _ = browserState.Close() })
+	page, err := browserState.Navigate(context.Background(), pageURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, ok := page.Document.GetElementByID("target")
+	if !ok {
+		t.Fatal("overflow target is missing")
+	}
+	snapshot, err := pageRenderSnapshot(context.Background(), page, target.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.ClientWidth != 100 || snapshot.ClientHeight != 80 || snapshot.ScrollWidth != 240 || snapshot.ScrollHeight != 160 {
+		t.Fatalf("CSSOM scroll geometry = %#v", snapshot)
+	}
+	if snapshot.Style["overflow-x"] != "auto" || snapshot.Style["overflow-y"] != "auto" {
+		t.Fatalf("CSSOM overflow style = %#v", snapshot.Style)
+	}
+	clipped, _ := page.Document.GetElementByID("clipped")
+	clipSnapshot, err := pageRenderSnapshot(context.Background(), page, clipped.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if clipSnapshot.Style["overflow-x"] != "clip" || clipSnapshot.Style["overflow-y"] != "clip" {
+		t.Fatalf("CSSOM clip style = %#v", clipSnapshot.Style)
+	}
+}
+
 func TestJavaScriptMatchMediaChangeFollowsBrowserViewport(t *testing.T) {
 	pageURL := mustParseURL(t, "https://app.example/media-change")
 	loader := stubLoader{response: &network.Response{

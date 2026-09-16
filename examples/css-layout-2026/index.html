@@ -17,6 +17,8 @@
     <strong id="layout-status">VERTICAL-RL · SAFE</strong>
     <button id="writing-toggle" type="button">Flip vertical flow</button>
     <strong id="writing-status">VERTICAL-RL · LTR</strong>
+    <button id="position-toggle" type="button">Shift positioned scroll</button>
+    <strong id="position-status">NESTED SCROLL · TRANSFORMED</strong>
   </header>
   <main>
     <section class="panel sizing-panel">
@@ -82,6 +84,23 @@
           <span class="vertical-grid-b">乙二</span>
           <span class="vertical-grid-c">丙三</span>
         </div>
+      </div>
+    </section>
+    <section class="panel position-panel">
+      <h2>Position, overflow &amp; pointer geometry</h2>
+      <p>Wheel the rounded inner scrollport, then toggle its transform. Sticky, fixed, clipping, paint, and pointer targeting keep one geometry.</p>
+      <div id="position-playground" class="position-playground">
+        <div class="relative-probe">relative + opposing inset</div>
+        <div class="absolute-probe">absolute</div>
+        <div class="fixed-probe">fixed CB</div>
+        <div class="nested-scroll" aria-label="nested scroll example">
+          <div class="scroll-content">
+            <strong class="sticky-probe">sticky top / left</strong>
+            <button class="scroll-target" type="button">pointer target</button>
+            <span class="scroll-end">container end</span>
+          </div>
+        </div>
+        <div class="overflow-clip"><span>overflow:clip keeps this wide content outside pointer reach</span></div>
       </div>
     </section>
   </main>

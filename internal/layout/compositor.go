@@ -63,7 +63,7 @@ func compositingReasons(computed stylemodel.ComputedStyle) LayerReason {
 	}
 	if computed.OverflowX != stylemodel.OverflowVisible || computed.OverflowY != stylemodel.OverflowVisible {
 		reasons |= LayerClip
-		if computed.OverflowX == stylemodel.OverflowScroll || computed.OverflowY == stylemodel.OverflowScroll || computed.OverflowX == stylemodel.OverflowAuto || computed.OverflowY == stylemodel.OverflowAuto {
+		if isScrollContainerOverflow(computed.OverflowX) || isScrollContainerOverflow(computed.OverflowY) {
 			reasons |= LayerScroll
 		}
 	}
