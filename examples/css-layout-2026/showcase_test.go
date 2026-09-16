@@ -20,6 +20,7 @@ func TestCSSLayoutShowcaseServesLayoutStagesAndLateImage(t *testing.T) {
 		path, contentType, marker string
 	}{
 		{"/", "text/html", "Multi-column &amp; fragmentation"},
+		{"/differential.html", "text/html", "css-layout-2026-desktop"},
 		{"/style.css", "text/css", ".column-stage"},
 		{"/app.mjs", "text/javascript", "2 COLUMNS · AUTO FILL"},
 		{"/assets/late-layout.png", "image/png", ""},

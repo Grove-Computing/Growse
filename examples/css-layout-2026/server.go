@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-//go:embed index.html style.css app.mjs
+//go:embed index.html style.css app.mjs differential.html
 var cssLayoutAssets embed.FS
 
 var lateLayoutImage = makeLateLayoutImage()

@@ -387,8 +387,8 @@ func TestBuildCarriesOverflowClipAndScrollExtentIntoHitTesting(t *testing.T) {
 	if len(tree.Boxes) != 2 || tree.Boxes[0].Clip == nil || tree.Boxes[1].Clip == nil {
 		t.Fatalf("clipped boxes = %#v", tree.Boxes)
 	}
-	if tree.ScrollWidth <= tree.Width {
-		t.Fatalf("scroll width = %v, want greater than viewport %v", tree.ScrollWidth, tree.Width)
+	if tree.ScrollWidth != tree.Width {
+		t.Fatalf("clipped descendant leaked into document scroll width = %v, viewport %v", tree.ScrollWidth, tree.Width)
 	}
 	outside := tree.Boxes[1]
 	if got, ok := HitTest(tree, outside.X+1, outside.Y+1); ok || got != 0 {

@@ -254,12 +254,22 @@ func build(document *dom.Document, computed stylemodel.Map, images map[dom.NodeI
 				contentWidth += run.Width
 			}
 		}
-		tree.ScrollWidth = max(tree.ScrollWidth, box.X+contentWidth+pageInset)
-		tree.ScrollHeight = max(tree.ScrollHeight, box.Y+box.Height+pageInset)
+		right, bottom := box.X+contentWidth, box.Y+box.Height
+		if box.Clip != nil {
+			right = min(right, box.Clip.X+box.Clip.Width)
+			bottom = min(bottom, box.Clip.Y+box.Clip.Height)
+		}
+		tree.ScrollWidth = max(tree.ScrollWidth, right+pageInset)
+		tree.ScrollHeight = max(tree.ScrollHeight, bottom+pageInset)
 	}
 	for _, decoration := range tree.Decorations {
-		tree.ScrollWidth = max(tree.ScrollWidth, decoration.X+decoration.Width+pageInset)
-		tree.ScrollHeight = max(tree.ScrollHeight, decoration.Y+decoration.Height+pageInset)
+		right, bottom := decoration.X+decoration.Width, decoration.Y+decoration.Height
+		if decoration.Clip != nil {
+			right = min(right, decoration.Clip.X+decoration.Clip.Width)
+			bottom = min(bottom, decoration.Clip.Y+decoration.Clip.Height)
+		}
+		tree.ScrollWidth = max(tree.ScrollWidth, right+pageInset)
+		tree.ScrollHeight = max(tree.ScrollHeight, bottom+pageInset)
 	}
 	assignFragmentIdentities(tree)
 	buildCompositingLayers(tree, computed)
