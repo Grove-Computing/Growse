@@ -708,6 +708,13 @@ func pixelSize(value float32) stylemodel.SizeValue {
 }
 
 func translateFlexGeometry(tree *Tree, boxStart, decorationStart int, x, y float32, parentClip *Rect) {
+	movedNodes := make(map[dom.NodeID]struct{})
+	for index := boxStart; index < len(tree.Boxes); index++ {
+		movedNodes[tree.Boxes[index].NodeID] = struct{}{}
+	}
+	for index := decorationStart; index < len(tree.Decorations); index++ {
+		movedNodes[tree.Decorations[index].NodeID] = struct{}{}
+	}
 	translatedBounds := make(map[dom.NodeID]struct{})
 	translateBounds := func(nodeID dom.NodeID) {
 		if _, translated := translatedBounds[nodeID]; translated {
@@ -735,11 +742,31 @@ func translateFlexGeometry(tree *Tree, boxStart, decorationStart int, x, y float
 		}
 		return intersectClip(parentClip, *clip)
 	}
+	translateClips := func(clips []ClipRegion) {
+		for index := range clips {
+			_, ownerMoves := movedNodes[clips[index].NodeID]
+			if clips[index].NodeID == 0 || ownerMoves {
+				clips[index].X += x
+				clips[index].Y += y
+			}
+		}
+	}
+	resolvedClip := func(current *Rect, clips []ClipRegion) *Rect {
+		if len(clips) == 0 {
+			return translateClip(current)
+		}
+		current = intersectClipRegions(clips)
+		if parentClip != nil {
+			current = intersectClip(parentClip, *current)
+		}
+		return current
+	}
 	for index := boxStart; index < len(tree.Boxes); index++ {
 		translateBounds(tree.Boxes[index].NodeID)
 		tree.Boxes[index].X += x
 		tree.Boxes[index].Y += y
 		tree.Boxes[index].Baseline += y
+		tree.Boxes[index].Transform = translatedTransform(tree.Boxes[index].Transform, x, y)
 		if tree.Boxes[index].Image {
 			tree.Boxes[index].ImageRect.X += x
 			tree.Boxes[index].ImageRect.Y += y
@@ -749,21 +776,16 @@ func translateFlexGeometry(tree *Tree, boxStart, decorationStart int, x, y float
 		for runIndex := range tree.Boxes[index].Runs {
 			tree.Boxes[index].Runs[runIndex].Baseline += y
 		}
-		tree.Boxes[index].Clip = translateClip(tree.Boxes[index].Clip)
-		for clipIndex := range tree.Boxes[index].Clips {
-			tree.Boxes[index].Clips[clipIndex].X += x
-			tree.Boxes[index].Clips[clipIndex].Y += y
-		}
+		translateClips(tree.Boxes[index].Clips)
+		tree.Boxes[index].Clip = resolvedClip(tree.Boxes[index].Clip, tree.Boxes[index].Clips)
 	}
 	for index := decorationStart; index < len(tree.Decorations); index++ {
 		translateBounds(tree.Decorations[index].NodeID)
 		tree.Decorations[index].X += x
 		tree.Decorations[index].Y += y
-		tree.Decorations[index].Clip = translateClip(tree.Decorations[index].Clip)
-		for clipIndex := range tree.Decorations[index].Clips {
-			tree.Decorations[index].Clips[clipIndex].X += x
-			tree.Decorations[index].Clips[clipIndex].Y += y
-		}
+		tree.Decorations[index].Transform = translatedTransform(tree.Decorations[index].Transform, x, y)
+		translateClips(tree.Decorations[index].Clips)
+		tree.Decorations[index].Clip = resolvedClip(tree.Decorations[index].Clip, tree.Decorations[index].Clips)
 	}
 }
 

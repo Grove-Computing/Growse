@@ -20,8 +20,8 @@ func TestCSSLayoutShowcaseServesLayoutStagesAndLateImage(t *testing.T) {
 		path, contentType, marker string
 	}{
 		{"/", "text/html", "Writing Mode &amp; logical geometry"},
-		{"/style.css", "text/css", ".vertical-grid"},
-		{"/app.mjs", "text/javascript", "VERTICAL-LR · RTL"},
+		{"/style.css", "text/css", ".nested-scroll"},
+		{"/app.mjs", "text/javascript", "NESTED SCROLL · TRANSFORMED"},
 		{"/assets/late-layout.png", "image/png", ""},
 	} {
 		response, err := server.Client().Get(server.URL + route.path)
@@ -35,6 +35,59 @@ func TestCSSLayoutShowcaseServesLayoutStagesAndLateImage(t *testing.T) {
 			t.Fatalf("GET %s = status:%d type:%q marker:%t err:%v", route.path, response.StatusCode, response.Header.Get("Content-Type"), strings.Contains(string(body), route.marker), readErr)
 		}
 	}
+}
+
+func TestCSSLayoutShowcaseNestedScrollSharesTransformClipAndHitGeometry(t *testing.T) {
+	htmlSource, err := cssLayoutAssets.ReadFile("index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cssSource, err := cssLayoutAssets.ReadFile("style.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := htmlparser.Parse(strings.NewReader(string(htmlSource)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stylesheet, err := css.Parse(strings.NewReader(string(cssSource)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	scroller, ok := document.QuerySelector(".nested-scroll")
+	if !ok {
+		t.Fatal("nested scroll fixture is missing")
+	}
+	target, ok := document.QuerySelector(".scroll-target")
+	if !ok {
+		t.Fatal("nested scroll target is missing")
+	}
+	computed := style.Compute(document, stylesheet)
+	tree := layout.BuildWithViewport(document, computed, 1050, 700)
+	container, ok := tree.ScrollContainers[scroller.ID]
+	if !ok || container.ScrollWidth <= container.Viewport.Width || container.ScrollHeight <= container.Viewport.Height {
+		t.Fatalf("nested showcase scroll geometry = %#v exists:%v", container, ok)
+	}
+	if dirty := layout.ApplyScrollContainerOffset(tree, computed, scroller.ID, 120, 80); len(dirty) == 0 {
+		t.Fatal("nested showcase did not scroll")
+	}
+	targetBounds := tree.Bounds[target.ID]
+	for _, decoration := range tree.Decorations {
+		if decoration.NodeID != target.ID {
+			continue
+		}
+		x, y := decoration.Transform.TransformPoint(targetBounds.X+targetBounds.Width/2, targetBounds.Y+targetBounds.Height/2)
+		hit, hitOK := layout.HitTest(tree, x, y)
+		hitNode, exists := document.NodeByID(hit)
+		for hitNode != nil && hitNode != target {
+			hitNode = hitNode.Parent
+		}
+		if !hitOK || !exists || hitNode != target {
+			t.Fatalf("nested showcase transformed hit = %d/%v target=%d raw=%#v bounds=%#v decoration=%#v container=%#v", hit, hitOK, target.ID, func() *dom.Node { node, _ := document.NodeByID(hit); return node }(), targetBounds, decoration, tree.ScrollContainers[scroller.ID])
+		}
+		return
+	}
+	t.Fatal("nested showcase target decoration is missing")
 }
 
 func TestCSSLayoutShowcaseUsesVerticalGlyphAndLogicalAxes(t *testing.T) {

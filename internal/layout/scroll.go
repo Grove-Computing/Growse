@@ -339,25 +339,72 @@ func translateScrollDescendants(tree *Tree, styles stylemodel.Map, containerID d
 	}
 	for index := range tree.Boxes {
 		if belongs(tree.Boxes[index].NodeID) {
-			translateBoxForScroll(&tree.Boxes[index], dx, dy)
+			translateBoxForScroll(tree, &tree.Boxes[index], containerID, dx, dy)
 		}
 	}
 	for index := range tree.Decorations {
 		if belongs(tree.Decorations[index].NodeID) {
-			tree.Decorations[index].X += dx
-			tree.Decorations[index].Y += dy
+			translateDecorationForScroll(tree, &tree.Decorations[index], containerID, dx, dy)
+		}
+	}
+	for nodeID, container := range tree.ScrollContainers {
+		if nodeID != containerID && belongs(nodeID) {
+			container.Viewport.X += dx
+			container.Viewport.Y += dy
+			tree.ScrollContainers[nodeID] = container
 		}
 	}
 	return dirty
 }
 
-func translateBoxForScroll(box *Box, dx, dy float32) {
+func translateBoxForScroll(tree *Tree, box *Box, containerID dom.NodeID, dx, dy float32) {
 	box.X, box.Y, box.Baseline = box.X+dx, box.Y+dy, box.Baseline+dy
 	box.ImageRect.X, box.ImageRect.Y = box.ImageRect.X+dx, box.ImageRect.Y+dy
 	box.ImageClip.X, box.ImageClip.Y = box.ImageClip.X+dx, box.ImageClip.Y+dy
+	box.Transform = translatedTransform(box.Transform, dx, dy)
+	translateOwnedClipRegions(tree, box.Clips, containerID, dx, dy)
+	if len(box.Clips) != 0 {
+		box.Clip = intersectClipRegions(box.Clips)
+	}
 	for index := range box.Runs {
 		box.Runs[index].Baseline += dy
 	}
+}
+
+func translateDecorationForScroll(tree *Tree, decoration *Decoration, containerID dom.NodeID, dx, dy float32) {
+	decoration.X, decoration.Y = decoration.X+dx, decoration.Y+dy
+	decoration.Transform = translatedTransform(decoration.Transform, dx, dy)
+	translateOwnedClipRegions(tree, decoration.Clips, containerID, dx, dy)
+	if len(decoration.Clips) != 0 {
+		decoration.Clip = intersectClipRegions(decoration.Clips)
+	}
+}
+
+func translateOwnedClipRegions(tree *Tree, clips []ClipRegion, containerID dom.NodeID, dx, dy float32) {
+	for index := range clips {
+		owner := clips[index].NodeID
+		if owner != 0 && owner != containerID && isDescendantOf(tree, owner, containerID) {
+			clips[index].X += dx
+			clips[index].Y += dy
+		}
+	}
+}
+
+func intersectClipRegions(clips []ClipRegion) *Rect {
+	var result *Rect
+	for _, region := range clips {
+		result = intersectClip(result, region.Rect)
+	}
+	return result
+}
+
+func translatedTransform(matrix stylemodel.Matrix, dx, dy float32) stylemodel.Matrix {
+	if matrix == (stylemodel.Matrix{}) {
+		return matrix
+	}
+	matrix.E += dx - matrix.A*dx - matrix.C*dy
+	matrix.F += dy - matrix.B*dx - matrix.D*dy
+	return matrix
 }
 
 func sortedNodeSet(values map[dom.NodeID]struct{}) []dom.NodeID {
@@ -386,37 +433,51 @@ func translateNodeSubtree(tree *Tree, root dom.NodeID, dx, dy float32) {
 	}
 	for index := range tree.Boxes {
 		if belongs(tree.Boxes[index].NodeID) {
-			translateBox(&tree.Boxes[index], dx, dy)
+			translateBox(tree, &tree.Boxes[index], root, dx, dy)
 		}
 	}
 	for index := range tree.Decorations {
 		if belongs(tree.Decorations[index].NodeID) {
-			translateDecoration(&tree.Decorations[index], dx, dy)
+			translateDecoration(tree, &tree.Decorations[index], root, dx, dy)
 		}
 	}
 }
 
-func translateBox(box *Box, dx, dy float32) {
+func translateBox(tree *Tree, box *Box, root dom.NodeID, dx, dy float32) {
 	box.X, box.Y, box.Baseline = box.X+dx, box.Y+dy, box.Baseline+dy
 	box.ImageRect.X, box.ImageRect.Y = box.ImageRect.X+dx, box.ImageRect.Y+dy
 	box.ImageClip.X, box.ImageClip.Y = box.ImageClip.X+dx, box.ImageClip.Y+dy
-	if box.Clip != nil {
+	box.Transform = translatedTransform(box.Transform, dx, dy)
+	if len(box.Clips) == 0 && box.Clip != nil {
 		box.Clip.X, box.Clip.Y = box.Clip.X+dx, box.Clip.Y+dy
 	}
-	for index := range box.Clips {
-		box.Clips[index].X, box.Clips[index].Y = box.Clips[index].X+dx, box.Clips[index].Y+dy
+	translateSubtreeClipRegions(tree, box.Clips, root, dx, dy)
+	if len(box.Clips) != 0 {
+		box.Clip = intersectClipRegions(box.Clips)
 	}
 	for index := range box.Runs {
 		box.Runs[index].Baseline += dy
 	}
 }
 
-func translateDecoration(decoration *Decoration, dx, dy float32) {
+func translateDecoration(tree *Tree, decoration *Decoration, root dom.NodeID, dx, dy float32) {
 	decoration.X, decoration.Y = decoration.X+dx, decoration.Y+dy
-	if decoration.Clip != nil {
+	decoration.Transform = translatedTransform(decoration.Transform, dx, dy)
+	if len(decoration.Clips) == 0 && decoration.Clip != nil {
 		decoration.Clip.X, decoration.Clip.Y = decoration.Clip.X+dx, decoration.Clip.Y+dy
 	}
-	for index := range decoration.Clips {
-		decoration.Clips[index].X, decoration.Clips[index].Y = decoration.Clips[index].X+dx, decoration.Clips[index].Y+dy
+	translateSubtreeClipRegions(tree, decoration.Clips, root, dx, dy)
+	if len(decoration.Clips) != 0 {
+		decoration.Clip = intersectClipRegions(decoration.Clips)
+	}
+}
+
+func translateSubtreeClipRegions(tree *Tree, clips []ClipRegion, root dom.NodeID, dx, dy float32) {
+	for index := range clips {
+		owner := clips[index].NodeID
+		if owner == 0 || owner == root || isDescendantOf(tree, owner, root) {
+			clips[index].X += dx
+			clips[index].Y += dy
+		}
 	}
 }

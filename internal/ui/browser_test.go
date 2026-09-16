@@ -1341,6 +1341,75 @@ func TestHitTestPaintedDisplayListUsesVerticalRunOffsets(t *testing.T) {
 	}
 }
 
+func TestHitTestPaintedDisplayListUsesInverseTransformAndRoundedClips(t *testing.T) {
+	list := &paintmodel.DisplayList{Commands: []paintmodel.Command{
+		paintmodel.DrawBox{
+			NodeID: 7, X: 10, Y: 10, Top: 10, Width: 40, Height: 40,
+			Transform: style.Matrix{A: 1, D: 1, E: 100},
+			Clips: []layoutengine.ClipRegion{{
+				Rect:   layoutengine.Rect{X: 10, Y: 10, Width: 40, Height: 40},
+				Radius: layoutengine.BorderRadii{TopLeft: layoutengine.CornerRadius{X: 20, Y: 20}},
+			}},
+		},
+	}}
+	if hit, ok := hitTestPaintedDisplayList(list, layout.Position{First: 0}, image.Pt(130, 30), 1); !ok || hit.NodeID != 7 {
+		t.Fatalf("transformed painted hit = (%+v, %v)", hit, ok)
+	}
+	if hit, ok := hitTestPaintedDisplayList(list, layout.Position{First: 0}, image.Pt(111, 11), 1); ok || hit.NodeID != 0 {
+		t.Fatalf("rounded painted corner hit = (%+v, %v), want miss", hit, ok)
+	}
+	if hit, ok := hitTestPaintedDisplayList(list, layout.Position{First: 0}, image.Pt(30, 30), 1); ok || hit.NodeID != 0 {
+		t.Fatalf("untransformed painted hit = (%+v, %v), want miss", hit, ok)
+	}
+}
+
+func TestWheelScrollTargetsNestedOverflowContainerBeforeDocument(t *testing.T) {
+	document := dom.NewDocument()
+	container := document.CreateElement("div", map[string]string{"class": "container"})
+	content := document.CreateElement("div", map[string]string{"class": "content"})
+	if err := document.AppendChild(document.Root, container); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(container, content); err != nil {
+		t.Fatal(err)
+	}
+	stylesheet, err := css.Parse(strings.NewReader(`
+.container { width:160px; height:100px; overflow:auto; border-radius:16px }
+.content { width:240px; height:260px; background:#777 }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := &browser.Page{Document: document, Stylesheet: stylesheet, ComputedStyles: style.Compute(document, stylesheet), StyleRevision: 1}
+	ui := NewBrowserUI(&stubNavigator{page: page}, nil)
+	router := new(input.Router)
+	gtx := layout.Context{
+		Ops: new(op.Ops), Source: router.Source(), Constraints: layout.Exact(image.Pt(800, 600)),
+		Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1},
+	}
+
+	ui.Layout(gtx)
+	router.Frame(gtx.Ops)
+	router.Queue(pointer.Event{
+		Kind: pointer.Scroll, Source: pointer.Mouse,
+		Position: f32.Pt(float32(tabRailWidth)+80, float32(toolbarHeight)+70),
+		Scroll:   f32.Pt(0, 48),
+	})
+	gtx.Reset()
+	ui.Layout(gtx)
+
+	offset := ui.nestedScroll[container.ID]
+	if offset.Y != 48 || offset.X != 0 {
+		t.Fatalf("nested wheel offset = %#v", offset)
+	}
+	if ui.pageList.Position.First != 0 || ui.pageList.Position.Offset != 0 {
+		t.Fatalf("document scrolled with nested container: %#v", ui.pageList.Position)
+	}
+	if cached := ui.layoutCache.tree.ScrollContainers[container.ID]; cached.Offset != offset {
+		t.Fatalf("cached nested scroll = %#v, want %#v", cached.Offset, offset)
+	}
+}
+
 func TestPointerMoveAppliesAndClearsHoverStyle(t *testing.T) {
 	document := dom.NewDocument()
 	button := document.CreateElement("button", map[string]string{"id": "save"})

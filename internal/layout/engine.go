@@ -900,8 +900,9 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 			clipRect.Y, clipRect.Height = -unboundedClip, unboundedClip*2
 		}
 		e.clip = intersectClip(previousClip, clipRect)
-		resolvedClip := *e.clip
-		e.clips = append(cloneClipRegions(previousClips), ClipRegion{Rect: resolvedClip, Radius: resolveBorderRadii(style.radius, resolvedClip.Width, resolvedClip.Height)})
+		e.clips = append(cloneClipRegions(previousClips), ClipRegion{
+			Rect: clipRect, NodeID: node.ID, Radius: resolveBorderRadii(style.radius, clipRect.Width, clipRect.Height),
+		})
 	}
 
 	var positionedChildren []*dom.Node

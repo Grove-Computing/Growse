@@ -87,6 +87,8 @@ type DrawInput struct {
 	Color       uint32
 	Opacity     float32
 	Clip        *layout.Rect
+	Clips       []layout.ClipRegion
+	Transform   stylemodel.Matrix
 	Appearance  stylemodel.Appearance
 	AccentColor uint32
 	Cursor      stylemodel.Cursor
@@ -110,6 +112,8 @@ type DrawSelect struct {
 	Color       uint32
 	Opacity     float32
 	Clip        *layout.Rect
+	Clips       []layout.ClipRegion
+	Transform   stylemodel.Matrix
 	Disabled    bool
 	Appearance  stylemodel.Appearance
 	AccentColor uint32
@@ -133,6 +137,8 @@ type DrawCheckable struct {
 	Color       uint32
 	Opacity     float32
 	Clip        *layout.Rect
+	Clips       []layout.ClipRegion
+	Transform   stylemodel.Matrix
 	Disabled    bool
 	Appearance  stylemodel.Appearance
 	AccentColor uint32
@@ -156,6 +162,8 @@ type DrawButton struct {
 	Background  uint32
 	Opacity     float32
 	Clip        *layout.Rect
+	Clips       []layout.ClipRegion
+	Transform   stylemodel.Matrix
 	Disabled    bool
 	Appearance  stylemodel.Appearance
 	AccentColor uint32
@@ -353,6 +361,8 @@ func Build(tree *layout.Tree) *DisplayList {
 				Color:      box.Color,
 				Opacity:    box.Opacity,
 				Clip:       cloneLayoutRect(box.Clip),
+				Clips:      cloneClipRegions(box.Clips),
+				Transform:  box.Transform,
 				Appearance: box.Appearance, AccentColor: box.AccentColor, Cursor: box.Cursor,
 				WritingMode: box.WritingMode, Direction: box.Direction,
 			})
@@ -363,7 +373,7 @@ func Build(tree *layout.Tree) *DisplayList {
 			list.Commands = append(list.Commands, DrawSelect{
 				NodeID: box.NodeID, Options: append([]forms.Option(nil), box.Options...), Selected: box.Selected, Label: box.Text,
 				X: box.X, Y: box.Y, Top: top, Width: box.Width, Height: box.Height,
-				Color: box.Color, Opacity: box.Opacity, Clip: cloneLayoutRect(box.Clip),
+				Color: box.Color, Opacity: box.Opacity, Clip: cloneLayoutRect(box.Clip), Clips: cloneClipRegions(box.Clips), Transform: box.Transform,
 				Disabled:   box.Disabled,
 				Appearance: box.Appearance, AccentColor: box.AccentColor, Cursor: box.Cursor,
 				WritingMode: box.WritingMode, Direction: box.Direction,
@@ -375,7 +385,7 @@ func Build(tree *layout.Tree) *DisplayList {
 			list.Commands = append(list.Commands, DrawCheckable{
 				NodeID: box.NodeID, InputType: box.InputType, Checked: box.Checked,
 				X: box.X, Y: box.Y, Top: top, Width: box.Width, Height: box.Height,
-				Color: box.Color, Opacity: box.Opacity, Clip: cloneLayoutRect(box.Clip),
+				Color: box.Color, Opacity: box.Opacity, Clip: cloneLayoutRect(box.Clip), Clips: cloneClipRegions(box.Clips), Transform: box.Transform,
 				Disabled:   box.Disabled,
 				Appearance: box.Appearance, AccentColor: box.AccentColor, Cursor: box.Cursor,
 				WritingMode: box.WritingMode, Direction: box.Direction,
@@ -387,7 +397,7 @@ func Build(tree *layout.Tree) *DisplayList {
 			list.Commands = append(list.Commands, DrawButton{
 				NodeID: box.NodeID, Label: box.Text, X: box.X, Y: box.Y, Top: top,
 				Width: box.Width, Height: box.Height, Color: box.Color, Background: box.Background, Opacity: box.Opacity,
-				Clip: cloneLayoutRect(box.Clip), Disabled: box.Disabled,
+				Clip: cloneLayoutRect(box.Clip), Clips: cloneClipRegions(box.Clips), Transform: box.Transform, Disabled: box.Disabled,
 				Appearance: box.Appearance, AccentColor: box.AccentColor, Cursor: box.Cursor,
 				WritingMode: box.WritingMode, Direction: box.Direction,
 			})
@@ -534,6 +544,7 @@ func ApplyAnimatedLayout(list *DisplayList, tree *layout.Tree) {
 			command.Color, command.BackdropColor = background, backdrop
 			command.Border, command.Outline = decoration.Border, decoration.Outline
 			command.Opacity, command.Transform = decoration.Opacity, decoration.Transform
+			command.Clip, command.Clips = cloneLayoutRect(decoration.Clip), cloneClipRegions(decoration.Clips)
 			if decoration.Hidden {
 				command.Opacity = 0
 			}
@@ -554,6 +565,7 @@ func ApplyAnimatedLayout(list *DisplayList, tree *layout.Tree) {
 			command.X, command.Y, command.Top, command.Width, command.Height, command.Baseline = box.X, box.Y, top, box.Width, box.Height, box.Baseline
 			command.Color, command.Background = box.Color, box.Background
 			command.DecorationColor, command.Opacity, command.Transform = box.DecorationColor, opacity, box.Transform
+			command.Clip, command.Clips = cloneLayoutRect(box.Clip), cloneClipRegions(box.Clips)
 			for runIndex := range command.Runs {
 				if runIndex >= len(box.Runs) {
 					break
@@ -569,22 +581,27 @@ func ApplyAnimatedLayout(list *DisplayList, tree *layout.Tree) {
 			command.ImageRect, command.ImageClip = box.ImageRect, box.ImageClip
 			command.Color, command.Background, command.Opacity = box.Color, box.Background, opacity
 			command.Transform = box.Transform
+			command.Clip, command.Clips = cloneLayoutRect(box.Clip), cloneClipRegions(box.Clips)
 			list.Commands[index] = command
 		case DrawInput:
 			command.X, command.Y, command.Top, command.Width, command.Height = box.X, box.Y, top, box.Width, box.Height
 			command.Color, command.Opacity = box.Color, opacity
+			command.Transform, command.Clip, command.Clips = box.Transform, cloneLayoutRect(box.Clip), cloneClipRegions(box.Clips)
 			list.Commands[index] = command
 		case DrawSelect:
 			command.X, command.Y, command.Top, command.Width, command.Height = box.X, box.Y, top, box.Width, box.Height
 			command.Color, command.Opacity = box.Color, opacity
+			command.Transform, command.Clip, command.Clips = box.Transform, cloneLayoutRect(box.Clip), cloneClipRegions(box.Clips)
 			list.Commands[index] = command
 		case DrawCheckable:
 			command.X, command.Y, command.Top, command.Width, command.Height = box.X, box.Y, top, box.Width, box.Height
 			command.Color, command.Opacity = box.Color, opacity
+			command.Transform, command.Clip, command.Clips = box.Transform, cloneLayoutRect(box.Clip), cloneClipRegions(box.Clips)
 			list.Commands[index] = command
 		case DrawButton:
 			command.X, command.Y, command.Top, command.Width, command.Height = box.X, box.Y, top, box.Width, box.Height
 			command.Color, command.Opacity = box.Color, opacity
+			command.Transform, command.Clip, command.Clips = box.Transform, cloneLayoutRect(box.Clip), cloneClipRegions(box.Clips)
 			list.Commands[index] = command
 		}
 		previousBottom = box.Y + box.Height
@@ -647,6 +664,7 @@ func ApplyAnimatedStyles(list *DisplayList, styles stylemodel.Map) {
 			}
 			command.Color = computed.Color
 			command.Opacity = computed.Opacity
+			command.Transform = resolvedPaintTransform(computed, command.X, command.Y, command.Width, command.Height)
 			list.Commands[index] = command
 		case DrawSelect:
 			computed, ok := styles[command.NodeID]
@@ -655,6 +673,7 @@ func ApplyAnimatedStyles(list *DisplayList, styles stylemodel.Map) {
 			}
 			command.Color = computed.Color
 			command.Opacity = computed.Opacity
+			command.Transform = resolvedPaintTransform(computed, command.X, command.Y, command.Width, command.Height)
 			list.Commands[index] = command
 		case DrawCheckable:
 			computed, ok := styles[command.NodeID]
@@ -663,6 +682,7 @@ func ApplyAnimatedStyles(list *DisplayList, styles stylemodel.Map) {
 			}
 			command.Color = computed.Color
 			command.Opacity = computed.Opacity
+			command.Transform = resolvedPaintTransform(computed, command.X, command.Y, command.Width, command.Height)
 			list.Commands[index] = command
 		case DrawButton:
 			computed, ok := styles[command.NodeID]
@@ -671,6 +691,7 @@ func ApplyAnimatedStyles(list *DisplayList, styles stylemodel.Map) {
 			}
 			command.Color = computed.Color
 			command.Opacity = computed.Opacity
+			command.Transform = resolvedPaintTransform(computed, command.X, command.Y, command.Width, command.Height)
 			list.Commands[index] = command
 		}
 	}

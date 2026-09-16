@@ -73,6 +73,46 @@ main { padding: 22px 34px 50px; }
 .writing-playground.alternate .vertical-flex span,
 .writing-playground.alternate .vertical-grid span { writing-mode: vertical-lr; direction: rtl; }
 .writing-playground.alternate .vertical-flow { block-size: 220px; }
+.position-panel > p { color: #b8cbe2; }
+.position-playground {
+  position: relative;
+  min-height: 300px;
+  padding: 18px;
+  overflow: hidden;
+  border-radius: 26px;
+  background: #132842;
+  transform: translateX(8px);
+}
+.relative-probe {
+  position: relative;
+  left: 12px;
+  right: 4px;
+  width: 190px;
+  padding: 8px;
+  color: #08111f;
+  background: #66e3d7;
+}
+.absolute-probe { position: absolute; top: 18px; right: 18px; width: 100px; padding: 8px; color: #08111f; background: #ffd166; }
+.fixed-probe { position: fixed; right: 20px; bottom: 18px; width: 92px; padding: 7px; color: #08111f; background: #ff9f68; }
+.nested-scroll {
+  position: relative;
+  width: 300px;
+  height: 150px;
+  margin-top: 18px;
+  overflow: auto;
+  border: 2px solid #9fc7ff;
+  border-radius: 24px;
+  background: #0a1728;
+}
+.scroll-content { position: relative; width: 480px; height: 310px; padding: 16px; background: #173453; }
+.sticky-probe { position: sticky; top: 8px; left: 8px; display: block; width: 150px; padding: 8px; color: #08111f; background: #66e3d7; }
+.scroll-target { position: absolute; left: 190px; top: 110px; z-index: 2; width: 130px; height: 48px; margin: 0; background: #214f75; }
+.scroll-end { position: absolute; right: 14px; bottom: 14px; padding: 8px; color: #e8f0ff; background: #214f75; }
+.overflow-clip { position: absolute; left: 350px; top: 92px; width: 210px; height: 70px; overflow: clip; border-radius: 18px; background: #214f75; }
+.overflow-clip span { display: block; width: 390px; padding: 14px; color: #e8f0ff; }
+.position-playground.alternate { transform: translateX(24px) rotate(1deg); }
+.position-playground.alternate .nested-scroll { width: 340px; }
+.position-playground.alternate .absolute-probe { top: 54px; right: 34px; }
 @media (max-width: 620px) {
   .hero, main { padding-left: 16px; padding-right: 16px; }
   .ratio-row { display: block; }
@@ -82,4 +122,7 @@ main { padding: 22px 34px 50px; }
   .logical-stage { grid-column: auto; }
   .writing-playground { display: block; }
   .vertical-flow, .vertical-flex, .vertical-grid { margin-bottom: 14px; max-width: 100%; }
+  .position-playground { transform: none; }
+  .overflow-clip { position: relative; left: auto; top: auto; margin-top: 14px; max-width: 100%; }
+  .nested-scroll { max-width: 100%; }
 }

@@ -114,6 +114,7 @@ type CompositingLayer struct {
 // ClipRegion is one nested rectangular or rounded clipping boundary.
 type ClipRegion struct {
 	Rect
+	NodeID dom.NodeID
 	Radius BorderRadii
 }
 

@@ -71,6 +71,10 @@ func TestStickyUsesBothAxesNestedScrollContainerAndContainerEnd(t *testing.T) {
 	if got := tree.Bounds[sticky.ID]; got.X != scrollerRect.X+10 || got.Y != scrollerRect.Y+8 {
 		t.Fatalf("nested sticky geometry = %#v", got)
 	}
+	stickyClip := clipForOwner(t, decorationForNode(t, tree, sticky.ID).Clips, scroller.ID)
+	if stickyClip.X != scrollerRect.X || stickyClip.Y != scrollerRect.Y || stickyClip.Width != 200 || stickyClip.Height != 120 {
+		t.Fatalf("sticky moved its ancestor scrollport clip = %#v", stickyClip)
+	}
 	ApplyScrollContainerOffset(tree, computed, scroller.ID, 0, 0)
 	if got := tree.Bounds[sticky.ID]; got.X != scrollerRect.X+10 || got.Y != scrollerRect.Y+8 {
 		t.Fatalf("reverse nested scroll geometry = %#v", got)
