@@ -1662,6 +1662,8 @@ func parseDisplay(value string) (Display, bool) {
 		return DisplayTableRow, true
 	case "table-cell":
 		return DisplayTableCell, true
+	case "flow-root":
+		return DisplayFlowRoot, true
 	case "none":
 		return DisplayNone, true
 	default:

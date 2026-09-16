@@ -98,7 +98,13 @@ func TestBuildLaysOutPictureFallbackImage(t *testing.T) {
 	tree := BuildWithScrollAndImages(document, computed, map[dom.NodeID]ImageResource{
 		imageNode.ID: {URL: "https://example.com/hero.png", IntrinsicWidth: 32, IntrinsicHeight: 32, Loaded: true},
 	}, 800, 600, 0, 0)
-	if len(tree.Boxes) != 1 || !tree.Boxes[0].Image || tree.Boxes[0].NodeID != imageNode.ID || tree.Boxes[0].ImageURL != "https://example.com/hero.png" {
+	var imageBox *Box
+	for index := range tree.Boxes {
+		if tree.Boxes[index].Image {
+			imageBox = &tree.Boxes[index]
+		}
+	}
+	if imageBox == nil || imageBox.NodeID != imageNode.ID || imageBox.ImageURL != "https://example.com/hero.png" {
 		t.Fatalf("picture fallback boxes = %#v", tree.Boxes)
 	}
 }

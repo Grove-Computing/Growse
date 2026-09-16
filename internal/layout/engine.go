@@ -19,6 +19,9 @@ const (
 	checkableSize  = float32(32)
 	buttonWidth    = float32(120)
 	textareaHeight = float32(96)
+	maxLayoutDepth = 192
+	maxLineBoxes   = 16384
+	maxFloatBoxes  = 4096
 )
 
 type blockStyle struct {
@@ -126,6 +129,7 @@ type inlineRun struct {
 	atomic      bool
 	flex        bool
 	grid        bool
+	image       bool
 	width       float32
 	widthOffset float32
 	height      float32
@@ -255,6 +259,7 @@ type engine struct {
 	positionCB                    *Rect
 	stackingID                    int
 	floats                        []floatRegion
+	depth                         int
 }
 
 func (e *engine) nextOrder() int {
@@ -403,18 +408,21 @@ func isEditableTextControl(node *dom.Node) bool {
 }
 
 func isImageElement(node *dom.Node, resources map[dom.NodeID]ImageResource) bool {
-	return node != nil && resources != nil && (node.TagName == "img" || node.TagName == "svg")
+	return node != nil && (node.TagName == "img" || node.TagName == "svg")
 }
 
-func (e *engine) addImage(node *dom.Node, style blockStyle, x, width, containingHeight float32, heightDefinite bool) {
+type resolvedImageGeometry struct {
+	resource                    ImageResource
+	outerWidth, outerHeight     float32
+	contentWidth, contentHeight float32
+}
+
+func (e *engine) resolveImageGeometry(node *dom.Node, style blockStyle, availableWidth, containingHeight float32, heightDefinite bool) resolvedImageGeometry {
 	resource, loaded := e.images[node.ID]
 	if !loaded {
 		alt, _ := node.Attribute("alt")
 		resource = ImageResource{Alt: alt, Error: "image resource is unavailable"}
 	}
-	e.y += style.margin.Top
-	x += style.margin.Left
-	availableWidth := max(width-style.margin.Left-style.margin.Right, float32(1))
 	attributeWidth, hasAttributeWidth := imageDimensionAttribute(node, "width")
 	attributeHeight, hasAttributeHeight := imageDimensionAttribute(node, "height")
 	intrinsicWidth, intrinsicHeight := resource.IntrinsicWidth, resource.IntrinsicHeight
@@ -463,6 +471,17 @@ func (e *engine) addImage(node *dom.Node, style blockStyle, x, width, containing
 		contentWidth = max(outerWidth-horizontal, float32(0))
 		contentHeight = max(outerHeight-vertical, float32(0))
 	}
+	return resolvedImageGeometry{resource: resource, outerWidth: outerWidth, outerHeight: outerHeight, contentWidth: contentWidth, contentHeight: contentHeight}
+}
+
+func (e *engine) addImage(node *dom.Node, style blockStyle, x, width, containingHeight float32, heightDefinite bool) {
+	e.y += style.margin.Top
+	x += style.margin.Left
+	availableWidth := max(width-style.margin.Left-style.margin.Right, float32(1))
+	geometry := e.resolveImageGeometry(node, style, availableWidth, containingHeight, heightDefinite)
+	resource := geometry.resource
+	outerWidth, outerHeight := geometry.outerWidth, geometry.outerHeight
+	contentWidth, contentHeight := geometry.contentWidth, geometry.contentHeight
 	contentX := x + style.border.Left.Width + style.padding.Left
 	contentY := e.y + style.border.Top.Width + style.padding.Top
 	imageRect := fitImageRect(contentX, contentY, contentWidth, contentHeight, resource.IntrinsicWidth, resource.IntrinsicHeight, style.objectFit, style.objectPosition)
@@ -479,6 +498,33 @@ func (e *engine) addImage(node *dom.Node, style blockStyle, x, width, containing
 	e.tree.Boxes = append(e.tree.Boxes, box)
 	e.tree.Bounds[node.ID] = Rect{X: x, Y: e.y, Width: box.Width, Height: box.Height}
 	e.y += box.Height + style.margin.Bottom
+}
+
+func (e *engine) resolveInlineImageSize(run inlineRun, containingWidth float32) (float32, float32, float32) {
+	geometry := e.resolveImageGeometry(run.node, run.style, max(containingWidth-run.style.margin.Left-run.style.margin.Right, float32(1)), 0, false)
+	width := geometry.outerWidth + run.style.margin.Left + run.style.margin.Right
+	height := geometry.outerHeight + run.style.margin.Top + run.style.margin.Bottom
+	return max(width, float32(1)), max(height, float32(1)), max(height-run.style.margin.Bottom, float32(0))
+}
+
+func (e *engine) renderInlineImage(run inlineRun, x, y, containingWidth float32) {
+	geometry := e.resolveImageGeometry(run.node, run.style, max(containingWidth-run.style.margin.Left-run.style.margin.Right, float32(1)), 0, false)
+	boxX, boxY := x+run.style.margin.Left, y+run.style.margin.Top
+	contentX := boxX + run.style.border.Left.Width + run.style.padding.Left
+	contentY := boxY + run.style.border.Top.Width + run.style.padding.Top
+	imageRect := fitImageRect(contentX, contentY, geometry.contentWidth, geometry.contentHeight, geometry.resource.IntrinsicWidth, geometry.resource.IntrinsicHeight, run.style.objectFit, run.style.objectPosition)
+	box := Box{
+		Order: e.nextOrder(), StackingID: e.stackingID, NodeID: run.node.ID, Tag: run.node.TagName,
+		Image: true, ImageURL: geometry.resource.URL, Alt: geometry.resource.Alt, ImageRect: imageRect,
+		ImageClip: Rect{X: contentX, Y: contentY, Width: geometry.contentWidth, Height: geometry.contentHeight}, ImageFailed: !geometry.resource.Loaded,
+		ObjectFit: run.style.objectFit, ObjectPos: run.style.objectPosition, ImageBorder: run.style.border, ImageRadius: resolveBorderRadii(run.style.radius, geometry.outerWidth, geometry.outerHeight),
+		X: boxX, Y: boxY, Width: max(geometry.outerWidth, float32(1)), Height: max(geometry.outerHeight, float32(1)),
+		FontSize: run.style.fontSize, FontFamilies: append([]string(nil), run.style.fontFamilies...), Bold: run.style.bold, Color: run.style.color, Background: run.style.background,
+		Clip: cloneRect(e.clip), Clips: cloneClipRegions(e.clips), Opacity: run.opacity, Cursor: run.style.cursor,
+		Transform: stylemodel.IdentityMatrix(), Hidden: run.style.hidden,
+	}
+	e.tree.Boxes = append(e.tree.Boxes, box)
+	e.tree.Bounds[run.node.ID] = Rect{X: box.X, Y: box.Y, Width: box.Width, Height: box.Height}
 }
 
 func imageDimensionAttribute(node *dom.Node, name string) (float32, bool) {
@@ -618,6 +664,13 @@ func (e *engine) addSelect(node *dom.Node, style blockStyle, x, width, containin
 }
 
 func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containingHeight float32, heightDefinite bool, topMargin *float32) {
+	if e.depth >= maxLayoutDepth {
+		e.tree.addFallback(node.ID, "layout recursion limit exceeded")
+		return
+	}
+	e.depth++
+	defer func() { e.depth-- }()
+
 	geometryBoxStart, geometryDecorationStart := len(e.tree.Boxes), len(e.tree.Decorations)
 	previousStackingID := e.stackingID
 	effectRequested := len(style.filters) != 0 || len(style.backdropFilters) != 0 || style.mixBlendMode != stylemodel.BlendNormal
@@ -627,8 +680,13 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 	}
 	previousOpacity := e.opacity
 	e.opacity *= style.opacity
+	firstCollapsibleChild := e.firstCollapsibleBlockChild(node, style)
 	if topMargin == nil {
-		e.y += style.margin.Top
+		top := marginGroupFor(style.margin.Top)
+		if firstCollapsibleChild != nil {
+			top = top.merge(e.collapsingTopMargin(firstCollapsibleChild, e.styleFor(firstCollapsibleChild), 0))
+		}
+		e.y += top.value()
 	} else {
 		e.y += *topMargin
 	}
@@ -676,6 +734,14 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 	if outerWidth < 1 {
 		outerWidth = 1
 	}
+	if free := max(width-style.margin.Left-style.margin.Right-outerWidth, float32(0)); free > 0 {
+		switch {
+		case style.marginAuto.Left && style.marginAuto.Right:
+			x += free / 2
+		case style.marginAuto.Left:
+			x += free
+		}
+	}
 	contentX := x + style.border.Left.Width + style.padding.Left
 	contentWidth := outerWidth - style.padding.Left - style.padding.Right - horizontalBorder
 	if contentWidth < 1 {
@@ -717,6 +783,11 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 	previousClip := e.clip
 	previousClips := e.clips
 	previousPositionCB := e.positionCB
+	outerFloats := e.floats
+	formattingContext := establishesBlockFormattingContext(style)
+	if formattingContext {
+		e.floats = nil
+	}
 	if style.layoutPosition != stylemodel.PositionStatic {
 		cbHeight := childContainingHeight
 		if !declaredHeightDefinite {
@@ -746,7 +817,8 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 		inlineRuns := e.listMarkerRuns(node, style)
 		inlineRuns = append(inlineRuns, e.generatedRuns(node, true, style)...)
 		previousBlock := false
-		previousBottomMargin := float32(0)
+		previousBottomMargin := marginGroup{}
+		firstInFlow := true
 		flushInline := func() {
 			if len(inlineRuns) != 0 {
 				e.addInlineRuns(node.ID, node.TagName, inlineRuns, style, contentX, contentWidth)
@@ -775,7 +847,8 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 					flushInline()
 					e.addTable(child, childStyle, contentX, contentWidth, childContainingHeight, declaredHeightDefinite)
 					previousBlock = true
-					previousBottomMargin = childStyle.margin.Bottom
+					previousBottomMargin = marginGroupFor(childStyle.margin.Bottom)
+					firstInFlow = false
 					continue
 				}
 				if childStyle.layoutPosition == stylemodel.PositionAbsolute || childStyle.layoutPosition == stylemodel.PositionFixed {
@@ -783,66 +856,87 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 					positionedChildren = append(positionedChildren, child)
 					continue
 				}
-				if isImageElement(child, e.images) {
+				if isImageElement(child, e.images) && childStyle.display != stylemodel.DisplayInline && childStyle.display != stylemodel.DisplayInlineBlock {
 					flushInline()
 					e.addImage(child, childStyle, contentX, contentWidth, childContainingHeight, declaredHeightDefinite)
 					previousBlock = true
-					previousBottomMargin = childStyle.margin.Bottom
+					previousBottomMargin = marginGroupFor(childStyle.margin.Bottom)
+					firstInFlow = false
 					continue
 				}
 				if isEditableTextControl(child) {
 					flushInline()
 					e.addInput(child, childStyle, contentX, contentWidth, childContainingHeight, declaredHeightDefinite)
 					previousBlock = true
-					previousBottomMargin = childStyle.margin.Bottom
+					previousBottomMargin = marginGroupFor(childStyle.margin.Bottom)
+					firstInFlow = false
 					continue
 				}
 				if isSelectControl(child) {
 					flushInline()
 					e.addSelect(child, childStyle, contentX, contentWidth, childContainingHeight, declaredHeightDefinite)
 					previousBlock = true
-					previousBottomMargin = childStyle.margin.Bottom
+					previousBottomMargin = marginGroupFor(childStyle.margin.Bottom)
+					firstInFlow = false
 					continue
 				}
 				if isCheckableControl(child) {
 					flushInline()
 					e.addCheckable(child, childStyle, contentX, contentWidth, childContainingHeight, declaredHeightDefinite)
 					previousBlock = true
-					previousBottomMargin = childStyle.margin.Bottom
+					previousBottomMargin = marginGroupFor(childStyle.margin.Bottom)
+					firstInFlow = false
 					continue
 				}
 				if isSubmitButtonControl(child) {
 					flushInline()
 					e.addSubmitButton(child, childStyle, contentX, contentWidth, childContainingHeight, declaredHeightDefinite)
 					previousBlock = true
-					previousBottomMargin = childStyle.margin.Bottom
+					previousBottomMargin = marginGroupFor(childStyle.margin.Bottom)
+					firstInFlow = false
 					continue
 				}
 				if isBlockLevelDisplay(childStyle.display) {
 					flushInline()
-					if previousBlock {
-						e.y -= previousBottomMargin
-						collapsed := collapseMargins(previousBottomMargin, childStyle.margin.Top)
+					childTop := e.collapsingTopMargin(child, childStyle, 0)
+					if firstInFlow && firstCollapsibleChild == child {
+						zero := float32(0)
+						e.addBlock(child, childStyle, contentX, contentWidth, childContainingHeight, declaredHeightDefinite, &zero)
+					} else if previousBlock {
+						e.y -= previousBottomMargin.value()
+						collapsed := previousBottomMargin.merge(childTop).value()
 						e.addBlock(child, childStyle, contentX, contentWidth, childContainingHeight, declaredHeightDefinite, &collapsed)
 					} else {
 						e.addBlock(child, childStyle, contentX, contentWidth, childContainingHeight, declaredHeightDefinite, nil)
 					}
 					previousBlock = true
-					previousBottomMargin = childStyle.margin.Bottom
+					previousBottomMargin = e.collapsingBottomMargin(child, childStyle, 0)
+					firstInFlow = false
 					continue
 				}
 				if hasNestedFormControl(child) {
 					flushInline()
 					e.addInlineContentWithControls(child, contentX, contentWidth, childContainingHeight, declaredHeightDefinite)
 					previousBlock = true
-					previousBottomMargin = childStyle.margin.Bottom
+					previousBottomMargin = marginGroupFor(childStyle.margin.Bottom)
+					firstInFlow = false
 					continue
 				}
 			}
 			inlineRuns = append(inlineRuns, e.collectInlineRuns(child, node)...)
+			if child.Type != dom.NodeText || strings.TrimSpace(child.Text) != "" {
+				firstInFlow = false
+			}
 		}
 		inlineRuns = append(inlineRuns, e.generatedRuns(node, false, style)...)
 		flushInline()
+	}
+	localFloats := e.floats
+	if formattingContext {
+		for _, region := range localFloats {
+			e.y = max(e.y, region.Y+region.Height)
+		}
+		e.floats = outerFloats
 	}
 	e.clip = previousClip
 	e.clips = previousClips
@@ -880,7 +974,17 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 	for _, child := range positionedChildren {
 		e.renderPositionedChild(child, e.styleFor(child))
 	}
-	e.y = boxTop + outerHeight + style.margin.Bottom
+	bottomMargin := marginGroupFor(style.margin.Bottom)
+	if last := e.lastCollapsibleBlockChild(node, style); last != nil {
+		childBottom := e.collapsingBottomMargin(last, e.styleFor(last), 0)
+		outerHeight = max(outerHeight-childBottom.value(), float32(0))
+		bottomMargin = bottomMargin.merge(childBottom)
+		e.tree.Bounds[node.ID] = Rect{X: x, Y: boxTop, Width: outerWidth, Height: outerHeight}
+		if decorationIndex >= 0 {
+			e.tree.Decorations[decorationIndex].Height = outerHeight
+		}
+	}
+	e.y = boxTop + outerHeight + bottomMargin.value()
 	if style.layoutPosition == stylemodel.PositionRelative || style.layoutPosition == stylemodel.PositionSticky {
 		dx, dy := float32(0), float32(0)
 		if style.layoutPosition == stylemodel.PositionRelative {
@@ -994,10 +1098,115 @@ func (e *engine) renderPositionedChild(node *dom.Node, style blockStyle) {
 	e.renderGridItem(node, style, childX, childY, usedWidth, usedHeight)
 }
 
-func collapseMargins(first, second float32) float32 {
-	positive := max(first, float32(0), second)
-	negative := min(first, float32(0), second)
-	return positive + negative
+type marginGroup struct {
+	positive float32
+	negative float32
+}
+
+func marginGroupFor(value float32) marginGroup {
+	if value >= 0 {
+		return marginGroup{positive: value}
+	}
+	return marginGroup{negative: value}
+}
+
+func (group marginGroup) merge(other marginGroup) marginGroup {
+	group.positive = max(group.positive, other.positive)
+	group.negative = min(group.negative, other.negative)
+	return group
+}
+
+func (group marginGroup) value() float32 { return group.positive + group.negative }
+
+func establishesBlockFormattingContext(style blockStyle) bool {
+	return style.display == stylemodel.DisplayFlowRoot || style.display == stylemodel.DisplayFlex || style.display == stylemodel.DisplayGrid ||
+		style.float != stylemodel.FloatNone || style.layoutPosition == stylemodel.PositionAbsolute || style.layoutPosition == stylemodel.PositionFixed ||
+		style.overflowX != stylemodel.OverflowVisible || style.overflowY != stylemodel.OverflowVisible
+}
+
+func canCollapseBlockStart(style blockStyle) bool {
+	return style.display == stylemodel.DisplayBlock && !establishesBlockFormattingContext(style) && style.padding.Top == 0 && style.border.Top.Width == 0
+}
+
+func canCollapseBlockEnd(style blockStyle) bool {
+	return canCollapseBlockStart(style) && style.padding.Bottom == 0 && style.border.Bottom.Width == 0 &&
+		style.height.Kind == stylemodel.SizeAuto && style.minHeight.Kind == stylemodel.SizeAuto
+}
+
+func (e *engine) firstCollapsibleBlockChild(node *dom.Node, style blockStyle) *dom.Node {
+	if node == nil || !canCollapseBlockStart(style) {
+		return nil
+	}
+	for _, child := range e.flowChildren(node) {
+		if child == nil {
+			continue
+		}
+		if child.Type == dom.NodeText {
+			if strings.TrimSpace(child.Text) == "" {
+				continue
+			}
+			return nil
+		}
+		childStyle := e.styleFor(child)
+		if childStyle.display == stylemodel.DisplayNone || childStyle.float != stylemodel.FloatNone || childStyle.layoutPosition == stylemodel.PositionAbsolute || childStyle.layoutPosition == stylemodel.PositionFixed {
+			continue
+		}
+		if childStyle.display == stylemodel.DisplayBlock {
+			return child
+		}
+		return nil
+	}
+	return nil
+}
+
+func (e *engine) lastCollapsibleBlockChild(node *dom.Node, style blockStyle) *dom.Node {
+	if node == nil || !canCollapseBlockEnd(style) {
+		return nil
+	}
+	children := e.flowChildren(node)
+	for index := len(children) - 1; index >= 0; index-- {
+		child := children[index]
+		if child == nil {
+			continue
+		}
+		if child.Type == dom.NodeText {
+			if strings.TrimSpace(child.Text) == "" {
+				continue
+			}
+			return nil
+		}
+		childStyle := e.styleFor(child)
+		if childStyle.display == stylemodel.DisplayNone || childStyle.float != stylemodel.FloatNone || childStyle.layoutPosition == stylemodel.PositionAbsolute || childStyle.layoutPosition == stylemodel.PositionFixed {
+			continue
+		}
+		if childStyle.display == stylemodel.DisplayBlock {
+			return child
+		}
+		return nil
+	}
+	return nil
+}
+
+func (e *engine) collapsingTopMargin(node *dom.Node, style blockStyle, depth int) marginGroup {
+	result := marginGroupFor(style.margin.Top)
+	if depth >= maxLayoutDepth {
+		return result
+	}
+	if child := e.firstCollapsibleBlockChild(node, style); child != nil {
+		result = result.merge(e.collapsingTopMargin(child, e.styleFor(child), depth+1))
+	}
+	return result
+}
+
+func (e *engine) collapsingBottomMargin(node *dom.Node, style blockStyle, depth int) marginGroup {
+	result := marginGroupFor(style.margin.Bottom)
+	if depth >= maxLayoutDepth {
+		return result
+	}
+	if child := e.lastCollapsibleBlockChild(node, style); child != nil {
+		result = result.merge(e.collapsingBottomMargin(child, e.styleFor(child), depth+1))
+	}
+	return result
 }
 
 func resolveSize(value stylemodel.SizeValue, basis float32, basisDefinite bool) (float32, bool) {
@@ -1115,6 +1324,9 @@ func (e *engine) collectInlineRunsWithOpacity(node, owner *dom.Node, opacity flo
 		}
 		return result
 	}
+	if isImageElement(node, e.images) {
+		return []inlineRun{{nodeID: node.ID, node: node, tag: node.TagName, style: style, atomic: true, image: true, opacity: opacity}}
+	}
 	if style.display == stylemodel.DisplayInlineBlock {
 		return []inlineRun{{nodeID: node.ID, tag: node.TagName, text: e.inlineText(node), style: style, atomic: true, opacity: opacity}}
 	}
@@ -1219,7 +1431,7 @@ func (e *engine) addText(nodeID dom.NodeID, tag, text string, style blockStyle, 
 
 func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, container blockStyle, x, width float32) {
 	var lineRuns []TextRun
-	var flexPlacements []inlineRun
+	var atomicPlacements []inlineRun
 	var lineText strings.Builder
 	var usedWidth, lineHeight, lineAscent float32
 	var pendingSpace *inlineRun
@@ -1232,6 +1444,11 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 
 	flushLine := func(final bool) {
 		if len(lineRuns) == 0 {
+			return
+		}
+		if len(e.tree.Boxes) >= maxLineBoxes {
+			e.tree.addFallback(nodeID, "line box limit exceeded")
+			lineRuns = nil
 			return
 		}
 		if final && container.textOverflow == stylemodel.TextOverflowEllipsis &&
@@ -1289,9 +1506,11 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 			Runs:        append([]TextRun(nil), lineRuns...),
 			Baseline:    e.y + lineAscent, Clip: cloneRect(e.clip), Clips: cloneClipRegions(e.clips),
 		})
-		for _, placement := range flexPlacements {
+		for _, placement := range atomicPlacements {
 			placementX, placementY := lineX+alignmentOffset+placement.widthOffset, e.y+lineAscent-placement.baseline
-			if placement.grid {
+			if placement.image {
+				e.renderInlineImage(placement, placementX, placementY, width)
+			} else if placement.grid {
 				e.renderInlineGrid(placement, placementX, placementY)
 			} else {
 				item := &flexLayoutItem{node: placement.node, style: placement.style, crossSize: placement.height}
@@ -1303,7 +1522,7 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 		lineRuns = lineRuns[:0]
 		lineText.Reset()
 		usedWidth, lineHeight, lineAscent, pendingSpace = 0, 0, 0, nil
-		flexPlacements = flexPlacements[:0]
+		atomicPlacements = atomicPlacements[:0]
 		if firstLine {
 			firstLine = false
 		}
@@ -1343,7 +1562,9 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 
 	for _, token := range tokenizeInlineRuns(transformInlineRuns(runs)) {
 		if token.atomic {
-			if token.flex {
+			if token.image {
+				token.width, token.height, token.baseline = e.resolveInlineImageSize(token, width)
+			} else if token.flex {
 				token.width, token.height, token.baseline = e.resolveInlineFlexSize(token.node, token.style, width)
 			} else if token.grid {
 				token.width, token.height, token.baseline = e.resolveInlineGridSize(token.node, token.style, width)
@@ -1353,9 +1574,9 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 			if usedWidth > 0 && usedWidth+token.width > lineWidth && wrapsWhitespace(token.style.whiteSpace) {
 				flushLine(false)
 			}
-			if token.flex || token.grid {
+			if token.flex || token.grid || token.image {
 				token.widthOffset = usedWidth
-				flexPlacements = append(flexPlacements, token)
+				atomicPlacements = append(atomicPlacements, token)
 				appendPiece(token, "", token.width)
 			} else {
 				appendPiece(token, token.text, token.width)
@@ -1432,7 +1653,7 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 }
 
 func isBlockLevelDisplay(display stylemodel.Display) bool {
-	return display == stylemodel.DisplayBlock || display == stylemodel.DisplayFlex || display == stylemodel.DisplayGrid
+	return display == stylemodel.DisplayBlock || display == stylemodel.DisplayFlowRoot || display == stylemodel.DisplayFlex || display == stylemodel.DisplayGrid
 }
 
 func tokenizeInlineRuns(runs []inlineRun) []inlineRun {

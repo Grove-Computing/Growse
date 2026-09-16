@@ -11,6 +11,10 @@ type floatRegion struct {
 }
 
 func (e *engine) addFloat(node *dom.Node, style blockStyle, containingX, containingWidth, containingHeight float32, heightDefinite bool) {
+	if len(e.floats) >= maxFloatBoxes {
+		e.tree.addFallback(node.ID, "float box limit exceeded")
+		return
+	}
 	outerWidth, outerHeight, _ := e.flexIntrinsicSizes(node, style, flexAxis{horizontal: true}, containingWidth, containingWidth, containingHeight, heightDefinite)
 	if isImageElement(node, e.images) {
 		ratio := style.aspectRatio
