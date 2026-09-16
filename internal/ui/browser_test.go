@@ -1138,6 +1138,35 @@ func TestKeyboardShortcutsCycleTabsForwardAndBackward(t *testing.T) {
 	}
 }
 
+func TestAddressShortcutFocusesAndReplacesCurrentURL(t *testing.T) {
+	ui := NewBrowserUI(nil, nil)
+	ui.address.SetText("https://old.example/path")
+	router := new(input.Router)
+	gtx := layout.Context{
+		Ops:         new(op.Ops),
+		Source:      router.Source(),
+		Constraints: layout.Exact(image.Pt(800, 600)),
+		Metric:      unit.Metric{PxPerDp: 1, PxPerSp: 1},
+	}
+
+	ui.Layout(gtx)
+	router.Frame(gtx.Ops)
+	router.Queue(key.Event{Name: "L", Modifiers: key.ModShortcut, State: key.Press})
+	gtx.Reset()
+	ui.Layout(gtx)
+	if got := ui.address.SelectedText(); got != "https://old.example/path" {
+		t.Fatalf("Ctrl/Command+L selection = %q", got)
+	}
+
+	router.Frame(gtx.Ops)
+	router.Queue(key.EditEvent{Range: key.Range{Start: 0, End: ui.address.Len()}, Text: "https://new.example/"})
+	gtx.Reset()
+	ui.Layout(gtx)
+	if got := ui.address.Text(); got != "https://new.example/" {
+		t.Fatalf("address after shortcut edit = %q", got)
+	}
+}
+
 func (navigator *reloadRecordingNavigator) Reload(ctx context.Context) (*browser.Page, error) {
 	navigator.reloads <- false
 	select {

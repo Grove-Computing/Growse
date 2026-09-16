@@ -587,6 +587,18 @@ func tabStateColor(tab browser.TabSnapshot) color.NRGBA {
 func (ui *BrowserUI) handleKeyboardShortcuts(gtx layout.Context) {
 	ui.handleTabKeyboardShortcuts(gtx)
 	for {
+		event, ok := gtx.Event(key.Filter{Name: "L", Required: key.ModShortcut})
+		if !ok {
+			break
+		}
+		keyEvent, ok := event.(key.Event)
+		if !ok || keyEvent.State != key.Press {
+			continue
+		}
+		ui.address.SetCaret(0, ui.address.Len())
+		gtx.Execute(key.FocusCmd{Tag: &ui.address})
+	}
+	for {
 		event, ok := gtx.Event(key.Filter{Name: key.NameF12})
 		if !ok {
 			break
