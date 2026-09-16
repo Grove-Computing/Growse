@@ -2983,7 +2983,11 @@ func (ui *BrowserUI) layoutDrawButton(gtx layout.Context, command paintmodel.Dra
 		gtx.Constraints.Max.Y = gtx.Constraints.Min.Y
 		style := material.Button(ui.documentTheme(), button, command.Label)
 		style.Color = rgba(command.Color)
-		style.Background = rgba(command.AccentColor)
+		background := command.Background
+		if background == 0 {
+			background = command.AccentColor
+		}
+		style.Background = rgba(background)
 		if command.Appearance == stylemodel.AppearanceNone {
 			style.Background = color.NRGBA{}
 		}

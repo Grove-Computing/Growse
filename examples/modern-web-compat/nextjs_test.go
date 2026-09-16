@@ -107,8 +107,13 @@ func TestNextJSSSRFixtureHydratesWithoutReplacingDOM(t *testing.T) {
 	if !foundChunkDiagnostic {
 		t.Fatalf("DevTools did not expose the dynamic chunk: %+v", page.RuntimeDiagnostics())
 	}
+	counter := fixtureNode(t, page, "next-counter")
+	counterStyle, _ := page.ComputedStyles.For(counter)
+	if counterStyle.Color != 0xffffffff || counterStyle.BackgroundColor != 0x2563ebff {
+		t.Fatalf("counter visual style = color:%08x background:%08x", counterStyle.Color, counterStyle.BackgroundColor)
+	}
 
-	if !engine.DispatchClick(fixtureNode(t, page, "next-counter").ID, 0, 0) {
+	if !engine.DispatchClick(counter.ID, 0, 0) {
 		t.Fatal("counter Event was not handled")
 	}
 	if got := fixtureNode(t, page, "next-count").TextContent(); got != "1" {

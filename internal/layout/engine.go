@@ -549,7 +549,7 @@ func (e *engine) addSubmitButton(node *dom.Node, style blockStyle, x, width, con
 		Order: e.nextOrder(), StackingID: e.stackingID, NodeID: node.ID, Tag: node.TagName,
 		Text: label, Button: true, Disabled: forms.Disabled(node),
 		Appearance: style.appearance, AccentColor: resolvedAccentColor(style), Cursor: style.cursor,
-		X: x, Y: e.y, Width: max(usedWidth, float32(1)), Height: max(usedHeight, float32(1)), Color: style.color,
+		X: x, Y: e.y, Width: max(usedWidth, float32(1)), Height: max(usedHeight, float32(1)), Color: style.color, Background: style.background,
 		Clip: cloneRect(e.clip), Clips: cloneClipRegions(e.clips), Opacity: e.opacity * style.opacity,
 		Transform: stylemodel.IdentityMatrix(), Hidden: style.hidden,
 	})
@@ -1682,6 +1682,8 @@ func uaStyle(tag string) blockStyle {
 		style.margin.Bottom = 14
 	case "button":
 		style.bold = true
+	case "picture":
+		style.display = stylemodel.DisplayContents
 	case "iframe":
 		style.display = stylemodel.DisplayInlineBlock
 		style.width = stylemodel.SizeValue{Kind: stylemodel.SizeLength, Value: stylemodel.LengthPercentage{Pixels: 300}}
@@ -1694,7 +1696,7 @@ func uaStyle(tag string) blockStyle {
 		style.margin.Bottom = 14
 	case "a":
 		style.color = linkColor
-	case "head", "script", "style", "noscript", "template":
+	case "head", "script", "style", "noscript", "template", "source":
 		style.display = stylemodel.DisplayNone
 	}
 	return style
