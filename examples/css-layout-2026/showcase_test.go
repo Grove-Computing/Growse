@@ -21,7 +21,7 @@ func TestCSSLayoutShowcaseServesLayoutStagesAndLateImage(t *testing.T) {
 	}{
 		{"/", "text/html", "Writing Mode &amp; logical geometry"},
 		{"/style.css", "text/css", ".nested-scroll"},
-		{"/app.mjs", "text/javascript", "NESTED SCROLL · TRANSFORMED"},
+		{"/app.mjs", "text/javascript", "POINTER TARGET · HIT"},
 		{"/assets/late-layout.png", "image/png", ""},
 	} {
 		response, err := server.Client().Get(server.URL + route.path)

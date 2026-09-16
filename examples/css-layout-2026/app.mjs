@@ -41,3 +41,7 @@ positionToggle.addEventListener("click", () => {
   positionPlayground.setAttribute("class", alternatePosition ? "position-playground alternate" : "position-playground");
   positionStatus.textContent = alternatePosition ? "SHIFTED · ROTATED · WIDER" : "NESTED SCROLL · TRANSFORMED";
 });
+
+document.querySelector(".scroll-target").addEventListener("click", () => {
+  positionStatus.textContent = "POINTER TARGET · HIT";
+});
