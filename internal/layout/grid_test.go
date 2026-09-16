@@ -393,3 +393,52 @@ func TestBuildGridSpanningContributionCyclicPercentageAndAbsoluteChild(t *testin
 		t.Fatalf("absolute child affected grid auto-placement: span %#v witness %#v", spanRect.Rect, witnessRect.Rect)
 	}
 }
+
+func TestBuildSubgridSharesParentTracksGapsNamedLinesAndContributions(t *testing.T) {
+	document := dom.NewDocument()
+	parent := document.CreateElement("div", map[string]string{"class": "parent"})
+	subgrid := document.CreateElement("div", map[string]string{"class": "subgrid"})
+	first := document.CreateElement("div", map[string]string{"class": "first"})
+	contributor := document.CreateElement("div", map[string]string{"class": "contributor"})
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, parent},
+		[2]*dom.Node{parent, subgrid},
+		[2]*dom.Node{subgrid, first},
+		[2]*dom.Node{subgrid, contributor},
+		[2]*dom.Node{contributor, document.CreateText("intrinsic contribution")},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.parent {
+  display:grid;
+  width:260px;
+  grid-template-columns:[left] 70px [content] auto [right];
+  grid-template-rows:[top] 30px [middle] 40px [bottom];
+  gap:12px 10px;
+}
+.subgrid {
+  display:grid;
+  grid-column:left / right;
+  grid-row:top / bottom;
+  grid-template-columns:subgrid [local-left] [local-middle] [local-right];
+  grid-template-rows:subgrid;
+}
+.first { grid-column:local-left / local-middle; grid-row:1; background-color:#bbb }
+.contributor { grid-column:content / right; grid-row:2; min-width:150px; background-color:#c44 }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, stylemodel.Compute(document, stylesheet), 500)
+	parentRect := tree.Bounds[parent.ID]
+	firstRect := decorationForNode(t, tree, first.ID)
+	contributorRect := decorationForNode(t, tree, contributor.ID)
+	if firstRect.X != parentRect.X || firstRect.Width != 70 || contributorRect.X != parentRect.X+80 {
+		t.Fatalf("subgrid columns/named lines = parent %#v first %#v contributor %#v", parentRect, firstRect.Rect, contributorRect.Rect)
+	}
+	if contributorRect.Width < 150 {
+		t.Fatalf("nested contribution did not grow inherited auto track: %#v", contributorRect.Rect)
+	}
+	if firstRect.Y != parentRect.Y || contributorRect.Y != parentRect.Y+42 || contributorRect.Height != 40 {
+		t.Fatalf("subgrid rows/gap = parent %#v first %#v contributor %#v", parentRect, firstRect.Rect, contributorRect.Rect)
+	}
+}

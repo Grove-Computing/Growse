@@ -18,6 +18,12 @@ type gridSpanContribution struct {
 	required   float32
 }
 
+type subgridContext struct {
+	columns, rows         []float32
+	columnGap, rowGap     float32
+	columnLines, rowLines map[string][]int
+}
+
 // addGridChildren establishes the initial one-column grid formatting context.
 // Track construction and placement extend this entry point without falling back
 // to block/inline formatting for direct grid items.
@@ -58,9 +64,22 @@ func (e *engine) addGridChildren(container *dom.Node, containerStyle blockStyle,
 	}
 	columnGap := containerStyle.columnGap.Resolve(width)
 	rowGap := containerStyle.rowGap.Resolve(containingHeight)
+	inherited, hasInherited := e.subgrids[container.ID]
+	columnLines, rowLines := containerStyle.gridColumnLines, containerStyle.gridRowLines
+	if containerStyle.gridColumnsSubgrid && hasInherited && len(inherited.columns) != 0 {
+		columnGap = inherited.columnGap
+		columnLines = mergeGridLineMaps(inherited.columnLines, columnLines)
+	}
+	if containerStyle.gridRowsSubgrid && hasInherited && len(inherited.rows) != 0 {
+		rowGap = inherited.rowGap
+		rowLines = mergeGridLineMaps(inherited.rowLines, rowLines)
+	}
 	columnTemplate := expandAutoRepeatTracks(containerStyle.gridTemplateColumns, width, columnGap, len(items))
 	rowTemplate := expandAutoRepeatTracks(containerStyle.gridTemplateRows, containingHeight, rowGap, len(items))
 	columnCount := len(columnTemplate)
+	if containerStyle.gridColumnsSubgrid && hasInherited && len(inherited.columns) != 0 {
+		columnCount = len(inherited.columns)
+	}
 	for _, area := range containerStyle.gridTemplateAreas {
 		columnCount = max(columnCount, area.ColumnEnd)
 	}
@@ -68,17 +87,28 @@ func (e *engine) addGridChildren(container *dom.Node, containerStyle blockStyle,
 		columnCount = 1
 	}
 	rowCount := len(rowTemplate)
+	if containerStyle.gridRowsSubgrid && hasInherited && len(inherited.rows) != 0 {
+		rowCount = len(inherited.rows)
+	}
 	occupied := make(map[[2]int]bool)
 	for index := range items {
 		item := &items[index]
 		if area, ok := containerStyle.gridTemplateAreas[item.style.gridAreaName]; ok {
 			item.rowStart, item.rowEnd, item.colStart, item.colEnd = area.RowStart, area.RowEnd, area.ColumnStart, area.ColumnEnd
 		} else {
-			item.colStart, item.colEnd = resolveGridAxis(item.style.gridColumn, containerStyle.gridColumnLines, columnCount)
-			item.rowStart, item.rowEnd = resolveGridAxis(item.style.gridRow, containerStyle.gridRowLines, max(rowCount, 1))
+			item.colStart, item.colEnd = resolveGridAxis(item.style.gridColumn, columnLines, columnCount)
+			item.rowStart, item.rowEnd = resolveGridAxis(item.style.gridRow, rowLines, max(rowCount, 1))
 		}
-		columnCount = max(columnCount, item.colEnd)
-		rowCount = max(rowCount, item.rowEnd)
+		if containerStyle.gridColumnsSubgrid && hasInherited {
+			item.colStart, item.colEnd = clampGridArea(item.colStart, item.colEnd, columnCount)
+		} else {
+			columnCount = max(columnCount, item.colEnd)
+		}
+		if containerStyle.gridRowsSubgrid && hasInherited {
+			item.rowStart, item.rowEnd = clampGridArea(item.rowStart, item.rowEnd, rowCount)
+		} else {
+			rowCount = max(rowCount, item.rowEnd)
+		}
 		if item.colStart >= 0 && item.rowStart >= 0 {
 			occupyGridCells(occupied, item.rowStart, item.rowEnd, item.colStart, item.colEnd)
 		}
@@ -94,6 +124,16 @@ func (e *engine) addGridChildren(container *dom.Node, containerStyle blockStyle,
 		}
 		colSpan := placementSpan(item.style.gridColumn, item.colStart, item.colEnd)
 		rowSpan := placementSpan(item.style.gridRow, item.rowStart, item.rowEnd)
+		if colSpan > columnCount {
+			if containerStyle.gridColumnsSubgrid && hasInherited {
+				colSpan = columnCount
+			} else {
+				columnCount = colSpan
+			}
+		}
+		if rowSpan > max(rowCount, 1) && containerStyle.gridRowsSubgrid && hasInherited {
+			rowSpan = max(rowCount, 1)
+		}
 		for {
 			row, column := autoPlacementCell(cursor, containerStyle.gridAutoFlow.Column, columnCount, max(rowCount, 1))
 			cursor++
@@ -117,6 +157,9 @@ func (e *engine) addGridChildren(container *dom.Node, containerStyle blockStyle,
 	columnMaxContent, columnMinContent := make([]float32, columnCount), make([]float32, columnCount)
 	columnSpans := make([]gridSpanContribution, 0)
 	for _, item := range items {
+		if item.style.gridColumnsSubgrid && e.addSubgridColumnContributions(item, columnLines, width, containingHeight, heightDefinite, columnMaxContent, columnMinContent, &columnSpans) {
+			continue
+		}
 		maxContent, _, minContent := e.flexIntrinsicSizes(item.node, item.style, flexAxis{horizontal: true}, width, width, containingHeight, heightDefinite)
 		horizontalMargin := item.style.margin.Left + item.style.margin.Right
 		span := max(item.colEnd-item.colStart, 1)
@@ -127,14 +170,20 @@ func (e *engine) addGridChildren(container *dom.Node, containerStyle blockStyle,
 			columnSpans = append(columnSpans, gridSpanContribution{start: item.colStart, end: item.colEnd, required: max(maxContent, minContent) + horizontalMargin})
 		}
 	}
-	columns := resolveGridTracks(columnTemplate, containerStyle.gridAutoColumns, columnCount, width, true, columnGap, columnMinContent, columnMaxContent)
-	for _, contribution := range columnSpans {
-		growGridSpan(columns, contribution, columnGap, columnTemplate, containerStyle.gridAutoColumns)
+	columns := append([]float32(nil), inherited.columns...)
+	if !containerStyle.gridColumnsSubgrid || !hasInherited || len(columns) == 0 {
+		columns = resolveGridTracks(columnTemplate, containerStyle.gridAutoColumns, columnCount, width, true, columnGap, columnMinContent, columnMaxContent)
+		for _, contribution := range columnSpans {
+			growGridSpan(columns, contribution, columnGap, columnTemplate, containerStyle.gridAutoColumns)
+		}
 	}
 	rowMaxContent := make([]float32, rowCount)
 	rowSpans := make([]gridSpanContribution, 0)
 	for _, item := range items {
 		itemWidth := trackSpanSize(columns, item.colStart, item.colEnd, columnGap)
+		if item.style.gridRowsSubgrid && e.addSubgridRowContributions(item, rowLines, itemWidth, containingHeight, heightDefinite, rowMaxContent, &rowSpans) {
+			continue
+		}
 		_, intrinsicHeight, _ := e.flexIntrinsicSizes(item.node, item.style, flexAxis{horizontal: true}, itemWidth, itemWidth, containingHeight, heightDefinite)
 		rowSpan := max(item.rowEnd-item.rowStart, 1)
 		required := intrinsicHeight + item.style.margin.Top + item.style.margin.Bottom
@@ -144,9 +193,12 @@ func (e *engine) addGridChildren(container *dom.Node, containerStyle blockStyle,
 			rowSpans = append(rowSpans, gridSpanContribution{start: item.rowStart, end: item.rowEnd, required: required})
 		}
 	}
-	rows := resolveGridTracks(rowTemplate, containerStyle.gridAutoRows, rowCount, containingHeight, heightDefinite, rowGap, rowMaxContent, rowMaxContent)
-	for _, contribution := range rowSpans {
-		growGridSpan(rows, contribution, rowGap, rowTemplate, containerStyle.gridAutoRows)
+	rows := append([]float32(nil), inherited.rows...)
+	if !containerStyle.gridRowsSubgrid || !hasInherited || len(rows) == 0 {
+		rows = resolveGridTracks(rowTemplate, containerStyle.gridAutoRows, rowCount, containingHeight, heightDefinite, rowGap, rowMaxContent, rowMaxContent)
+		for _, contribution := range rowSpans {
+			growGridSpan(rows, contribution, rowGap, rowTemplate, containerStyle.gridAutoRows)
+		}
 	}
 	startY := e.y
 	columnOffset, distributedColumnGap := justifySpacing(containerStyle.justifyContent, max(width-trackSpanSize(columns, 0, len(columns), columnGap), float32(0)), len(columns), false)
@@ -160,15 +212,19 @@ func (e *engine) addGridChildren(container *dom.Node, containerStyle blockStyle,
 		itemX, itemY := x+columnOffset+trackOffset(columns, item.colStart, columnGap), startY+rowOffset+trackOffset(rows, item.rowStart, rowGap)
 		itemWidth, itemHeight := trackSpanSize(columns, item.colStart, item.colEnd, columnGap), trackSpanSize(rows, item.rowStart, item.rowEnd, rowGap)
 		itemX, itemY, itemWidth, itemHeight = e.alignGridItem(item.node, item.style, containerStyle, itemX, itemY, itemWidth, itemHeight)
+		if item.style.gridColumnsSubgrid || item.style.gridRowsSubgrid {
+			e.subgrids[item.node.ID] = subgridContextForItem(item, columns, rows, columnGap, rowGap, columnLines, rowLines)
+		}
 		e.renderGridItem(item.node, item.style, itemX, itemY, itemWidth, itemHeight)
+		delete(e.subgrids, item.node.ID)
 	}
 	for _, item := range positioned {
 		if item.style.layoutPosition == stylemodel.PositionFixed {
 			e.renderPositionedChild(item.node, item.style)
 			continue
 		}
-		item.colStart, item.colEnd = resolveGridAxis(item.style.gridColumn, containerStyle.gridColumnLines, len(columns))
-		item.rowStart, item.rowEnd = resolveGridAxis(item.style.gridRow, containerStyle.gridRowLines, len(rows))
+		item.colStart, item.colEnd = resolveGridAxis(item.style.gridColumn, columnLines, len(columns))
+		item.rowStart, item.rowEnd = resolveGridAxis(item.style.gridRow, rowLines, len(rows))
 		if item.colStart < 0 {
 			item.colStart = 0
 		}
@@ -190,6 +246,152 @@ func (e *engine) addGridChildren(container *dom.Node, containerStyle blockStyle,
 		e.renderPositionedChildAt(item.node, item.style, static)
 	}
 	e.y = startY + rowOffset + trackSpanSize(rows, 0, len(rows), rowGap)
+}
+
+func (e *engine) addSubgridColumnContributions(item gridLayoutItem, parentLines map[string][]int, width, height float32, heightDefinite bool, maximum, minimum []float32, spans *[]gridSpanContribution) bool {
+	count := item.colEnd - item.colStart
+	if count <= 0 || item.node == nil || item.node.Type != dom.NodeElement {
+		return false
+	}
+	names := mergeGridLineMaps(sliceGridLineMap(parentLines, item.colStart, item.colEnd), item.style.gridColumnLines)
+	for _, child := range subgridItems(e, item.node, true, names, count) {
+		maxContent, _, minContent := e.flexIntrinsicSizes(child.node, child.style, flexAxis{horizontal: true}, width, width, height, heightDefinite)
+		start, end := item.colStart+child.colStart, item.colStart+child.colEnd
+		requiredMax := maxContent + child.style.margin.Left + child.style.margin.Right
+		requiredMin := minContent + child.style.margin.Left + child.style.margin.Right
+		if end-start == 1 && start >= 0 && start < len(maximum) {
+			maximum[start] = max(maximum[start], requiredMax)
+			minimum[start] = max(minimum[start], requiredMin)
+		} else {
+			*spans = append(*spans, gridSpanContribution{start: start, end: end, required: max(requiredMax, requiredMin)})
+		}
+	}
+	return true
+}
+
+func (e *engine) addSubgridRowContributions(item gridLayoutItem, parentLines map[string][]int, width, height float32, heightDefinite bool, maximum []float32, spans *[]gridSpanContribution) bool {
+	count := item.rowEnd - item.rowStart
+	if count <= 0 || item.node == nil || item.node.Type != dom.NodeElement {
+		return false
+	}
+	names := mergeGridLineMaps(sliceGridLineMap(parentLines, item.rowStart, item.rowEnd), item.style.gridRowLines)
+	for _, child := range subgridItems(e, item.node, false, names, count) {
+		_, intrinsicHeight, _ := e.flexIntrinsicSizes(child.node, child.style, flexAxis{horizontal: true}, width, width, height, heightDefinite)
+		start, end := item.rowStart+child.rowStart, item.rowStart+child.rowEnd
+		required := intrinsicHeight + child.style.margin.Top + child.style.margin.Bottom
+		if end-start == 1 && start >= 0 && start < len(maximum) {
+			maximum[start] = max(maximum[start], required)
+		} else {
+			*spans = append(*spans, gridSpanContribution{start: start, end: end, required: required})
+		}
+	}
+	return true
+}
+
+func subgridItems(e *engine, container *dom.Node, columns bool, named map[string][]int, count int) []gridLayoutItem {
+	items := make([]gridLayoutItem, 0, len(container.Children))
+	cursor := 0
+	for _, child := range container.Children {
+		if child.Type != dom.NodeElement && (child.Type != dom.NodeText || strings.TrimSpace(child.Text) == "") {
+			continue
+		}
+		childStyle := e.styleFor(child)
+		if childStyle.display == stylemodel.DisplayNone || childStyle.layoutPosition == stylemodel.PositionAbsolute || childStyle.layoutPosition == stylemodel.PositionFixed {
+			continue
+		}
+		placement := childStyle.gridRow
+		if columns {
+			placement = childStyle.gridColumn
+		}
+		start, end := resolveGridAxis(placement, named, count)
+		span := placementSpan(placement, start, end)
+		if start < 0 {
+			start = cursor
+			end = start + span
+		}
+		start = min(max(start, 0), count)
+		if start >= count {
+			continue
+		}
+		end = min(max(end, start+1), count)
+		cursor = end
+		item := gridLayoutItem{node: child, style: childStyle}
+		if columns {
+			item.colStart, item.colEnd = start, end
+		} else {
+			item.rowStart, item.rowEnd = start, end
+		}
+		items = append(items, item)
+	}
+	return items
+}
+
+func subgridContextForItem(item gridLayoutItem, columns, rows []float32, columnGap, rowGap float32, columnLines, rowLines map[string][]int) subgridContext {
+	context := subgridContext{}
+	if item.style.gridColumnsSubgrid {
+		start := min(max(item.colStart, 0), len(columns))
+		end := min(max(item.colEnd, start), len(columns))
+		context.columns = append([]float32(nil), columns[start:end]...)
+		context.columnGap = columnGap
+		context.columnLines = sliceGridLineMap(columnLines, start, end)
+	}
+	if item.style.gridRowsSubgrid {
+		start := min(max(item.rowStart, 0), len(rows))
+		end := min(max(item.rowEnd, start), len(rows))
+		context.rows = append([]float32(nil), rows[start:end]...)
+		context.rowGap = rowGap
+		context.rowLines = sliceGridLineMap(rowLines, start, end)
+	}
+	return context
+}
+
+func clampGridArea(start, end, count int) (int, int) {
+	if start < 0 {
+		return start, end
+	}
+	start = min(start, max(count-1, 0))
+	end = min(max(end, start+1), count)
+	return start, end
+}
+
+func sliceGridLineMap(source map[string][]int, start, end int) map[string][]int {
+	if len(source) == 0 || end < start {
+		return nil
+	}
+	result := make(map[string][]int)
+	for name, lines := range source {
+		for _, line := range lines {
+			if line >= start && line <= end {
+				result[name] = append(result[name], line-start)
+			}
+		}
+	}
+	return result
+}
+
+func mergeGridLineMaps(base, additional map[string][]int) map[string][]int {
+	if len(base) == 0 && len(additional) == 0 {
+		return nil
+	}
+	result := make(map[string][]int, len(base)+len(additional))
+	for name, lines := range base {
+		result[name] = append([]int(nil), lines...)
+	}
+	for name, lines := range additional {
+		for _, line := range lines {
+			present := false
+			for _, existing := range result[name] {
+				if existing == line {
+					present = true
+					break
+				}
+			}
+			if !present {
+				result[name] = append(result[name], line)
+			}
+		}
+	}
+	return result
 }
 
 // growGridSpan applies a spanning item's intrinsic contribution after the

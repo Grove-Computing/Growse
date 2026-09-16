@@ -670,6 +670,8 @@ type ComputedStyle struct {
 	ColumnGap           LengthPercentage
 	GridTemplateColumns []GridTrackSize
 	GridTemplateRows    []GridTrackSize
+	GridColumnsSubgrid  bool
+	GridRowsSubgrid     bool
 	GridAutoColumns     []GridTrackSize
 	GridAutoRows        []GridTrackSize
 	GridColumnLines     map[string][]int

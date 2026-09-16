@@ -112,6 +112,8 @@ type blockStyle struct {
 	columnGap           stylemodel.LengthPercentage
 	gridTemplateColumns []stylemodel.GridTrackSize
 	gridTemplateRows    []stylemodel.GridTrackSize
+	gridColumnsSubgrid  bool
+	gridRowsSubgrid     bool
 	gridAutoColumns     []stylemodel.GridTrackSize
 	gridAutoRows        []stylemodel.GridTrackSize
 	gridColumnLines     map[string][]int
@@ -206,6 +208,7 @@ func build(document *dom.Document, computed stylemodel.Map, images map[dom.NodeI
 		viewportHeight: viewportHeight,
 		scrollX:        scrollX,
 		scrollY:        scrollY,
+		subgrids:       make(map[dom.NodeID]subgridContext),
 	}
 	if document != nil {
 		if body := findElement(document.Root, "body"); body != nil {
@@ -264,6 +267,7 @@ type engine struct {
 	positionCB                    *Rect
 	stackingID                    int
 	floats                        []floatRegion
+	subgrids                      map[dom.NodeID]subgridContext
 	depth                         int
 }
 
@@ -2139,6 +2143,7 @@ func applyComputed(block blockStyle, computed stylemodel.ComputedStyle) blockSty
 	block.rowGap, block.columnGap = computed.RowGap, computed.ColumnGap
 	block.gridTemplateColumns = append([]stylemodel.GridTrackSize(nil), computed.GridTemplateColumns...)
 	block.gridTemplateRows = append([]stylemodel.GridTrackSize(nil), computed.GridTemplateRows...)
+	block.gridColumnsSubgrid, block.gridRowsSubgrid = computed.GridColumnsSubgrid, computed.GridRowsSubgrid
 	block.gridAutoColumns = append([]stylemodel.GridTrackSize(nil), computed.GridAutoColumns...)
 	block.gridAutoRows = append([]stylemodel.GridTrackSize(nil), computed.GridAutoRows...)
 	block.gridColumnLines = computed.GridColumnLines

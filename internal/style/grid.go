@@ -8,8 +8,16 @@ import (
 )
 
 func applyGridProperties(computed, parent ComputedStyle, winners map[string]winner, custom map[string]string, context LengthContext) ComputedStyle {
+	computed.GridColumnsSubgrid = resolveSubgridWinner(computed.GridColumnsSubgrid, parent.GridColumnsSubgrid, winners["grid-template-columns"], custom)
+	computed.GridRowsSubgrid = resolveSubgridWinner(computed.GridRowsSubgrid, parent.GridRowsSubgrid, winners["grid-template-rows"], custom)
 	computed.GridTemplateColumns = resolveTrackListWinner(computed.GridTemplateColumns, parent.GridTemplateColumns, winners["grid-template-columns"], custom, context, true)
 	computed.GridTemplateRows = resolveTrackListWinner(computed.GridTemplateRows, parent.GridTemplateRows, winners["grid-template-rows"], custom, context, true)
+	if computed.GridColumnsSubgrid {
+		computed.GridTemplateColumns = nil
+	}
+	if computed.GridRowsSubgrid {
+		computed.GridTemplateRows = nil
+	}
 	computed.GridAutoColumns = resolveTrackListWinner(computed.GridAutoColumns, parent.GridAutoColumns, winners["grid-auto-columns"], custom, context, false)
 	computed.GridAutoRows = resolveTrackListWinner(computed.GridAutoRows, parent.GridAutoRows, winners["grid-auto-rows"], custom, context, false)
 	computed.GridColumnLines = resolveNamedLines(computed.GridColumnLines, parent.GridColumnLines, winners["grid-template-columns"], custom)
@@ -24,6 +32,33 @@ func applyGridProperties(computed, parent ComputedStyle, winners map[string]winn
 		}
 	}
 	return computed
+}
+
+func resolveSubgridWinner(current, parent bool, candidate winner, custom map[string]string) bool {
+	value, ok := winnerValue(candidate, custom)
+	if !ok {
+		return current
+	}
+	switch parseGlobalKeyword(value) {
+	case globalInherit:
+		return parent
+	case globalInitial, globalUnset:
+		return false
+	}
+	return isSubgridValue(value)
+}
+
+func isSubgridValue(value string) bool {
+	parts, valid := splitCSSSpaceSeparated(value)
+	if !valid || len(parts) == 0 || !strings.EqualFold(parts[0], "subgrid") {
+		return false
+	}
+	for _, part := range parts[1:] {
+		if !strings.HasPrefix(part, "[") || !strings.HasSuffix(part, "]") {
+			return false
+		}
+	}
+	return true
 }
 
 func resolveGridAutoFlow(current, parent GridAutoFlow, candidate winner, custom map[string]string) GridAutoFlow {
@@ -115,6 +150,19 @@ func resolveNamedLines(current, parent map[string][]int, candidate winner, custo
 	parts, valid := splitCSSSpaceSeparated(value)
 	if !valid {
 		return current
+	}
+	if len(parts) > 0 && strings.EqualFold(parts[0], "subgrid") {
+		result, line := make(map[string][]int), 0
+		for _, part := range parts[1:] {
+			if !strings.HasPrefix(part, "[") || !strings.HasSuffix(part, "]") {
+				return current
+			}
+			for _, name := range strings.Fields(part[1 : len(part)-1]) {
+				result[name] = append(result[name], line)
+			}
+			line++
+		}
+		return result
 	}
 	result, line := make(map[string][]int), 0
 	for _, part := range parts {

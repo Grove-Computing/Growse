@@ -134,6 +134,12 @@ func supportsDeclaration(property, value string) bool {
 			}
 		}
 		return true
+	case "grid-template-columns", "grid-template-rows":
+		if isSubgridValue(value) {
+			return true
+		}
+		_, ok := parseGridTrackList(value, context, true)
+		return ok
 	case "overflow", "overflow-x", "overflow-y":
 		_, ok := resolveOverflow(value, OverflowVisible)
 		return ok
