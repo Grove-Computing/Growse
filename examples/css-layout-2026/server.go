@@ -20,6 +20,15 @@ var lateLayoutImage = makeLateLayoutImage()
 
 func cssLayoutHandler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("/app.mjs", func(response http.ResponseWriter, _ *http.Request) {
+		module, err := cssLayoutAssets.ReadFile("app.mjs")
+		if err != nil {
+			http.Error(response, "showcase module is unavailable", http.StatusInternalServerError)
+			return
+		}
+		response.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		_, _ = response.Write(module)
+	})
 	mux.HandleFunc("/assets/late-layout.png", func(response http.ResponseWriter, _ *http.Request) {
 		time.Sleep(180 * time.Millisecond)
 		response.Header().Set("Content-Type", "image/png")
