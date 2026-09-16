@@ -325,7 +325,7 @@ func Build(tree *layout.Tree) *DisplayList {
 				WritingMode: decoration.WritingMode, Direction: decoration.Direction,
 				Clips: cloneClipRegions(decoration.Clips),
 			})
-			paintCursor = max(paintCursor, decoration.Y+decoration.Height)
+			paintCursor = max(paintCursor, decoration.Y)
 			continue
 		}
 		box := *item.box
@@ -532,7 +532,7 @@ func ApplyAnimatedLayout(list *DisplayList, tree *layout.Tree) {
 			}
 			command.X, command.Y, command.Width, command.Height = decoration.X, decoration.Y, decoration.Width, decoration.Height
 			command.Top = decoration.Y - paintCursor
-			paintCursor = max(paintCursor, decoration.Y+decoration.Height)
+			paintCursor = max(paintCursor, decoration.Y)
 			backdrop := stylemodel.ApplyColorFilters(tree.Background, decoration.BackdropFilters)
 			background := stylemodel.ApplyColorFilters(decoration.Background, decoration.Filters)
 			if decoration.BlendMode != stylemodel.BlendNormal {

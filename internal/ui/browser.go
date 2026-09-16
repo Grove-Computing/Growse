@@ -2530,7 +2530,7 @@ func paintedCommandVisualFor(command paintmodel.Command) paintedCommandVisual {
 	case paintmodel.DrawButton:
 		return paintedCommandVisual{nodeID: command.NodeID, x: command.X, y: command.Y, top: command.Top, width: command.Width, height: command.Height, advance: max(command.Top+command.Height, float32(0)), writingMode: command.WritingMode, clip: command.Clip, clips: command.Clips, transform: command.Transform}
 	case paintmodel.DrawBox:
-		return paintedCommandVisual{nodeID: command.NodeID, x: command.X, y: command.Y, top: command.Top, width: command.Width, height: command.Height, advance: max(command.Top+command.Height, float32(0)), writingMode: command.WritingMode, clip: command.Clip, clips: command.Clips, transform: command.Transform, radius: command.Radius}
+		return paintedCommandVisual{nodeID: command.NodeID, x: command.X, y: command.Y, top: command.Top, width: command.Width, height: command.Height, advance: max(command.Top, float32(0)), writingMode: command.WritingMode, clip: command.Clip, clips: command.Clips, transform: command.Transform, radius: command.Radius}
 	case paintmodel.DrawImage:
 		return paintedCommandVisual{nodeID: command.NodeID, x: command.X, y: command.Y, top: command.Top, width: command.Width, height: command.Height, advance: max(command.Top+command.Height, float32(0)), writingMode: command.WritingMode, clip: command.Clip, clips: command.Clips, transform: command.Transform, radius: command.Radius}
 	default:
@@ -2760,7 +2760,7 @@ func (ui *BrowserUI) layoutDrawImage(gtx layout.Context, command paintmodel.Draw
 }
 
 func (ui *BrowserUI) layoutDrawBox(gtx layout.Context, command paintmodel.DrawBox, backgroundImages map[string]image.Image, styleRevision uint64) layout.Dimensions {
-	return layoutPaintCommand(gtx, command.Top, command.Height, layout.Inset{Left: unit.Dp(command.X)}, func(gtx layout.Context) layout.Dimensions {
+	return layoutPaintCommand(gtx, command.Top, 0, layout.Inset{Left: unit.Dp(command.X)}, func(gtx layout.Context) layout.Dimensions {
 		if command.Transform != (stylemodel.Matrix{}) && command.Transform != stylemodel.IdentityMatrix() {
 			defer pushCSSMatrix(gtx, command.Transform, command.X, command.Y).Pop()
 		}
