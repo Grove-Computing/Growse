@@ -97,7 +97,7 @@ func (e *engine) addColumnSegment(node *dom.Node, style blockStyle, children []*
 	if naturalEnd <= segmentTop {
 		return
 	}
-	ranges := e.planColumnRanges(children, style, boxStart, segmentTop, naturalEnd, geometry.count, containingHeight, heightDefinite)
+	ranges := e.planColumnRanges(node.ID, children, style, boxStart, segmentTop, naturalEnd, geometry.count, containingHeight, heightDefinite)
 	if len(ranges) == 0 {
 		ranges = []columnSourceRange{{start: segmentTop, end: naturalEnd}}
 	}
@@ -141,7 +141,7 @@ func (e *engine) renderColumnWrapper(node *dom.Node, style blockStyle, children 
 	e.addBlock(wrapper, wrapperStyle, x, width, containingHeight, heightDefinite, &zero)
 }
 
-func (e *engine) planColumnRanges(children []*dom.Node, style blockStyle, boxStart int, top, end float32, requestedCount int, containingHeight float32, heightDefinite bool) []columnSourceRange {
+func (e *engine) planColumnRanges(owner dom.NodeID, children []*dom.Node, style blockStyle, boxStart int, top, end float32, requestedCount int, containingHeight float32, heightDefinite bool) []columnSourceRange {
 	naturalHeight := end - top
 	count := min(max(requestedCount, 1), maxMultiColumnCount)
 	targetHeight := naturalHeight / float32(count)
@@ -156,22 +156,30 @@ func (e *engine) planColumnRanges(children []*dom.Node, style blockStyle, boxSta
 	candidates := e.columnBreakCandidates(boxStart, top, end)
 	forced, avoided := e.columnBreakControls(children, top, end)
 	boundaries := []float32{top}
-	iterations := 0
-	for column := 1; column < count && iterations < maxColumnBalanceIterations; column++ {
+	iterationLimitReported := false
+	finiteFallbackReported := false
+	for column := 1; column < count; column++ {
 		ideal := top + targetHeight*float32(column)
 		if ideal >= end {
 			break
 		}
-		if boundary, ok := e.closestColumnBreak(candidates, ideal, boundaries[len(boundaries)-1], end, avoided); ok {
+		boundary, ok, iterationLimit := e.closestColumnBreak(candidates, ideal, boundaries[len(boundaries)-1], end, avoided)
+		if iterationLimit && !iterationLimitReported {
+			e.tree.addFallback(owner, "multi-column balance iteration limit exceeded")
+			iterationLimitReported = true
+		}
+		if ok {
 			boundaries = append(boundaries, boundary)
 		} else {
 			boundaries = append(boundaries, ideal)
-			e.tree.addFallback(0, "multi-column balance used finite fallback")
+			if !finiteFallbackReported {
+				e.tree.addFallback(owner, "multi-column balance used finite fallback")
+				finiteFallbackReported = true
+			}
 		}
-		iterations++
 	}
 	if naturalHeight > targetHeight*float32(maxMultiColumnCount) && style.columnFill == stylemodel.ColumnFillAuto {
-		e.tree.addFallback(0, "multi-column count limit exceeded")
+		e.tree.addFallback(owner, "multi-column count limit exceeded")
 	}
 	boundaries = append(boundaries, end)
 	boundaries = append(boundaries, forced...)
@@ -179,7 +187,7 @@ func (e *engine) planColumnRanges(children []*dom.Node, style blockStyle, boxSta
 	boundaries = uniqueColumnBoundaries(boundaries, top, end)
 	if len(boundaries)-1 > maxMultiColumnCount {
 		boundaries = append(boundaries[:maxMultiColumnCount], end)
-		e.tree.addFallback(0, "multi-column fragmentainer limit exceeded")
+		e.tree.addFallback(owner, "multi-column fragmentainer limit exceeded")
 	}
 	ranges := make([]columnSourceRange, 0, len(boundaries)-1)
 	for index := 0; index+1 < len(boundaries); index++ {
@@ -230,18 +238,25 @@ func (e *engine) columnBreakControls(children []*dom.Node, top, end float32) (fo
 	return forced, avoided
 }
 
-func (e *engine) closestColumnBreak(candidates []float32, ideal, previous, end float32, avoided []columnSourceRange) (float32, bool) {
-	best, bestDistance := float32(0), float32(1<<30)
-	for _, candidate := range candidates {
+func (e *engine) closestColumnBreak(candidates []float32, ideal, previous, end float32, avoided []columnSourceRange) (float32, bool, bool) {
+	right := sort.Search(len(candidates), func(index int) bool { return candidates[index] >= ideal })
+	left := right - 1
+	for iterations := 0; iterations < maxColumnBalanceIterations && (left >= 0 || right < len(candidates)); iterations++ {
+		useRight := left < 0 || right < len(candidates) && absFloat32(candidates[right]-ideal) <= absFloat32(candidates[left]-ideal)
+		index := left
+		if useRight {
+			index = right
+			right++
+		} else {
+			left--
+		}
+		candidate := candidates[index]
 		if candidate <= previous+0.01 || candidate >= end-0.01 || columnBreakAvoided(candidate, avoided) || !e.columnBreakKeepsLines(candidate) {
 			continue
 		}
-		distance := absFloat32(candidate - ideal)
-		if distance < bestDistance || distance == bestDistance && candidate > best {
-			best, bestDistance = candidate, distance
-		}
+		return candidate, true, false
 	}
-	return best, bestDistance < float32(1<<30)
+	return 0, false, left >= 0 || right < len(candidates)
 }
 
 func columnBreakAvoided(candidate float32, avoided []columnSourceRange) bool {

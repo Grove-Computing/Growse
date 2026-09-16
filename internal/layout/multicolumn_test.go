@@ -2,6 +2,7 @@ package layout
 
 import (
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -159,5 +160,78 @@ func TestMultiColumnRepeatsOneDOMNodeAsStablePaintAndHitFragments(t *testing.T) 
 	}
 	if bounds := tree.Bounds[paragraph.ID]; bounds.Width != 360 {
 		t.Fatalf("fragment union/container bounds = %#v", bounds)
+	}
+}
+
+func TestMultiColumnBalancingLimitsAndFallbackAreDeterministic(t *testing.T) {
+	document := dom.NewDocument()
+	container := document.CreateElement("section", map[string]string{"class": "columns"})
+	kept := document.CreateElement("div", map[string]string{"class": "kept"})
+	appendNodes(t, document, [2]*dom.Node{document.Root, container}, [2]*dom.Node{container, kept})
+	lineIDs := make(map[dom.NodeID]bool)
+	for index := 0; index < 200; index++ {
+		line := document.CreateElement("div", map[string]string{"class": "line"})
+		lineIDs[line.ID] = true
+		appendNodes(t, document, [2]*dom.Node{kept, line}, [2]*dom.Node{line, document.CreateText(fmt.Sprintf("line %03d", index))})
+	}
+	stylesheet, err := css.Parse(strings.NewReader(`
+.columns { display:block; width:600px; column-count:999; column-gap:16px }
+.kept { display:block; break-inside:avoid-column }
+.line { display:block; height:8px; margin:0 }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	computed := stylemodel.Compute(document, stylesheet)
+	containerStyle, _ := computed.For(container)
+	if containerStyle.ColumnCount != maxMultiColumnCount {
+		t.Fatalf("computed column count = %d, want bounded %d", containerStyle.ColumnCount, maxMultiColumnCount)
+	}
+	first := BuildWithViewport(document, computed, 760, 600)
+	second := BuildWithViewport(document, computed, 760, 600)
+	if !reflect.DeepEqual(first.Boxes, second.Boxes) || !reflect.DeepEqual(first.Decorations, second.Decorations) || !reflect.DeepEqual(first.Fallbacks, second.Fallbacks) {
+		t.Fatal("bounded multi-column fallback was not deterministic")
+	}
+	columns := make(map[int]bool)
+	for _, box := range first.Boxes {
+		if !lineIDs[box.NodeID] {
+			continue
+		}
+		columns[int(box.X+0.5)] = true
+	}
+	if len(columns) != maxMultiColumnCount {
+		t.Fatalf("generated fragmentainers = %d, want %d", len(columns), maxMultiColumnCount)
+	}
+	iterationFallback, finiteFallback := false, false
+	for _, fallback := range first.Fallbacks {
+		if fallback.NodeID != container.ID {
+			t.Fatalf("fallback owner = %d, want %d: %#v", fallback.NodeID, container.ID, fallback)
+		}
+		iterationFallback = iterationFallback || fallback.Reason == "multi-column balance iteration limit exceeded"
+		finiteFallback = finiteFallback || fallback.Reason == "multi-column balance used finite fallback"
+	}
+	if !iterationFallback || !finiteFallback {
+		t.Fatalf("bounded balancing diagnostics = %#v", first.Fallbacks)
+	}
+}
+
+func TestMultiColumnAutoFillCapsFragmentainers(t *testing.T) {
+	document := dom.NewDocument()
+	container := document.CreateElement("section", map[string]string{"class": "columns"})
+	appendNodes(t, document, [2]*dom.Node{document.Root, container})
+	for index := 0; index < 80; index++ {
+		item := document.CreateElement("div", map[string]string{"class": "item"})
+		appendNodes(t, document, [2]*dom.Node{container, item}, [2]*dom.Node{item, document.CreateText("item")})
+	}
+	stylesheet, err := css.Parse(strings.NewReader(`
+.columns { display:block; width:320px; height:10px; column-count:2; column-fill:auto }
+.item { display:block; height:8px; margin:0 }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := BuildWithViewport(document, stylemodel.Compute(document, stylesheet), 480, 300)
+	if !hasFallbackReason(tree, "multi-column count limit exceeded") {
+		t.Fatalf("auto-fill count fallback = %#v", tree.Fallbacks)
 	}
 }

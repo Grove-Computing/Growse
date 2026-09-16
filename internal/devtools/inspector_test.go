@@ -114,6 +114,22 @@ func TestSnapshotInspectorLimitsNodeCount(t *testing.T) {
 	}
 }
 
+func TestSnapshotInspectorLimitsLayoutFragments(t *testing.T) {
+	document := dom.NewDocument()
+	selected := document.CreateElement("p", nil)
+	if err := document.AppendChild(document.Root, selected); err != nil {
+		t.Fatal(err)
+	}
+	tree := &layoutmodel.Tree{Bounds: map[dom.NodeID]layoutmodel.Rect{selected.ID: {Width: 10, Height: 10}}}
+	for index := 0; index < MaxLayoutFragments+1; index++ {
+		tree.Boxes = append(tree.Boxes, layoutmodel.Box{NodeID: selected.ID, FragmentID: uint64(index + 1), Width: 10, Height: 10})
+	}
+	snapshot := SnapshotInspector(document, nil, tree, selected.ID)
+	if !snapshot.Truncated || len(snapshot.Fragments) != MaxLayoutFragments {
+		t.Fatalf("fragment snapshot = count:%d truncated:%v", len(snapshot.Fragments), snapshot.Truncated)
+	}
+}
+
 func attributeValue(attributes []Attribute, name string) string {
 	for _, attribute := range attributes {
 		if attribute.Name == name {
