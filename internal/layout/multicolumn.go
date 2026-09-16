@@ -171,6 +171,13 @@ func (e *engine) planColumnRanges(owner dom.NodeID, children []*dom.Node, style 
 		if ok {
 			boundaries = append(boundaries, boundary)
 		} else {
+			// A balanced fragmentainer has no fixed block-size. If every
+			// remaining candidate would split an avoid interval, use fewer
+			// columns and let that unbreakable item determine the balance
+			// height instead of manufacturing a break through its content.
+			if !iterationLimit && style.columnFill == stylemodel.ColumnFillBalance && columnBreakAvoided(ideal, avoided) {
+				break
+			}
 			boundaries = append(boundaries, ideal)
 			if !finiteFallbackReported {
 				e.tree.addFallback(owner, "multi-column balance used finite fallback")

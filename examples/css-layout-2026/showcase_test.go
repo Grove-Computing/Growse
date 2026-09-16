@@ -62,7 +62,8 @@ func TestCSSLayoutShowcaseBalancesColumnsAndSpans(t *testing.T) {
 	if !ok {
 		t.Fatal("column spanner is missing")
 	}
-	tree := layout.BuildWithViewport(document, style.Compute(document, stylesheet), 1050, 700)
+	computed := style.ComputeWithEnvironment(document, stylesheet, style.InteractionState{}, style.Environment{ViewportWidth: 1057, ViewportHeight: 700, RootFontSize: 16, ResolutionDPI: 96})
+	tree := layout.BuildWithScrollAndResources(document, computed, nil, layout.NewFontSetWithSystemFallback(nil), 1057, 700, 0, 0)
 	stageBounds, spanBounds := tree.Bounds[stage.ID], tree.Bounds[spanner.ID]
 	columns := make(map[int]bool)
 	for _, child := range stage.Children {
@@ -71,6 +72,33 @@ func TestCSSLayoutShowcaseBalancesColumnsAndSpans(t *testing.T) {
 		}
 		if bounds, exists := tree.Bounds[child.ID]; exists {
 			columns[int(bounds.X+0.5)] = true
+		}
+		fragments := 0
+		for _, decoration := range tree.Decorations {
+			if decoration.NodeID == child.ID {
+				fragments++
+			}
+		}
+		if fragments != 1 {
+			t.Fatalf("break-inside card %d produced %d decoration fragments, bounds=%#v", child.ID, fragments, tree.Bounds[child.ID])
+		}
+		descendants := make(map[dom.NodeID]bool)
+		var collectDescendants func(*dom.Node)
+		collectDescendants = func(node *dom.Node) {
+			descendants[node.ID] = true
+			for _, descendant := range node.Children {
+				collectDescendants(descendant)
+			}
+		}
+		collectDescendants(child)
+		cardBounds := tree.Bounds[child.ID]
+		for _, box := range tree.Boxes {
+			if !descendants[box.NodeID] {
+				continue
+			}
+			if box.X < cardBounds.X-0.01 || box.X+box.Width > cardBounds.X+cardBounds.Width+0.01 {
+				t.Fatalf("break-inside card %d content escaped its fragment: card=%#v box=%#v", child.ID, cardBounds, box)
+			}
 		}
 	}
 	if len(columns) < 3 || spanBounds.Width != stageBounds.Width-28 {
