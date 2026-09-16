@@ -2203,6 +2203,8 @@ func recomputePageStyles(page *Page, current time.Time) {
 	if page == nil {
 		return
 	}
+	page.styleMu.Lock()
+	defer page.styleMu.Unlock()
 	previous := page.ComputedStyles
 	page.ComputedStyles = computePageStyles(page)
 	page.RecordComputedStyleChanges(previous, page.ComputedStyles)

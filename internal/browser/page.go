@@ -98,6 +98,7 @@ type Page struct {
 	imageDirty         ImageInvalidation
 	fontMu             sync.Mutex
 	fontDirty          FontInvalidation
+	styleMu            sync.Mutex
 	renderMu           sync.Mutex
 	renderMetrics      RenderMetrics
 	renderDirty        RenderInvalidation
