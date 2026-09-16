@@ -83,6 +83,26 @@ func TestBuildLaysOutReplacedImageWithIntrinsicRatioAndObjectFit(t *testing.T) {
 	}
 }
 
+func TestBuildLaysOutPictureFallbackImage(t *testing.T) {
+	document := dom.NewDocument()
+	html := document.CreateElement("html", nil)
+	body := document.CreateElement("body", nil)
+	picture := document.CreateElement("picture", nil)
+	source := document.CreateElement("source", map[string]string{"type": "image/avif", "srcset": "hero.avif"})
+	imageNode := document.CreateElement("img", map[string]string{"src": "hero.png", "width": "32", "height": "32"})
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, html}, [2]*dom.Node{html, body},
+		[2]*dom.Node{body, picture}, [2]*dom.Node{picture, source}, [2]*dom.Node{picture, imageNode},
+	)
+	computed := style.ComputeWithEnvironment(document, nil, style.InteractionState{}, style.Environment{BrowserDefaults: true})
+	tree := BuildWithScrollAndImages(document, computed, map[dom.NodeID]ImageResource{
+		imageNode.ID: {URL: "https://example.com/hero.png", IntrinsicWidth: 32, IntrinsicHeight: 32, Loaded: true},
+	}, 800, 600, 0, 0)
+	if len(tree.Boxes) != 1 || !tree.Boxes[0].Image || tree.Boxes[0].NodeID != imageNode.ID || tree.Boxes[0].ImageURL != "https://example.com/hero.png" {
+		t.Fatalf("picture fallback boxes = %#v", tree.Boxes)
+	}
+}
+
 func TestBuildUsesIntrinsicRatioForCSSWidthAndAltFallback(t *testing.T) {
 	document := dom.NewDocument()
 	loaded := document.CreateElement("img", map[string]string{"src": "wide.png"})
@@ -585,6 +605,20 @@ func TestBuildCreatesSubmitButtonControls(t *testing.T) {
 	boxes := Build(document, style.Compute(document, nil), 800).Boxes
 	if len(boxes) != 2 || !boxes[0].Button || boxes[0].Text != "Send" || !boxes[1].Button || boxes[1].Text != "Save" {
 		t.Fatalf("submit buttons = %#v", boxes)
+	}
+}
+
+func TestBuildCarriesAuthorButtonBackgroundToControlBox(t *testing.T) {
+	document := dom.NewDocument()
+	button := document.CreateElement("button", nil)
+	appendNodes(t, document, [2]*dom.Node{document.Root, button}, [2]*dom.Node{button, document.CreateText("Increment")})
+	stylesheet, err := css.Parse(strings.NewReader(`button { color: #fff; background: #2563eb; }`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	boxes := Build(document, style.Compute(document, stylesheet), 800).Boxes
+	if len(boxes) != 1 || !boxes[0].Button || boxes[0].Color != 0xffffffff || boxes[0].Background != 0x2563ebff {
+		t.Fatalf("styled button box = %#v", boxes)
 	}
 }
 

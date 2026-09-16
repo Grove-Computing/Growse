@@ -145,6 +145,7 @@ type DrawButton struct {
 	Width       float32
 	Height      float32
 	Color       uint32
+	Background  uint32
 	Opacity     float32
 	Clip        *layout.Rect
 	Disabled    bool
@@ -361,7 +362,7 @@ func Build(tree *layout.Tree) *DisplayList {
 		if box.Button {
 			list.Commands = append(list.Commands, DrawButton{
 				NodeID: box.NodeID, Label: box.Text, X: box.X, Y: box.Y, Top: top,
-				Width: box.Width, Height: box.Height, Color: box.Color, Opacity: box.Opacity,
+				Width: box.Width, Height: box.Height, Color: box.Color, Background: box.Background, Opacity: box.Opacity,
 				Clip: cloneLayoutRect(box.Clip), Disabled: box.Disabled,
 				Appearance: box.Appearance, AccentColor: box.AccentColor, Cursor: box.Cursor,
 			})

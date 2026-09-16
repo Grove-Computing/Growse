@@ -284,9 +284,9 @@ func TestBuildCreatesCheckableCommand(t *testing.T) {
 }
 
 func TestBuildCreatesSubmitButtonCommand(t *testing.T) {
-	tree := &layout.Tree{Boxes: []layout.Box{{NodeID: 11, Button: true, Text: "Send", Width: 120, Height: 40}}}
+	tree := &layout.Tree{Boxes: []layout.Box{{NodeID: 11, Button: true, Text: "Send", Width: 120, Height: 40, Background: 0x2563ebff}}}
 	command, ok := Build(tree).Commands[0].(DrawButton)
-	if !ok || command.NodeID != 11 || command.Label != "Send" || command.Width != 120 {
+	if !ok || command.NodeID != 11 || command.Label != "Send" || command.Width != 120 || command.Background != 0x2563ebff {
 		t.Fatalf("button command = %#v", Build(tree).Commands[0])
 	}
 }

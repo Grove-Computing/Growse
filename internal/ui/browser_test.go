@@ -1495,6 +1495,162 @@ func TestPointerHoveringLinkDoesNotStartNavigation(t *testing.T) {
 	}
 }
 
+func TestPointerClickingLinkStartsNavigation(t *testing.T) {
+	document := dom.NewDocument()
+	anchor := document.CreateElement("a", map[string]string{"href": "/next"})
+	if err := document.AppendChild(document.Root, anchor); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(anchor, document.CreateText("Next")); err != nil {
+		t.Fatal(err)
+	}
+	pageURL, err := url.Parse("https://example.com/current")
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := &browser.Page{URL: pageURL, Document: document, ComputedStyles: style.Compute(document, nil)}
+	navigator := &recordingNavigator{stubNavigator: stubNavigator{page: page}, navigated: make(chan string, 1)}
+	ui := NewBrowserUI(navigator, nil)
+	router := new(input.Router)
+	gtx := layout.Context{Ops: new(op.Ops), Source: router.Source(), Constraints: layout.Exact(image.Pt(800, 600)), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}}
+	position := f32.Pt(float32(tabRailWidth)+40, float32(toolbarHeight)+40)
+
+	ui.Layout(gtx)
+	router.Frame(gtx.Ops)
+	router.Queue(pointer.Event{Kind: pointer.Press, Source: pointer.Mouse, Buttons: pointer.ButtonPrimary, Position: position})
+	gtx.Reset()
+	ui.Layout(gtx)
+	router.Frame(gtx.Ops)
+	router.Queue(pointer.Event{Kind: pointer.Release, Source: pointer.Mouse, Position: position})
+	gtx.Reset()
+	ui.Layout(gtx)
+
+	select {
+	case got := <-navigator.navigated:
+		if got != "https://example.com/next" {
+			t.Fatalf("pointer link navigation = %q", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("pointer click did not start link navigation")
+	}
+}
+
+func TestPointerClickingInlineLinkBesideStyledButtonStartsNavigation(t *testing.T) {
+	document := dom.NewDocument()
+	main := document.CreateElement("main", nil)
+	button := document.CreateElement("button", nil)
+	anchor := document.CreateElement("a", map[string]string{"href": "/next/about"})
+	if err := document.AppendChild(document.Root, main); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(main, button); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(button, document.CreateText("Increment")); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(main, document.CreateText("0")); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(main, anchor); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(anchor, document.CreateText("About")); err != nil {
+		t.Fatal(err)
+	}
+	stylesheet, err := css.Parse(strings.NewReader(`button { color:#fff; background:#2563eb; }`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pageURL, err := url.Parse("https://example.com/next/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := &browser.Page{URL: pageURL, Document: document, ComputedStyles: style.Compute(document, stylesheet)}
+	navigator := &recordingNavigator{stubNavigator: stubNavigator{page: page}, navigated: make(chan string, 1)}
+	ui := NewBrowserUI(navigator, nil)
+	router := new(input.Router)
+	gtx := layout.Context{Ops: new(op.Ops), Source: router.Source(), Constraints: layout.Exact(image.Pt(800, 600)), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}}
+
+	ui.Layout(gtx)
+	router.Frame(gtx.Ops)
+	var linkBox layoutengine.Box
+	var linkOffset float32
+	found := false
+	for _, box := range ui.layoutCache.tree.Boxes {
+		if box.NodeID == anchor.ID || box.Tag == "a" {
+			linkBox, linkOffset, found = box, box.Width/2, true
+			break
+		}
+		var offset float32
+		for _, run := range box.Runs {
+			if run.NodeID == anchor.ID || run.Tag == "a" {
+				linkBox, linkOffset, found = box, offset+run.Width/2, true
+				break
+			}
+			offset += run.Width
+		}
+		if found {
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("inline link box was not built: %#v", ui.layoutCache.tree.Boxes)
+	}
+	position := f32.Pt(float32(tabRailWidth)+linkBox.X+linkOffset, float32(toolbarHeight)+linkBox.Y+linkBox.Height/2)
+	router.Queue(pointer.Event{Kind: pointer.Press, Source: pointer.Mouse, Buttons: pointer.ButtonPrimary, Position: position})
+	gtx.Reset()
+	ui.Layout(gtx)
+	router.Frame(gtx.Ops)
+	router.Queue(pointer.Event{Kind: pointer.Release, Source: pointer.Mouse, Position: position})
+	gtx.Reset()
+	ui.Layout(gtx)
+
+	select {
+	case got := <-navigator.navigated:
+		if got != "https://example.com/next/about" {
+			t.Fatalf("inline link navigation = %q", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("inline link beside styled button did not start navigation")
+	}
+}
+
+func TestPointerClickingStyledButtonDispatchesEvent(t *testing.T) {
+	document := dom.NewDocument()
+	button := document.CreateElement("button", nil)
+	if err := document.AppendChild(document.Root, button); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(button, document.CreateText("Increment")); err != nil {
+		t.Fatal(err)
+	}
+	stylesheet, err := css.Parse(strings.NewReader(`button { color:#fff; background:#2563eb; }`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := &browser.Page{Document: document, ComputedStyles: style.Compute(document, stylesheet), Events: events.NewDispatcher()}
+	clicked := 0
+	page.Events.AddEventListener(button.ID, events.Click, func(events.Event) { clicked++ })
+	ui := NewBrowserUI(&stubNavigator{page: page}, nil)
+	router := new(input.Router)
+	gtx := layout.Context{Ops: new(op.Ops), Source: router.Source(), Constraints: layout.Exact(image.Pt(800, 600)), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}}
+	position := f32.Pt(float32(tabRailWidth)+40, float32(toolbarHeight)+40)
+
+	ui.Layout(gtx)
+	router.Frame(gtx.Ops)
+	router.Queue(pointer.Event{Kind: pointer.Press, Source: pointer.Mouse, Buttons: pointer.ButtonPrimary, Position: position})
+	gtx.Reset()
+	ui.Layout(gtx)
+	router.Frame(gtx.Ops)
+	router.Queue(pointer.Event{Kind: pointer.Release, Source: pointer.Mouse, Position: position})
+	gtx.Reset()
+	ui.Layout(gtx)
+	if clicked != 1 || page.FocusTarget != button.ID {
+		t.Fatalf("styled button pointer result = clicks:%d focus:%d", clicked, page.FocusTarget)
+	}
+}
+
 func TestTextInputReceivesFocusFromPointerPress(t *testing.T) {
 	document := dom.NewDocument()
 	inputNode := document.CreateElement("input", map[string]string{"type": "text"})
