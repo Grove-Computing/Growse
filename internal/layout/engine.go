@@ -226,11 +226,12 @@ func build(document *dom.Document, computed stylemodel.Map, images map[dom.NodeI
 		}
 		state.walk(document.Root, pageInset, viewportWidth-pageInset*2, viewportHeight, viewportHeight > 0)
 	}
+	applyWritingMetadata(tree, computed)
 	tree.Height = state.y + pageInset
 	tree.ScrollWidth, tree.ScrollHeight = tree.Width, tree.Height
 	for _, box := range tree.Boxes {
 		contentWidth := box.Width
-		if len(box.Runs) != 0 {
+		if len(box.Runs) != 0 && box.WritingMode == stylemodel.WritingModeHorizontalTB {
 			contentWidth = 0
 			for _, run := range box.Runs {
 				contentWidth += run.Width
@@ -246,6 +247,35 @@ func build(document *dom.Document, computed stylemodel.Map, images map[dom.NodeI
 	assignFragmentIdentities(tree)
 	buildCompositingLayers(tree, computed)
 	return tree
+}
+
+// applyWritingMetadata keeps the logical coordinate system attached to every
+// visual fragment. Geometry, paint, and hit testing can then consume one
+// layout result without consulting mutable computed-style state again.
+func applyWritingMetadata(tree *Tree, computed stylemodel.Map) {
+	if tree == nil {
+		return
+	}
+	for index := range tree.Decorations {
+		if style, ok := computed[tree.Decorations[index].NodeID]; ok {
+			tree.Decorations[index].WritingMode = style.WritingMode
+			tree.Decorations[index].Direction = style.Direction
+		}
+	}
+	for index := range tree.Boxes {
+		box := &tree.Boxes[index]
+		if style, ok := computed[box.NodeID]; ok {
+			box.WritingMode = style.WritingMode
+			box.Direction = style.Direction
+		}
+		for runIndex := range box.Runs {
+			run := &box.Runs[runIndex]
+			if style, ok := computed[run.NodeID]; ok {
+				run.WritingMode = style.WritingMode
+				run.Direction = style.Direction
+			}
+		}
+	}
 }
 
 func usesBrowserViewport(document *dom.Document, computed stylemodel.Map) bool {
@@ -1497,6 +1527,10 @@ func (e *engine) addText(nodeID dom.NodeID, tag, text string, style blockStyle, 
 }
 
 func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, container blockStyle, x, width float32) {
+	if container.writingMode != stylemodel.WritingModeHorizontalTB {
+		e.addVerticalInlineRuns(nodeID, tag, runs, container, x, width)
+		return
+	}
 	var lineRuns []TextRun
 	var atomicPlacements []inlineRun
 	var lineText strings.Builder

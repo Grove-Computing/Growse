@@ -39,6 +39,40 @@ main { padding: 22px 34px 50px; }
 .layout-playground.alternate .flex-stage { justify-content: unsafe center; }
 .layout-playground.alternate .logical-stage { writing-mode: vertical-lr; direction: rtl; justify-content: start; align-items: end; }
 .layout-playground.alternate .parent-grid { grid-template-columns: [edge] 120px [content] minmax(120px, 1fr) [end]; }
+.writing-panel > p { color: #b8cbe2; }
+.writing-playground { display: block; }
+.vertical-flow, .vertical-flex, .vertical-grid {
+  writing-mode: vertical-rl;
+  direction: ltr;
+  inline-size: 172px;
+  block-size: 190px;
+  border: 2px solid #416b91;
+  background: #132842;
+  margin-bottom: 18px;
+}
+.vertical-flow { overflow: auto; padding: 10px; line-height: 24px; }
+.vertical-flow strong, .vertical-flow span { color: #e8f0ff; }
+.vertical-image { display: block; flex: none; inline-size: 56px; block-size: 38px; object-fit: cover; border: 2px solid #ff9f68; }
+.vertical-flex { display: flex; gap: 9px; padding: 10px; }
+.vertical-flex span { flex: none; inline-size: 56px; block-size: 40px; padding: 6px; color: #08111f; background: #66e3d7; }
+.vertical-flex span, .vertical-grid span { writing-mode: vertical-rl; direction: ltr; font-size: 14px; }
+.vertical-grid {
+  display: grid;
+  grid-template-columns: 64px 64px 64px;
+  grid-template-rows: 52px 72px;
+  gap: 10px;
+  padding: 10px;
+}
+.vertical-grid span { padding: 7px; color: #e8f0ff; background: #214f75; border: 1px solid #9fc7ff; }
+.vertical-grid-a { grid-column: 1; grid-row: 1; }
+.vertical-grid-b { grid-column: 2; grid-row: 1; }
+.vertical-grid-c { grid-column: 3; grid-row: 2; }
+.writing-playground.alternate .vertical-flow,
+.writing-playground.alternate .vertical-flex,
+.writing-playground.alternate .vertical-grid { writing-mode: vertical-lr; direction: rtl; }
+.writing-playground.alternate .vertical-flex span,
+.writing-playground.alternate .vertical-grid span { writing-mode: vertical-lr; direction: rtl; }
+.writing-playground.alternate .vertical-flow { block-size: 220px; }
 @media (max-width: 620px) {
   .hero, main { padding-left: 16px; padding-right: 16px; }
   .ratio-row { display: block; }
@@ -46,4 +80,6 @@ main { padding: 22px 34px 50px; }
   .layout-playground { display: block; }
   .flex-stage, .parent-grid, .logical-stage { margin-bottom: 14px; }
   .logical-stage { grid-column: auto; }
+  .writing-playground { display: block; }
+  .vertical-flow, .vertical-flex, .vertical-grid { margin-bottom: 14px; max-width: 100%; }
 }

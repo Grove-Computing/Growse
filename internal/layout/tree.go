@@ -161,6 +161,8 @@ type Decoration struct {
 	BlendMode       stylemodel.BlendMode
 	Cursor          stylemodel.Cursor
 	Transform       stylemodel.Matrix
+	WritingMode     stylemodel.WritingMode
+	Direction       stylemodel.Direction
 	Hidden          bool
 }
 
@@ -244,6 +246,8 @@ type Box struct {
 	DecorationColor uint32
 	TextShadows     []stylemodel.Shadow
 	Transform       stylemodel.Matrix
+	WritingMode     stylemodel.WritingMode
+	Direction       stylemodel.Direction
 	Hidden          bool
 	Runs            []TextRun
 }
@@ -254,6 +258,11 @@ type TextRun struct {
 	Tag    string
 	Text   string
 	Width  float32
+	// OffsetX/OffsetY and CrossSize describe the physical glyph rectangle for
+	// vertical writing. Horizontal runs retain their compact sequential form.
+	OffsetX   float32
+	OffsetY   float32
+	CrossSize float32
 
 	FontSize        float32
 	Bold            bool
@@ -269,5 +278,7 @@ type TextRun struct {
 	Decoration      stylemodel.TextDecorationLine
 	DecorationColor uint32
 	Opacity         float32
+	WritingMode     stylemodel.WritingMode
+	Direction       stylemodel.Direction
 	TextShadows     []stylemodel.Shadow
 }

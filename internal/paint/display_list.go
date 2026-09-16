@@ -65,6 +65,8 @@ type DrawText struct {
 	TextShadows     []stylemodel.Shadow
 	Transform       stylemodel.Matrix
 	Cursor          stylemodel.Cursor
+	WritingMode     stylemodel.WritingMode
+	Direction       stylemodel.Direction
 }
 
 func (DrawText) paintCommand() {}
@@ -88,6 +90,8 @@ type DrawInput struct {
 	Appearance  stylemodel.Appearance
 	AccentColor uint32
 	Cursor      stylemodel.Cursor
+	WritingMode stylemodel.WritingMode
+	Direction   stylemodel.Direction
 }
 
 func (DrawInput) paintCommand() {}
@@ -110,6 +114,8 @@ type DrawSelect struct {
 	Appearance  stylemodel.Appearance
 	AccentColor uint32
 	Cursor      stylemodel.Cursor
+	WritingMode stylemodel.WritingMode
+	Direction   stylemodel.Direction
 }
 
 func (DrawSelect) paintCommand() {}
@@ -131,6 +137,8 @@ type DrawCheckable struct {
 	Appearance  stylemodel.Appearance
 	AccentColor uint32
 	Cursor      stylemodel.Cursor
+	WritingMode stylemodel.WritingMode
+	Direction   stylemodel.Direction
 }
 
 func (DrawCheckable) paintCommand() {}
@@ -152,6 +160,8 @@ type DrawButton struct {
 	Appearance  stylemodel.Appearance
 	AccentColor uint32
 	Cursor      stylemodel.Cursor
+	WritingMode stylemodel.WritingMode
+	Direction   stylemodel.Direction
 }
 
 func (DrawButton) paintCommand() {}
@@ -186,39 +196,46 @@ type DrawBox struct {
 	BlendMode       stylemodel.BlendMode
 	Cursor          stylemodel.Cursor
 	Transform       stylemodel.Matrix
+	WritingMode     stylemodel.WritingMode
+	Direction       stylemodel.Direction
 }
 
 func (DrawBox) paintCommand() {}
 
 // DrawImage paints one decoded replaced image or its alt fallback.
 type DrawImage struct {
-	NodeID     dom.NodeID
-	URL, Alt   string
-	X, Y, Top  float32
-	Width      float32
-	Height     float32
-	ImageRect  layout.Rect
-	ImageClip  layout.Rect
-	Failed     bool
-	Color      uint32
-	Background uint32
-	Opacity    float32
-	Clip       *layout.Rect
-	Clips      []layout.ClipRegion
-	Border     stylemodel.Borders
-	Radius     layout.BorderRadii
-	Transform  stylemodel.Matrix
-	Cursor     stylemodel.Cursor
+	NodeID      dom.NodeID
+	URL, Alt    string
+	X, Y, Top   float32
+	Width       float32
+	Height      float32
+	ImageRect   layout.Rect
+	ImageClip   layout.Rect
+	Failed      bool
+	Color       uint32
+	Background  uint32
+	Opacity     float32
+	Clip        *layout.Rect
+	Clips       []layout.ClipRegion
+	Border      stylemodel.Borders
+	Radius      layout.BorderRadii
+	Transform   stylemodel.Matrix
+	Cursor      stylemodel.Cursor
+	WritingMode stylemodel.WritingMode
+	Direction   stylemodel.Direction
 }
 
 func (DrawImage) paintCommand() {}
 
 // TextRun is one styled fragment within a DrawText line.
 type TextRun struct {
-	NodeID dom.NodeID
-	Tag    string
-	Text   string
-	Width  float32
+	NodeID    dom.NodeID
+	Tag       string
+	Text      string
+	Width     float32
+	OffsetX   float32
+	OffsetY   float32
+	CrossSize float32
 
 	FontSize        float32
 	Bold            bool
@@ -234,6 +251,8 @@ type TextRun struct {
 	Decoration      stylemodel.TextDecorationLine
 	DecorationColor uint32
 	Opacity         float32
+	WritingMode     stylemodel.WritingMode
+	Direction       stylemodel.Direction
 	TextShadows     []stylemodel.Shadow
 }
 
@@ -294,8 +313,9 @@ func Build(tree *layout.Tree) *DisplayList {
 				Border: decoration.Border, Padding: decoration.Padding, Radius: decoration.Radius, Opacity: decoration.Opacity,
 				BoxShadows: append([]stylemodel.Shadow(nil), decoration.BoxShadows...), Outline: decoration.Outline, OutlineOffset: decoration.OutlineOffset,
 				Filters: append([]stylemodel.Filter(nil), decoration.Filters...), BackdropFilters: append([]stylemodel.Filter(nil), decoration.BackdropFilters...), BlendMode: decoration.BlendMode, Cursor: decoration.Cursor,
-				Transform: decoration.Transform,
-				Clips:     cloneClipRegions(decoration.Clips),
+				Transform:   decoration.Transform,
+				WritingMode: decoration.WritingMode, Direction: decoration.Direction,
+				Clips: cloneClipRegions(decoration.Clips),
 			})
 			previousBottom += top
 			continue
@@ -312,6 +332,7 @@ func Build(tree *layout.Tree) *DisplayList {
 				Width: box.Width, Height: box.Height, ImageRect: box.ImageRect, ImageClip: box.ImageClip, Failed: box.ImageFailed,
 				Color: box.Color, Background: box.Background, Opacity: box.Opacity, Clip: cloneLayoutRect(box.Clip), Clips: cloneClipRegions(box.Clips),
 				Border: box.ImageBorder, Radius: box.ImageRadius, Transform: box.Transform, Cursor: box.Cursor,
+				WritingMode: box.WritingMode, Direction: box.Direction,
 			})
 			previousBottom = box.Y + box.Height
 			continue
@@ -333,6 +354,7 @@ func Build(tree *layout.Tree) *DisplayList {
 				Opacity:    box.Opacity,
 				Clip:       cloneLayoutRect(box.Clip),
 				Appearance: box.Appearance, AccentColor: box.AccentColor, Cursor: box.Cursor,
+				WritingMode: box.WritingMode, Direction: box.Direction,
 			})
 			previousBottom = box.Y + box.Height
 			continue
@@ -344,6 +366,7 @@ func Build(tree *layout.Tree) *DisplayList {
 				Color: box.Color, Opacity: box.Opacity, Clip: cloneLayoutRect(box.Clip),
 				Disabled:   box.Disabled,
 				Appearance: box.Appearance, AccentColor: box.AccentColor, Cursor: box.Cursor,
+				WritingMode: box.WritingMode, Direction: box.Direction,
 			})
 			previousBottom = box.Y + box.Height
 			continue
@@ -355,6 +378,7 @@ func Build(tree *layout.Tree) *DisplayList {
 				Color: box.Color, Opacity: box.Opacity, Clip: cloneLayoutRect(box.Clip),
 				Disabled:   box.Disabled,
 				Appearance: box.Appearance, AccentColor: box.AccentColor, Cursor: box.Cursor,
+				WritingMode: box.WritingMode, Direction: box.Direction,
 			})
 			previousBottom = box.Y + box.Height
 			continue
@@ -365,6 +389,7 @@ func Build(tree *layout.Tree) *DisplayList {
 				Width: box.Width, Height: box.Height, Color: box.Color, Background: box.Background, Opacity: box.Opacity,
 				Clip: cloneLayoutRect(box.Clip), Disabled: box.Disabled,
 				Appearance: box.Appearance, AccentColor: box.AccentColor, Cursor: box.Cursor,
+				WritingMode: box.WritingMode, Direction: box.Direction,
 			})
 			previousBottom = box.Y + box.Height
 			continue
@@ -389,17 +414,21 @@ func Build(tree *layout.Tree) *DisplayList {
 			TextShadows: append([]stylemodel.Shadow(nil), box.TextShadows...),
 			Transform:   box.Transform,
 			Cursor:      box.Cursor,
+			WritingMode: box.WritingMode,
+			Direction:   box.Direction,
 			Clips:       cloneClipRegions(box.Clips),
 		}
 		command.Runs = make([]TextRun, 0, len(box.Runs))
 		for _, run := range box.Runs {
 			command.Runs = append(command.Runs, TextRun{
 				NodeID: run.NodeID, Tag: run.Tag, Text: run.Text, Width: run.Width,
+				OffsetX: run.OffsetX, OffsetY: run.OffsetY, CrossSize: run.CrossSize,
 				FontSize: run.FontSize, Bold: run.Bold, Color: run.Color, Background: run.Background,
 				FontFamilies: append([]string(nil), run.FontFamilies...), FontStyle: run.FontStyle, FontStretch: run.FontStretch,
 				LetterSpacing: run.LetterSpacing, WordSpacing: run.WordSpacing, VerticalOffset: run.VerticalOffset,
 				Baseline: run.Baseline - box.Y, Decoration: run.Decoration,
 				DecorationColor: run.DecorationColor, Opacity: run.Opacity,
+				WritingMode: run.WritingMode, Direction: run.Direction,
 				TextShadows: append([]stylemodel.Shadow(nil), run.TextShadows...),
 			})
 		}

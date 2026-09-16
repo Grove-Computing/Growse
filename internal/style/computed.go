@@ -60,6 +60,8 @@ const (
 	FloatNone Float = iota
 	FloatLeft
 	FloatRight
+	FloatTop
+	FloatBottom
 )
 
 // Clear moves a box below preceding floats on the selected side.
@@ -69,6 +71,8 @@ const (
 	ClearNone Clear = iota
 	ClearLeft
 	ClearRight
+	ClearTop
+	ClearBottom
 	ClearBoth
 )
 

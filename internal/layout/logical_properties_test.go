@@ -25,3 +25,26 @@ func TestLogicalPropertiesDriveHorizontalLayoutGeometry(t *testing.T) {
 		t.Fatalf("logical box bounds = %#v, found %t", bounds, ok)
 	}
 }
+
+func TestLogicalPropertiesDriveVerticalLayoutGeometry(t *testing.T) {
+	document := dom.NewDocument()
+	box := document.CreateElement("div", map[string]string{"class": "box"})
+	if err := document.AppendChild(document.Root, box); err != nil {
+		t.Fatal(err)
+	}
+	stylesheet, err := css.Parse(strings.NewReader(`.box {
+  display:block; writing-mode:vertical-rl;
+  inline-size:100px; block-size:40px;
+  padding-block:3px 4px;
+  border-block-start:2px solid red;
+  margin-inline-start:15px;
+}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, style.Compute(document, stylesheet), 500)
+	bounds, ok := tree.Bounds[box.ID]
+	if !ok || bounds.Width != 49 || bounds.Height != 100 || bounds.Y != pagePadding+15 {
+		t.Fatalf("vertical logical box bounds = %#v, found %t", bounds, ok)
+	}
+}

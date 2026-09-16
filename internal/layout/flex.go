@@ -638,6 +638,7 @@ func (e *engine) renderFlexItem(item *flexLayoutItem, axis flexAxis, x, y, mainS
 	}
 	e.y, e.clip = savedY, savedClip
 	translateFlexGeometry(e.tree, startBoxes, startDecorations, x, y, savedClip)
+	e.tree.Bounds[item.node.ID] = Rect{X: x, Y: y, Width: outerWidth, Height: outerHeight}
 }
 
 func (e *engine) resolveInlineFlexSize(node *dom.Node, containerStyle blockStyle, containingWidth float32) (float32, float32, float32) {
@@ -707,6 +708,20 @@ func pixelSize(value float32) stylemodel.SizeValue {
 }
 
 func translateFlexGeometry(tree *Tree, boxStart, decorationStart int, x, y float32, parentClip *Rect) {
+	translatedBounds := make(map[dom.NodeID]struct{})
+	translateBounds := func(nodeID dom.NodeID) {
+		if _, translated := translatedBounds[nodeID]; translated {
+			return
+		}
+		bounds, exists := tree.Bounds[nodeID]
+		if !exists {
+			return
+		}
+		bounds.X += x
+		bounds.Y += y
+		tree.Bounds[nodeID] = bounds
+		translatedBounds[nodeID] = struct{}{}
+	}
 	translateClip := func(clip *Rect) *Rect {
 		if clip != nil {
 			clip.X += x
@@ -721,6 +736,7 @@ func translateFlexGeometry(tree *Tree, boxStart, decorationStart int, x, y float
 		return intersectClip(parentClip, *clip)
 	}
 	for index := boxStart; index < len(tree.Boxes); index++ {
+		translateBounds(tree.Boxes[index].NodeID)
 		tree.Boxes[index].X += x
 		tree.Boxes[index].Y += y
 		tree.Boxes[index].Baseline += y
@@ -740,6 +756,7 @@ func translateFlexGeometry(tree *Tree, boxStart, decorationStart int, x, y float
 		}
 	}
 	for index := decorationStart; index < len(tree.Decorations); index++ {
+		translateBounds(tree.Decorations[index].NodeID)
 		tree.Decorations[index].X += x
 		tree.Decorations[index].Y += y
 		tree.Decorations[index].Clip = translateClip(tree.Decorations[index].Clip)
