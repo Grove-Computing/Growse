@@ -303,6 +303,7 @@ type engine struct {
 	viewportWidth, viewportHeight float32
 	scrollX, scrollY              float32
 	positionCB                    *Rect
+	fixedCB                       *Rect
 	stackingID                    int
 	floats                        []floatRegion
 	subgrids                      map[dom.NodeID]subgridContext
@@ -862,18 +863,22 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 	}
 	previousClip := e.clip
 	previousClips := e.clips
-	previousPositionCB := e.positionCB
+	previousPositionCB, previousFixedCB := e.positionCB, e.fixedCB
 	outerFloats := e.floats
 	formattingContext := establishesBlockFormattingContext(style)
 	if formattingContext {
 		e.floats = nil
 	}
-	if style.layoutPosition != stylemodel.PositionStatic {
+	establishesPositionCB := style.layoutPosition != stylemodel.PositionStatic || len(style.transform) != 0
+	if establishesPositionCB {
 		cbHeight := childContainingHeight
 		if !declaredHeightDefinite {
 			cbHeight = containingHeight
 		}
 		e.positionCB = &Rect{X: x + style.border.Left.Width, Y: boxTop + style.border.Top.Width, Width: outerWidth - horizontalBorder, Height: max(cbHeight, float32(0))}
+		if len(style.transform) != 0 {
+			e.fixedCB = e.positionCB
+		}
 	}
 	if (style.overflowX != stylemodel.OverflowVisible || style.overflowY != stylemodel.OverflowVisible) && declaredHeightDefinite {
 		clipHeight := declaredHeight
@@ -1048,7 +1053,7 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 			e.tree.addFallback(node.ID, "visual-effect-surface-limit")
 		}
 	}
-	if e.positionCB != nil && style.layoutPosition != stylemodel.PositionStatic {
+	if e.positionCB != nil && establishesPositionCB {
 		e.positionCB.Height = max(outerHeight-verticalBorder, float32(0))
 	}
 	for _, child := range positionedChildren {
@@ -1068,7 +1073,7 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 	if style.layoutPosition == stylemodel.PositionRelative || style.layoutPosition == stylemodel.PositionSticky {
 		dx, dy := float32(0), float32(0)
 		if style.layoutPosition == stylemodel.PositionRelative {
-			dx, dy = relativeOffset(style.inset, outerWidth, outerHeight)
+			dx, dy = relativeOffset(style.inset, width, containingHeight, heightDefinite, style.direction)
 		} else {
 			if top, ok := resolveSize(style.inset.Top, outerHeight, true); ok {
 				dy = max(e.scrollY+top-boxTop, float32(0))
@@ -1089,6 +1094,7 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 		}
 	}
 	e.positionCB = previousPositionCB
+	e.fixedCB = previousFixedCB
 	e.stackingID = previousStackingID
 	e.opacity = previousOpacity
 }
@@ -1120,16 +1126,18 @@ func normalizeMatrix(matrix stylemodel.Matrix) stylemodel.Matrix {
 	return matrix
 }
 
-func relativeOffset(inset stylemodel.Insets, width, height float32) (float32, float32) {
+func relativeOffset(inset stylemodel.Insets, width, height float32, heightDefinite bool, direction stylemodel.Direction) (float32, float32) {
 	dx, dy := float32(0), float32(0)
-	if left, ok := resolveSize(inset.Left, width, true); ok {
+	left, hasLeft := resolveSize(inset.Left, width, true)
+	right, hasRight := resolveSize(inset.Right, width, true)
+	if hasLeft && (!hasRight || direction == stylemodel.DirectionLTR) {
 		dx = left
-	} else if right, ok := resolveSize(inset.Right, width, true); ok {
+	} else if hasRight {
 		dx = -right
 	}
-	if top, ok := resolveSize(inset.Top, height, true); ok {
+	if top, ok := resolveSize(inset.Top, height, heightDefinite); ok {
 		dy = top
-	} else if bottom, ok := resolveSize(inset.Bottom, height, true); ok {
+	} else if bottom, ok := resolveSize(inset.Bottom, height, heightDefinite); ok {
 		dy = -bottom
 	}
 	return dx, dy
@@ -1146,8 +1154,15 @@ func (e *engine) renderPositionedChild(node *dom.Node, style blockStyle) {
 // origin by passing nil.
 func (e *engine) renderPositionedChildAt(node *dom.Node, style blockStyle, staticPosition *Rect) {
 	containingBlock := e.positionCB
-	if style.layoutPosition == stylemodel.PositionFixed || containingBlock == nil {
-		containingBlock = &Rect{X: e.scrollX, Y: e.scrollY, Width: e.viewportWidth, Height: e.viewportHeight}
+	if style.layoutPosition == stylemodel.PositionFixed {
+		containingBlock = e.fixedCB
+		if containingBlock == nil {
+			containingBlock = &Rect{X: e.scrollX, Y: e.scrollY, Width: e.viewportWidth, Height: e.viewportHeight}
+		}
+	} else if containingBlock == nil {
+		// The initial containing block remains anchored at the document origin;
+		// unlike fixed positioning it must not follow the viewport scroll offset.
+		containingBlock = &Rect{Width: e.viewportWidth, Height: e.viewportHeight}
 	}
 	left, hasLeft := resolveSize(style.inset.Left, containingBlock.Width, true)
 	right, hasRight := resolveSize(style.inset.Right, containingBlock.Width, true)
