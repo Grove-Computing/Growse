@@ -3159,7 +3159,7 @@ func (ui *BrowserUI) layoutVerticalText(gtx layout.Context, command paintmodel.D
 	runs := append([]paintmodel.TextRun(nil), command.Runs...)
 	if len(runs) == 0 {
 		offsetY := float32(0)
-		for _, character := range []rune(command.Text) {
+		for _, character := range command.Text {
 			runs = append(runs, paintmodel.TextRun{
 				Text: string(character), Width: max(command.FontSize, float32(1)), FontSize: command.FontSize,
 				OffsetY: offsetY, CrossSize: command.Width,

@@ -145,7 +145,7 @@ func (e *engine) verticalInlineItems(runs []inlineRun, containingWidth float32) 
 			result = append(result, verticalInlineItem{run: token, advance: max(token.height, float32(1)), cross: max(token.width, float32(1)), baseline: token.baseline, atomic: true})
 			continue
 		}
-		for _, character := range []rune(token.text) {
+		for _, character := range token.text {
 			text := string(character)
 			glyphWidth, glyphHeight, ascent := measureStyledText(text, token.style)
 			advance := max(glyphHeight+token.style.wordSpacing, token.style.fontSize+token.style.letterSpacing)
