@@ -161,6 +161,8 @@ type Decoration struct {
 	BlendMode       stylemodel.BlendMode
 	Cursor          stylemodel.Cursor
 	Transform       stylemodel.Matrix
+	WritingMode     stylemodel.WritingMode
+	Direction       stylemodel.Direction
 	Hidden          bool
 }
 
@@ -244,6 +246,8 @@ type Box struct {
 	DecorationColor uint32
 	TextShadows     []stylemodel.Shadow
 	Transform       stylemodel.Matrix
+	WritingMode     stylemodel.WritingMode
+	Direction       stylemodel.Direction
 	Hidden          bool
 	Runs            []TextRun
 }
@@ -269,5 +273,7 @@ type TextRun struct {
 	Decoration      stylemodel.TextDecorationLine
 	DecorationColor uint32
 	Opacity         float32
+	WritingMode     stylemodel.WritingMode
+	Direction       stylemodel.Direction
 	TextShadows     []stylemodel.Shadow
 }
