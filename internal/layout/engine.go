@@ -228,6 +228,7 @@ func build(document *dom.Document, computed stylemodel.Map, images map[dom.NodeI
 	}
 	applyWritingMetadata(tree, computed)
 	tree.Height = state.y + pageInset
+	initializeScrollContainers(tree, computed)
 	initializeStickyConstraints(tree, computed)
 	applyInitialStickyOffsets(tree, computed)
 	tree.ScrollWidth, tree.ScrollHeight = tree.Width, tree.Height
@@ -882,17 +883,25 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 			e.fixedCB = e.positionCB
 		}
 	}
-	if (style.overflowX != stylemodel.OverflowVisible || style.overflowY != stylemodel.OverflowVisible) && declaredHeightDefinite {
+	if style.overflowX != stylemodel.OverflowVisible || style.overflowY != stylemodel.OverflowVisible {
 		clipHeight := declaredHeight
 		if style.boxSizing == stylemodel.BoxSizingContentBox {
 			clipHeight += style.padding.Top + style.padding.Bottom
 		}
-		e.clip = intersectClip(previousClip, Rect{
+		clipRect := Rect{
 			X: x + style.border.Left.Width, Y: boxTop + style.border.Top.Width,
 			Width: outerWidth - horizontalBorder, Height: clipHeight,
-		})
-		clipRect := *e.clip
-		e.clips = append(cloneClipRegions(previousClips), ClipRegion{Rect: clipRect, Radius: resolveBorderRadii(style.radius, clipRect.Width, clipRect.Height)})
+		}
+		const unboundedClip = float32(1 << 20)
+		if style.overflowX == stylemodel.OverflowVisible {
+			clipRect.X, clipRect.Width = -unboundedClip, unboundedClip*2
+		}
+		if style.overflowY == stylemodel.OverflowVisible || !declaredHeightDefinite {
+			clipRect.Y, clipRect.Height = -unboundedClip, unboundedClip*2
+		}
+		e.clip = intersectClip(previousClip, clipRect)
+		resolvedClip := *e.clip
+		e.clips = append(cloneClipRegions(previousClips), ClipRegion{Rect: resolvedClip, Radius: resolveBorderRadii(style.radius, resolvedClip.Width, resolvedClip.Height)})
 	}
 
 	var positionedChildren []*dom.Node
@@ -1224,7 +1233,11 @@ func (group marginGroup) value() float32 { return group.positive + group.negativ
 func establishesBlockFormattingContext(style blockStyle) bool {
 	return style.display == stylemodel.DisplayFlowRoot || style.display == stylemodel.DisplayFlex || style.display == stylemodel.DisplayGrid ||
 		style.float != stylemodel.FloatNone || style.layoutPosition == stylemodel.PositionAbsolute || style.layoutPosition == stylemodel.PositionFixed ||
-		style.overflowX != stylemodel.OverflowVisible || style.overflowY != stylemodel.OverflowVisible
+		overflowEstablishesFormattingContext(style.overflowX) || overflowEstablishesFormattingContext(style.overflowY)
+}
+
+func overflowEstablishesFormattingContext(value stylemodel.Overflow) bool {
+	return value != stylemodel.OverflowVisible && value != stylemodel.OverflowClip
 }
 
 func canCollapseBlockStart(style blockStyle) bool {

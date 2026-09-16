@@ -50,6 +50,53 @@ func TestBuildPreservesFlexOverflowGeometry(t *testing.T) {
 	}
 }
 
+func TestBuildUsesScrolledContentGeometryAndFixedScrollportClip(t *testing.T) {
+	document := dom.NewDocument()
+	container := document.CreateElement("div", map[string]string{"class": "container"})
+	content := document.CreateElement("div", map[string]string{"class": "content"})
+	if err := document.AppendChild(document.Root, container); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(container, content); err != nil {
+		t.Fatal(err)
+	}
+	stylesheet, err := css.Parse(strings.NewReader(`
+.container { position:relative; width:100px; height:80px; overflow:auto; }
+.content { width:240px; height:160px; background:#777; }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	computed := style.Compute(document, stylesheet)
+	tree := layout.BuildWithViewport(document, computed, 640, 480)
+	containerRect := tree.Bounds[container.ID]
+	if dirty := layout.ApplyScrollContainerOffset(tree, computed, container.ID, 50, 30); len(dirty) == 0 {
+		t.Fatal("scroll offset did not dirty content")
+	}
+
+	var command DrawBox
+	found := false
+	for _, candidate := range Build(tree).Commands {
+		box, ok := candidate.(DrawBox)
+		if ok && box.NodeID == content.ID {
+			command, found = box, true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("scrolled content paint command is missing")
+	}
+	if command.X != containerRect.X-50 || command.Y != containerRect.Y-30 {
+		t.Fatalf("paint offset = (%v,%v), container = %#v", command.X, command.Y, containerRect)
+	}
+	if command.Clip == nil || command.Clip.X != containerRect.X || command.Clip.Y != containerRect.Y || command.Clip.Width != 100 || command.Clip.Height != 80 {
+		t.Fatalf("fixed scrollport clip = %#v, container = %#v", command.Clip, containerRect)
+	}
+	if hit, ok := layout.HitTest(tree, containerRect.X+10, containerRect.Y+10); !ok || hit != content.ID {
+		t.Fatalf("paint/hit geometry diverged after scroll: %d/%v", hit, ok)
+	}
+}
+
 func TestBuildPreservesPaintOrder(t *testing.T) {
 	tree := &layout.Tree{Width: 400, Height: 100, Boxes: []layout.Box{
 		{Text: "first", Y: 10, Runs: []layout.TextRun{{Text: "first", Color: 0x123456ff}}},

@@ -534,6 +534,7 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 	computed = applyVisualProperties(computed, parent, winners, fontContext)
 	if value, ok := winners["overflow-x"]; ok {
 		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
+			resolved = overflowShorthandComponent(value, resolved, false)
 			if parsed, valid := resolveOverflow(resolved, parent.OverflowX); valid {
 				computed.OverflowX = parsed
 			}
@@ -541,11 +542,13 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 	}
 	if value, ok := winners["overflow-y"]; ok {
 		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
+			resolved = overflowShorthandComponent(value, resolved, true)
 			if parsed, valid := resolveOverflow(resolved, parent.OverflowY); valid {
 				computed.OverflowY = parsed
 			}
 		}
 	}
+	computed.OverflowX, computed.OverflowY = normalizeOverflowAxes(computed.OverflowX, computed.OverflowY)
 	if value, ok := winners["display"]; ok {
 		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
 			if parsed, valid := resolveDisplay(resolved, parent.Display); valid {
@@ -906,9 +909,44 @@ func resolveOverflow(value string, parent Overflow) (Overflow, bool) {
 		return OverflowAuto, true
 	case "scroll":
 		return OverflowScroll, true
+	case "clip":
+		return OverflowClip, true
 	default:
 		return 0, false
 	}
+}
+
+func overflowShorthandComponent(candidate winner, value string, vertical bool) string {
+	if candidate.source != "overflow" {
+		return value
+	}
+	parts, valid := splitCSSSpaceSeparated(value)
+	if !valid || len(parts) == 0 || len(parts) > 2 {
+		return value
+	}
+	if vertical && len(parts) == 2 {
+		return parts[1]
+	}
+	return parts[0]
+}
+
+func normalizeOverflowAxes(x, y Overflow) (Overflow, Overflow) {
+	nonScrollable := func(value Overflow) bool { return value == OverflowVisible || value == OverflowClip }
+	if nonScrollable(x) && !nonScrollable(y) {
+		if x == OverflowVisible {
+			x = OverflowAuto
+		} else {
+			x = OverflowHidden
+		}
+	}
+	if nonScrollable(y) && !nonScrollable(x) {
+		if y == OverflowVisible {
+			y = OverflowAuto
+		} else {
+			y = OverflowHidden
+		}
+	}
+	return x, y
 }
 
 func applyCustomProperties(inherited map[string]string, winners map[string]winner, stylesheet *css.Stylesheet, context LengthContext, parentValues map[string]string) map[string]string {

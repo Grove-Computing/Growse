@@ -27,12 +27,23 @@ type Tree struct {
 	Parents           map[dom.NodeID]dom.NodeID
 	Bounds            map[dom.NodeID]Rect
 	StickyConstraints map[dom.NodeID]StickyConstraint
+	ScrollContainers  map[dom.NodeID]ScrollContainer
 	ScrollOffsets     map[dom.NodeID]ScrollOffset
 	Fallbacks         []Fallback
 }
 
 // ScrollOffset is the physical scroll position of one nested scroll container.
 type ScrollOffset struct{ X, Y float32 }
+
+// ScrollContainer shares one node's scrollport, overflow policy, extent, and
+// current offset between layout, CSSOM, paint updates, and hit testing.
+type ScrollContainer struct {
+	NodeID                    dom.NodeID
+	Viewport                  Rect
+	ScrollWidth, ScrollHeight float32
+	Offset                    ScrollOffset
+	OverflowX, OverflowY      stylemodel.Overflow
+}
 
 // StickyConstraint retains normal-flow geometry and the two independently
 // selected scroll containers needed to recompute sticky placement without a

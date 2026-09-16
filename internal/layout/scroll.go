@@ -52,11 +52,61 @@ func nearestScrollContainer(tree *Tree, styles stylemodel.Map, nodeID dom.NodeID
 		if horizontal {
 			overflow = computed.OverflowX
 		}
-		if overflow != stylemodel.OverflowVisible {
+		if isScrollContainerOverflow(overflow) {
 			return ancestor
 		}
 	}
 	return 0
+}
+
+func isScrollContainerOverflow(value stylemodel.Overflow) bool {
+	return value == stylemodel.OverflowHidden || value == stylemodel.OverflowAuto || value == stylemodel.OverflowScroll
+}
+
+func initializeScrollContainers(tree *Tree, styles stylemodel.Map) {
+	if tree == nil {
+		return
+	}
+	tree.ScrollContainers = make(map[dom.NodeID]ScrollContainer)
+	for nodeID, computed := range styles {
+		if !isScrollContainerOverflow(computed.OverflowX) && !isScrollContainerOverflow(computed.OverflowY) {
+			continue
+		}
+		bounds, bounded := tree.Bounds[nodeID]
+		if !bounded {
+			continue
+		}
+		viewport := paddingBoxForNode(tree, nodeID, bounds)
+		maximumX, maximumY := viewport.X+viewport.Width, viewport.Y+viewport.Height
+		for descendantID, descendantBounds := range tree.Bounds {
+			if descendantID == nodeID || !isDescendantOf(tree, descendantID, nodeID) {
+				continue
+			}
+			maximumX = max(maximumX, descendantBounds.X+descendantBounds.Width)
+			maximumY = max(maximumY, descendantBounds.Y+descendantBounds.Height)
+		}
+		scrollWidth := max(viewport.Width, maximumX-viewport.X)
+		scrollHeight := max(viewport.Height, maximumY-viewport.Y)
+		if !isScrollContainerOverflow(computed.OverflowX) {
+			scrollWidth = viewport.Width
+		}
+		if !isScrollContainerOverflow(computed.OverflowY) {
+			scrollHeight = viewport.Height
+		}
+		tree.ScrollContainers[nodeID] = ScrollContainer{
+			NodeID: nodeID, Viewport: viewport, ScrollWidth: scrollWidth, ScrollHeight: scrollHeight,
+			OverflowX: computed.OverflowX, OverflowY: computed.OverflowY,
+		}
+	}
+}
+
+func isDescendantOf(tree *Tree, nodeID, ancestorID dom.NodeID) bool {
+	for current := tree.Parents[nodeID]; current != 0; current = tree.Parents[current] {
+		if current == ancestorID {
+			return true
+		}
+	}
+	return false
 }
 
 func paddingBoxForNode(tree *Tree, nodeID dom.NodeID, bounds Rect) Rect {
@@ -124,13 +174,31 @@ func ApplyScrollContainerOffset(tree *Tree, styles stylemodel.Map, containerID d
 	if tree.StickyConstraints == nil {
 		initializeStickyConstraints(tree, styles)
 	}
-	scrollX, scrollY = max(scrollX, float32(0)), max(scrollY, float32(0))
+	if tree.ScrollContainers == nil {
+		initializeScrollContainers(tree, styles)
+	}
+	container, exists := tree.ScrollContainers[containerID]
+	if !exists {
+		return nil
+	}
+	if isScrollContainerOverflow(container.OverflowX) {
+		scrollX = min(max(scrollX, float32(0)), max(container.ScrollWidth-container.Viewport.Width, float32(0)))
+	} else {
+		scrollX = 0
+	}
+	if isScrollContainerOverflow(container.OverflowY) {
+		scrollY = min(max(scrollY, float32(0)), max(container.ScrollHeight-container.Viewport.Height, float32(0)))
+	} else {
+		scrollY = 0
+	}
 	old := tree.ScrollOffsets[containerID]
 	if old.X == scrollX && old.Y == scrollY {
 		return nil
 	}
 	dirtySet := translateScrollDescendants(tree, styles, containerID, old.X-scrollX, old.Y-scrollY)
 	tree.ScrollOffsets[containerID] = ScrollOffset{X: scrollX, Y: scrollY}
+	container.Offset = tree.ScrollOffsets[containerID]
+	tree.ScrollContainers[containerID] = container
 	for _, nodeID := range stickyNodeIDs(tree) {
 		constraint := tree.StickyConstraints[nodeID]
 		if constraint.XScrollContainer != containerID && constraint.YScrollContainer != containerID {
