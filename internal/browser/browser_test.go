@@ -144,6 +144,9 @@ func TestSetInputValueUpdatesActiveTextInput(t *testing.T) {
 	if got, want := mutations, 1; got != want {
 		t.Fatalf("mutation count = %d, want %d", got, want)
 	}
+	if invalidation := page.RenderInvalidationSnapshot(); invalidation.Damage != RenderDamageLayout || invalidation.Revision != page.StyleRevision {
+		t.Fatalf("input render invalidation = %#v, revision %d", invalidation, page.StyleRevision)
+	}
 	if inputEvent.Type != events.Input || inputEvent.Target != input.ID || inputEvent.Value != "hello" {
 		t.Fatalf("input event = %#v, want updated value", inputEvent)
 	}

@@ -55,6 +55,22 @@ func (p *Page) RecordComputedStyleChanges(previous, current style.Map) RenderInv
 	return result
 }
 
+// RecordDOMMutation forces layout and paint data derived from node content to
+// be rebuilt even when the computed CSS values themselves did not change.
+func (p *Page) RecordDOMMutation(rootID dom.NodeID) RenderInvalidation {
+	if p == nil {
+		return RenderInvalidation{}
+	}
+	p.renderMu.Lock()
+	result := cloneRenderInvalidation(p.renderDirty)
+	result.Revision = p.StyleRevision
+	appendRenderDamage(&result, rootID, RenderDamageLayout)
+	result.Damage = RenderDamageLayout
+	p.renderDirty = cloneRenderInvalidation(result)
+	p.renderMu.Unlock()
+	return result
+}
+
 func classifyComputedStyleDamage(previous, current style.ComputedStyle, existed bool) RenderDamage {
 	if !existed {
 		return RenderDamageLayout

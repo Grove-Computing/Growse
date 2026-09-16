@@ -561,6 +561,30 @@ func TestBuildCreatesTextInputBox(t *testing.T) {
 	}
 }
 
+func TestBuildKeepsTextInputNestedInLabelInteractive(t *testing.T) {
+	document := dom.NewDocument()
+	form := document.CreateElement("form", nil)
+	label := document.CreateElement("label", nil)
+	input := document.CreateElement("input", map[string]string{"type": "text", "value": "SSR"})
+	button := document.CreateElement("button", map[string]string{"type": "submit"})
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, form}, [2]*dom.Node{form, label},
+		[2]*dom.Node{label, document.CreateText("Name ")}, [2]*dom.Node{label, input},
+		[2]*dom.Node{form, button}, [2]*dom.Node{button, document.CreateText("Save")},
+	)
+	tree := Build(document, style.ComputeWithEnvironment(document, nil, style.InteractionState{}, style.Environment{BrowserDefaults: true}), 800)
+	var inputBox *Box
+	for index := range tree.Boxes {
+		if tree.Boxes[index].NodeID == input.ID {
+			inputBox = &tree.Boxes[index]
+			break
+		}
+	}
+	if inputBox == nil || !inputBox.Input || inputBox.Text != "SSR" || inputBox.Width <= 1 || inputBox.Height <= 1 {
+		t.Fatalf("nested label input box = %#v; boxes = %#v", inputBox, tree.Boxes)
+	}
+}
+
 func TestBuildCreatesEditableBoxesForSupportedAndUnknownTextTypes(t *testing.T) {
 	document := dom.NewDocument()
 	types := []string{"password", "email", "url", "number", "unknown-control"}

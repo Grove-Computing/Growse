@@ -477,6 +477,7 @@ func (b *Browser) SetInputValue(nodeID dom.NodeID, value string) bool {
 	changed := forms.SetCurrentValue(node, value)
 	if changed {
 		recomputePageStyles(page, b.currentTime())
+		page.RecordDOMMutation(nodeID)
 	}
 	dispatcher := page.Events
 	b.mu.Unlock()
@@ -500,6 +501,7 @@ func (b *Browser) SetSelectValue(nodeID dom.NodeID, value string) bool {
 		return false
 	}
 	recomputePageStyles(page, b.currentTime())
+	page.RecordDOMMutation(nodeID)
 	dispatcher := page.Events
 	b.mu.Unlock()
 	if onMutation != nil {
@@ -527,6 +529,7 @@ func (b *Browser) ActivateCheckable(nodeID dom.NodeID) bool {
 		return false
 	}
 	recomputePageStyles(page, b.currentTime())
+	page.RecordDOMMutation(page.Document.Root.ID)
 	dispatcher := page.Events
 	b.mu.Unlock()
 	if onMutation != nil {
@@ -618,6 +621,7 @@ func (b *Browser) ResetForm(nodeID dom.NodeID) bool {
 	changed := b.page == page && forms.Reset(form)
 	if changed {
 		recomputePageStyles(page, b.currentTime())
+		page.RecordDOMMutation(form.ID)
 	}
 	b.mu.Unlock()
 	if changed && onMutation != nil {
@@ -1920,6 +1924,7 @@ func startRuntime(ctx context.Context, factory runtimemodel.EngineFactory, engin
 			}
 			page.FocusTarget = validFocusTarget(page.Document, page.FocusTarget)
 			recomputePageStyles(page, runtimeNow())
+			page.RecordDOMMutation(page.Document.Root.ID)
 			if onMutation != nil {
 				onMutation()
 			}

@@ -7,10 +7,38 @@ import (
 	"testing"
 
 	"github.com/Grove-Computing/Growse/internal/browser"
+	layoutengine "github.com/Grove-Computing/Growse/internal/layout"
 	"github.com/Grove-Computing/Growse/internal/network"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
+	"github.com/Grove-Computing/Growse/internal/runtime/isolated"
 	"github.com/Grove-Computing/Growse/internal/runtime/javascript"
 )
+
+func TestSvelteKitIsolatedDesktopRuntimeHydratesPromptly(t *testing.T) {
+	server := httptest.NewServer(modernWebCompatibilityHandler())
+	defer server.Close()
+	engine := browser.NewWithEngineFactory(network.NewClientWithLimits(server.Client(), 4<<20), func(selected runtimemodel.Engine) runtimemodel.Runtime {
+		return isolated.New(selected)
+	})
+	defer engine.Close()
+	if _, err := engine.SetEngine(context.Background(), runtimemodel.EngineJavaScript); err != nil {
+		t.Fatal(err)
+	}
+	mutations := make(chan struct{}, 32)
+	engine.SetOnMutation(func() {
+		select {
+		case mutations <- struct{}{}:
+		default:
+		}
+	})
+	if _, err := engine.Navigate(context.Background(), server.URL+"/svelte/"); err != nil {
+		t.Fatal(err)
+	}
+	waitForFixtureText(t, engine, mutations, "svelte-hydration-marker", "hydrated")
+	if page := engine.Page(); page.RuntimeError != "" || len(page.ScriptErrors) != 0 || !page.RuntimeStarted {
+		t.Fatalf("isolated desktop hydration = started:%t runtime:%q scripts:%v", page.RuntimeStarted, page.RuntimeError, page.ScriptErrors)
+	}
+}
 
 func TestSvelteKitSSRFixtureHydratesAndEnhancesForm(t *testing.T) {
 	requests := &fixtureRequestLog{}
@@ -60,6 +88,17 @@ func TestSvelteKitSSRFixtureHydratesAndEnhancesForm(t *testing.T) {
 	}
 	if requests.count("/_app/immutable/upstream-contract.mjs") != 1 {
 		t.Fatalf("SvelteKit upstream build contract requests = %#v", requests.paths)
+	}
+	inputID := fixtureNode(t, page, "svelte-name").ID
+	inputVisible := false
+	for _, box := range layoutengine.BuildWithScrollAndResources(page.Document, page.ComputedStyles, page.ImageResources, page.WebFonts, 1024, 720, 0, 0).Boxes {
+		if box.NodeID == inputID && box.Input && box.Text == "SSR" && box.Width > 1 && box.Height > 1 {
+			inputVisible = true
+			break
+		}
+	}
+	if !inputVisible {
+		t.Fatal("SvelteKit label input was not exposed as an interactive layout box")
 	}
 
 	if !engine.DispatchClick(fixtureNode(t, page, "svelte-reactive").ID, 0, 0) {
