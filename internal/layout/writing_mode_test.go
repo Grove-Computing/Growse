@@ -96,8 +96,12 @@ func TestVerticalTextUsesColumnGeometryForPaintHitAndScroll(t *testing.T) {
 	if hit, ok := HitTest(tree, first.X+firstRun.OffsetX+firstRun.CrossSize/2, first.Y+firstRun.OffsetY+firstRun.Width/2); !ok || hit != container.ID {
 		t.Fatalf("vertical glyph hit = %d/%t, want %d", hit, ok, container.ID)
 	}
-	if tree.ScrollWidth <= tree.Width {
-		t.Fatalf("vertical overflow scroll width = %v, viewport %v", tree.ScrollWidth, tree.Width)
+	scrollContainer, exists := tree.ScrollContainers[container.ID]
+	if !exists || scrollContainer.ScrollWidth <= scrollContainer.Viewport.Width {
+		t.Fatalf("vertical scroll container = %#v exists:%t", scrollContainer, exists)
+	}
+	if tree.ScrollWidth != tree.Width {
+		t.Fatalf("nested vertical overflow leaked into document scroll width = %v, viewport %v", tree.ScrollWidth, tree.Width)
 	}
 }
 

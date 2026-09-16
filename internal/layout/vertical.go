@@ -135,12 +135,20 @@ func (e *engine) verticalInlineItems(runs []inlineRun, containingWidth float32) 
 			if token.image {
 				token.width, token.height, token.baseline = e.resolveInlineImageSize(token, containingWidth)
 			} else if token.flex {
-				token.width, token.height, token.baseline = e.resolveInlineFlexSize(token.node, token.style, containingWidth)
+				token.boxWidth, token.boxHeight, token.baseline = e.resolveInlineFlexSize(token.node, token.style, containingWidth)
+				token.width = token.boxWidth + token.style.margin.Left + token.style.margin.Right
+				token.height = token.boxHeight + token.style.margin.Top + token.style.margin.Bottom
+				token.baseline += token.style.margin.Top
 			} else if token.grid {
-				token.width, token.height, token.baseline = e.resolveInlineGridSize(token.node, token.style, containingWidth)
+				token.boxWidth, token.boxHeight, token.baseline = e.resolveInlineGridSize(token.node, token.style, containingWidth)
+				token.width = token.boxWidth + token.style.margin.Left + token.style.margin.Right
+				token.height = token.boxHeight + token.style.margin.Top + token.style.margin.Bottom
+				token.baseline += token.style.margin.Top
 			} else {
-				token.width, token.height = resolveAtomicSize(token, containingWidth)
-				token.baseline = token.height
+				token.boxWidth, token.boxHeight = resolveAtomicSize(token, containingWidth)
+				token.width = token.boxWidth + token.style.margin.Left + token.style.margin.Right
+				token.height = token.boxHeight + token.style.margin.Top + token.style.margin.Bottom
+				token.baseline = token.style.margin.Top + token.boxHeight
 			}
 			result = append(result, verticalInlineItem{run: token, advance: max(token.height, float32(1)), cross: max(token.width, float32(1)), baseline: token.baseline, atomic: true})
 			continue
@@ -173,11 +181,12 @@ func (e *engine) appendVerticalColumn(box *Box, items []verticalInlineItem, x, y
 				if item.run.image {
 					e.renderInlineImage(item.run, x, itemY, containingWidth)
 				} else if item.run.grid {
-					e.renderInlineGrid(item.run, x, itemY)
+					item.run.width, item.run.height = item.run.boxWidth, item.run.boxHeight
+					e.renderInlineGrid(item.run, x+item.run.style.margin.Left, itemY+item.run.style.margin.Top)
 				} else {
-					layoutItem := &flexLayoutItem{node: item.run.node, style: item.run.style, crossSize: item.run.width}
-					layoutItem.algorithm = &flexItem{target: item.run.height}
-					e.renderFlexItem(layoutItem, flexAxis{horizontal: false}, x, itemY, item.run.height, item.run.width)
+					layoutItem := &flexLayoutItem{node: item.run.node, style: item.run.style, crossSize: item.run.boxWidth}
+					layoutItem.algorithm = &flexItem{target: item.run.boxHeight}
+					e.renderFlexItem(layoutItem, flexAxis{horizontal: false}, x+item.run.style.margin.Left, itemY+item.run.style.margin.Top, item.run.boxHeight, item.run.boxWidth)
 				}
 			}
 			advance += item.advance

@@ -522,8 +522,15 @@ func (e *engine) flexIntrinsicSizes(node *dom.Node, style blockStyle, axis flexA
 		textWidth, textHeight = checkableSize, checkableSize
 		minTextWidth = checkableSize
 	} else if isSubmitButtonControl(node) {
-		textWidth, textHeight = buttonWidth, inputHeight
-		minTextWidth = buttonWidth
+		label := text
+		if node.TagName == "input" {
+			label, _ = node.Attribute("value")
+		}
+		if label == "" {
+			label = "Submit"
+		}
+		textWidth, textHeight, _ = measureStyledText(label, style)
+		minTextWidth = textWidth
 	} else if isImageElement(node, e.images) {
 		resource := e.images[node.ID]
 		textWidth, textHeight = resource.IntrinsicWidth, resource.IntrinsicHeight

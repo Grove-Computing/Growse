@@ -15,6 +15,7 @@ type compatibilityCorpus struct {
 	SchemaVersion int          `json:"schemaVersion"`
 	Release       string       `json:"release"`
 	Chromium      string       `json:"chromium"`
+	Firefox       string       `json:"firefox"`
 	Offline       bool         `json:"offline"`
 	Pages         []corpusPage `json:"pages"`
 }
@@ -51,12 +52,16 @@ func TestBrowserGradeCorpusCoversFrameworkViewportDPRAndLifecycleMatrix(t *testi
 	if err := json.Unmarshal(encoded, &corpus); err != nil {
 		t.Fatal(err)
 	}
-	if corpus.SchemaVersion != 1 || corpus.Release != "v0.18.0" || corpus.Chromium == "" || !corpus.Offline || len(corpus.Pages) != 2 {
+	if corpus.SchemaVersion != 1 || corpus.Release != "v0.19.0" || corpus.Chromium != "153.0.8010.36" || corpus.Firefox != "156.0" || !corpus.Offline || len(corpus.Pages) != 3 {
 		t.Fatalf("corpus header = %#v", corpus)
 	}
 	wantStates := []string{"ssr", "resource-complete", "hydrated", "interaction", "scroll", "animation"}
 	for _, page := range corpus.Pages {
-		if page.Name == "" || page.Framework == "" || !strings.HasPrefix(page.Path, "/") || !sameStrings(page.Viewports, []string{"desktop", "narrow"}) || !sameInts(page.DevicePixelRatios, []int{1, 2}) || !sameStrings(page.States, wantStates) {
+		states := wantStates
+		if page.Name == "tailwind-css" {
+			states = []string{"resource-complete", "interaction", "scroll"}
+		}
+		if page.Name == "" || page.Framework == "" || !strings.HasPrefix(page.Path, "/") || !sameStrings(page.Viewports, []string{"desktop", "narrow"}) || !sameInts(page.DevicePixelRatios, []int{1, 2}) || !sameStrings(page.States, states) {
 			t.Fatalf("incomplete corpus page = %#v", page)
 		}
 	}

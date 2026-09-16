@@ -21,6 +21,8 @@ func applyFlexProperties(computed, parent ComputedStyle, winners map[string]winn
 	computed.FlexBasis = resolveBasisWinner(computed.FlexBasis, parent.FlexBasis, winners["flex-basis"], customProperties, context)
 	computed.RowGap = resolveGapWinner("row-gap", computed.RowGap, parent.RowGap, winners["row-gap"], customProperties, context)
 	computed.ColumnGap = resolveGapWinner("column-gap", computed.ColumnGap, parent.ColumnGap, winners["column-gap"], customProperties, context)
+	computed.RowGapNormal = resolveGapNormal("row-gap", computed.RowGapNormal, parent.RowGapNormal, winners["row-gap"], customProperties)
+	computed.ColumnGapNormal = resolveGapNormal("column-gap", computed.ColumnGapNormal, parent.ColumnGapNormal, winners["column-gap"], customProperties)
 	computed.AspectRatio = resolveAspectRatioWinner(computed.AspectRatio, parent.AspectRatio, winners["aspect-ratio"], customProperties)
 	return computed
 }

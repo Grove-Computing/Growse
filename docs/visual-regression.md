@@ -74,3 +74,17 @@ bash tests/v017-conformance.sh
 ```
 
 差分が出た場合はmaskやgoldenを先に広げず、semantic、region、性能counterのどのGateが変化したかを確認する。固定Chromium versionとcorpus scenarioを変更する場合は、referenceとGrowse snapshotを同じcommitで更新する。
+
+## v0.19.0 CSS Layout 2026 Differential
+
+`examples/css-layout-2026/differential.html`は720×520 CSS pxでGrid、Flexbox、nested overflowをfont非依存の色面へ固定する。2026-09-16にGoogle Chrome 153.0.8010.36とMozilla Firefox 156.0 / geckodriver 0.37.1から同じDOM landmark、computed display / position / overflow、geometry、document scroll extentを採取し、`testdata/differential-v019.json`へ保存した。
+
+`TestCSSLayoutDifferentialMatchesChromiumAndFirefoxGeometryScrollAndVisualThreshold`はGrowseのbrowser UA profileから同じsnapshotを構築し、viewportとlandmark geometryを2 CSS pxまたは参照値の1%以内、semantic stateを完全一致、page / workspace / footerの色面raster差を各2%以下でGateする。nested scrollerの内部extentはscroll containerへ保持し、clipped descendantをdocument scroll extentへ漏らさない。
+
+```sh
+go test ./internal/conformance ./internal/layout ./examples/css-layout-2026 -count=1
+```
+
+参照更新時は両ブラウザのversion、720×520 content viewport、採取日を同時に更新する。片方だけの参照更新、threshold拡大、fontや動的領域を持つfixtureへの置換は行わない。
+
+`TestV019FrameworkCorpusDesktopNarrowHydrationInteractionAndScroll`はNext.js 16.3.3 / React 19.2.8、SvelteKit 2.70.3 / Svelte 5.57.0、Tailwind CSS 4.1.12のchecked-in artifactを対象にする。Next.js / SvelteKitはSSR root identityを保持したhydrationとevent後state、TailwindはCSS-only resource完了を起点に、1024px / 640px幅、document scroll、native buttonのPaint / Hit Testing、layout fallback不在を検証する。

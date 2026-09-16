@@ -117,6 +117,7 @@ type blockStyle struct {
 	justifySelf          stylemodel.Align
 	justifySelfSafety    stylemodel.OverflowAlignment
 	rowGap               stylemodel.LengthPercentage
+	rowGapNormal         bool
 	columnGap            stylemodel.LengthPercentage
 	columnGapNormal      bool
 	columnCount          int
@@ -160,6 +161,8 @@ type inlineRun struct {
 	widthOffset float32
 	height      float32
 	baseline    float32
+	boxWidth    float32
+	boxHeight   float32
 	opacity     float32
 }
 
@@ -251,12 +254,22 @@ func build(document *dom.Document, computed stylemodel.Map, images map[dom.NodeI
 				contentWidth += run.Width
 			}
 		}
-		tree.ScrollWidth = max(tree.ScrollWidth, box.X+contentWidth+pageInset)
-		tree.ScrollHeight = max(tree.ScrollHeight, box.Y+box.Height+pageInset)
+		right, bottom := box.X+contentWidth, box.Y+box.Height
+		if box.Clip != nil {
+			right = min(right, box.Clip.X+box.Clip.Width)
+			bottom = min(bottom, box.Clip.Y+box.Clip.Height)
+		}
+		tree.ScrollWidth = max(tree.ScrollWidth, right+pageInset)
+		tree.ScrollHeight = max(tree.ScrollHeight, bottom+pageInset)
 	}
 	for _, decoration := range tree.Decorations {
-		tree.ScrollWidth = max(tree.ScrollWidth, decoration.X+decoration.Width+pageInset)
-		tree.ScrollHeight = max(tree.ScrollHeight, decoration.Y+decoration.Height+pageInset)
+		right, bottom := decoration.X+decoration.Width, decoration.Y+decoration.Height
+		if decoration.Clip != nil {
+			right = min(right, decoration.Clip.X+decoration.Clip.Width)
+			bottom = min(bottom, decoration.Clip.Y+decoration.Clip.Height)
+		}
+		tree.ScrollWidth = max(tree.ScrollWidth, right+pageInset)
+		tree.ScrollHeight = max(tree.ScrollHeight, bottom+pageInset)
 	}
 	assignFragmentIdentities(tree)
 	buildCompositingLayers(tree, computed)
@@ -636,7 +649,9 @@ func isCheckableControl(node *dom.Node) bool {
 }
 
 func isSubmitButtonControl(node *dom.Node) bool {
-	return forms.IsSubmitButton(node)
+	// Every <button> has native control geometry, regardless of whether its
+	// activation behavior is submit, reset, or an ordinary script event.
+	return node != nil && node.Type == dom.NodeElement && node.TagName == "button" || forms.IsSubmitButton(node)
 }
 
 func (e *engine) addSubmitButton(node *dom.Node, style blockStyle, x, width, containingHeight float32, heightDefinite bool) {
@@ -974,7 +989,7 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 					firstInFlow = false
 					continue
 				}
-				if isEditableTextControl(child) {
+				if isEditableTextControl(child) && !isInlineLevelDisplay(childStyle.display) {
 					flushInline()
 					e.addInput(child, childStyle, contentX, contentWidth, childContainingHeight, declaredHeightDefinite)
 					previousBlock = true
@@ -982,7 +997,7 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 					firstInFlow = false
 					continue
 				}
-				if isSelectControl(child) {
+				if isSelectControl(child) && !isInlineLevelDisplay(childStyle.display) {
 					flushInline()
 					e.addSelect(child, childStyle, contentX, contentWidth, childContainingHeight, declaredHeightDefinite)
 					previousBlock = true
@@ -990,7 +1005,7 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 					firstInFlow = false
 					continue
 				}
-				if isCheckableControl(child) {
+				if isCheckableControl(child) && !isInlineLevelDisplay(childStyle.display) {
 					flushInline()
 					e.addCheckable(child, childStyle, contentX, contentWidth, childContainingHeight, declaredHeightDefinite)
 					previousBlock = true
@@ -998,7 +1013,7 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 					firstInFlow = false
 					continue
 				}
-				if isSubmitButtonControl(child) {
+				if isSubmitButtonControl(child) && !isInlineLevelDisplay(childStyle.display) {
 					flushInline()
 					e.addSubmitButton(child, childStyle, contentX, contentWidth, childContainingHeight, declaredHeightDefinite)
 					previousBlock = true
@@ -1463,12 +1478,15 @@ func (e *engine) collectInlineRunsWithOpacity(node, owner *dom.Node, opacity flo
 	if isImageElement(node, e.images) {
 		return []inlineRun{{nodeID: node.ID, node: node, tag: node.TagName, style: style, atomic: true, image: true, opacity: opacity}}
 	}
-	if style.display == stylemodel.DisplayInlineBlock {
-		run := inlineRun{nodeID: node.ID, tag: node.TagName, text: e.inlineText(node), style: style, atomic: true, opacity: opacity}
-		if node.TagName == "iframe" {
-			run.node = node
+	if forms.IsSubmitButton(node) {
+		label := strings.TrimSpace(node.TextContent())
+		if node.TagName == "input" {
+			label, _ = node.Attribute("value")
 		}
-		return []inlineRun{run}
+		return []inlineRun{{nodeID: node.ID, node: node, tag: node.TagName, text: label, style: style, atomic: true, opacity: opacity}}
+	}
+	if style.display == stylemodel.DisplayInlineBlock {
+		return []inlineRun{{nodeID: node.ID, node: node, tag: node.TagName, text: e.inlineText(node), style: style, atomic: true, opacity: opacity}}
 	}
 	if style.display == stylemodel.DisplayInlineFlex {
 		return []inlineRun{{nodeID: node.ID, node: node, tag: node.TagName, style: style, atomic: true, flex: true, opacity: opacity}}
@@ -1655,11 +1673,12 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 			if placement.image {
 				e.renderInlineImage(placement, placementX, placementY, width)
 			} else if placement.grid {
-				e.renderInlineGrid(placement, placementX, placementY)
+				placement.width, placement.height = placement.boxWidth, placement.boxHeight
+				e.renderInlineGrid(placement, placementX+placement.style.margin.Left, placementY+placement.style.margin.Top)
 			} else {
-				item := &flexLayoutItem{node: placement.node, style: placement.style, crossSize: placement.height}
-				item.algorithm = &flexItem{target: placement.width}
-				e.renderFlexItem(item, flexAxis{horizontal: true}, placementX, placementY, placement.width, placement.height)
+				item := &flexLayoutItem{node: placement.node, style: placement.style, crossSize: placement.boxHeight}
+				item.algorithm = &flexItem{target: placement.boxWidth}
+				e.renderFlexItem(item, flexAxis{horizontal: true}, placementX+placement.style.margin.Left, placementY+placement.style.margin.Top, placement.boxWidth, placement.boxHeight)
 			}
 		}
 		e.y += lineHeight
@@ -1676,12 +1695,18 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 	appendPiece := func(run inlineRun, text string, pieceWidth float32) {
 		textRun := TextRun{
 			NodeID: run.nodeID, Tag: run.tag, Text: text, Width: pieceWidth,
+			Atomic:   run.atomic,
 			FontSize: run.style.fontSize, Bold: run.style.bold,
 			FontFamilies: append([]string(nil), run.style.fontFamilies...), FontStyle: run.style.fontStyle, FontStretch: run.style.fontStretch,
 			LetterSpacing: run.style.letterSpacing, WordSpacing: run.style.wordSpacing, VerticalOffset: verticalAlignOffset(run.style),
 			Color: run.style.color, Background: run.style.background,
 			Decoration: run.style.decoration, DecorationColor: run.style.decorationColor, Opacity: run.opacity,
 			TextShadows: append([]stylemodel.Shadow(nil), run.style.textShadows...),
+		}
+		if run.atomic && run.node != nil {
+			// The placeholder owns inline advance only. The atomic box is painted
+			// separately at its border-box geometry, excluding its margins.
+			textRun.Background = 0
 		}
 		runHeight, runAscent := usedLineMetrics(run)
 		textRun.Baseline = e.y + runAscent - textRun.VerticalOffset
@@ -1709,12 +1734,20 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 			if token.image {
 				token.width, token.height, token.baseline = e.resolveInlineImageSize(token, width)
 			} else if token.flex {
-				token.width, token.height, token.baseline = e.resolveInlineFlexSize(token.node, token.style, width)
+				token.boxWidth, token.boxHeight, token.baseline = e.resolveInlineFlexSize(token.node, token.style, width)
+				token.width = token.boxWidth + token.style.margin.Left + token.style.margin.Right
+				token.height = token.boxHeight + token.style.margin.Top + token.style.margin.Bottom
+				token.baseline += token.style.margin.Top
 			} else if token.grid {
-				token.width, token.height, token.baseline = e.resolveInlineGridSize(token.node, token.style, width)
+				token.boxWidth, token.boxHeight, token.baseline = e.resolveInlineGridSize(token.node, token.style, width)
+				token.width = token.boxWidth + token.style.margin.Left + token.style.margin.Right
+				token.height = token.boxHeight + token.style.margin.Top + token.style.margin.Bottom
+				token.baseline += token.style.margin.Top
 			} else {
-				token.width, token.height = resolveAtomicSize(token, width)
-				token.baseline = token.height
+				token.boxWidth, token.boxHeight = resolveAtomicSize(token, width)
+				token.width = token.boxWidth + token.style.margin.Left + token.style.margin.Right
+				token.height = token.boxHeight + token.style.margin.Top + token.style.margin.Bottom
+				token.baseline = token.style.margin.Top + token.boxHeight
 			}
 			if usedWidth > 0 && usedWidth+token.width > lineWidth && wrapsWhitespace(token.style.whiteSpace) {
 				flushLine(false)
@@ -1801,6 +1834,10 @@ func isBlockLevelDisplay(display stylemodel.Display) bool {
 	return display == stylemodel.DisplayBlock || display == stylemodel.DisplayFlowRoot || display == stylemodel.DisplayFlex || display == stylemodel.DisplayGrid || display == stylemodel.DisplayTableCaption
 }
 
+func isInlineLevelDisplay(display stylemodel.Display) bool {
+	return display == stylemodel.DisplayInline || display == stylemodel.DisplayInlineBlock || display == stylemodel.DisplayInlineFlex || display == stylemodel.DisplayInlineGrid
+}
+
 func tokenizeInlineRuns(runs []inlineRun) []inlineRun {
 	var tokens []inlineRun
 	for _, run := range runs {
@@ -1878,23 +1915,33 @@ func resolveAtomicSize(run inlineRun, containingWidth float32) (float32, float32
 	horizontal := run.style.padding.Left + run.style.padding.Right + run.style.border.Left.Width + run.style.border.Right.Width
 	vertical := run.style.padding.Top + run.style.padding.Bottom + run.style.border.Top.Width + run.style.border.Bottom.Width
 	width, _, _ := measureStyledText(normalizeWhitespace(run.text), run.style)
+	widthDefinite := false
 	if resolved, ok := resolveSize(run.style.width, containingWidth, true); ok {
 		width = resolved
+		widthDefinite = true
+	} else if run.style.boxSizing == stylemodel.BoxSizingBorderBox {
+		// box-sizing only changes how a declared size is interpreted. An auto
+		// intrinsic size still has to contain its padding and border.
+		width += horizontal
 	}
-	width = constrainSize(width, run.style.minWidth, run.style.maxWidth, containingWidth, true)
 	height := run.style.fontSize * 1.4
+	heightDefinite := false
 	if resolved, ok := resolveSize(run.style.height, 0, false); ok {
 		height = resolved
+		heightDefinite = true
+	} else if run.style.boxSizing == stylemodel.BoxSizingBorderBox {
+		height += vertical
 	}
 	if run.style.aspectRatio > 0 {
-		widthSpecified := run.style.width.Kind != stylemodel.SizeAuto
-		heightSpecified := run.style.height.Kind != stylemodel.SizeAuto
-		if widthSpecified && !heightSpecified {
+		if widthDefinite && !heightDefinite {
 			height = width / run.style.aspectRatio
-		} else if heightSpecified && !widthSpecified {
+			heightDefinite = true
+		} else if heightDefinite && !widthDefinite {
 			width = height * run.style.aspectRatio
+			widthDefinite = true
 		}
 	}
+	width = constrainSize(width, run.style.minWidth, run.style.maxWidth, containingWidth, true)
 	height = constrainSize(height, run.style.minHeight, run.style.maxHeight, 0, false)
 	if run.style.boxSizing == stylemodel.BoxSizingContentBox {
 		width += horizontal
@@ -2229,7 +2276,8 @@ func applyComputed(block blockStyle, computed stylemodel.ComputedStyle) blockSty
 	block.order, block.flexGrow, block.flexShrink = computed.Order, computed.FlexGrow, computed.FlexShrink
 	block.flexBasis, block.alignSelf, block.justifySelf = computed.FlexBasis, computed.AlignSelf, computed.JustifySelf
 	block.alignSelfSafety, block.justifySelfSafety = computed.AlignSelfSafety, computed.JustifySelfSafety
-	block.rowGap, block.columnGap, block.columnGapNormal = computed.RowGap, computed.ColumnGap, computed.ColumnGapNormal
+	block.rowGap, block.rowGapNormal = computed.RowGap, computed.RowGapNormal
+	block.columnGap, block.columnGapNormal = computed.ColumnGap, computed.ColumnGapNormal
 	block.columnCount, block.columnWidth, block.columnRule, block.columnFill = computed.ColumnCount, computed.ColumnWidth, computed.ColumnRule, computed.ColumnFill
 	block.columnSpan, block.breakBefore, block.breakAfter, block.breakInside = computed.ColumnSpan, computed.BreakBefore, computed.BreakAfter, computed.BreakInside
 	block.widows, block.orphans = computed.Widows, computed.Orphans

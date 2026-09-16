@@ -53,6 +53,12 @@ func HitTest(tree *Tree, x, y float32) (dom.NodeID, bool) {
 
 		if box.WritingMode != stylemodel.WritingModeHorizontalTB {
 			for _, run := range box.Runs {
+				if run.Atomic {
+					if bounds, exists := tree.Bounds[run.NodeID]; exists && containsPoint(bounds.X, bounds.Y, bounds.Width, bounds.Height, localX, localY) {
+						return run.NodeID, true
+					}
+					continue
+				}
 				crossSize := run.CrossSize
 				if crossSize <= 0 {
 					crossSize = box.Width
@@ -64,6 +70,13 @@ func HitTest(tree *Tree, x, y float32) (dom.NodeID, bool) {
 		} else {
 			runX := box.X
 			for _, run := range box.Runs {
+				if run.Atomic {
+					if bounds, exists := tree.Bounds[run.NodeID]; exists && containsPoint(bounds.X, bounds.Y, bounds.Width, bounds.Height, localX, localY) {
+						return run.NodeID, true
+					}
+					runX += run.Width
+					continue
+				}
 				if containsPoint(runX, box.Y, run.Width, box.Height, localX, localY) {
 					return run.NodeID, true
 				}

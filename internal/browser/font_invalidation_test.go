@@ -52,11 +52,19 @@ func TestCommitWebFontCompletionInvalidatesOnlyCoveredGlyphRuns(t *testing.T) {
 			t.Fatalf("run %d = %#v, want %#v", index, invalidation.Runs[index], want[index])
 		}
 	}
-	if page.StyleRevision != 17 {
-		t.Fatalf("font completion rebuilt page styles: revision=%d", page.StyleRevision)
+	if page.StyleRevision != 18 {
+		t.Fatalf("font completion render revision = %d, want 18", page.StyleRevision)
 	}
 	if page.WebFonts == nil || len(page.Fonts) != 1 {
 		t.Fatal("decoded font was not installed")
+	}
+	wantAncestors := []dom.NodeID{matchingText.ID, matching.ID, document.Root.ID}
+	if !equalNodeIDs(invalidation.LayoutAncestors, wantAncestors) {
+		t.Fatalf("font layout ancestors = %v, want %v", invalidation.LayoutAncestors, wantAncestors)
+	}
+	renderDirty := page.RenderInvalidationSnapshot()
+	if renderDirty.Revision != page.StyleRevision || renderDirty.Damage != RenderDamageLayout {
+		t.Fatalf("font render invalidation = %#v", renderDirty)
 	}
 
 	snapshot := page.FontInvalidationSnapshot()
@@ -70,5 +78,25 @@ func TestCommitWebFontCompletionIgnoresFailedFont(t *testing.T) {
 	page := &Page{}
 	if got := page.CommitWebFontCompletion(FontResource{Family: "Fixture", Error: "decode failed"}); got.Revision != 0 || len(page.Fonts) != 0 {
 		t.Fatalf("failed font changed page: %#v", got)
+	}
+}
+
+func TestCommitWebFontCompletionRejectsStaleGeneration(t *testing.T) {
+	face, err := textfont.ParseTTF(bytes.NewReader(goregular.TTF))
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := &Page{StyleRevision: 9}
+	stale := page.BeginWebFontLoad()
+	current := page.BeginWebFontLoad()
+	resource := FontResource{Family: "Fixture", URL: "https://example.com/fixture.woff2", Loaded: true, Decoded: true, Face: face}
+	if invalidation, committed := page.CommitWebFontCompletionForGeneration(stale, resource); committed || invalidation.Revision != 0 {
+		t.Fatalf("stale font completion was committed: %#v", invalidation)
+	}
+	if len(page.Fonts) != 0 || page.StyleRevision != 9 {
+		t.Fatalf("stale font completion changed page: fonts=%d revision=%d", len(page.Fonts), page.StyleRevision)
+	}
+	if _, committed := page.CommitWebFontCompletionForGeneration(current, resource); !committed || len(page.Fonts) != 1 {
+		t.Fatal("current font completion was rejected")
 	}
 }

@@ -290,6 +290,7 @@ type TextRun struct {
 	Tag    string
 	Text   string
 	Width  float32
+	Atomic bool
 	// OffsetX/OffsetY and CrossSize describe the physical glyph rectangle for
 	// vertical writing. Horizontal runs retain their compact sequential form.
 	OffsetX   float32

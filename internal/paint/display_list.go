@@ -34,6 +34,15 @@ type Command interface {
 	paintCommand()
 }
 
+// MinimumCommandAdvance keeps fully backtracked paint commands addressable by
+// the virtualized viewport. Later signed offsets compensate this bookkeeping
+// slot, so it does not move command geometry in document coordinates.
+const MinimumCommandAdvance float32 = 1
+
+func advancePaintCursor(cursor, top, height float32) float32 {
+	return cursor + max(top+height, MinimumCommandAdvance)
+}
+
 // DrawText paints one pre-laid-out line of text.
 type DrawText struct {
 	NodeID dom.NodeID
@@ -241,6 +250,7 @@ type TextRun struct {
 	Tag       string
 	Text      string
 	Width     float32
+	Atomic    bool
 	OffsetX   float32
 	OffsetY   float32
 	CrossSize float32
@@ -325,7 +335,7 @@ func Build(tree *layout.Tree) *DisplayList {
 				WritingMode: decoration.WritingMode, Direction: decoration.Direction,
 				Clips: cloneClipRegions(decoration.Clips),
 			})
-			paintCursor = max(paintCursor, decoration.Y)
+			paintCursor = advancePaintCursor(paintCursor, top, 0)
 			continue
 		}
 		box := *item.box
@@ -339,7 +349,7 @@ func Build(tree *layout.Tree) *DisplayList {
 				Border: box.ImageBorder, Radius: box.ImageRadius, Transform: box.Transform, Cursor: box.Cursor,
 				WritingMode: box.WritingMode, Direction: box.Direction,
 			})
-			paintCursor = max(paintCursor, box.Y+box.Height)
+			paintCursor = advancePaintCursor(paintCursor, top, box.Height)
 			continue
 		}
 		if box.Input {
@@ -363,7 +373,7 @@ func Build(tree *layout.Tree) *DisplayList {
 				Appearance: box.Appearance, AccentColor: box.AccentColor, Cursor: box.Cursor,
 				WritingMode: box.WritingMode, Direction: box.Direction,
 			})
-			paintCursor = max(paintCursor, box.Y+box.Height)
+			paintCursor = advancePaintCursor(paintCursor, top, box.Height)
 			continue
 		}
 		if box.Select {
@@ -375,7 +385,7 @@ func Build(tree *layout.Tree) *DisplayList {
 				Appearance: box.Appearance, AccentColor: box.AccentColor, Cursor: box.Cursor,
 				WritingMode: box.WritingMode, Direction: box.Direction,
 			})
-			paintCursor = max(paintCursor, box.Y+box.Height)
+			paintCursor = advancePaintCursor(paintCursor, top, box.Height)
 			continue
 		}
 		if box.Checkable {
@@ -387,7 +397,7 @@ func Build(tree *layout.Tree) *DisplayList {
 				Appearance: box.Appearance, AccentColor: box.AccentColor, Cursor: box.Cursor,
 				WritingMode: box.WritingMode, Direction: box.Direction,
 			})
-			paintCursor = max(paintCursor, box.Y+box.Height)
+			paintCursor = advancePaintCursor(paintCursor, top, box.Height)
 			continue
 		}
 		if box.Button {
@@ -398,7 +408,7 @@ func Build(tree *layout.Tree) *DisplayList {
 				Appearance: box.Appearance, AccentColor: box.AccentColor, Cursor: box.Cursor,
 				WritingMode: box.WritingMode, Direction: box.Direction,
 			})
-			paintCursor = max(paintCursor, box.Y+box.Height)
+			paintCursor = advancePaintCursor(paintCursor, top, box.Height)
 			continue
 		}
 		command := DrawText{
@@ -428,7 +438,7 @@ func Build(tree *layout.Tree) *DisplayList {
 		command.Runs = make([]TextRun, 0, len(box.Runs))
 		for _, run := range box.Runs {
 			command.Runs = append(command.Runs, TextRun{
-				NodeID: run.NodeID, Tag: run.Tag, Text: run.Text, Width: run.Width,
+				NodeID: run.NodeID, Tag: run.Tag, Text: run.Text, Width: run.Width, Atomic: run.Atomic,
 				OffsetX: run.OffsetX, OffsetY: run.OffsetY, CrossSize: run.CrossSize,
 				FontSize: run.FontSize, Bold: run.Bold, Color: run.Color, Background: run.Background,
 				FontFamilies: append([]string(nil), run.FontFamilies...), FontStyle: run.FontStyle, FontStretch: run.FontStretch,
@@ -440,7 +450,7 @@ func Build(tree *layout.Tree) *DisplayList {
 			})
 		}
 		list.Commands = append(list.Commands, command)
-		paintCursor = max(paintCursor, box.Y+box.Height)
+		paintCursor = advancePaintCursor(paintCursor, top, box.Height)
 	}
 	return list
 }
@@ -532,7 +542,7 @@ func ApplyAnimatedLayout(list *DisplayList, tree *layout.Tree) {
 			}
 			command.X, command.Y, command.Width, command.Height = decoration.X, decoration.Y, decoration.Width, decoration.Height
 			command.Top = decoration.Y - paintCursor
-			paintCursor = max(paintCursor, decoration.Y)
+			paintCursor = advancePaintCursor(paintCursor, command.Top, 0)
 			backdrop := stylemodel.ApplyColorFilters(tree.Background, decoration.BackdropFilters)
 			background := stylemodel.ApplyColorFilters(decoration.Background, decoration.Filters)
 			if decoration.BlendMode != stylemodel.BlendNormal {
@@ -601,7 +611,7 @@ func ApplyAnimatedLayout(list *DisplayList, tree *layout.Tree) {
 			command.Transform, command.Clip, command.Clips = box.Transform, cloneLayoutRect(box.Clip), cloneClipRegions(box.Clips)
 			list.Commands[index] = command
 		}
-		paintCursor = max(paintCursor, box.Y+box.Height)
+		paintCursor = advancePaintCursor(paintCursor, top, box.Height)
 	}
 }
 

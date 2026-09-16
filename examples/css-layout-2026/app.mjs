@@ -1,3 +1,14 @@
+const flowToggle = document.getElementById("flow-toggle");
+const flowStage = document.getElementById("flow-stage");
+const flowStatus = document.getElementById("flow-status");
+let alternateFlow = false;
+
+flowToggle.addEventListener("click", () => {
+  alternateFlow = !alternateFlow;
+  flowStage.setAttribute("class", alternateFlow ? "flow-stage alternate" : "flow-stage");
+  flowStatus.textContent = alternateFlow ? "RIGHT FLOAT · FLOW ROOT" : "LEFT FLOAT · CLEAR BOTH";
+});
+
 const toggle = document.getElementById("table-toggle");
 const table = document.getElementById("layout-table");
 const status = document.getElementById("table-status");

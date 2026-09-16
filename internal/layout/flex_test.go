@@ -483,7 +483,7 @@ func TestBuildFlexOverflowClipScrollAndHitTestingShareGeometry(t *testing.T) {
 	}
 	tree := Build(document, stylemodel.Compute(document, stylesheet), 160)
 	itemBox := decorationForNode(t, tree, item.ID)
-	if itemBox.Clip == nil || itemBox.Clip.Width != 100 || tree.ScrollWidth < itemBox.X+itemBox.Width {
+	if itemBox.Clip == nil || itemBox.Clip.Width != 100 || tree.ScrollWidth >= itemBox.X+itemBox.Width+pagePadding {
 		t.Fatalf("overflow geometry = item %#v, scroll width %v", itemBox, tree.ScrollWidth)
 	}
 	if _, ok := HitTest(tree, itemBox.X+150, itemBox.Y+1); ok {

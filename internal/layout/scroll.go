@@ -78,6 +78,24 @@ func initializeScrollContainers(tree *Tree, styles stylemodel.Map) {
 		}
 		viewport := paddingBoxForNode(tree, nodeID, bounds)
 		maximumX, maximumY := viewport.X+viewport.Width, viewport.Y+viewport.Height
+		// Direct text fragments keep the scroll container's DOM identity rather
+		// than introducing descendant nodes. Include those fragment boxes before
+		// walking descendant element bounds so vertical columns and long inline
+		// content contribute to the container's own scrollable overflow.
+		for _, box := range tree.Boxes {
+			if box.NodeID != nodeID {
+				continue
+			}
+			contentWidth := box.Width
+			if len(box.Runs) != 0 && box.WritingMode == stylemodel.WritingModeHorizontalTB {
+				contentWidth = 0
+				for _, run := range box.Runs {
+					contentWidth += run.Width
+				}
+			}
+			maximumX = max(maximumX, box.X+contentWidth)
+			maximumY = max(maximumY, box.Y+box.Height)
+		}
 		for descendantID, descendantBounds := range tree.Bounds {
 			if descendantID == nodeID || !isDescendantOf(tree, descendantID, nodeID) {
 				continue

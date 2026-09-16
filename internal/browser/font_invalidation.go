@@ -17,20 +17,51 @@ type GlyphRunInvalidation struct {
 // FontInvalidation describes the bounded layout work caused by a web-font
 // completion. Browser chrome and text using other families are never included.
 type FontInvalidation struct {
-	Revision uint64
-	Runs     []GlyphRunInvalidation
+	Revision        uint64
+	Runs            []GlyphRunInvalidation
+	LayoutAncestors []dom.NodeID
 }
 
 const maxFontInvalidationRuns = 1024
 
-// CommitWebFontCompletion installs a decoded face and marks only text spans
-// covered by its family and unicode-range for re-shaping.
-func (p *Page) CommitWebFontCompletion(resource FontResource) FontInvalidation {
-	if p == nil || !resource.Loaded || !resource.Decoded || resource.Face == nil {
-		return FontInvalidation{}
+// BeginWebFontLoad advances the page-owned generation used to reject a late
+// completion from an older stylesheet or navigation state.
+func (p *Page) BeginWebFontLoad() uint64 {
+	if p == nil {
+		return 0
 	}
 	p.fontMu.Lock()
 	defer p.fontMu.Unlock()
+	p.fontGeneration++
+	return p.fontGeneration
+}
+
+// CommitWebFontCompletion installs a decoded face and marks only text spans
+// covered by its family and unicode-range for re-shaping.
+func (p *Page) CommitWebFontCompletion(resource FontResource) FontInvalidation {
+	if p == nil {
+		return FontInvalidation{}
+	}
+	p.fontMu.Lock()
+	generation := p.fontGeneration
+	p.fontMu.Unlock()
+	invalidation, _ := p.CommitWebFontCompletionForGeneration(generation, resource)
+	return invalidation
+}
+
+// CommitWebFontCompletionForGeneration installs a current decoded face and
+// rejects stale asynchronous completion without changing page state.
+func (p *Page) CommitWebFontCompletionForGeneration(generation uint64, resource FontResource) (FontInvalidation, bool) {
+	if p == nil || !resource.Loaded || !resource.Decoded || resource.Face == nil {
+		return FontInvalidation{}, false
+	}
+	p.styleMu.Lock()
+	defer p.styleMu.Unlock()
+	p.fontMu.Lock()
+	defer p.fontMu.Unlock()
+	if generation != p.fontGeneration {
+		return FontInvalidation{}, false
+	}
 
 	replaced := false
 	for index := range p.Fonts {
@@ -46,7 +77,14 @@ func (p *Page) CommitWebFontCompletion(resource FontResource) FontInvalidation {
 	p.WebFonts = layoutPageFonts(p.Fonts, p.Compatibility == CompatibilityProfileModernWeb)
 	p.fontDirty.Revision++
 	p.fontDirty.Runs = affectedGlyphRuns(p, resource, maxFontInvalidationRuns)
-	return cloneFontInvalidation(p.fontDirty)
+	p.fontDirty.LayoutAncestors = affectedFontLayoutAncestors(p, p.fontDirty.Runs, maxRenderInvalidationNodes)
+	if len(p.fontDirty.Runs) != 0 {
+		p.StyleRevision++
+		for _, nodeID := range p.fontDirty.LayoutAncestors {
+			p.RecordDOMMutation(nodeID)
+		}
+	}
+	return cloneFontInvalidation(p.fontDirty), true
 }
 
 func (p *Page) FontInvalidationSnapshot() FontInvalidation {
@@ -60,7 +98,33 @@ func (p *Page) FontInvalidationSnapshot() FontInvalidation {
 
 func cloneFontInvalidation(source FontInvalidation) FontInvalidation {
 	source.Runs = append([]GlyphRunInvalidation(nil), source.Runs...)
+	source.LayoutAncestors = append([]dom.NodeID(nil), source.LayoutAncestors...)
 	return source
+}
+
+func affectedFontLayoutAncestors(page *Page, runs []GlyphRunInvalidation, limit int) []dom.NodeID {
+	if page == nil || page.Document == nil || limit <= 0 {
+		return nil
+	}
+	result := make([]dom.NodeID, 0, min(len(runs)*4, limit))
+	seen := make(map[dom.NodeID]bool, cap(result))
+	for _, run := range runs {
+		node, exists := page.Document.NodeByID(run.TextNode)
+		if !exists {
+			continue
+		}
+		for current := node; current != nil && len(result) < limit; current = current.Parent {
+			if seen[current.ID] {
+				continue
+			}
+			seen[current.ID] = true
+			result = append(result, current.ID)
+		}
+		if len(result) >= limit {
+			break
+		}
+	}
+	return result
 }
 
 func sameFontResource(left, right FontResource) bool {
