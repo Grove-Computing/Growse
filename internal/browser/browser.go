@@ -773,28 +773,46 @@ func (b *Browser) UpdateViewport(width, height float32) bool {
 		budget := newImageDecodeBudgetWithImages(page.BackgroundImages)
 		document := snapshotImageDocument(page.Document)
 		imageCache := page.imageCache
-		if !documentHasViewportImageWork(document) {
+		backgroundResources := backgroundImageResources(page.ComputedStyles)
+		backgroundPreloads := imagePreloadPriorities(document, baseURL)
+		if !documentHasViewportImageWork(document) && len(backgroundResources) == 0 {
 			committed := page.commitImageLoad(generation, make(map[dom.NodeID]layoutengine.ImageResource), make(map[string]image.Image), nil)
 			if committed && onMutation != nil {
 				onMutation()
 			}
 			return true
 		}
-		b.loadPageImagesAsync(loadContext, generation, page, imageLoader, baseURL, document, width, policy, budget, imageCache, onMutation)
+		b.loadPageImagesAsync(loadContext, generation, page, imageLoader, baseURL, document, width, policy, budget, imageCache, backgroundResources, backgroundPreloads, true, onMutation)
 	}
 	return true
 }
 
-func (b *Browser) loadPageImagesAsync(loadContext context.Context, generation uint64, page *Page, imageLoader ResourceLoader, baseURL *url.URL, document *dom.Document, width float32, policy map[dom.NodeID]bool, budget *imageDecodeBudget, imageCache *imageResourceCache, onMutation func()) {
+func (b *Browser) loadPageImagesAsync(loadContext context.Context, generation uint64, page *Page, imageLoader ResourceLoader, baseURL *url.URL, document *dom.Document, width float32, policy map[dom.NodeID]bool, budget *imageDecodeBudget, imageCache *imageResourceCache, backgroundResources []string, backgroundPreloads map[string]resourcePriority, loadBackgrounds bool, onMutation func()) {
 	go func() {
-		resources, images, failures := loadReplacedImagesWithCache(loadContext, imageLoader, baseURL, document, width, 1, policy, budget, imageCache)
+		var resources map[dom.NodeID]layoutengine.ImageResource
+		var images, backgrounds map[string]image.Image
+		var failures, backgroundFailures []string
+		var group sync.WaitGroup
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			resources, images, failures = loadReplacedImagesWithCache(loadContext, imageLoader, baseURL, document, width, 1, policy, budget, imageCache)
+		}()
+		if loadBackgrounds {
+			group.Add(1)
+			go func() {
+				defer group.Done()
+				backgrounds, backgroundFailures = loadBackgroundImageResourcesWithCache(loadContext, imageLoader, backgroundResources, budget, imageCache, backgroundPreloads)
+			}()
+		}
+		group.Wait()
 		inlineResources, inlineImages, inlineFailures := loadInlineSVGImagesWithBudget(document, budget)
 		mergeImageResources(resources, images, inlineResources, inlineImages)
 		failures = append(failures, inlineFailures...)
 		b.mu.RLock()
 		active := b.page == page && page.Engine == runtimemodel.EngineJavaScript
 		b.mu.RUnlock()
-		staged := active && loadContext.Err() == nil && page.stageImageLoad(generation, resources, images, failures)
+		staged := active && loadContext.Err() == nil && page.stageImageLoad(generation, resources, images, failures, backgrounds, backgroundFailures, loadBackgrounds)
 		if staged && onMutation != nil {
 			onMutation()
 		}
@@ -1446,7 +1464,13 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	computedStyles, styleErrors := computeStableStylesWithDiagnostics(document, stylesheet, style.InteractionState{}, 1280, 720, reducedMotion, engine == runtimemodel.EngineJavaScript)
 	imageBudget := newImageDecodeBudget()
 	imageCache := newImageResourceCache()
-	backgroundImages, backgroundErrors := loadBackgroundImagesWithCache(ctx, imageResources, computedStyles, imageBudget, imageCache, imagePreloadPriorities(document, baseURL))
+	backgroundResources := backgroundImageResources(computedStyles)
+	backgroundPreloads := imagePreloadPriorities(document, baseURL)
+	backgroundImages := make(map[string]image.Image)
+	var backgroundErrors []string
+	if engine != runtimemodel.EngineJavaScript {
+		backgroundImages, backgroundErrors = loadBackgroundImageResourcesWithCache(ctx, imageResources, backgroundResources, imageBudget, imageCache, backgroundPreloads)
+	}
 	var replacedImages map[dom.NodeID]layoutengine.ImageResource
 	var decodedImages map[string]image.Image
 	var imageErrors []string
@@ -1588,9 +1612,9 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	childRuntimes := frameRuntimes(page)
 	b.mu.Unlock()
 	committed = true
-	if engine == runtimemodel.EngineJavaScript && documentHasViewportImageWork(imageDocument) {
+	if engine == runtimemodel.EngineJavaScript && (documentHasViewportImageWork(imageDocument) || len(backgroundResources) != 0) {
 		loadContext, generation := page.beginImageLoad(context.Background())
-		b.loadPageImagesAsync(loadContext, generation, page, imageResources, baseURL, imageDocument, 1280, imagePolicy, imageBudget, imageCache, onMutation)
+		b.loadPageImagesAsync(loadContext, generation, page, imageResources, baseURL, imageDocument, 1280, imagePolicy, imageBudget, imageCache, backgroundResources, backgroundPreloads, true, onMutation)
 	}
 	for _, childRuntime := range childRuntimes {
 		if runtime, ok := childRuntime.(backgroundRuntime); ok {

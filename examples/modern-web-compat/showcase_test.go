@@ -70,8 +70,13 @@ func TestModernWebCompatibilityShowcaseRunsEntirelyLocally(t *testing.T) {
 		t.Fatalf("showcase Web Font = %+v errors=%v", jsPage.Fonts, jsPage.FontErrors)
 	}
 	imageNode := fixtureNode(t, jsPage, "next-image")
-	if resource := jsPage.ImageResources[imageNode.ID]; !resource.Loaded || resource.Error != "" {
+	if resource := jsPage.ImageResources[imageNode.ID]; !resource.Loaded || resource.Error != "" || !strings.HasSuffix(resource.URL, "/assets/pixel.png") {
 		t.Fatalf("showcase picture/image = %+v errors=%v", resource, jsPage.ImageErrors)
+	}
+	backgroundNode := fixtureNode(t, jsPage, "next-background")
+	backgroundStyle, _ := jsPage.ComputedStyles.For(backgroundNode)
+	if backgroundStyle.BackgroundImage.Kind != style.BackgroundImageURL || !strings.HasSuffix(backgroundStyle.BackgroundImage.URL, "/assets/pixel.png") || jsPage.BackgroundImages[backgroundStyle.BackgroundImage.URL] == nil {
+		t.Fatalf("showcase CSS background = style:%+v images:%v errors:%v", backgroundStyle.BackgroundImage, jsPage.BackgroundImages, jsPage.BackgroundErrors)
 	}
 	svgNode := fixtureNode(t, jsPage, "next-svg")
 	if resource := jsPage.ImageResources[svgNode.ID]; !resource.Loaded || resource.IntrinsicWidth != 80 || resource.IntrinsicHeight != 48 {

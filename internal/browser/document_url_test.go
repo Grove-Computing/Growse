@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	htmlparser "github.com/Grove-Computing/Growse/internal/html"
 	"github.com/Grove-Computing/Growse/internal/network"
@@ -43,6 +44,7 @@ func TestDocumentBaseURLAppliesToPageResourcesAndActions(t *testing.T) {
 		loadedRuntime = &runtimeStub{}
 		return loadedRuntime
 	})
+	defer browserState.Close()
 	if _, err := browserState.SetEngine(context.Background(), runtimemodel.EngineJavaScript); err != nil {
 		t.Fatal(err)
 	}
@@ -59,8 +61,22 @@ func TestDocumentBaseURLAppliesToPageResourcesAndActions(t *testing.T) {
 	}
 	card, _ := page.Document.GetElementByID("card")
 	computed, ok := page.ComputedStyles.For(card)
-	if !ok || computed.BackgroundImage.URL != imageURL || !slices.Contains(loader.requested, imageURL) {
-		t.Fatalf("base-resolved CSS resource = %#v, requested=%v", computed.BackgroundImage, loader.requested)
+	deadline := time.Now().Add(time.Second)
+	imageRequested := false
+	var requested []string
+	for !imageRequested && time.Now().Before(deadline) {
+		page = browserState.Page()
+		loader.mu.Lock()
+		imageRequested = slices.Contains(loader.requested, imageURL)
+		requested = append(requested[:0], loader.requested...)
+		loader.mu.Unlock()
+		if imageRequested {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if !ok || computed.BackgroundImage.URL != imageURL || !imageRequested {
+		t.Fatalf("base-resolved CSS resource = %#v, requested=%v", computed.BackgroundImage, requested)
 	}
 	if len(page.Scripts) != 2 || page.Scripts[0].SourceURL.String() != classicURL.String() || page.Scripts[1].SourceURL.String() != moduleURL.String() {
 		t.Fatalf("base-resolved scripts = %#v", page.Scripts)
