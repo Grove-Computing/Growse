@@ -25,104 +25,114 @@ const (
 )
 
 type blockStyle struct {
-	fonts               *FontSet
-	fontSize            float32
-	bold                bool
-	fontFamilies        []string
-	fontStyle           string
-	fontStretch         string
-	color               uint32
-	background          uint32
-	image               stylemodel.BackgroundImage
-	repeat              stylemodel.BackgroundRepeat
-	position            stylemodel.BackgroundPosition
-	backgroundSize      stylemodel.BackgroundSize
-	backgroundLayers    []stylemodel.BackgroundLayer
-	layoutPosition      stylemodel.Position
-	inset               stylemodel.Insets
-	zIndex              int
-	zIndexAuto          bool
-	boxShadows          []stylemodel.Shadow
-	textShadows         []stylemodel.Shadow
-	outline             stylemodel.BorderSide
-	outlineOffset       float32
-	transform           []stylemodel.TransformFunction
-	transformOrigin     stylemodel.BackgroundPosition
-	radius              stylemodel.BorderRadii
-	decoration          stylemodel.TextDecorationLine
-	decorationColor     uint32
-	opacity             float32
-	display             stylemodel.Display
-	tableLayout         stylemodel.TableLayout
-	borderCollapse      stylemodel.BorderCollapse
-	borderSpacingX      float32
-	borderSpacingY      float32
-	captionSide         stylemodel.CaptionSide
-	float               stylemodel.Float
-	clear               stylemodel.Clear
-	hidden              bool
-	margin              stylemodel.Edges
-	padding             stylemodel.Edges
-	border              stylemodel.Borders
-	boxSizing           stylemodel.BoxSizing
-	width               stylemodel.SizeValue
-	height              stylemodel.SizeValue
-	minWidth            stylemodel.SizeValue
-	minHeight           stylemodel.SizeValue
-	maxWidth            stylemodel.SizeValue
-	maxHeight           stylemodel.SizeValue
-	lineHeight          float32
-	whiteSpace          stylemodel.WhiteSpace
-	textAlign           stylemodel.TextAlign
-	textTransform       stylemodel.TextTransform
-	textIndent          stylemodel.LengthPercentage
-	letterSpacing       float32
-	wordSpacing         float32
-	wordBreak           stylemodel.WordBreak
-	overflowWrap        stylemodel.OverflowWrap
-	verticalAlign       stylemodel.VerticalAlign
-	textOverflow        stylemodel.TextOverflow
-	objectFit           stylemodel.ObjectFit
-	objectPosition      stylemodel.BackgroundPosition
-	listStyleType       stylemodel.ListStyleType
-	listStylePosition   stylemodel.ListStylePosition
-	listStyleImage      string
-	appearance          stylemodel.Appearance
-	accentColor         uint32
-	accentColorAuto     bool
-	cursor              stylemodel.Cursor
-	filters             []stylemodel.Filter
-	backdropFilters     []stylemodel.Filter
-	mixBlendMode        stylemodel.BlendMode
-	overflowX           stylemodel.Overflow
-	overflowY           stylemodel.Overflow
-	flexDirection       stylemodel.FlexDirection
-	flexWrap            stylemodel.FlexWrap
-	justifyContent      stylemodel.JustifyContent
-	alignItems          stylemodel.Align
-	justifyItems        stylemodel.Align
-	alignContent        stylemodel.Align
-	order               int
-	flexGrow            float32
-	flexShrink          float32
-	flexBasis           stylemodel.FlexBasis
-	alignSelf           stylemodel.Align
-	justifySelf         stylemodel.Align
-	rowGap              stylemodel.LengthPercentage
-	columnGap           stylemodel.LengthPercentage
-	gridTemplateColumns []stylemodel.GridTrackSize
-	gridTemplateRows    []stylemodel.GridTrackSize
-	gridAutoColumns     []stylemodel.GridTrackSize
-	gridAutoRows        []stylemodel.GridTrackSize
-	gridColumnLines     map[string][]int
-	gridRowLines        map[string][]int
-	gridTemplateAreas   map[string]stylemodel.GridArea
-	gridColumn          stylemodel.GridPlacement
-	gridRow             stylemodel.GridPlacement
-	gridAreaName        string
-	gridAutoFlow        stylemodel.GridAutoFlow
-	marginAuto          stylemodel.AutoEdges
-	aspectRatio         float32
+	fonts                *FontSet
+	fontSize             float32
+	bold                 bool
+	fontFamilies         []string
+	fontStyle            string
+	fontStretch          string
+	color                uint32
+	background           uint32
+	image                stylemodel.BackgroundImage
+	repeat               stylemodel.BackgroundRepeat
+	position             stylemodel.BackgroundPosition
+	backgroundSize       stylemodel.BackgroundSize
+	backgroundLayers     []stylemodel.BackgroundLayer
+	layoutPosition       stylemodel.Position
+	inset                stylemodel.Insets
+	zIndex               int
+	zIndexAuto           bool
+	boxShadows           []stylemodel.Shadow
+	textShadows          []stylemodel.Shadow
+	outline              stylemodel.BorderSide
+	outlineOffset        float32
+	transform            []stylemodel.TransformFunction
+	transformOrigin      stylemodel.BackgroundPosition
+	radius               stylemodel.BorderRadii
+	decoration           stylemodel.TextDecorationLine
+	decorationColor      uint32
+	opacity              float32
+	display              stylemodel.Display
+	tableLayout          stylemodel.TableLayout
+	borderCollapse       stylemodel.BorderCollapse
+	borderSpacingX       float32
+	borderSpacingY       float32
+	captionSide          stylemodel.CaptionSide
+	float                stylemodel.Float
+	clear                stylemodel.Clear
+	hidden               bool
+	margin               stylemodel.Edges
+	padding              stylemodel.Edges
+	border               stylemodel.Borders
+	boxSizing            stylemodel.BoxSizing
+	width                stylemodel.SizeValue
+	height               stylemodel.SizeValue
+	minWidth             stylemodel.SizeValue
+	minHeight            stylemodel.SizeValue
+	maxWidth             stylemodel.SizeValue
+	maxHeight            stylemodel.SizeValue
+	lineHeight           float32
+	whiteSpace           stylemodel.WhiteSpace
+	writingMode          stylemodel.WritingMode
+	direction            stylemodel.Direction
+	textAlign            stylemodel.TextAlign
+	textTransform        stylemodel.TextTransform
+	textIndent           stylemodel.LengthPercentage
+	letterSpacing        float32
+	wordSpacing          float32
+	wordBreak            stylemodel.WordBreak
+	overflowWrap         stylemodel.OverflowWrap
+	verticalAlign        stylemodel.VerticalAlign
+	textOverflow         stylemodel.TextOverflow
+	objectFit            stylemodel.ObjectFit
+	objectPosition       stylemodel.BackgroundPosition
+	listStyleType        stylemodel.ListStyleType
+	listStylePosition    stylemodel.ListStylePosition
+	listStyleImage       string
+	appearance           stylemodel.Appearance
+	accentColor          uint32
+	accentColorAuto      bool
+	cursor               stylemodel.Cursor
+	filters              []stylemodel.Filter
+	backdropFilters      []stylemodel.Filter
+	mixBlendMode         stylemodel.BlendMode
+	overflowX            stylemodel.Overflow
+	overflowY            stylemodel.Overflow
+	flexDirection        stylemodel.FlexDirection
+	flexWrap             stylemodel.FlexWrap
+	justifyContent       stylemodel.JustifyContent
+	justifyContentSafety stylemodel.OverflowAlignment
+	alignItems           stylemodel.Align
+	alignItemsSafety     stylemodel.OverflowAlignment
+	justifyItems         stylemodel.Align
+	justifyItemsSafety   stylemodel.OverflowAlignment
+	alignContent         stylemodel.Align
+	alignContentSafety   stylemodel.OverflowAlignment
+	order                int
+	flexGrow             float32
+	flexShrink           float32
+	flexBasis            stylemodel.FlexBasis
+	alignSelf            stylemodel.Align
+	alignSelfSafety      stylemodel.OverflowAlignment
+	justifySelf          stylemodel.Align
+	justifySelfSafety    stylemodel.OverflowAlignment
+	rowGap               stylemodel.LengthPercentage
+	columnGap            stylemodel.LengthPercentage
+	gridTemplateColumns  []stylemodel.GridTrackSize
+	gridTemplateRows     []stylemodel.GridTrackSize
+	gridColumnsSubgrid   bool
+	gridRowsSubgrid      bool
+	gridAutoColumns      []stylemodel.GridTrackSize
+	gridAutoRows         []stylemodel.GridTrackSize
+	gridColumnLines      map[string][]int
+	gridRowLines         map[string][]int
+	gridTemplateAreas    map[string]stylemodel.GridArea
+	gridColumn           stylemodel.GridPlacement
+	gridRow              stylemodel.GridPlacement
+	gridAreaName         string
+	gridAutoFlow         stylemodel.GridAutoFlow
+	marginAuto           stylemodel.AutoEdges
+	aspectRatio          float32
 }
 
 type inlineRun struct {
@@ -206,6 +216,7 @@ func build(document *dom.Document, computed stylemodel.Map, images map[dom.NodeI
 		viewportHeight: viewportHeight,
 		scrollX:        scrollX,
 		scrollY:        scrollY,
+		subgrids:       make(map[dom.NodeID]subgridContext),
 	}
 	if document != nil {
 		if body := findElement(document.Root, "body"); body != nil {
@@ -264,6 +275,7 @@ type engine struct {
 	positionCB                    *Rect
 	stackingID                    int
 	floats                        []floatRegion
+	subgrids                      map[dom.NodeID]subgridContext
 	depth                         int
 }
 
@@ -1094,6 +1106,15 @@ func relativeOffset(inset stylemodel.Insets, width, height float32) (float32, fl
 }
 
 func (e *engine) renderPositionedChild(node *dom.Node, style blockStyle) {
+	e.renderPositionedChildAt(node, style, nil)
+}
+
+// renderPositionedChildAt resolves an out-of-flow box against its containing
+// block while retaining the formatting context's static position for auto
+// insets. Flex and grid containers provide that position after laying out
+// their in-flow items; ordinary block containers use the containing-block
+// origin by passing nil.
+func (e *engine) renderPositionedChildAt(node *dom.Node, style blockStyle, staticPosition *Rect) {
 	containingBlock := e.positionCB
 	if style.layoutPosition == stylemodel.PositionFixed || containingBlock == nil {
 		containingBlock = &Rect{X: e.scrollX, Y: e.scrollY, Width: e.viewportWidth, Height: e.viewportHeight}
@@ -1124,11 +1145,15 @@ func (e *engine) renderPositionedChild(node *dom.Node, style blockStyle) {
 		childX += left
 	} else if hasRight {
 		childX += containingBlock.Width - right - usedWidth
+	} else if staticPosition != nil && style.layoutPosition != stylemodel.PositionFixed {
+		childX = staticPosition.X
 	}
 	if hasTop {
 		childY += top
 	} else if hasBottom {
 		childY += containingBlock.Height - bottom - usedHeight
+	} else if staticPosition != nil && style.layoutPosition != stylemodel.PositionFixed {
+		childY = staticPosition.Y
 	}
 	if style.display == stylemodel.DisplayInline || style.display == stylemodel.DisplayInlineBlock || style.display == stylemodel.DisplayInlineFlex || style.display == stylemodel.DisplayInlineGrid {
 		style.display = stylemodel.DisplayBlock
@@ -2108,6 +2133,7 @@ func applyComputed(block blockStyle, computed stylemodel.ComputedStyle) blockSty
 	block.minWidth, block.minHeight = computed.MinWidth, computed.MinHeight
 	block.maxWidth, block.maxHeight = computed.MaxWidth, computed.MaxHeight
 	block.lineHeight, block.whiteSpace = computed.LineHeight, computed.WhiteSpace
+	block.writingMode, block.direction = computed.WritingMode, computed.Direction
 	block.textAlign, block.textTransform, block.textIndent = computed.TextAlign, computed.TextTransform, computed.TextIndent
 	block.letterSpacing, block.wordSpacing = computed.LetterSpacing, computed.WordSpacing
 	block.wordBreak, block.overflowWrap = computed.WordBreak, computed.OverflowWrap
@@ -2121,11 +2147,15 @@ func applyComputed(block blockStyle, computed stylemodel.ComputedStyle) blockSty
 	block.overflowX, block.overflowY = computed.OverflowX, computed.OverflowY
 	block.flexDirection, block.flexWrap = computed.FlexDirection, computed.FlexWrap
 	block.justifyContent, block.alignItems, block.justifyItems, block.alignContent = computed.JustifyContent, computed.AlignItems, computed.JustifyItems, computed.AlignContent
+	block.justifyContentSafety, block.alignItemsSafety = computed.JustifyContentSafety, computed.AlignItemsSafety
+	block.justifyItemsSafety, block.alignContentSafety = computed.JustifyItemsSafety, computed.AlignContentSafety
 	block.order, block.flexGrow, block.flexShrink = computed.Order, computed.FlexGrow, computed.FlexShrink
 	block.flexBasis, block.alignSelf, block.justifySelf = computed.FlexBasis, computed.AlignSelf, computed.JustifySelf
+	block.alignSelfSafety, block.justifySelfSafety = computed.AlignSelfSafety, computed.JustifySelfSafety
 	block.rowGap, block.columnGap = computed.RowGap, computed.ColumnGap
 	block.gridTemplateColumns = append([]stylemodel.GridTrackSize(nil), computed.GridTemplateColumns...)
 	block.gridTemplateRows = append([]stylemodel.GridTrackSize(nil), computed.GridTemplateRows...)
+	block.gridColumnsSubgrid, block.gridRowsSubgrid = computed.GridColumnsSubgrid, computed.GridRowsSubgrid
 	block.gridAutoColumns = append([]stylemodel.GridTrackSize(nil), computed.GridAutoColumns...)
 	block.gridAutoRows = append([]stylemodel.GridTrackSize(nil), computed.GridAutoRows...)
 	block.gridColumnLines = computed.GridColumnLines

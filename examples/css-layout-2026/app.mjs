@@ -8,3 +8,14 @@ toggle.addEventListener("click", () => {
   table.setAttribute("class", compact ? "showcase-table collapsed auto" : "showcase-table");
   status.textContent = compact ? "COLLAPSED · AUTO" : "SEPARATE · FIXED";
 });
+
+const layoutToggle = document.getElementById("layout-toggle");
+const playground = document.getElementById("layout-playground");
+const layoutStatus = document.getElementById("layout-status");
+let alternateLayout = false;
+
+layoutToggle.addEventListener("click", () => {
+  alternateLayout = !alternateLayout;
+  playground.setAttribute("class", alternateLayout ? "layout-playground alternate" : "layout-playground");
+  layoutStatus.textContent = alternateLayout ? "VERTICAL-LR · RTL · UNSAFE" : "VERTICAL-RL · SAFE";
+});

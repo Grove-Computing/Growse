@@ -13,6 +13,8 @@
     <p>Intrinsic sizing, replaced elements, and table geometry on one shared layout tree.</p>
     <button id="table-toggle" type="button">Toggle table algorithm</button>
     <strong id="table-status">SEPARATE · FIXED</strong>
+    <button id="layout-toggle" type="button">Flip logical alignment</button>
+    <strong id="layout-status">VERTICAL-RL · SAFE</strong>
   </header>
   <main>
     <section class="panel sizing-panel">
@@ -39,6 +41,26 @@
           <tr><td>Table</td><td colspan="2">caption · groups · span · spacing · collapse</td></tr>
         </tbody>
       </table>
+    </section>
+    <section class="panel flex-grid-panel">
+      <h2>Flex, Grid &amp; Subgrid</h2>
+      <div id="layout-playground" class="layout-playground">
+        <div class="flex-stage">
+          <div class="flex-card flex-tall">baseline</div>
+          <div class="flex-card">wrap</div>
+          <div class="flex-card">freeze</div>
+          <div class="absolute-card">absolute</div>
+        </div>
+        <div class="parent-grid">
+          <div class="subgrid-card">
+            <span class="subgrid-label">inherited track</span>
+            <strong class="subgrid-value">named line · shared gap</strong>
+          </div>
+        </div>
+        <div class="logical-stage">
+          <div class="logical-card">logical end / self-start</div>
+        </div>
+      </div>
     </section>
   </main>
   <script type="module" src="/app.mjs"></script>

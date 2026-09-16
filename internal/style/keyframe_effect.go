@@ -19,6 +19,8 @@ func (registry *AnimationRegistry) AnimatedStyles(underlying Map, stylesheet *cs
 	if registry == nil || stylesheet == nil {
 		return result
 	}
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
 	for nodeID, stack := range registry.stacks {
 		base, exists := underlying[nodeID]
 		if !exists {
@@ -47,6 +49,8 @@ func (registry *AnimationRegistry) Active(current time.Time) bool {
 	if registry == nil {
 		return false
 	}
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
 	for _, stack := range registry.stacks {
 		for _, running := range stack.items {
 			if running.Paused() {

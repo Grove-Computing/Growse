@@ -86,11 +86,102 @@ func cssomProperties(computed stylemodel.ComputedStyle, width, height float32) m
 		"border-bottom-width": px(computed.Border.Bottom.Width), "border-left-width": px(computed.Border.Left.Width),
 		"flex-grow": numberCSS(computed.FlexGrow), "flex-shrink": numberCSS(computed.FlexShrink), "order": strconv.Itoa(computed.Order),
 		"row-gap": lengthPercentageCSS(computed.RowGap), "column-gap": lengthPercentageCSS(computed.ColumnGap),
+		"writing-mode": writingModeCSS(computed.WritingMode), "direction": directionCSS(computed.Direction),
+		"justify-content": justifyContentCSS(computed.JustifyContent, computed.JustifyContentSafety),
+		"align-content":   alignCSS(computed.AlignContent, computed.AlignContentSafety),
+		"align-items":     alignCSS(computed.AlignItems, computed.AlignItemsSafety),
+		"justify-items":   alignCSS(computed.JustifyItems, computed.JustifyItemsSafety),
+		"align-self":      alignCSS(computed.AlignSelf, computed.AlignSelfSafety),
+		"justify-self":    alignCSS(computed.JustifySelf, computed.JustifySelfSafety),
 	}
 	for name, value := range computed.CustomProperties {
 		result[name] = value
 	}
 	return result
+}
+
+func writingModeCSS(value stylemodel.WritingMode) string {
+	switch value {
+	case stylemodel.WritingModeVerticalRL:
+		return "vertical-rl"
+	case stylemodel.WritingModeVerticalLR:
+		return "vertical-lr"
+	default:
+		return "horizontal-tb"
+	}
+}
+
+func directionCSS(value stylemodel.Direction) string {
+	if value == stylemodel.DirectionRTL {
+		return "rtl"
+	}
+	return "ltr"
+}
+
+func justifyContentCSS(value stylemodel.JustifyContent, safety stylemodel.OverflowAlignment) string {
+	keyword := "flex-start"
+	switch value {
+	case stylemodel.JustifyFlexEnd:
+		keyword = "flex-end"
+	case stylemodel.JustifyStart:
+		keyword = "start"
+	case stylemodel.JustifyEnd:
+		keyword = "end"
+	case stylemodel.JustifyLeft:
+		keyword = "left"
+	case stylemodel.JustifyRight:
+		keyword = "right"
+	case stylemodel.JustifyCenter:
+		keyword = "center"
+	case stylemodel.JustifySpaceBetween:
+		keyword = "space-between"
+	case stylemodel.JustifySpaceAround:
+		keyword = "space-around"
+	case stylemodel.JustifySpaceEvenly:
+		keyword = "space-evenly"
+	}
+	return overflowAlignmentCSS(keyword, safety)
+}
+
+func alignCSS(value stylemodel.Align, safety stylemodel.OverflowAlignment) string {
+	keyword := "stretch"
+	switch value {
+	case stylemodel.AlignFlexStart:
+		keyword = "flex-start"
+	case stylemodel.AlignFlexEnd:
+		keyword = "flex-end"
+	case stylemodel.AlignStart:
+		keyword = "start"
+	case stylemodel.AlignEnd:
+		keyword = "end"
+	case stylemodel.AlignSelfStart:
+		keyword = "self-start"
+	case stylemodel.AlignSelfEnd:
+		keyword = "self-end"
+	case stylemodel.AlignCenter:
+		keyword = "center"
+	case stylemodel.AlignBaseline:
+		keyword = "baseline"
+	case stylemodel.AlignSpaceBetween:
+		keyword = "space-between"
+	case stylemodel.AlignSpaceAround:
+		keyword = "space-around"
+	case stylemodel.AlignSpaceEvenly:
+		keyword = "space-evenly"
+	case stylemodel.AlignAuto:
+		keyword = "auto"
+	}
+	return overflowAlignmentCSS(keyword, safety)
+}
+
+func overflowAlignmentCSS(keyword string, safety stylemodel.OverflowAlignment) string {
+	if safety == stylemodel.OverflowAlignmentSafe {
+		return "safe " + keyword
+	}
+	if safety == stylemodel.OverflowAlignmentUnsafe {
+		return "unsafe " + keyword
+	}
+	return keyword
 }
 
 func textAlignCSS(value stylemodel.TextAlign) string {
