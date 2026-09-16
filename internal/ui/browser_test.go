@@ -1327,6 +1327,28 @@ func TestHitTestPaintedDisplayListUsesVisibleCommandOrderAndScroll(t *testing.T)
 	}
 }
 
+func TestHitTestPaintedDisplayListUsesSignedBacktrackingOffset(t *testing.T) {
+	list := &paintmodel.DisplayList{Commands: []paintmodel.Command{
+		paintmodel.DrawText{NodeID: 1, X: 10, Y: 100, Top: 100, Width: 80, Height: 20},
+		paintmodel.DrawText{NodeID: 2, X: 110, Y: 20, Top: -100, Width: 80, Height: 20},
+	}}
+	hit, ok := hitTestPaintedDisplayList(list, layout.Position{First: 0}, image.Pt(130, 25), 1)
+	if !ok || hit.NodeID != 2 || hit.DocumentY != 25 {
+		t.Fatalf("signed-offset painted hit = (%+v, %v)", hit, ok)
+	}
+}
+
+func TestLayoutPaintCommandClampsBacktrackingAdvance(t *testing.T) {
+	gtx := layout.Context{Ops: new(op.Ops), Constraints: layout.Exact(image.Pt(200, 200)), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}}
+	widget := func(layout.Context) layout.Dimensions { return layout.Dimensions{Size: image.Pt(40, 20)} }
+	if dimensions := layoutPaintCommand(gtx, -30, 20, layout.Inset{}, widget); dimensions.Size.Y != 0 {
+		t.Fatalf("fully backtracked advance = %d, want 0", dimensions.Size.Y)
+	}
+	if dimensions := layoutPaintCommand(gtx, -10, 20, layout.Inset{}, widget); dimensions.Size.Y != 10 {
+		t.Fatalf("partially backtracked advance = %d, want 10", dimensions.Size.Y)
+	}
+}
+
 func TestHitTestPaintedDisplayListUsesVerticalRunOffsets(t *testing.T) {
 	list := &paintmodel.DisplayList{Commands: []paintmodel.Command{
 		paintmodel.DrawText{

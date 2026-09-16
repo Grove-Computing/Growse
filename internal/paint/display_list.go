@@ -301,13 +301,13 @@ func Build(tree *layout.Tree) *DisplayList {
 	}
 
 	list.Commands = make([]Command, 0, len(items))
-	previousBottom := float32(0)
+	paintCursor := float32(0)
 	for _, item := range items {
 		list.sources = append(list.sources, item.source)
 		if item.decoration != nil {
 			decoration := item.decoration
 			list.CommandIDs = append(list.CommandIDs, decoration.FragmentID)
-			top := max(decoration.Y-previousBottom, float32(0))
+			top := decoration.Y - paintCursor
 			backdrop := stylemodel.ApplyColorFilters(tree.Background, decoration.BackdropFilters)
 			filteredColor := stylemodel.ApplyColorFilters(decoration.Background, decoration.Filters)
 			if decoration.BlendMode != stylemodel.BlendNormal {
@@ -325,15 +325,12 @@ func Build(tree *layout.Tree) *DisplayList {
 				WritingMode: decoration.WritingMode, Direction: decoration.Direction,
 				Clips: cloneClipRegions(decoration.Clips),
 			})
-			previousBottom += top
+			paintCursor = max(paintCursor, decoration.Y+decoration.Height)
 			continue
 		}
 		box := *item.box
 		list.CommandIDs = append(list.CommandIDs, box.FragmentID)
-		top := box.Y - previousBottom
-		if top < 0 {
-			top = 0
-		}
+		top := box.Y - paintCursor
 		if box.Image {
 			list.Commands = append(list.Commands, DrawImage{
 				NodeID: box.NodeID, URL: box.ImageURL, Alt: box.Alt, X: box.X, Y: box.Y, Top: top,
@@ -342,7 +339,7 @@ func Build(tree *layout.Tree) *DisplayList {
 				Border: box.ImageBorder, Radius: box.ImageRadius, Transform: box.Transform, Cursor: box.Cursor,
 				WritingMode: box.WritingMode, Direction: box.Direction,
 			})
-			previousBottom = box.Y + box.Height
+			paintCursor = max(paintCursor, box.Y+box.Height)
 			continue
 		}
 		if box.Input {
@@ -366,7 +363,7 @@ func Build(tree *layout.Tree) *DisplayList {
 				Appearance: box.Appearance, AccentColor: box.AccentColor, Cursor: box.Cursor,
 				WritingMode: box.WritingMode, Direction: box.Direction,
 			})
-			previousBottom = box.Y + box.Height
+			paintCursor = max(paintCursor, box.Y+box.Height)
 			continue
 		}
 		if box.Select {
@@ -378,7 +375,7 @@ func Build(tree *layout.Tree) *DisplayList {
 				Appearance: box.Appearance, AccentColor: box.AccentColor, Cursor: box.Cursor,
 				WritingMode: box.WritingMode, Direction: box.Direction,
 			})
-			previousBottom = box.Y + box.Height
+			paintCursor = max(paintCursor, box.Y+box.Height)
 			continue
 		}
 		if box.Checkable {
@@ -390,7 +387,7 @@ func Build(tree *layout.Tree) *DisplayList {
 				Appearance: box.Appearance, AccentColor: box.AccentColor, Cursor: box.Cursor,
 				WritingMode: box.WritingMode, Direction: box.Direction,
 			})
-			previousBottom = box.Y + box.Height
+			paintCursor = max(paintCursor, box.Y+box.Height)
 			continue
 		}
 		if box.Button {
@@ -401,7 +398,7 @@ func Build(tree *layout.Tree) *DisplayList {
 				Appearance: box.Appearance, AccentColor: box.AccentColor, Cursor: box.Cursor,
 				WritingMode: box.WritingMode, Direction: box.Direction,
 			})
-			previousBottom = box.Y + box.Height
+			paintCursor = max(paintCursor, box.Y+box.Height)
 			continue
 		}
 		command := DrawText{
@@ -443,7 +440,7 @@ func Build(tree *layout.Tree) *DisplayList {
 			})
 		}
 		list.Commands = append(list.Commands, command)
-		previousBottom = box.Y + box.Height
+		paintCursor = max(paintCursor, box.Y+box.Height)
 	}
 	return list
 }
@@ -525,7 +522,7 @@ func ApplyAnimatedLayout(list *DisplayList, tree *layout.Tree) {
 	for _, layer := range tree.CompositingLayers {
 		list.DamageRegions = append(list.DamageRegions, layer.Damage...)
 	}
-	previousBottom := float32(0)
+	paintCursor := float32(0)
 	for index, source := range list.sources {
 		if source.decoration >= 0 && source.decoration < len(tree.Decorations) {
 			decoration := tree.Decorations[source.decoration]
@@ -534,8 +531,8 @@ func ApplyAnimatedLayout(list *DisplayList, tree *layout.Tree) {
 				continue
 			}
 			command.X, command.Y, command.Width, command.Height = decoration.X, decoration.Y, decoration.Width, decoration.Height
-			command.Top = max(decoration.Y-previousBottom, float32(0))
-			previousBottom += command.Top
+			command.Top = decoration.Y - paintCursor
+			paintCursor = max(paintCursor, decoration.Y+decoration.Height)
 			backdrop := stylemodel.ApplyColorFilters(tree.Background, decoration.BackdropFilters)
 			background := stylemodel.ApplyColorFilters(decoration.Background, decoration.Filters)
 			if decoration.BlendMode != stylemodel.BlendNormal {
@@ -555,7 +552,7 @@ func ApplyAnimatedLayout(list *DisplayList, tree *layout.Tree) {
 			continue
 		}
 		box := tree.Boxes[source.box]
-		top := max(box.Y-previousBottom, float32(0))
+		top := box.Y - paintCursor
 		opacity := box.Opacity
 		if box.Hidden {
 			opacity = 0
@@ -604,7 +601,7 @@ func ApplyAnimatedLayout(list *DisplayList, tree *layout.Tree) {
 			command.Transform, command.Clip, command.Clips = box.Transform, cloneLayoutRect(box.Clip), cloneClipRegions(box.Clips)
 			list.Commands[index] = command
 		}
-		previousBottom = box.Y + box.Height
+		paintCursor = max(paintCursor, box.Y+box.Height)
 	}
 }
 

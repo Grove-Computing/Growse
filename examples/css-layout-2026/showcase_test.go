@@ -106,8 +106,21 @@ func TestCSSLayoutShowcaseBalancesColumnsAndSpans(t *testing.T) {
 	if len(columns) < 3 || spanBounds.Width != stageBounds.Width-28 {
 		t.Fatalf("showcase columns = positions:%v stage:%#v span:%#v", columns, stageBounds, spanBounds)
 	}
-	if len(cards) < 2 || tree.Bounds[cards[0].ID].X == tree.Bounds[cards[1].ID].X {
+	if len(cards) != 5 || tree.Bounds[cards[0].ID].X == tree.Bounds[cards[1].ID].X {
 		t.Fatalf("balanced avoid cards did not use separate columns: %#v", cards)
+	}
+	for _, group := range [][]*dom.Node{cards[:2], cards[2:]} {
+		for _, card := range group[1:] {
+			if delta := tree.Bounds[card.ID].Y - tree.Bounds[group[0].ID].Y; delta < -0.01 || delta > 0.01 {
+				t.Fatalf("balanced cards do not share a fragmentainer start: first=%#v card=%#v", tree.Bounds[group[0].ID], tree.Bounds[card.ID])
+			}
+		}
+	}
+	for _, card := range cards {
+		bounds := tree.Bounds[card.ID]
+		if bounds.Y+bounds.Height > stageBounds.Y+stageBounds.Height+0.01 {
+			t.Fatalf("column card escaped stage block-size: stage=%#v card=%#v", stageBounds, bounds)
+		}
 	}
 }
 

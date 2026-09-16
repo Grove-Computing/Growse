@@ -2520,19 +2520,19 @@ type paintedCommandVisual struct {
 func paintedCommandVisualFor(command paintmodel.Command) paintedCommandVisual {
 	switch command := command.(type) {
 	case paintmodel.DrawText:
-		return paintedCommandVisual{nodeID: command.NodeID, x: command.X, y: command.Y, top: command.Top, width: command.Width, height: command.Height, advance: command.Top + command.Height, writingMode: command.WritingMode, runs: command.Runs, clip: command.Clip, clips: command.Clips, transform: command.Transform}
+		return paintedCommandVisual{nodeID: command.NodeID, x: command.X, y: command.Y, top: command.Top, width: command.Width, height: command.Height, advance: max(command.Top+command.Height, float32(0)), writingMode: command.WritingMode, runs: command.Runs, clip: command.Clip, clips: command.Clips, transform: command.Transform}
 	case paintmodel.DrawInput:
-		return paintedCommandVisual{nodeID: command.NodeID, x: command.X, y: command.Y, top: command.Top, width: command.Width, height: command.Height, advance: command.Top + command.Height, writingMode: command.WritingMode, clip: command.Clip, clips: command.Clips, transform: command.Transform}
+		return paintedCommandVisual{nodeID: command.NodeID, x: command.X, y: command.Y, top: command.Top, width: command.Width, height: command.Height, advance: max(command.Top+command.Height, float32(0)), writingMode: command.WritingMode, clip: command.Clip, clips: command.Clips, transform: command.Transform}
 	case paintmodel.DrawSelect:
-		return paintedCommandVisual{nodeID: command.NodeID, x: command.X, y: command.Y, top: command.Top, width: command.Width, height: command.Height, advance: command.Top + command.Height, writingMode: command.WritingMode, clip: command.Clip, clips: command.Clips, transform: command.Transform}
+		return paintedCommandVisual{nodeID: command.NodeID, x: command.X, y: command.Y, top: command.Top, width: command.Width, height: command.Height, advance: max(command.Top+command.Height, float32(0)), writingMode: command.WritingMode, clip: command.Clip, clips: command.Clips, transform: command.Transform}
 	case paintmodel.DrawCheckable:
-		return paintedCommandVisual{nodeID: command.NodeID, x: command.X, y: command.Y, top: command.Top, width: command.Width, height: command.Height, advance: command.Top + command.Height, writingMode: command.WritingMode, clip: command.Clip, clips: command.Clips, transform: command.Transform}
+		return paintedCommandVisual{nodeID: command.NodeID, x: command.X, y: command.Y, top: command.Top, width: command.Width, height: command.Height, advance: max(command.Top+command.Height, float32(0)), writingMode: command.WritingMode, clip: command.Clip, clips: command.Clips, transform: command.Transform}
 	case paintmodel.DrawButton:
-		return paintedCommandVisual{nodeID: command.NodeID, x: command.X, y: command.Y, top: command.Top, width: command.Width, height: command.Height, advance: command.Top + command.Height, writingMode: command.WritingMode, clip: command.Clip, clips: command.Clips, transform: command.Transform}
+		return paintedCommandVisual{nodeID: command.NodeID, x: command.X, y: command.Y, top: command.Top, width: command.Width, height: command.Height, advance: max(command.Top+command.Height, float32(0)), writingMode: command.WritingMode, clip: command.Clip, clips: command.Clips, transform: command.Transform}
 	case paintmodel.DrawBox:
-		return paintedCommandVisual{nodeID: command.NodeID, x: command.X, y: command.Y, top: command.Top, width: command.Width, height: command.Height, advance: command.Top, writingMode: command.WritingMode, clip: command.Clip, clips: command.Clips, transform: command.Transform, radius: command.Radius}
+		return paintedCommandVisual{nodeID: command.NodeID, x: command.X, y: command.Y, top: command.Top, width: command.Width, height: command.Height, advance: max(command.Top+command.Height, float32(0)), writingMode: command.WritingMode, clip: command.Clip, clips: command.Clips, transform: command.Transform, radius: command.Radius}
 	case paintmodel.DrawImage:
-		return paintedCommandVisual{nodeID: command.NodeID, x: command.X, y: command.Y, top: command.Top, width: command.Width, height: command.Height, advance: command.Top + command.Height, writingMode: command.WritingMode, clip: command.Clip, clips: command.Clips, transform: command.Transform, radius: command.Radius}
+		return paintedCommandVisual{nodeID: command.NodeID, x: command.X, y: command.Y, top: command.Top, width: command.Width, height: command.Height, advance: max(command.Top+command.Height, float32(0)), writingMode: command.WritingMode, clip: command.Clip, clips: command.Clips, transform: command.Transform, radius: command.Radius}
 	default:
 		return paintedCommandVisual{}
 	}
@@ -2696,11 +2696,23 @@ func commandDocumentY(command paintmodel.Command) (float32, bool) {
 	}
 }
 
+// layoutPaintCommand keeps material.List's scroll cursor monotonic while
+// painting a command at its signed offset from that cursor. CSS paint order is
+// not document-Y order (columns, positioned descendants, and backgrounds can
+// move backwards), so a non-negative inset alone cannot preserve geometry.
+func layoutPaintCommand(gtx layout.Context, top, height float32, inset layout.Inset, widget layout.Widget) layout.Dimensions {
+	offset := op.Offset(image.Pt(0, gtx.Dp(unit.Dp(top)))).Push(gtx.Ops)
+	dimensions := inset.Layout(gtx, widget)
+	offset.Pop()
+	dimensions.Size.Y = gtx.Dp(unit.Dp(max(top+height, float32(0))))
+	return dimensions
+}
+
 func (ui *BrowserUI) layoutDrawImage(gtx layout.Context, command paintmodel.DrawImage, images map[string]image.Image) layout.Dimensions {
 	left := unit.Dp(command.X)
 	viewportWidth := float32(gtx.Constraints.Max.X) / gtx.Metric.PxPerDp
 	right := unit.Dp(max(viewportWidth-command.X-command.Width, float32(0)))
-	return layout.Inset{Top: unit.Dp(command.Top), Left: left, Right: right}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+	return layoutPaintCommand(gtx, command.Top, command.Height, layout.Inset{Left: left, Right: right}, func(gtx layout.Context) layout.Dimensions {
 		width, height := gtx.Dp(unit.Dp(command.Width)), gtx.Dp(unit.Dp(command.Height))
 		gtx.Constraints = layout.Exact(image.Pt(width, height))
 		if command.Transform != (stylemodel.Matrix{}) && command.Transform != stylemodel.IdentityMatrix() {
@@ -2748,7 +2760,7 @@ func (ui *BrowserUI) layoutDrawImage(gtx layout.Context, command paintmodel.Draw
 }
 
 func (ui *BrowserUI) layoutDrawBox(gtx layout.Context, command paintmodel.DrawBox, backgroundImages map[string]image.Image, styleRevision uint64) layout.Dimensions {
-	return layout.Inset{Top: unit.Dp(command.Top), Left: unit.Dp(command.X)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+	return layoutPaintCommand(gtx, command.Top, command.Height, layout.Inset{Left: unit.Dp(command.X)}, func(gtx layout.Context) layout.Dimensions {
 		if command.Transform != (stylemodel.Matrix{}) && command.Transform != stylemodel.IdentityMatrix() {
 			defer pushCSSMatrix(gtx, command.Transform, command.X, command.Y).Pop()
 		}
@@ -3134,7 +3146,7 @@ func (ui *BrowserUI) layoutDrawInput(gtx layout.Context, command paintmodel.Draw
 		rightValue = 0
 	}
 	right := unit.Dp(rightValue)
-	return layout.Inset{Top: unit.Dp(command.Top), Left: left, Right: right}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+	return layoutPaintCommand(gtx, command.Top, command.Height, layout.Inset{Left: left, Right: right}, func(gtx layout.Context) layout.Dimensions {
 		if command.Transform != (stylemodel.Matrix{}) && command.Transform != stylemodel.IdentityMatrix() {
 			defer pushCSSMatrix(gtx, command.Transform, command.X, command.Y).Pop()
 		}
@@ -3231,7 +3243,7 @@ func (ui *BrowserUI) layoutDrawSelect(gtx layout.Context, command paintmodel.Dra
 	left := unit.Dp(command.X)
 	viewportWidth := float32(gtx.Constraints.Max.X) / gtx.Metric.PxPerDp
 	right := unit.Dp(max(viewportWidth-command.X-command.Width, float32(0)))
-	return layout.Inset{Top: unit.Dp(command.Top), Left: left, Right: right}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+	return layoutPaintCommand(gtx, command.Top, command.Height, layout.Inset{Left: left, Right: right}, func(gtx layout.Context) layout.Dimensions {
 		if command.Transform != (stylemodel.Matrix{}) && command.Transform != stylemodel.IdentityMatrix() {
 			defer pushCSSMatrix(gtx, command.Transform, command.X, command.Y).Pop()
 		}
@@ -3281,7 +3293,7 @@ func (ui *BrowserUI) layoutDrawCheckable(gtx layout.Context, command paintmodel.
 	left := unit.Dp(command.X)
 	viewportWidth := float32(gtx.Constraints.Max.X) / gtx.Metric.PxPerDp
 	right := unit.Dp(max(viewportWidth-command.X-command.Width, float32(0)))
-	return layout.Inset{Top: unit.Dp(command.Top), Left: left, Right: right}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+	return layoutPaintCommand(gtx, command.Top, command.Height, layout.Inset{Left: left, Right: right}, func(gtx layout.Context) layout.Dimensions {
 		if command.Transform != (stylemodel.Matrix{}) && command.Transform != stylemodel.IdentityMatrix() {
 			defer pushCSSMatrix(gtx, command.Transform, command.X, command.Y).Pop()
 		}
@@ -3339,7 +3351,7 @@ func (ui *BrowserUI) layoutDrawButton(gtx layout.Context, command paintmodel.Dra
 	left := unit.Dp(command.X)
 	viewportWidth := float32(gtx.Constraints.Max.X) / gtx.Metric.PxPerDp
 	right := unit.Dp(max(viewportWidth-command.X-command.Width, float32(0)))
-	return layout.Inset{Top: unit.Dp(command.Top), Left: left, Right: right}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+	return layoutPaintCommand(gtx, command.Top, command.Height, layout.Inset{Left: left, Right: right}, func(gtx layout.Context) layout.Dimensions {
 		if command.Transform != (stylemodel.Matrix{}) && command.Transform != stylemodel.IdentityMatrix() {
 			defer pushCSSMatrix(gtx, command.Transform, command.X, command.Y).Pop()
 		}
@@ -3437,7 +3449,7 @@ func (ui *BrowserUI) layoutDrawText(gtx layout.Context, command paintmodel.DrawT
 		rightValue = 0
 	}
 	right := unit.Dp(rightValue)
-	return layout.Inset{Top: unit.Dp(command.Top), Left: left, Right: right}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+	return layoutPaintCommand(gtx, command.Top, command.Height, layout.Inset{Left: left, Right: right}, func(gtx layout.Context) layout.Dimensions {
 		if command.Transform != (stylemodel.Matrix{}) && command.Transform != stylemodel.IdentityMatrix() {
 			defer pushCSSMatrix(gtx, command.Transform, command.X, command.Y).Pop()
 		}
