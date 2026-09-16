@@ -126,6 +126,7 @@ type BrowserUI struct {
 	selectButtons     map[dom.NodeID]*widget.Clickable
 	checkableButtons  map[dom.NodeID]*widget.Clickable
 	formButtons       map[dom.NodeID]*widget.Clickable
+	formPointerClicks map[dom.NodeID]int
 	layoutBuild       func(*dom.Document, stylemodel.Map, float32, float32, float32, float32) *layoutengine.Tree
 	layoutBuildImages func(*dom.Document, stylemodel.Map, map[dom.NodeID]layoutengine.ImageResource, float32, float32, float32, float32) *layoutengine.Tree
 	layoutBuildFonts  func(*dom.Document, stylemodel.Map, map[dom.NodeID]layoutengine.ImageResource, *layoutengine.FontSet, float32, float32, float32, float32) *layoutengine.Tree
@@ -330,6 +331,7 @@ func NewBrowserUIWithTabsAndUpdater(navigator Navigator, tabs TabController, inv
 		selectButtons:     make(map[dom.NodeID]*widget.Clickable),
 		checkableButtons:  make(map[dom.NodeID]*widget.Clickable),
 		formButtons:       make(map[dom.NodeID]*widget.Clickable),
+		formPointerClicks: make(map[dom.NodeID]int),
 		nestedScrollTags:  make(map[dom.NodeID]*nestedScrollTag),
 		nestedScroll:      make(map[dom.NodeID]layoutengine.ScrollOffset),
 		tabRowButtons:     make(map[browser.TabID]*widget.Clickable),
@@ -1895,6 +1897,7 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 	page.RecordCompositorSnapshot(len(dirtySnapshot.StyleNodes), len(displayList.Layers), len(displayList.DamageRegions))
 	paint.Fill(gtx.Ops, rgba(displayList.Background))
 	ui.updateViewportHover(gtx, page, tree, displayList)
+	clear(ui.formPointerClicks)
 	ui.handleViewportClicks(gtx, page, tree, displayList)
 
 	area := clip.Rect{Max: gtx.Constraints.Max}.Push(gtx.Ops)
@@ -2410,24 +2413,32 @@ func (ui *BrowserUI) handleViewportClicks(gtx layout.Context, page *browser.Page
 		if !ok || tree == nil || tree.Revision != page.StyleRevision || displayList.Revision != page.StyleRevision {
 			continue
 		}
-		nodeID := hit.NodeID
-		if _, handledByButton := ui.formButtons[nodeID]; handledByButton {
-			continue
-		}
+		ui.dispatchPaintedClick(page, hit)
+	}
+}
+
+func (ui *BrowserUI) dispatchPaintedClick(page *browser.Page, hit paintedDisplayHit) {
+	nodeID := hit.NodeID
+	if _, handledByButton := ui.formButtons[nodeID]; handledByButton {
 		ui.navigator.UpdateFocus(focusableNodeID(page.Document, nodeID))
 		if ui.navigator.DispatchClick(nodeID, hit.DocumentX, hit.DocumentY) {
-			continue
+			ui.formPointerClicks[nodeID]++
 		}
-		linkURL, target, ok := page.LinkDestination(nodeID)
-		if !ok {
-			continue
-		}
-		if target == "_blank" {
-			ui.openURLInNewTab(linkURL)
-			continue
-		}
-		ui.startNavigation(linkURL.String())
+		return
 	}
+	ui.navigator.UpdateFocus(focusableNodeID(page.Document, nodeID))
+	if ui.navigator.DispatchClick(nodeID, hit.DocumentX, hit.DocumentY) {
+		return
+	}
+	linkURL, target, ok := page.LinkDestination(nodeID)
+	if !ok {
+		return
+	}
+	if target == "_blank" {
+		ui.openURLInNewTab(linkURL)
+		return
+	}
+	ui.startNavigation(linkURL.String())
 }
 
 type paintedDisplayHit struct {
@@ -3346,6 +3357,10 @@ func (ui *BrowserUI) layoutDrawButton(gtx layout.Context, command paintmodel.Dra
 			ui.formButtons[command.NodeID] = button
 		}
 		for button.Clicked(gtx) {
+			if pending := ui.formPointerClicks[command.NodeID]; pending > 0 {
+				ui.formPointerClicks[command.NodeID] = pending - 1
+				continue
+			}
 			if ui.navigator != nil {
 				ui.navigator.UpdateFocus(command.NodeID)
 				ui.navigator.DispatchClick(command.NodeID, command.X, command.Y)

@@ -1751,6 +1751,33 @@ func TestPointerClickingStyledButtonDispatchesEvent(t *testing.T) {
 	}
 }
 
+func TestPaintedFormButtonClickUsesDisplayListHitGeometry(t *testing.T) {
+	document := dom.NewDocument()
+	button := document.CreateElement("button", nil)
+	if err := document.AppendChild(document.Root, button); err != nil {
+		t.Fatal(err)
+	}
+	page := &browser.Page{Document: document, ComputedStyles: style.Compute(document, nil), Events: events.NewDispatcher()}
+	clicked := 0
+	page.Events.AddEventListener(button.ID, events.Click, func(event events.Event) {
+		clicked++
+		if event.X != 240 || event.Y != 180 {
+			t.Fatalf("click coordinates = (%v,%v), want transformed document point (240,180)", event.X, event.Y)
+		}
+	})
+	ui := NewBrowserUI(&stubNavigator{page: page}, nil)
+	ui.formButtons[button.ID] = new(widget.Clickable)
+
+	ui.dispatchPaintedClick(page, paintedDisplayHit{NodeID: button.ID, DocumentX: 240, DocumentY: 180})
+
+	if clicked != 1 || page.FocusTarget != button.ID {
+		t.Fatalf("painted form click = clicks:%d focus:%d", clicked, page.FocusTarget)
+	}
+	if pending := ui.formPointerClicks[button.ID]; pending != 1 {
+		t.Fatalf("native duplicate suppression = %d, want 1", pending)
+	}
+}
+
 func TestTextInputReceivesFocusFromPointerPress(t *testing.T) {
 	document := dom.NewDocument()
 	inputNode := document.CreateElement("input", map[string]string{"type": "text"})
