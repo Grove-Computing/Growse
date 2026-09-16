@@ -114,7 +114,10 @@ func loadBackgroundImagesWithBudget(ctx context.Context, client ResourceLoader, 
 }
 
 func loadBackgroundImagesWithCache(ctx context.Context, client ResourceLoader, computed style.Map, budget *imageDecodeBudget, cache *imageResourceCache, preloads map[string]resourcePriority) (map[string]image.Image, []string) {
-	images := make(map[string]image.Image)
+	return loadBackgroundImageResourcesWithCache(ctx, client, backgroundImageResources(computed), budget, cache, preloads)
+}
+
+func backgroundImageResources(computed style.Map) []string {
 	seen := make(map[string]bool)
 	var resources []string
 	for _, computedStyle := range computed {
@@ -131,6 +134,11 @@ func loadBackgroundImagesWithCache(ctx context.Context, client ResourceLoader, c
 		}
 	}
 	sort.Strings(resources)
+	return resources
+}
+
+func loadBackgroundImageResourcesWithCache(ctx context.Context, client ResourceLoader, resources []string, budget *imageDecodeBudget, cache *imageResourceCache, preloads map[string]resourcePriority) (map[string]image.Image, []string) {
+	images := make(map[string]image.Image)
 	type backgroundResult struct {
 		resource string
 		decoded  image.Image

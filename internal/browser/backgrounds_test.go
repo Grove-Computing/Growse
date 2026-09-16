@@ -542,6 +542,32 @@ type cancelAwareImageLoader struct {
 	once      sync.Once
 }
 
+type releasableImageLoader struct {
+	responses map[string]*network.Response
+	blocked   string
+	started   chan struct{}
+	release   chan struct{}
+	once      sync.Once
+}
+
+func (loader *releasableImageLoader) Get(ctx context.Context, target *url.URL) (*network.Response, error) {
+	if target.String() == loader.blocked {
+		loader.once.Do(func() { close(loader.started) })
+		select {
+		case <-loader.release:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	response := loader.responses[target.String()]
+	if response == nil {
+		return nil, context.Canceled
+	}
+	copy := *response
+	copy.Body = append([]byte(nil), response.Body...)
+	return &copy, nil
+}
+
 func (loader *cancelAwareImageLoader) Get(ctx context.Context, target *url.URL) (*network.Response, error) {
 	if target.String() == loader.blocked {
 		loader.once.Do(func() { close(loader.started) })
@@ -664,6 +690,88 @@ func TestNavigateReturnsWhileInitialImageIsPending(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("initial image request did not start after page commit")
 	}
+}
+
+func TestNavigateReturnsWhileInitialBackgroundImageIsPending(t *testing.T) {
+	pageURL := "https://example.com/page.html"
+	imageURL := "https://example.com/card.png"
+	loader := &cancelAwareImageLoader{
+		blocked: imageURL, started: make(chan struct{}), responses: map[string]*network.Response{
+			pageURL: {
+				URL: mustParseURL(t, pageURL), StatusCode: 200, ContentType: "text/html",
+				Body: []byte(`<style>.card { background-image: url("card.png"); }</style><main class="card">Ready</main>`),
+			},
+		},
+	}
+	browserState := NewWithEngineFactory(loader, func(runtimemodel.Engine) runtimemodel.Runtime { return &runtimeStub{} })
+	defer browserState.Close()
+	_, _ = browserState.SetEngine(context.Background(), runtimemodel.EngineJavaScript)
+	type result struct {
+		page *Page
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		page, err := browserState.Navigate(context.Background(), pageURL)
+		done <- result{page: page, err: err}
+	}()
+	select {
+	case loaded := <-done:
+		if loaded.err != nil || loaded.page == nil || loaded.page.Document == nil {
+			t.Fatalf("navigation result = page:%#v err:%v", loaded.page, loaded.err)
+		}
+		if loaded.page.BackgroundImages[imageURL] != nil {
+			t.Fatal("pending background image was committed with the initial page")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("navigation blocked on the initial background image request")
+	}
+	select {
+	case <-loader.started:
+	case <-time.After(time.Second):
+		t.Fatal("initial background image request did not start after page commit")
+	}
+}
+
+func TestViewportUpdateResumesPendingBackgroundImage(t *testing.T) {
+	pageURL := "https://example.com/page.html"
+	imageURL := "https://example.com/card.png"
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, image.NewNRGBA(image.Rect(0, 0, 2, 2))); err != nil {
+		t.Fatal(err)
+	}
+	loader := &releasableImageLoader{
+		blocked: imageURL, started: make(chan struct{}), release: make(chan struct{}), responses: map[string]*network.Response{
+			pageURL: {
+				URL: mustParseURL(t, pageURL), StatusCode: 200, ContentType: "text/html",
+				Body: []byte(`<style>.card { width: 96px; height: 48px; background-image: url("card.png"); }</style><main class="card">Ready</main>`),
+			},
+			imageURL: {URL: mustParseURL(t, imageURL), StatusCode: 200, ContentType: "image/png", Body: encoded.Bytes()},
+		},
+	}
+	browserState := NewWithEngineFactory(loader, func(runtimemodel.Engine) runtimemodel.Runtime { return &runtimeStub{} })
+	defer browserState.Close()
+	_, _ = browserState.SetEngine(context.Background(), runtimemodel.EngineJavaScript)
+	if _, err := browserState.Navigate(context.Background(), pageURL); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-loader.started:
+	case <-time.After(time.Second):
+		t.Fatal("initial background image request did not start")
+	}
+	if !browserState.UpdateViewport(900, 700) {
+		t.Fatal("UpdateViewport() = false")
+	}
+	close(loader.release)
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if page := browserState.Page(); page != nil && page.BackgroundImages[imageURL] != nil {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("background image was not committed after viewport generation changed")
 }
 
 func TestPageCloseCancelsPendingResponsiveImage(t *testing.T) {

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"embed"
+	"flag"
 	"fmt"
 	"image"
 	"image/color"
@@ -202,6 +203,8 @@ func mustShowcasePNG() []byte {
 
 func main() {
 	address := "localhost:8080"
+	flag.StringVar(&address, "addr", address, "showcase listen address")
+	flag.Parse()
 	fmt.Printf("Growse Modern Web Compatibility Showcase: http://%s\n", address)
 	log.Fatal(http.ListenAndServe(address, modernWebCompatibilityHandler()))
 }

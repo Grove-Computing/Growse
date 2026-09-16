@@ -109,10 +109,13 @@ type Page struct {
 }
 
 type pendingImageLoad struct {
-	generation uint64
-	resources  map[dom.NodeID]layoutmodel.ImageResource
-	images     map[string]image.Image
-	failures   []string
+	generation         uint64
+	resources          map[dom.NodeID]layoutmodel.ImageResource
+	images             map[string]image.Image
+	failures           []string
+	backgrounds        map[string]image.Image
+	backgroundFailures []string
+	replaceBackgrounds bool
 }
 
 // ImageInvalidation describes the bounded renderer work caused by the latest
@@ -141,13 +144,16 @@ func (p *Page) beginImageLoad(parent context.Context) (context.Context, uint64) 
 	return ctx, p.imageGeneration
 }
 
-func (p *Page) stageImageLoad(generation uint64, resources map[dom.NodeID]layoutmodel.ImageResource, images map[string]image.Image, failures []string) bool {
+func (p *Page) stageImageLoad(generation uint64, resources map[dom.NodeID]layoutmodel.ImageResource, images map[string]image.Image, failures []string, backgrounds map[string]image.Image, backgroundFailures []string, replaceBackgrounds bool) bool {
 	p.imageMu.Lock()
 	defer p.imageMu.Unlock()
 	if generation != p.imageGeneration {
 		return false
 	}
-	p.pendingImageLoad = &pendingImageLoad{generation: generation, resources: resources, images: images, failures: failures}
+	p.pendingImageLoad = &pendingImageLoad{
+		generation: generation, resources: resources, images: images, failures: failures,
+		backgrounds: backgrounds, backgroundFailures: backgroundFailures, replaceBackgrounds: replaceBackgrounds,
+	}
 	return true
 }
 
@@ -160,6 +166,9 @@ func (p *Page) commitPendingImageLoad() bool {
 	}
 	p.pendingImageLoad = nil
 	p.ImageResources, p.Images, p.ImageErrors = pending.resources, pending.images, boundedImageDiagnostics(pending.failures)
+	if pending.replaceBackgrounds {
+		p.BackgroundImages, p.BackgroundErrors = pending.backgrounds, boundedImageDiagnostics(pending.backgroundFailures)
+	}
 	p.AnimatedImages = animatedImagesForResources(pending.resources, p.imageCache)
 	p.StyleRevision++
 	return true
