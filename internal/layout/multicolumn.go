@@ -202,7 +202,59 @@ func (e *engine) planColumnRanges(owner dom.NodeID, children []*dom.Node, style 
 			ranges = append(ranges, columnSourceRange{start: boundaries[index], end: boundaries[index+1]})
 		}
 	}
-	return ranges
+	return e.truncateUnforcedColumnMargins(ranges, forced, children)
+}
+
+// truncateUnforcedColumnMargins drops an empty gap between sibling block boxes
+// from the start of the following fragment. That makes the following box start
+// at the fragmentainer edge instead of carrying an adjoining margin into the
+// next column, as required by CSS Fragmentation.
+func (e *engine) truncateUnforcedColumnMargins(ranges []columnSourceRange, forced []float32, children []*dom.Node) []columnSourceRange {
+	adjusted := append([]columnSourceRange(nil), ranges...)
+	for index := 1; index < len(adjusted); index++ {
+		boundary := adjusted[index].start
+		isForced := false
+		for _, forcedBoundary := range forced {
+			if absFloat32(boundary-forcedBoundary) <= 0.01 {
+				isForced = true
+				break
+			}
+		}
+		if isForced {
+			continue
+		}
+
+		hasPrevious, startsAtBoundary, crossesBoundary := false, false, false
+		nextStart := adjusted[index].end
+		for _, child := range children {
+			if child == nil || child.Type != dom.NodeElement {
+				continue
+			}
+			bounds, exists := e.tree.Bounds[child.ID]
+			if !exists || bounds.Height <= 0 {
+				continue
+			}
+			bottom := bounds.Y + bounds.Height
+			if bounds.Y < boundary-0.01 && bottom > boundary+0.01 {
+				crossesBoundary = true
+				break
+			}
+			if bottom <= boundary+0.01 {
+				hasPrevious = true
+			}
+			if absFloat32(bounds.Y-boundary) <= 0.01 {
+				startsAtBoundary = true
+			}
+			if bounds.Y > boundary+0.01 && bounds.Y < nextStart {
+				nextStart = bounds.Y
+			}
+		}
+		if crossesBoundary || startsAtBoundary || !hasPrevious || nextStart <= boundary+0.01 || nextStart >= adjusted[index].end-0.01 {
+			continue
+		}
+		adjusted[index].start = nextStart
+	}
+	return adjusted
 }
 
 func (e *engine) columnBreakCandidates(boxStart, decorationStart int, top, end float32) []float32 {

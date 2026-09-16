@@ -85,6 +85,30 @@ func TestBlockAvoidCandidateEnclosesSystemFontContent(t *testing.T) {
 	}
 }
 
+func TestMultiColumnTruncatesMarginAfterUnforcedBreak(t *testing.T) {
+	document := dom.NewDocument()
+	container := document.CreateElement("section", map[string]string{"class": "columns"})
+	first := document.CreateElement("article", map[string]string{"class": "card"})
+	second := document.CreateElement("article", map[string]string{"class": "card"})
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, container},
+		[2]*dom.Node{container, first}, [2]*dom.Node{first, document.CreateText("first")},
+		[2]*dom.Node{container, second}, [2]*dom.Node{second, document.CreateText("second")},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.columns { display:block; width:600px; column-count:3; column-gap:20px }
+.card { display:block; height:100px; margin:0 0 12px; break-inside:avoid-column; background:#123 }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := BuildWithViewport(document, stylemodel.Compute(document, stylesheet), 760, 500)
+	firstBounds, secondBounds := tree.Bounds[first.ID], tree.Bounds[second.ID]
+	if firstBounds.X == secondBounds.X || absFloat32(firstBounds.Y-secondBounds.Y) > 0.01 {
+		t.Fatalf("unforced column break retained an adjoining margin: first=%#v second=%#v", firstBounds, secondBounds)
+	}
+}
+
 func TestMultiColumnSpanAndForcedBreakStartNewFragmentainers(t *testing.T) {
 	document := dom.NewDocument()
 	container := document.CreateElement("section", map[string]string{"class": "columns"})
