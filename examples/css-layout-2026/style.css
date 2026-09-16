@@ -99,7 +99,7 @@ main { padding: 22px 34px 50px; }
 .column-card strong { margin-bottom: 6px; color: #66e3d7; }
 .column-spanner { column-span: all; margin: 8px 0 14px; padding: 9px; color: #08111f; background: #ffd166; }
 .column-break { break-before: column; }
-.column-stage.alternate { height: 220px; column-count: 2; column-width: auto; column-fill: auto; column-rule: 4px solid #ff9f68; }
+.column-stage.alternate { height: auto; column-count: 2; column-width: auto; column-fill: auto; column-rule: 4px solid #ff9f68; }
 .position-panel > p { color: #b8cbe2; }
 .position-playground {
   position: relative;
