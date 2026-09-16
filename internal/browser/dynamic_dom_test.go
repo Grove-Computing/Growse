@@ -11,6 +11,7 @@ import (
 	"github.com/Grove-Computing/Growse/internal/network"
 	paintmodel "github.com/Grove-Computing/Growse/internal/paint"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
+	runtimejavascript "github.com/Grove-Computing/Growse/internal/runtime/javascript"
 	"github.com/Grove-Computing/Growse/internal/runtime/yaegi"
 	"github.com/Grove-Computing/Growse/internal/style"
 )
@@ -61,6 +62,95 @@ func main() { dom.GetElementByID("target").OnClick(func() {
 	stale := devtools.SnapshotInspectorAtRevision(page.Document, page.ComputedStyles, oldTree, target.ID, page.StyleRevision)
 	if stale.Layout != nil {
 		t.Fatalf("inspector accepted stale layout revision %d for %d", oldTree.Revision, page.StyleRevision)
+	}
+}
+
+func TestDynamicLayoutInputsPublishCoherentRenderRevisions(t *testing.T) {
+	pageURL := mustParseURL(t, "https://app.example/layout-revisions")
+	loader := stubLoader{response: &network.Response{
+		URL: pageURL, StatusCode: 200, ContentType: "text/html",
+		Body: []byte(`<!doctype html><style>
+			#target { display:block; box-sizing:border-box; width:100px; min-height:20px; background:#123; }
+			#target.classed { width:140px; }
+			#viewport-probe { display:block; width:120px; height:20px; background:#456; }
+			@media (max-width:600px) { #viewport-probe { width:260px; } }
+		</style><button id="dom">dom</button><button id="class">class</button>
+		<button id="inline">inline</button><button id="sheet">sheet</button>
+		<div id="target"></div><div id="viewport-probe"></div><script>
+			var target = document.getElementById("target");
+			document.getElementById("dom").addEventListener("click", function () {
+				target.insertAdjacentHTML("beforeend", '<span style="display:block;height:40px">child</span>');
+			});
+			document.getElementById("class").addEventListener("click", function () { target.classList.add("classed"); });
+			document.getElementById("inline").addEventListener("click", function () { target.style.width = "180px"; });
+			document.getElementById("sheet").addEventListener("click", function () {
+				var sheet = document.createElement("style");
+				sheet.textContent = "#target { height:90px !important; }";
+				document.head.appendChild(sheet);
+			});
+		</script>`),
+	}}
+	browserState := NewWithEngineFactory(loader, func(engine runtimemodel.Engine) runtimemodel.Runtime {
+		if engine == runtimemodel.EngineJavaScript {
+			return runtimejavascript.New()
+		}
+		return nil
+	})
+	t.Cleanup(func() { _ = browserState.Close() })
+	if _, err := browserState.SetEngine(context.Background(), runtimemodel.EngineJavaScript); err != nil {
+		t.Fatal(err)
+	}
+	page, err := browserState.Navigate(context.Background(), pageURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, _ := page.Document.GetElementByID("target")
+	probe, _ := page.Document.GetElementByID("viewport-probe")
+	assertCoherentRenderRevision(t, page, target.ID, 100, 20)
+
+	previousRevision := page.StyleRevision
+	for _, step := range []struct {
+		button        string
+		width, height float32
+	}{
+		{button: "dom", width: 100, height: 40},
+		{button: "class", width: 140, height: 40},
+		{button: "inline", width: 180, height: 40},
+		{button: "sheet", width: 180, height: 90},
+	} {
+		button, _ := page.Document.GetElementByID(step.button)
+		if !browserState.DispatchClick(button.ID, 0, 0) {
+			t.Fatalf("%s mutation click was not dispatched", step.button)
+		}
+		if page.StyleRevision <= previousRevision {
+			t.Fatalf("%s mutation revision = %d, want greater than %d", step.button, page.StyleRevision, previousRevision)
+		}
+		assertCoherentRenderRevision(t, page, target.ID, step.width, step.height)
+		previousRevision = page.StyleRevision
+	}
+
+	if !browserState.UpdateViewport(500, 700) {
+		t.Fatal("viewport mutation was not applied")
+	}
+	if page.StyleRevision <= previousRevision {
+		t.Fatalf("viewport revision = %d, want greater than %d", page.StyleRevision, previousRevision)
+	}
+	assertCoherentRenderRevision(t, page, probe.ID, 260, 20)
+}
+
+func assertCoherentRenderRevision(t *testing.T, page *Page, nodeID dom.NodeID, width, height float32) {
+	t.Helper()
+	tree := layoutengine.BuildWithScrollAtRevision(page.Document, page.ComputedStyles, page.ViewportWidth, page.ViewportHeight, 0, 0, page.StyleRevision)
+	displayList := paintmodel.Build(tree)
+	bounds, ok := tree.Bounds[nodeID]
+	if !ok || bounds.Width != width || bounds.Height != height {
+		t.Fatalf("revision %d geometry for %d = %#v, want %.0fx%.0f", page.StyleRevision, nodeID, bounds, width, height)
+	}
+	hit, hitOK := layoutengine.HitTestWithRevision(tree, bounds.X+bounds.Width/2, bounds.Y+bounds.Height/2)
+	inspector := devtools.SnapshotInspectorAtRevision(page.Document, page.ComputedStyles, tree, nodeID, page.StyleRevision)
+	if !hitOK || hit.NodeID != nodeID || tree.Revision != page.StyleRevision || displayList.Revision != page.StyleRevision ||
+		hit.Revision != page.StyleRevision || inspector.Revision != page.StyleRevision || inspector.Layout == nil {
+		t.Fatalf("incoherent render revision = page:%d tree:%d display:%d hit:%#v inspector:%#v", page.StyleRevision, tree.Revision, displayList.Revision, hit, inspector)
 	}
 }
 
