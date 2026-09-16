@@ -442,3 +442,52 @@ func TestBuildSubgridSharesParentTracksGapsNamedLinesAndContributions(t *testing
 		t.Fatalf("subgrid rows/gap = parent %#v first %#v contributor %#v", parentRect, firstRect.Rect, contributorRect.Rect)
 	}
 }
+
+func TestBuildAlignmentHandlesSafeUnsafeLogicalAxesAndGridBaseline(t *testing.T) {
+	document := dom.NewDocument()
+	vertical := document.CreateElement("div", map[string]string{"class": "vertical"})
+	verticalItem := document.CreateElement("div", map[string]string{"class": "vertical-item"})
+	safeGrid := document.CreateElement("div", map[string]string{"class": "overflow-grid safe"})
+	safeItem := document.CreateElement("div", map[string]string{"class": "overflow-item"})
+	unsafeGrid := document.CreateElement("div", map[string]string{"class": "overflow-grid unsafe"})
+	unsafeItem := document.CreateElement("div", map[string]string{"class": "overflow-item"})
+	baselineGrid := document.CreateElement("div", map[string]string{"class": "baseline-grid"})
+	large := document.CreateElement("div", map[string]string{"class": "large"})
+	small := document.CreateElement("div", map[string]string{"class": "small"})
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, vertical}, [2]*dom.Node{vertical, verticalItem},
+		[2]*dom.Node{document.Root, safeGrid}, [2]*dom.Node{safeGrid, safeItem},
+		[2]*dom.Node{document.Root, unsafeGrid}, [2]*dom.Node{unsafeGrid, unsafeItem},
+		[2]*dom.Node{document.Root, baselineGrid}, [2]*dom.Node{baselineGrid, large}, [2]*dom.Node{large, document.CreateText("Large")},
+		[2]*dom.Node{baselineGrid, small}, [2]*dom.Node{small, document.CreateText("small")},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.vertical { writing-mode:vertical-rl; display:flex; width:100px; height:100px; justify-content:end; align-items:start; background-color:#eee }
+.vertical-item { width:20px; height:20px; flex:none; background-color:#c44 }
+.overflow-grid { display:grid; width:100px; grid-template-columns:50px; grid-template-rows:20px; background-color:#eee }
+.overflow-item { width:80px; height:20px; background-color:#bbb }
+.safe .overflow-item { justify-self:safe center }
+.unsafe .overflow-item { justify-self:unsafe center }
+.baseline-grid { display:grid; width:200px; grid-template-columns:100px 100px; grid-template-rows:50px; align-items:baseline }
+.large { font-size:30px }
+.small { font-size:14px }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, stylemodel.Compute(document, stylesheet), 500)
+	verticalRect := decorationForNode(t, tree, vertical.ID)
+	verticalItemRect := decorationForNode(t, tree, verticalItem.ID)
+	if verticalItemRect.X != verticalRect.X+80 || verticalItemRect.Y != verticalRect.Y+80 {
+		t.Fatalf("vertical logical alignment = container %#v item %#v", verticalRect.Rect, verticalItemRect.Rect)
+	}
+	safeRect := decorationForNode(t, tree, safeItem.ID)
+	unsafeRect := decorationForNode(t, tree, unsafeItem.ID)
+	if unsafeRect.X != safeRect.X-15 {
+		t.Fatalf("safe/unsafe overflow alignment = safe %#v unsafe %#v", safeRect.Rect, unsafeRect.Rect)
+	}
+	largeText, smallText := boxForNode(t, tree, large.ID), boxForNode(t, tree, small.ID)
+	if largeText.Baseline != smallText.Baseline {
+		t.Fatalf("grid baselines = %v and %v", largeText.Baseline, smallText.Baseline)
+	}
+}

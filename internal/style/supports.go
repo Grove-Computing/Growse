@@ -160,6 +160,25 @@ func supportsDeclaration(property, value string) bool {
 	case "white-space":
 		_, ok := resolveWhiteSpace(value, WhiteSpaceNormal)
 		return ok
+	case "writing-mode":
+		return value == "horizontal-tb" || value == "vertical-rl" || value == "vertical-lr"
+	case "direction":
+		return value == "ltr" || value == "rtl"
+	case "justify-content":
+		alignment, _, valid := parseOverflowAlignment(value)
+		if !valid {
+			return false
+		}
+		switch alignment {
+		case "normal", "flex-start", "flex-end", "start", "end", "left", "right", "center", "space-between", "space-around", "space-evenly":
+			return true
+		}
+		return false
+	case "align-content", "align-items", "justify-items", "align-self", "justify-self":
+		allowAuto := strings.HasSuffix(property, "-self")
+		distributed := property == "align-content"
+		_, _, ok := parseAlign(value, allowAuto, distributed)
+		return ok
 	case "transform":
 		_, ok := parseTransform(value, context)
 		return ok
@@ -242,8 +261,8 @@ func supportsProperty(property string) bool {
 		"table-layout", "border-collapse", "border-spacing", "caption-side",
 		"margin", "margin-top", "margin-right", "margin-bottom", "margin-left", "padding", "padding-top", "padding-right", "padding-bottom", "padding-left",
 		"border", "border-width", "border-style", "border-color", "border-top", "border-right", "border-bottom", "border-left", "border-radius", "outline",
-		"overflow", "overflow-x", "overflow-y", "visibility", "opacity", "white-space", "transform",
-		"flex", "flex-flow", "flex-basis", "flex-grow", "flex-shrink", "order", "gap", "row-gap", "column-gap",
+		"overflow", "overflow-x", "overflow-y", "visibility", "opacity", "white-space", "writing-mode", "direction", "transform",
+		"flex", "flex-flow", "flex-basis", "flex-grow", "flex-shrink", "order", "gap", "row-gap", "column-gap", "justify-content", "align-content", "align-items", "justify-items", "align-self", "justify-self",
 		"grid-template-columns", "grid-template-rows", "grid-auto-flow", "grid-column", "grid-row", "grid-area", "place-content", "place-items", "place-self", "container-type", "container-name":
 		return true
 	default:

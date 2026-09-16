@@ -97,6 +97,10 @@ type JustifyContent uint8
 const (
 	JustifyFlexStart JustifyContent = iota
 	JustifyFlexEnd
+	JustifyStart
+	JustifyEnd
+	JustifyLeft
+	JustifyRight
 	JustifyCenter
 	JustifySpaceBetween
 	JustifySpaceAround
@@ -110,12 +114,43 @@ const (
 	AlignStretch Align = iota
 	AlignFlexStart
 	AlignFlexEnd
+	AlignStart
+	AlignEnd
+	AlignSelfStart
+	AlignSelfEnd
 	AlignCenter
 	AlignBaseline
 	AlignSpaceBetween
 	AlignSpaceAround
 	AlignSpaceEvenly
 	AlignAuto
+)
+
+// OverflowAlignment selects fallback behavior when the alignment subject is
+// larger than its alignment container.
+type OverflowAlignment uint8
+
+const (
+	OverflowAlignmentDefault OverflowAlignment = iota
+	OverflowAlignmentSafe
+	OverflowAlignmentUnsafe
+)
+
+// WritingMode defines the physical direction of the inline and block axes.
+type WritingMode uint8
+
+const (
+	WritingModeHorizontalTB WritingMode = iota
+	WritingModeVerticalRL
+	WritingModeVerticalLR
+)
+
+// Direction defines inline base direction.
+type Direction uint8
+
+const (
+	DirectionLTR Direction = iota
+	DirectionRTL
 )
 
 // FlexBasisKind identifies an automatic, content-based, or sized flex basis.
@@ -602,117 +637,125 @@ type ComputedStyle struct {
 	// BrowserDefaults marks styles computed with the JavaScript-only browser
 	// compatibility UA profile. Layout uses it to select the initial
 	// containing-block behavior without changing the Go Engine defaults.
-	BrowserDefaults     bool
-	Color               uint32
-	BackgroundColor     uint32
-	BackgroundImage     BackgroundImage
-	BackgroundRepeat    BackgroundRepeat
-	BackgroundPos       BackgroundPosition
-	BackgroundSize      BackgroundSize
-	BackgroundLayers    []BackgroundLayer
-	BackgroundOrigin    BackgroundBox
-	BackgroundClip      BackgroundBox
-	FontSize            float32
-	FontWeight          int
-	FontFamilies        []string
-	FontStyle           string
-	FontStretch         string
-	FontFaceIndex       int
-	LineHeight          float32
-	WhiteSpace          WhiteSpace
-	TextAlign           TextAlign
-	TextTransform       TextTransform
-	TextIndent          LengthPercentage
-	LetterSpacing       float32
-	WordSpacing         float32
-	WordBreak           WordBreak
-	OverflowWrap        OverflowWrap
-	VerticalAlign       VerticalAlign
-	TextOverflow        TextOverflow
-	ObjectFit           ObjectFit
-	ObjectPosition      BackgroundPosition
-	ListStyleType       ListStyleType
-	ListStylePosition   ListStylePosition
-	ListStyleImage      string
-	Appearance          Appearance
-	AccentColor         uint32
-	AccentColorAuto     bool
-	Cursor              Cursor
-	Filters             []Filter
-	BackdropFilters     []Filter
-	MixBlendMode        BlendMode
-	OverflowX           Overflow
-	OverflowY           Overflow
-	Display             Display
-	TableLayout         TableLayout
-	BorderCollapse      BorderCollapse
-	BorderSpacingX      float32
-	BorderSpacingY      float32
-	CaptionSide         CaptionSide
-	Float               Float
-	Clear               Clear
-	ContainerType       ContainerType
-	ContainerName       string
-	Visibility          Visibility
-	FlexDirection       FlexDirection
-	FlexWrap            FlexWrap
-	JustifyContent      JustifyContent
-	AlignItems          Align
-	JustifyItems        Align
-	AlignContent        Align
-	Order               int
-	FlexGrow            float32
-	FlexShrink          float32
-	FlexBasis           FlexBasis
-	AlignSelf           Align
-	JustifySelf         Align
-	RowGap              LengthPercentage
-	ColumnGap           LengthPercentage
-	GridTemplateColumns []GridTrackSize
-	GridTemplateRows    []GridTrackSize
-	GridColumnsSubgrid  bool
-	GridRowsSubgrid     bool
-	GridAutoColumns     []GridTrackSize
-	GridAutoRows        []GridTrackSize
-	GridColumnLines     map[string][]int
-	GridRowLines        map[string][]int
-	GridTemplateAreas   map[string]GridArea
-	GridColumn          GridPlacement
-	GridRow             GridPlacement
-	GridAreaName        string
-	GridAutoFlow        GridAutoFlow
-	Position            Position
-	Inset               Insets
-	ZIndex              int
-	ZIndexAuto          bool
-	BoxShadows          []Shadow
-	TextShadows         []Shadow
-	Outline             BorderSide
-	OutlineOffset       float32
-	Transform           []TransformFunction
-	TransformOrigin     BackgroundPosition
-	AspectRatio         float32
-	BoxSizing           BoxSizing
-	Width               SizeValue
-	Height              SizeValue
-	MinWidth            SizeValue
-	MinHeight           SizeValue
-	MaxWidth            SizeValue
-	MaxHeight           SizeValue
-	Margin              Edges
-	MarginAuto          AutoEdges
-	Padding             Edges
-	Border              Borders
-	BorderRadius        BorderRadii
-	TextDecoration      TextDecorationLine
-	DecorationColor     uint32
-	Opacity             float32
-	Transitions         []Transition
-	Animations          []CSSAnimation
-	ImportantProperties map[string]bool
-	BeforeContent       string
-	AfterContent        string
-	CustomProperties    map[string]string
+	BrowserDefaults      bool
+	Color                uint32
+	BackgroundColor      uint32
+	BackgroundImage      BackgroundImage
+	BackgroundRepeat     BackgroundRepeat
+	BackgroundPos        BackgroundPosition
+	BackgroundSize       BackgroundSize
+	BackgroundLayers     []BackgroundLayer
+	BackgroundOrigin     BackgroundBox
+	BackgroundClip       BackgroundBox
+	FontSize             float32
+	FontWeight           int
+	FontFamilies         []string
+	FontStyle            string
+	FontStretch          string
+	FontFaceIndex        int
+	LineHeight           float32
+	WhiteSpace           WhiteSpace
+	WritingMode          WritingMode
+	Direction            Direction
+	TextAlign            TextAlign
+	TextTransform        TextTransform
+	TextIndent           LengthPercentage
+	LetterSpacing        float32
+	WordSpacing          float32
+	WordBreak            WordBreak
+	OverflowWrap         OverflowWrap
+	VerticalAlign        VerticalAlign
+	TextOverflow         TextOverflow
+	ObjectFit            ObjectFit
+	ObjectPosition       BackgroundPosition
+	ListStyleType        ListStyleType
+	ListStylePosition    ListStylePosition
+	ListStyleImage       string
+	Appearance           Appearance
+	AccentColor          uint32
+	AccentColorAuto      bool
+	Cursor               Cursor
+	Filters              []Filter
+	BackdropFilters      []Filter
+	MixBlendMode         BlendMode
+	OverflowX            Overflow
+	OverflowY            Overflow
+	Display              Display
+	TableLayout          TableLayout
+	BorderCollapse       BorderCollapse
+	BorderSpacingX       float32
+	BorderSpacingY       float32
+	CaptionSide          CaptionSide
+	Float                Float
+	Clear                Clear
+	ContainerType        ContainerType
+	ContainerName        string
+	Visibility           Visibility
+	FlexDirection        FlexDirection
+	FlexWrap             FlexWrap
+	JustifyContent       JustifyContent
+	JustifyContentSafety OverflowAlignment
+	AlignItems           Align
+	AlignItemsSafety     OverflowAlignment
+	JustifyItems         Align
+	JustifyItemsSafety   OverflowAlignment
+	AlignContent         Align
+	AlignContentSafety   OverflowAlignment
+	Order                int
+	FlexGrow             float32
+	FlexShrink           float32
+	FlexBasis            FlexBasis
+	AlignSelf            Align
+	AlignSelfSafety      OverflowAlignment
+	JustifySelf          Align
+	JustifySelfSafety    OverflowAlignment
+	RowGap               LengthPercentage
+	ColumnGap            LengthPercentage
+	GridTemplateColumns  []GridTrackSize
+	GridTemplateRows     []GridTrackSize
+	GridColumnsSubgrid   bool
+	GridRowsSubgrid      bool
+	GridAutoColumns      []GridTrackSize
+	GridAutoRows         []GridTrackSize
+	GridColumnLines      map[string][]int
+	GridRowLines         map[string][]int
+	GridTemplateAreas    map[string]GridArea
+	GridColumn           GridPlacement
+	GridRow              GridPlacement
+	GridAreaName         string
+	GridAutoFlow         GridAutoFlow
+	Position             Position
+	Inset                Insets
+	ZIndex               int
+	ZIndexAuto           bool
+	BoxShadows           []Shadow
+	TextShadows          []Shadow
+	Outline              BorderSide
+	OutlineOffset        float32
+	Transform            []TransformFunction
+	TransformOrigin      BackgroundPosition
+	AspectRatio          float32
+	BoxSizing            BoxSizing
+	Width                SizeValue
+	Height               SizeValue
+	MinWidth             SizeValue
+	MinHeight            SizeValue
+	MaxWidth             SizeValue
+	MaxHeight            SizeValue
+	Margin               Edges
+	MarginAuto           AutoEdges
+	Padding              Edges
+	Border               Borders
+	BorderRadius         BorderRadii
+	TextDecoration       TextDecorationLine
+	DecorationColor      uint32
+	Opacity              float32
+	Transitions          []Transition
+	Animations           []CSSAnimation
+	ImportantProperties  map[string]bool
+	BeforeContent        string
+	AfterContent         string
+	CustomProperties     map[string]string
 }
 
 // ContainerType identifies size containment exposed to @container queries.
