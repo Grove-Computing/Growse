@@ -2299,7 +2299,7 @@ func (ui *BrowserUI) documentTheme() *material.Theme {
 		ui.theme = material.NewTheme()
 	}
 	pageTheme := *ui.theme
-	pageTheme.Shaper = &text.Shaper{}
+	pageTheme.Shaper = newPageTextShaper(gofont.Collection(), true)
 	ui.pageTheme = &pageTheme
 	return ui.pageTheme
 }
@@ -2313,7 +2313,7 @@ func (ui *BrowserUI) installPageFonts(page *browser.Page) {
 		return
 	}
 	if !page.UsesModernWebCompatibility() {
-		ui.documentTheme().Shaper = &text.Shaper{}
+		ui.documentTheme().Shaper = newPageTextShaper(gofont.Collection(), true)
 		ui.fontPage, ui.fontRevision = page, page.StyleRevision
 		return
 	}
@@ -3531,7 +3531,11 @@ func (ui *BrowserUI) layoutVerticalText(gtx layout.Context, command paintmodel.D
 				paint.FillShape(gtx.Ops, rgba(run.Background), clip.Rect{Max: image.Pt(width, height)}.Op())
 			}
 			return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-				return ui.layoutShadowedText(gtx, run.Text, run.FontSize, run.Bold, run.FontFamilies, run.FontStyle, run.LetterSpacing, run.WordSpacing, run.Color, run.Decoration, run.DecorationColor, 0, run.TextShadows)
+				baseline := run.Baseline
+				if baseline == 0 {
+					baseline = run.FontSize * 0.8
+				}
+				return ui.layoutShadowedText(gtx, run.Text, run.FontSize, run.Bold, run.FontFamilies, run.FontStyle, run.LetterSpacing, run.WordSpacing, run.Color, run.Decoration, run.DecorationColor, baseline, run.TextShadows)
 			})
 		}))
 	}
