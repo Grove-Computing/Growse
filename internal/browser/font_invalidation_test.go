@@ -2,9 +2,12 @@ package browser
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 
+	"github.com/Grove-Computing/Growse/internal/css"
 	"github.com/Grove-Computing/Growse/internal/dom"
+	layoutmodel "github.com/Grove-Computing/Growse/internal/layout"
 	"github.com/Grove-Computing/Growse/internal/style"
 	textfont "github.com/go-text/typesetting/font"
 	"golang.org/x/image/font/gofont/goregular"
@@ -98,5 +101,60 @@ func TestCommitWebFontCompletionRejectsStaleGeneration(t *testing.T) {
 	}
 	if _, committed := page.CommitWebFontCompletionForGeneration(current, resource); !committed || len(page.Fonts) != 1 {
 		t.Fatal("current font completion was rejected")
+	}
+}
+
+func TestWebFontSwapRelayoutKeepsFallbackTextAndFollowingContentVisible(t *testing.T) {
+	document := dom.NewDocument()
+	heading := document.CreateElement("h1", map[string]string{"class": "heading"})
+	copy := document.CreateElement("p", map[string]string{"class": "copy"})
+	headingText := document.CreateText("iiiiiiiiiiii 日本語")
+	for _, edge := range [][2]*dom.Node{
+		{document.Root, heading}, {heading, headingText},
+		{document.Root, copy}, {copy, document.CreateText("fallback copy remains visible")},
+	} {
+		if err := document.AppendChild(edge[0], edge[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stylesheet, err := css.Parse(strings.NewReader(`
+.heading { display:block; width:150px; margin:0 0 6px; font:24px/30px Fixture,sans-serif; overflow-wrap:anywhere }
+.copy { display:block; width:150px; margin:0; font:16px/24px sans-serif }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	computed := style.Compute(document, stylesheet)
+	page := &Page{
+		Document: document, ComputedStyles: computed, Compatibility: CompatibilityProfileModernWeb,
+		WebFonts: layoutmodel.NewFontSetWithSystemFallback(nil), StyleRevision: 4,
+	}
+	fallback := layoutmodel.BuildWithScrollAndResources(document, computed, nil, page.WebFonts, 240, 400, 0, 0)
+	face, err := textfont.ParseTTF(bytes.NewReader(goregular.TTF))
+	if err != nil {
+		t.Fatal(err)
+	}
+	invalidation := page.CommitWebFontCompletion(FontResource{
+		Family: "Fixture", Style: "normal", Weight: "normal", Loaded: true, Decoded: true, Face: face,
+		UnicodeRanges: []FontRange{{Start: 0x20, End: 0x7f}},
+	})
+	loaded := layoutmodel.BuildWithScrollAndResources(document, computed, nil, page.WebFonts, 240, 400, 0, 0)
+	if invalidation.Revision == 0 || page.StyleRevision != 5 {
+		t.Fatalf("font swap did not invalidate render state: invalidation=%#v revision=%d", invalidation, page.StyleRevision)
+	}
+	for name, tree := range map[string]*layoutmodel.Tree{"fallback": fallback, "loaded": loaded} {
+		headingRect, copyRect := tree.Bounds[heading.ID], tree.Bounds[copy.ID]
+		if headingRect.Height <= 0 || copyRect.Height <= 0 || copyRect.Y < headingRect.Y+headingRect.Height {
+			t.Fatalf("%s font state clipped or overlapped content: heading=%#v copy=%#v", name, headingRect, copyRect)
+		}
+		visible := ""
+		for _, box := range tree.Boxes {
+			visible += box.Text
+		}
+		for _, want := range []string{"iiiiiiiiiiii", "日本語", "fallbackcopyremainsvisible"} {
+			if !strings.Contains(strings.ReplaceAll(visible, " ", ""), want) {
+				t.Fatalf("%s font state lost %q from %q", name, want, visible)
+			}
+		}
 	}
 }
