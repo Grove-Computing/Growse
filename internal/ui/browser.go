@@ -53,7 +53,7 @@ import (
 var gopherPNG []byte
 
 const (
-	defaultURL         = "http://localhost:8080"
+	defaultURL         = "http://localhost:6053"
 	tabRailWidth       = unit.Dp(224)
 	toolbarHeight      = unit.Dp(92)
 	controlHeight      = unit.Dp(44)

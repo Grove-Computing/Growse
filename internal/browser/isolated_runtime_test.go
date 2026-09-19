@@ -18,7 +18,7 @@ import (
 )
 
 func TestBrowserSwitchesGoAndJavaScriptThroughIsolatedWorkers(t *testing.T) {
-	pageURL := mustParseURL(t, "http://localhost:8080/isolated.html")
+	pageURL := mustParseURL(t, "http://localhost:6053/isolated.html")
 	loader := &routeLoader{responses: map[string]*network.Response{
 		pageURL.String(): {
 			URL: pageURL, StatusCode: 200, ContentType: "text/html",

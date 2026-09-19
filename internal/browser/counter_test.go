@@ -10,9 +10,9 @@ import (
 )
 
 func TestCounterDemoIncrementsThroughWebGoClick(t *testing.T) {
-	pageURL := mustParseURL(t, "http://localhost:8080/index.html")
-	cssURL := mustParseURL(t, "http://localhost:8080/style.css")
-	scriptURL := mustParseURL(t, "http://localhost:8080/app.go")
+	pageURL := mustParseURL(t, "http://localhost:6053/index.html")
+	cssURL := mustParseURL(t, "http://localhost:6053/style.css")
+	scriptURL := mustParseURL(t, "http://localhost:6053/app.go")
 	loader := &routeLoader{responses: map[string]*network.Response{
 		pageURL.String(): {
 			URL: pageURL, StatusCode: 200, ContentType: "text/html",

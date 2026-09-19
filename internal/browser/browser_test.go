@@ -1182,7 +1182,7 @@ func TestNormalizeURL(t *testing.T) {
 		wantErr bool
 	}{
 		{name: "HTTPS default", rawURL: "example.com/path", want: "https://example.com/path"},
-		{name: "localhost HTTP", rawURL: "localhost:8080", want: "http://localhost:8080"},
+		{name: "localhost HTTP", rawURL: "localhost:6053", want: "http://localhost:6053"},
 		{name: "trim and remove fragment", rawURL: " https://example.com/#top ", want: "https://example.com/"},
 		{name: "empty", rawURL: " ", wantErr: true},
 		{name: "unsupported scheme", rawURL: "file:///tmp/index.html", wantErr: true},

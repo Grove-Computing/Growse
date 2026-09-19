@@ -315,7 +315,7 @@ MVPでは以下のUIを実装する。
 
 ```text
 ┌─────────────────────────────────────────────────┐
-│ ←   ↻   │ http://localhost:8080            Go │
+│ ←   ↻   │ http://localhost:6053            Go │
 ├─────────────────────────────────────────────────┤
 │                                                 │
 │                                                 │
@@ -344,7 +344,7 @@ MVPでは以下のUIを実装する。
 例：
 
 ```text
-http://localhost:8080
+http://localhost:6053
 https://example.com
 ```
 
@@ -1671,7 +1671,7 @@ MVPでは毎回フル再計算してよい。
 完成条件：
 
 ```text
-http://localhost:8080
+http://localhost:6053
 ```
 
 からHTMLを取得し、標準出力へ表示できる。
@@ -1913,7 +1913,7 @@ MVPでは標準出力へログを出力する。
 例：
 
 ```text
-[Growse] navigating: http://localhost:8080
+[Growse] navigating: http://localhost:6053
 [Growse] document loaded
 [Growse] stylesheet loaded: /style.css
 [Growse] go script loaded: /app.go
