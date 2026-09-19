@@ -134,6 +134,42 @@ func TestNestedScrollMovesOwnedRoundedClipsAndTransformGeometryTogether(t *testi
 	}
 }
 
+func TestRealSiteAxisOverflowKeepsRoundedTransformClipAcrossResize(t *testing.T) {
+	document := dom.NewDocument()
+	panel := document.CreateElement("section", map[string]string{"class": "panel"})
+	content := document.CreateElement("a", map[string]string{"class": "content"})
+	appendNodes(t, document, [2]*dom.Node{document.Root, panel}, [2]*dom.Node{panel, content})
+	stylesheet, err := css.Parse(strings.NewReader(`
+.panel { position:relative; width:50%; max-height:80px; overflow:hidden; border-radius:24px; transform:translateX(40px) }
+.content { display:block; width:240px; height:160px; background:#777 }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	computed := style.Compute(document, stylesheet)
+	wide := BuildWithViewport(document, computed, 600, 400)
+	narrow := BuildWithViewport(document, computed, 360, 400)
+	if wide.Bounds[panel.ID].Width <= narrow.Bounds[panel.ID].Width {
+		t.Fatalf("responsive overflow geometry did not resize: wide=%#v narrow=%#v", wide.Bounds[panel.ID], narrow.Bounds[panel.ID])
+	}
+	for name, tree := range map[string]*Tree{"wide": wide, "narrow": narrow} {
+		panelRect := tree.Bounds[panel.ID]
+		decoration := decorationForNode(t, tree, content.ID)
+		cornerX, cornerY := decoration.Transform.TransformPoint(panelRect.X+1, panelRect.Y+1)
+		if hit, ok := HitTest(tree, cornerX, cornerY); ok && hit == content.ID {
+			t.Fatalf("%s rounded overflow corner exposed content: %d/%v", name, hit, ok)
+		}
+		centerX, centerY := decoration.Transform.TransformPoint(panelRect.X+panelRect.Width/2, panelRect.Y+40)
+		if hit, ok := HitTest(tree, centerX, centerY); !ok || hit != content.ID {
+			t.Fatalf("%s transformed overflow center hit = %d/%v", name, hit, ok)
+		}
+		belowX, belowY := decoration.Transform.TransformPoint(panelRect.X+panelRect.Width/2, panelRect.Y+120)
+		if hit, ok := HitTest(tree, belowX, belowY); ok && hit == content.ID {
+			t.Fatalf("%s max-height overflow exposed content below scrollport: %d/%v", name, hit, ok)
+		}
+	}
+}
+
 func clipForOwner(t *testing.T, clips []ClipRegion, nodeID dom.NodeID) ClipRegion {
 	t.Helper()
 	for _, region := range clips {

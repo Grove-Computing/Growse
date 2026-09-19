@@ -35,7 +35,15 @@ func (e *engine) addGridChildren(container *dom.Node, containerStyle blockStyle,
 		if child.Type == dom.NodeText {
 			if text := normalizeWhitespace(child.Text); text != "" {
 				anonymous := &dom.Node{ID: child.ID, Type: dom.NodeText, Text: text}
-				items = append(items, gridLayoutItem{node: anonymous, style: e.styleFor(container)})
+				style := e.styleFor(container)
+				style.display = stylemodel.DisplayBlock
+				style.width, style.height = stylemodel.SizeValue{Kind: stylemodel.SizeAuto}, stylemodel.SizeValue{Kind: stylemodel.SizeAuto}
+				style.minWidth, style.minHeight = stylemodel.SizeValue{Kind: stylemodel.SizeAuto}, stylemodel.SizeValue{Kind: stylemodel.SizeAuto}
+				style.maxWidth, style.maxHeight = stylemodel.SizeValue{Kind: stylemodel.SizeNone}, stylemodel.SizeValue{Kind: stylemodel.SizeNone}
+				style.margin, style.padding, style.border = stylemodel.Edges{}, stylemodel.Edges{}, stylemodel.Borders{}
+				style.marginAuto = stylemodel.AutoEdges{}
+				style.aspectRatio = 0
+				items = append(items, gridLayoutItem{node: anonymous, style: style})
 			}
 			continue
 		}

@@ -46,6 +46,27 @@ func TestBuildGridEstablishesFormattingContexts(t *testing.T) {
 	}
 }
 
+func TestRealSiteAvatarCentersAnonymousGridText(t *testing.T) {
+	document := dom.NewDocument()
+	avatar := document.CreateElement("div", map[string]string{"class": "avatar"})
+	label := document.CreateText("S")
+	appendNodes(t, document, [2]*dom.Node{document.Root, avatar}, [2]*dom.Node{avatar, label})
+	stylesheet, err := css.Parse(strings.NewReader(`
+.avatar { display:grid; place-items:center; width:220px; aspect-ratio:1; border-radius:50%; font-size:58px; background:#d0d7de }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, stylemodel.Compute(document, stylesheet), 400)
+	avatarRect, labelRect := tree.Bounds[avatar.ID], tree.Bounds[label.ID]
+	if labelRect.X <= avatarRect.X+avatarRect.Width/4 || labelRect.X+labelRect.Width >= avatarRect.X+avatarRect.Width*3/4 {
+		t.Fatalf("anonymous grid text was not centered: avatar=%#v label=%#v", avatarRect, labelRect)
+	}
+	if labelRect.Y <= avatarRect.Y+avatarRect.Height/4 || labelRect.Y+labelRect.Height >= avatarRect.Y+avatarRect.Height*3/4 {
+		t.Fatalf("anonymous grid text was not vertically centered: avatar=%#v label=%#v", avatarRect, labelRect)
+	}
+}
+
 func TestBuildGridGeneratesExplicitAndImplicitTracks(t *testing.T) {
 	document := dom.NewDocument()
 	grid := document.CreateElement("div", map[string]string{"class": "grid"})
