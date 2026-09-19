@@ -278,7 +278,11 @@ func classifyStructuralIssues(document *dom.Document, required []string, observa
 				if strings.TrimSpace(box.Text) == "" {
 					continue
 				}
-				if !rectContains(region, layoutmodel.Rect{X: box.X, Y: box.Y, Width: box.Width, Height: box.Height}, 1) {
+				// Platform fallback fonts can place a line box a fractional pixel
+				// beyond its semantic parent. Treat less than two CSS pixels as the
+				// documented P2 raster/rounding allowance; full-line overflow still
+				// remains a P1 structural failure.
+				if !rectContains(region, layoutmodel.Rect{X: box.X, Y: box.Y, Width: box.Width, Height: box.Height}, 2) {
 					issues = appendBoundedIssue(issues, visualIssue{Severity: "P1", Code: "text-clipped", Region: name, Detail: fmt.Sprintf("text box %d exceeds region bounds", index)})
 				}
 				for other := index + 1; other < len(candidate.Boxes); other++ {
@@ -735,6 +739,20 @@ func TestStructuralClassifierDetectsMissingEmptyClippedAndOverlappingContent(t *
 		}
 		if !found {
 			t.Fatalf("missing %s/%s in %#v", want.severity, want.code, issues)
+		}
+	}
+}
+
+func TestStructuralClassifierAllowsPlatformFontRoundingWithinP2Tolerance(t *testing.T) {
+	observations := map[string][]regionObservation{
+		"rounded": {{
+			Metric: regionMetric{Name: "rounded", Width: 100, Height: 24, VisibleBoxes: 1, TextBytes: 7},
+			Boxes:  []layoutmodel.Box{{Text: "rounded", X: 0, Y: 0, Width: 101.5, Height: 24}},
+		}},
+	}
+	for _, issue := range classifyStructuralIssues(nil, []string{"rounded"}, observations) {
+		if issue.Code == "text-clipped" {
+			t.Fatalf("sub-two-pixel platform font rounding was classified as clipping: %#v", issue)
 		}
 	}
 }
