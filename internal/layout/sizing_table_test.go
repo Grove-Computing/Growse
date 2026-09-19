@@ -138,9 +138,11 @@ func TestAspectRatioSizesBlockFlexGridImageIframeAndFormControls(t *testing.T) {
 	image := document.CreateElement("img", map[string]string{"class": "image"})
 	frame := document.CreateElement("iframe", map[string]string{"class": "frame"})
 	input := document.CreateElement("input", map[string]string{"class": "input"})
+	contentBox := document.CreateElement("div", map[string]string{"class": "content-box"})
+	borderBox := document.CreateElement("div", map[string]string{"class": "border-box"})
 	for _, edge := range [][2]*dom.Node{
 		{document.Root, block}, {document.Root, flex}, {flex, flexItem}, {document.Root, grid}, {grid, gridItem},
-		{document.Root, image}, {document.Root, frame}, {document.Root, input},
+		{document.Root, image}, {document.Root, frame}, {document.Root, input}, {document.Root, contentBox}, {document.Root, borderBox},
 	} {
 		if err := document.AppendChild(edge[0], edge[1]); err != nil {
 			t.Fatal(err)
@@ -155,6 +157,8 @@ func TestAspectRatioSizesBlockFlexGridImageIframeAndFormControls(t *testing.T) {
 .image { display:block; width:auto; height:50px; aspect-ratio:3 }
 .frame { display:inline-block; width:120px; height:auto; aspect-ratio:2 }
 .input { width:100px; height:auto; aspect-ratio:4 }
+.content-box { box-sizing:content-box; width:50%; height:auto; aspect-ratio:2; padding:10px; border:2px solid }
+.border-box { box-sizing:border-box; width:50%; height:auto; aspect-ratio:2; padding:10px; border:2px solid }
 `))
 	if err != nil {
 		t.Fatal(err)
@@ -168,6 +172,13 @@ func TestAspectRatioSizesBlockFlexGridImageIframeAndFormControls(t *testing.T) {
 	assertRatioRect(t, "image", tree.Bounds[image.ID], 150, 50)
 	assertRatioRect(t, "iframe", tree.Bounds[frame.ID], 120, 60)
 	assertRatioRect(t, "input", tree.Bounds[input.ID], 100, 25)
+	contentRect, borderRect := tree.Bounds[contentBox.ID], tree.Bounds[borderBox.ID]
+	if contentRect.Height != (contentRect.Width-24)/2+24 {
+		t.Fatalf("content-box percentage ratio = %#v", contentRect)
+	}
+	if borderRect.Height != borderRect.Width/2 || contentRect.Width != borderRect.Width+24 {
+		t.Fatalf("box-sizing percentage ratios = content:%#v border:%#v", contentRect, borderRect)
+	}
 }
 
 func assertRatioRect(t *testing.T, name string, rectangle layout.Rect, width, height float32) {

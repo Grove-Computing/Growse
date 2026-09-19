@@ -14,11 +14,15 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"unicode/utf8"
 
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/basicfont"
+	"golang.org/x/image/font/gofont/gobold"
+	"golang.org/x/image/font/gofont/goregular"
+	"golang.org/x/image/font/opentype"
 	"golang.org/x/image/math/fixed"
 
 	"github.com/Grove-Computing/Growse/internal/browser"
@@ -280,12 +284,61 @@ func rasterDisplayList(list *paintmodel.DisplayList, width, height int) *image.R
 		case paintmodel.DrawBox:
 			drawRect(canvas, command.X, command.Y, command.Width, command.Height, rgba(command.Color, command.Opacity))
 		case paintmodel.DrawText:
-			face := font.Face(basicfont.Face7x13)
-			drawer := font.Drawer{Dst: canvas, Src: image.NewUniform(rgba(command.Color, command.Opacity)), Face: face, Dot: fixed.P(int(command.X), int(command.Y+command.Baseline))}
-			drawer.DrawString(command.Text)
+			if len(command.Runs) == 0 {
+				drawRasterText(canvas, command.Text, command.X, command.Y+command.Baseline, command.FontSize, command.Bold, command.Color, command.Opacity)
+				continue
+			}
+			cursor := command.X
+			for _, run := range command.Runs {
+				if !run.Atomic && run.Text != "" {
+					drawRasterText(canvas, run.Text, cursor+run.OffsetX, command.Y+run.Baseline+run.OffsetY, run.FontSize, run.Bold, run.Color, command.Opacity*run.Opacity)
+				}
+				cursor += run.Width
+			}
 		}
 	}
 	return canvas
+}
+
+var rasterFonts struct {
+	sync.Mutex
+	once    sync.Once
+	regular *opentype.Font
+	bold    *opentype.Font
+	faces   map[string]font.Face
+}
+
+func drawRasterText(canvas draw.Image, text string, x, baseline, size float32, bold bool, color uint32, opacity float32) {
+	face := rasterFontFace(size, bold)
+	drawer := font.Drawer{Dst: canvas, Src: image.NewUniform(rgba(color, opacity)), Face: face, Dot: fixed.P(int(x), int(baseline))}
+	drawer.DrawString(text)
+}
+
+func rasterFontFace(size float32, bold bool) font.Face {
+	rasterFonts.Lock()
+	defer rasterFonts.Unlock()
+	rasterFonts.once.Do(func() {
+		rasterFonts.regular, _ = opentype.Parse(goregular.TTF)
+		rasterFonts.bold, _ = opentype.Parse(gobold.TTF)
+		rasterFonts.faces = make(map[string]font.Face)
+	})
+	key := fmt.Sprintf("%t/%.3f", bold, size)
+	if face := rasterFonts.faces[key]; face != nil {
+		return face
+	}
+	parsed := rasterFonts.regular
+	if bold {
+		parsed = rasterFonts.bold
+	}
+	if parsed == nil || size <= 0 {
+		return basicfont.Face7x13
+	}
+	face, err := opentype.NewFace(parsed, &opentype.FaceOptions{Size: float64(size), DPI: 72, Hinting: font.HintingNone})
+	if err != nil {
+		return basicfont.Face7x13
+	}
+	rasterFonts.faces[key] = face
+	return face
 }
 
 func drawRect(destination draw.Image, x, y, width, height float32, fill color.RGBA) {

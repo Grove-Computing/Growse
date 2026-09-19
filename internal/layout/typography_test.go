@@ -81,6 +81,35 @@ func TestWordBreakingAndEllipsisRespectComputedPolicy(t *testing.T) {
 	}
 }
 
+// Adapted from CSS Text 3 line-height and text-overflow assertions. A normal
+// long heading must reserve every line and must never gain an implicit marker.
+func TestRealSiteHeadingWrapDoesNotOverlapParagraphOrGainImplicitEllipsis(t *testing.T) {
+	document := dom.NewDocument()
+	heading := document.CreateElement("h1", map[string]string{"class": "heading"})
+	paragraph := document.CreateElement("p", map[string]string{"class": "copy"})
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, heading}, [2]*dom.Node{heading, document.CreateText("University of Santo Tomas Remains Oldest University in Asia")},
+		[2]*dom.Node{document.Root, paragraph}, [2]*dom.Node{paragraph, document.CreateText("The following copy must start after every heading line.")},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.heading { display:block; width:260px; margin:0 0 6px; font-size:36px; line-height:1.12; overflow:visible }
+.copy { display:block; width:260px; margin:0; font-size:21px; line-height:1.55 }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, style.Compute(document, stylesheet), 320)
+	headingRect, paragraphRect := tree.Bounds[heading.ID], tree.Bounds[paragraph.ID]
+	if headingRect.Height < 36*1.12*3 || paragraphRect.Y < headingRect.Y+headingRect.Height {
+		t.Fatalf("heading/copy overlap = heading:%#v paragraph:%#v", headingRect, paragraphRect)
+	}
+	for _, box := range tree.Boxes {
+		if box.NodeID == heading.ID && strings.Contains(box.Text, "…") {
+			t.Fatalf("unspecified ellipsis appeared in heading: %q", box.Text)
+		}
+	}
+}
+
 func TestMixedCJKLatinUsesSharedLineMetricsAndNaturalCJKBreaks(t *testing.T) {
 	document := dom.NewDocument()
 	paragraph := document.CreateElement("p", map[string]string{"class": "mixed"})

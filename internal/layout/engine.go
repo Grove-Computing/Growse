@@ -838,6 +838,15 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 	} else {
 		e.y += *topMargin
 	}
+	// An auto-sized block formatting context must keep its margin box outside
+	// adjacent floats. This is common in article/media-object layouts where
+	// overflow:hidden or flow-root contains the text beside a floated image.
+	if style.width.Kind == stylemodel.SizeAuto && establishesBlockFormattingContext(style) && len(e.floats) != 0 {
+		left, right := e.floatEdges(x, width, e.y, max(style.lineHeight, float32(1)))
+		if available := right - left; available > 0 && available < width {
+			x, width = left, available
+		}
+	}
 	x += style.margin.Left
 	availableWidth := width - style.margin.Left - style.margin.Right
 	if availableWidth < 1 {
@@ -922,9 +931,13 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 		}
 	}
 	if !declaredHeightDefinite && style.aspectRatio > 0 {
-		declaredHeight = outerWidth / style.aspectRatio
 		if style.boxSizing == stylemodel.BoxSizingContentBox {
-			declaredHeight = max(declaredHeight-style.padding.Top-style.padding.Bottom-verticalBorder, float32(0))
+			// aspect-ratio follows the box selected by box-sizing. sizingWidth is
+			// the content box here; deriving from outerWidth would incorrectly
+			// subtract vertical extras from horizontal padding and borders.
+			declaredHeight = max(sizingWidth, float32(0)) / style.aspectRatio
+		} else {
+			declaredHeight = outerWidth / style.aspectRatio
 		}
 		declaredHeightDefinite = true
 	}
