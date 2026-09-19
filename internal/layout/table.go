@@ -24,12 +24,16 @@ type tableColumn struct {
 }
 
 // flowChildren removes display:contents boxes while retaining their children at
-// the exact position where the box would have participated in normal flow.
+// the exact position where the box would have participated in normal flow. It
+// also splits non-atomic inline wrappers around block-level children. CSS 2.1
+// requires anonymous block boxes in this case; lifting the wrapper's children
+// is the equivalent representation in Growse's block-first layout tree.
 func (e *engine) flowChildren(node *dom.Node) []*dom.Node {
 	var result []*dom.Node
 	var appendChild func(*dom.Node)
 	appendChild = func(child *dom.Node) {
-		if child != nil && child.Type == dom.NodeElement && e.styleFor(child).display == stylemodel.DisplayContents {
+		if child != nil && child.Type == dom.NodeElement &&
+			(e.styleFor(child).display == stylemodel.DisplayContents || e.inlineWrapperNeedsBlockSplit(child)) {
 			for _, grandchild := range child.Children {
 				appendChild(grandchild)
 			}
@@ -41,6 +45,23 @@ func (e *engine) flowChildren(node *dom.Node) []*dom.Node {
 		appendChild(child)
 	}
 	return result
+}
+
+func (e *engine) inlineWrapperNeedsBlockSplit(node *dom.Node) bool {
+	if node == nil || e.styleFor(node).display != stylemodel.DisplayInline {
+		return false
+	}
+	for _, child := range node.Children {
+		if child == nil || child.Type != dom.NodeElement {
+			continue
+		}
+		style := e.styleFor(child)
+		if style.display != stylemodel.DisplayNone && style.layoutPosition != stylemodel.PositionAbsolute &&
+			style.layoutPosition != stylemodel.PositionFixed && isBlockLevelDisplay(style.display) {
+			return true
+		}
+	}
+	return false
 }
 
 func (e *engine) addTable(node *dom.Node, tableStyle blockStyle, x, availableWidth, containingHeight float32, heightDefinite bool) {

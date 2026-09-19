@@ -58,6 +58,7 @@ GrowseはWeb Platform Tests（WPT）をブラウザで直接実行せず、対�
 | `TestWPTV019StickyTopRespectsConstraintAndContainerEnd` | `css/css-position/sticky/position-sticky-top.html` | normal / stuck / container-endの3 phaseをaxis geometryへ縮約 | DOM scroll harnessを決定的な数値入力へ変換 |
 | `TestWPTV019OverflowClipCannotScroll` | `css/css-overflow/overflow-clip-cant-scroll.html` | overflow:clipがscroll containerを作らずoffsetを拒否することを比較 | onloadとscreenshotをlayout API assertionへ変換 |
 | `TestWPTV019MultiColumnFirstChildMarginDoesNotCollapse` | `css/css-multicol/multicol-margin-001.xht` | first childのblock-start marginがmulticol parent外へcollapseしないことを比較 | Ahem text分割を固定block geometryへ縮約 |
+| `TestWPTInlineCustomWrapperSplitsAroundBlockContent` | `css/CSS2/box-display/block-in-inline-001.xht` | inline custom element内のblockを匿名block相当へ分割し、後続flowとpercentage heightのgeometryを比較 | 3行の色比較をSSR header相当の固定box geometryへ縮約 |
 | `TestMixedCJKLatinUsesSharedLineMetricsAndNaturalCJKBreaks` | `css/css-text/line-break/line-break-ja.html` | CJK/Latin 混在の折返し、baseline、line-height を数値geometryで比較 | platform font rasterは固定fallback PNGへ分離 |
 | `TestSystemFontSetMeasuresMixedCJKLatinText` | `css/css-fonts/font-family-fallback.html` | system fallback のCJK/Latin metricが有限であることを比較 | OS固有face名は要求しない |
 | `TestRasterLinearGradientInterpolatesAllColorStops` | `css/css-images/linear-gradient-color-stops.html` | linear gradientの両端・中間stopをraster pixelで比較 | background-position全組合せは対象外 |
