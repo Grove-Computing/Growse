@@ -1950,6 +1950,12 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 }
 
 func (ui *BrowserUI) persistHistoryScroll() {
+	// Browser.load can activate the next Page before its runtime/resource work
+	// returns to the UI. Persisting the still-visible old list position during
+	// that interval would copy the previous document's scroll into the new one.
+	if ui.loading {
+		return
+	}
 	if navigator, ok := ui.navigator.(historyScrollNavigator); ok {
 		navigator.UpdateHistoryScroll(ui.pageList.Position.First, ui.pageList.Position.Offset)
 	}
