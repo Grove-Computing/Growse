@@ -1,0 +1,2 @@
+corpus.json text eol=lf
+fixtures/*.html text eol=lf
