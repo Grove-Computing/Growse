@@ -86,7 +86,7 @@ func TestRealSiteCorpusLimitsAndProvenanceAreBounded(t *testing.T) {
 		t.Fatalf("unexpected corpus limits: %#v", manifest.Limits)
 	}
 	date := regexp.MustCompile(`^20[0-9]{2}-[0-9]{2}-[0-9]{2}$`)
-	if !date.MatchString(manifest.CapturedAt) || !strings.HasPrefix(manifest.ReferenceBrowser, "Chromium ") {
+	if !date.MatchString(manifest.CapturedAt) || !strings.Contains(manifest.ReferenceBrowser, "Chrome 153.") {
 		t.Fatalf("invalid provenance: captured=%q browser=%q", manifest.CapturedAt, manifest.ReferenceBrowser)
 	}
 }

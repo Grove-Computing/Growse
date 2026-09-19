@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "release": "v0.20.0",
   "capturedAt": "2026-09-19",
-  "referenceBrowser": "Chromium 153.0.8010.36",
+  "referenceBrowser": "Google Chrome 153.0.8010.52",
   "offline": true,
   "viewports": [
     {"name": "desktop", "width": 1280, "height": 800, "devicePixelRatio": 1},

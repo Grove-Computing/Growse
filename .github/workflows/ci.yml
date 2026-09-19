@@ -124,6 +124,11 @@ jobs:
           GROWSE_VISUAL_ARTIFACT_DIR: ${{ runner.temp }}/growse-visual
         run: bash tests/v020-visual.sh
 
+      - name: Run v0.20.0 real-site visual evidence tests
+        env:
+          GROWSE_REAL_SITE_ARTIFACT_DIR: ${{ runner.temp }}/growse-visual/real-site
+        run: bash tests/v020-real-site-visual.sh
+
       - name: Upload v0.20.0 visual evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
