@@ -121,6 +121,7 @@ python3 -m http.server 6053 --directory examples/data-app
 | External Web Platform | `go run ./examples/external-web-platform` | 外部classic / Module、dynamic import、WASM、same / cross-origin iframe、Service Worker offline、cross-origin CSS、sandbox |
 | Modern Web Compatibility | `go run ./examples/modern-web-compat` | Next.js / SvelteKit SSR、Tailwind CSS v4実artifact、SSR先行表示、段階的image更新、hydration、priority / cache / lifecycle診断 |
 | Browser-grade Compatibility | `go run ./examples/browser-grade-compat` | desktop / narrow・DPR 1 / 2 corpus、Chromium差分、visual / performance Gate、resource queue・dirty subtree・layer・damage診断 |
+| Real-Site Compatibility Gate | `GROWSE_REAL_SITE_ARTIFACT_DIR=/tmp/growse-real-site bash tests/v020-real-site-visual.sh` | 7サイトの固定fixture、desktop / narrow、P0 content loss / P1 structural breakage、Growse・Chromium・diff PNG |
 | Visual Fidelity Showcase | `go run ./examples/visual-fidelity` | CJK fallback、wrap、vertical writing、shadow、gradient、radius、clip、transform、filter、responsive viewport、resource completion |
 | CSS Layout 2026 | `go run ./examples/css-layout-2026` | Flow、Sizing / Table、Flex / Grid / Subgrid、Writing Mode、Sticky / Overflow、Multi-column、動的reflow |
 
@@ -141,6 +142,8 @@ Browser-grade Compatibility Showcaseは同じ固定framework artifactをdesktop 
 CSS Layout 2026 Showcaseはv0.19.0のscreen向けbaselineを1ページへ集約します。6個の操作ボタンでfloat / BFC、Table、Writing Mode / direction、relative / transform、Multi-columnを動的に切り替え、late image、nested scroll、Sticky、Paint / Hit Testingを同じrevisionで確認できます。固定Chromium 153とFirefox 156との差分fixture、選定WPT、Next.js / SvelteKit / Tailwind corpusはoffline CIで検証します。
 
 Visual Fidelity Showcaseはv0.20.0の実raster evidenceを補完するローカルfixtureです。Latin / CJK / combining mark のfallbackと折返し、vertical writing、shadow、gradient、radius、clip、2D transform、filter、focus、resize、scroll、resource completionを一画面で確認できます。pixelを完全一致させる対象は固定font・viewport・DPRのCI fixtureに限り、任意サイト、全font、complex script、3D transform、SVG filter全体との完全一致は保証しません。
+
+Real-Site Compatibility Gateは1MB Club、日本語Wikipedia、GitHub profile、cv.btxx.org、t0.vc、Schemescape、KIDLATを取得情報付きのsanitized fixtureとして固定します。desktop / narrowの両方で主要region、文字切れ・重なり、reload、scroll、focus、link、font / image完了を検証し、P0 / P1が1件でもあれば失敗します。公開サイトはrelease candidateのlive smokeにだけ使い、CI baselineは自動更新しません。
 
 ## ブラウザの仕組み
 
@@ -207,7 +210,7 @@ DevToolsはRequest / Response body、Header、Cookie、Authorizationを保持し
 | [CSS対応表](docs/css-support.md) | CSS Property、Layout、Animationの対応状況と制限 |
 | [Form / Fetch / Cookie対応表](docs/form-fetch-cookie-support.md) | Form、HTTP、Cookie、CORSの対応状況と制限 |
 | [Storage / Cache対応表](docs/storage-cache-support.md) | Web Storage、HTTP Cache、永続化、quotaの対応状況と制限 |
-| [Visual Regression Test](docs/visual-regression.md) | 固定Viewport、Font、ScaleによるDashboard、Persistent App、framework状態遷移、v0.20.0のtext / CSS raster PNG回帰テスト |
+| [Visual Regression Test](docs/visual-regression.md) | 固定Viewport、Font、Scaleによる既存gateと、v0.20.0の7サイトdesktop / narrow real-site visual gate |
 | [Performance Baseline](docs/performance.md) | Layout、Paint、Form、Scheduler、History、Storage、CacheのBenchmark基準値 |
 | [WPT由来テスト](docs/wpt.md) | Web Platform Testsから移植したTestと出典 |
 | [Developer Supply Chain Security](docs/developer-security.md) | 不可視Code検査、Extension管理、署名、Credential、Incident Response |
@@ -225,7 +228,7 @@ DevToolsはRequest / Response body、Header、Cookie、Authorizationを保持し
 | [v0.17.0リリース定義](docs/v0.17.0.md) | v0.17.0 Browser-grade Web Compatibility、実framework corpus、media pipeline、incremental rendering、compositor、differential Gateの完了条件 |
 | [v0.18.0リリース定義](docs/v0.18.0.md) | v0.18.0 Browser-grade Resource Loading、非同期image commit、script lifecycle、priority、cache / cancel診断の完了条件 |
 | [v0.19.0リリース定義](docs/v0.19.0.md) | v0.19.0 CSS Layout 2026、Flow / Table / Flex / Grid / Subgrid / Writing Mode / Sticky / Multi-columnと仕様適合の完了条件 |
-| [v0.20.0リリース定義](docs/v0.20.0.md) | v0.20.0 Typography & CSS Visual Fidelity、CJK fallback、text run、CSS surface、実raster evidenceの完了条件 |
+| [v0.20.0リリース定義](docs/v0.20.0.md) | v0.20.0 Real-World CSS Compatibility、7サイトcorpus、P0 / P1 gate、live smokeの完了条件 |
 
 ## 品質チェック
 

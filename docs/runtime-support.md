@@ -75,6 +75,8 @@ Request 1 MiB、Response 4 MiB、Header 100件 / 64 KiB、redirect 10回、Page 
 
 goja、WASM、HTML、CSS、Web API、Next.js、SvelteKit、Tailwindの仕様全体や任意公開サイトの完全互換は保証しない。対応範囲は本書、v0.20.0定義、固定Chromium / Firefox reference、Tailwind CSS v4実artifactと遅延image / scriptを含むoffline fixture、Showcase、選定WPT / Integration / Differential Testで観測できるsubsetである。
 
+v0.20.0のreal-site gateでは、未対応scriptまたはcustom elementの局所的な失敗が既にcommit済みのSSR / static contentをpage全体から消さないことを検証する。失敗したruntime contextだけをerrorにし、navigation、profile、fallback本文を保持してDevToolsへ有限なcategory / reasonを残す。これはcustom elements、Shadow DOM、任意SPA hydrationへの対応宣言ではない。
+
 ## Security Boundary
 
 Page / FrameのGo・JavaScript・WASMとService WorkerはBrowser UI processの外にある専用worker processで実行する。通信はversion / size制限付きIPCとBrowserが検証するbrokered host APIだけに限定し、workerのtimeout、crash、protocol違反、stale generationを対象contextの失敗として回収する。worker executable、protocol、process boundary、minimal environment、parent lifecycle、memory上限を起動時に検証し、不足時はexternal codeをfail closedする。
