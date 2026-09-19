@@ -3,6 +3,7 @@ package layout
 import (
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/Grove-Computing/Growse/internal/dom"
 	stylemodel "github.com/Grove-Computing/Growse/internal/style"
@@ -507,11 +508,7 @@ func (e *engine) renderFlexPositionedChildren(container *dom.Node, containerStyl
 func (e *engine) flexIntrinsicSizes(node *dom.Node, style blockStyle, axis flexAxis, availableMain, width, height float32, heightDefinite bool) (float32, float32, float32) {
 	text := normalizeWhitespace(e.inlineText(node))
 	textWidth, textHeight, _ := measureStyledText(text, style)
-	minTextWidth := float32(0)
-	for _, word := range strings.Fields(text) {
-		wordWidth, _, _ := measureStyledText(word, style)
-		minTextWidth = max(minTextWidth, wordWidth)
-	}
+	minTextWidth := minimumTextWidth(text, style)
 	if textHeight <= 0 {
 		textHeight = style.fontSize * 1.4
 	}
@@ -598,6 +595,33 @@ func (e *engine) flexIntrinsicSizes(node *dom.Node, style blockStyle, axis flexA
 		return max(base, float32(0)), max(intrinsicHeight, float32(1)), max(minTextWidth+horizontalExtras, float32(0))
 	}
 	return max(base, float32(0)), max(intrinsicWidth, float32(1)), max(textHeight+verticalExtras, float32(0))
+}
+
+func minimumTextWidth(value string, style blockStyle) float32 {
+	maximum := float32(0)
+	var segment strings.Builder
+	flush := func() {
+		if segment.Len() == 0 {
+			return
+		}
+		width, _, _ := measureStyledText(segment.String(), style)
+		maximum = max(maximum, width)
+		segment.Reset()
+	}
+	for _, character := range value {
+		switch {
+		case unicode.IsSpace(character):
+			flush()
+		case isCJKLineBreakRune(character):
+			flush()
+			width, _, _ := measureStyledText(string(character), style)
+			maximum = max(maximum, width)
+		default:
+			segment.WriteRune(character)
+		}
+	}
+	flush()
+	return maximum
 }
 
 func hasElementChildren(node *dom.Node) bool {

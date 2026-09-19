@@ -18,6 +18,6 @@
     {"id": "cv-btxx", "sourceURL": "https://cv.btxx.org/", "fixture": "fixtures/cv-btxx.html", "sha256": "4eb1f8f5fdd02520b9beeb00708f8b80efcfd05e58c01e724e8ff42d2a6a463e", "regions": ["main", "pre"]},
     {"id": "t0-vc", "sourceURL": "https://t0.vc/", "fixture": "fixtures/t0-vc.html", "sha256": "860d5bd661345a9f3b29d6228cf59bebd4e7ef1bab290faa50d1bc5c948a3051", "regions": ["main", "links"]},
     {"id": "schemescape", "sourceURL": "https://www.schemescape.com/", "fixture": "fixtures/schemescape.html", "sha256": "b96f2a47045e5deaf8b29f939397fd3883f25b45450f90d6c8fdcc324452ce90", "regions": ["heading", "main", "list"]},
-    {"id": "kidlat", "sourceURL": "https://kidlat.at/", "fixture": "fixtures/kidlat.html", "sha256": "77f6405ee68ba9bd6bc9340b93fa8dfdd7252fa7007f51fdf31ad92820b2caeb", "regions": ["navigation", "heading", "main", "article"]}
+    {"id": "kidlat", "sourceURL": "https://kidlat.at/", "fixture": "fixtures/kidlat.html", "sha256": "72db78804c8fcfae832b038bd8a8312212b047892be6a80bd6057fd26d2366b7", "regions": ["navigation", "heading", "main", "article"]}
   ]
 }
