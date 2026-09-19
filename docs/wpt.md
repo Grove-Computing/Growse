@@ -58,6 +58,13 @@ GrowseはWeb Platform Tests（WPT）をブラウザで直接実行せず、対�
 | `TestWPTV019StickyTopRespectsConstraintAndContainerEnd` | `css/css-position/sticky/position-sticky-top.html` | normal / stuck / container-endの3 phaseをaxis geometryへ縮約 | DOM scroll harnessを決定的な数値入力へ変換 |
 | `TestWPTV019OverflowClipCannotScroll` | `css/css-overflow/overflow-clip-cant-scroll.html` | overflow:clipがscroll containerを作らずoffsetを拒否することを比較 | onloadとscreenshotをlayout API assertionへ変換 |
 | `TestWPTV019MultiColumnFirstChildMarginDoesNotCollapse` | `css/css-multicol/multicol-margin-001.xht` | first childのblock-start marginがmulticol parent外へcollapseしないことを比較 | Ahem text分割を固定block geometryへ縮約 |
+| `TestWPTInlineCustomWrapperSplitsAroundBlockContent` | `css/CSS2/box-display/block-in-inline-001.xht` | inline custom element内のblockを匿名block相当へ分割し、後続flowとpercentage heightのgeometryを比較 | 3行の色比較をSSR header相当の固定box geometryへ縮約 |
+| `TestMixedCJKLatinUsesSharedLineMetricsAndNaturalCJKBreaks` | `css/css-text/line-break/line-break-ja.html` | CJK/Latin 混在の折返し、baseline、line-height を数値geometryで比較 | platform font rasterは固定fallback PNGへ分離 |
+| `TestSystemFontSetMeasuresMixedCJKLatinText` | `css/css-fonts/font-family-fallback.html` | system fallback のCJK/Latin metricが有限であることを比較 | OS固有face名は要求しない |
+| `TestRasterLinearGradientInterpolatesAllColorStops` | `css/css-images/linear-gradient-color-stops.html` | linear gradientの両端・中間stopをraster pixelで比較 | background-position全組合せは対象外 |
+| `TestRasterRadialGradientUsesCenterAndStops` | `css/css-images/radial-gradient-center.html` | radial gradient中心とstopをraster pixelで比較 | ellipse size keywordは対象外 |
+| `TestRasterConicGradientUsesAngleCenterAndStops` | `css/css-images/conic-gradient-from.html` | conic gradient角度と中心をraster pixelで比較 | repeating conic gradientは対象外 |
+| `TestWPTTransformOriginZeroDiffersFromDefaultCenter` | `css/css-transforms/transform-origin-001.html` | transform-originとinverse hit-test共有行列を比較 | 3D transformは対象外 |
 
 Upstreamのファイル全体はコピーせず、assertionの意味と最小入力だけを移植する。ケースを追加または更新するときは、Revision、Source、適応内容、および意図的な差分をこの表へ記録する。
 
@@ -138,3 +145,9 @@ Upstreamのファイル全体はコピーせず、assertionの意味と最小入
 - CSS 2.1、Flexbox、Grid Level 2 Subgrid、Writing Modes、Position、Overflow、Multi-columnから、screen layoutのlandmark geometryへ縮約できるassertionを各1件以上選定する。
 - `internal/layout/wpt_v019_test.go`は固定Revisionのsource pathを各Test直前に記録し、Ahemやscreenshot比較を決定的なbox、track、axis、scroll、fragment geometryへ置換する。
 - sideways writing mode、print fragmentation、paged media、native scrollbar pixel parityはv0.19.0対象外とし、対応済み値のassertionを拡張解釈しない。
+
+## v0.20.0の選定範囲
+
+- CSS Text / FontsからCJK・Latin混在のline-height、baseline、自然な改行、system fallbackの有限metricを選定し、OS固有のface名やcomplex scriptのpixel完全一致は対象外とする。
+- CSS Images / Transformsからlinear / radial / conic gradientのstop、center、angleと2D transform-originを選定し、repeating gradient、3D transform、perspective、SVG filter全体は対象外とする。
+- `internal/layout`と`internal/ui`のWPT由来assertionは固定した数値geometry・raster pixel・inverse hit-testへ縮約する。実raster PNGは`tests/v020-visual.sh`で別途固定し、WPT harness、公開network、browser screenshot runnerを直接実行しない。

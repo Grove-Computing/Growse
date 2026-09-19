@@ -1,6 +1,6 @@
 # CSS対応表
 
-この表はGrowse v0.19.0の実装を基準とする。「部分対応」は一般的な値を扱えるが、仕様全体を実装していない機能を表す。document、initial / dynamic stylesheet、`@import`、image、font resourceは最初の有効な`<base href>`から解決する。
+この表はGrowse v0.20.0の実装を基準とする。「部分対応」は一般的な値を扱えるが、仕様全体を実装していない機能を表す。document、initial / dynamic stylesheet、`@import`、image、font resourceは最初の有効な`<base href>`から解決する。
 
 ## SelectorとCascade
 
@@ -107,4 +107,6 @@ JavaScriptによるattribute、class、tree、`innerHTML` mutation後はStyle re
 
 Imageは`picture` / `source` / `srcset` / `sizes`、PNG / JPEG / GIF静止Frame / WebP、安全な静的SVG subset、load / error、alt fallback、late relayoutを扱う。v0.18.0では`fetchpriority`、preload、`loading=lazy`、viewport proximityを共通priorityへ写像し、初期Page commitと画像fetch / decodeを分離する。同じURLのfetch body / decodeをPage generation内でcoalesceし、target size、DPR、object-fit、filterごとのrasterとbackground / gradient / filter resultをbounded LRUで再利用する。image mutationは対象resourceだけを後続commitで更新し、Navigation、close、Engine切替でqueue、in-flight fetch、cacheを破棄する。Web FontはCORSを通過したWOFF / WOFF2をdecodeし、完了時に影響Textを再計測する。JS PageのshaperはBrowser chromeから分離し、system font discoveryでCJK glyphへfallbackする。SVG内script、event handler、external resource、`foreignObject`、animation、filter、font load、Navigationは実行しない。
 
-v0.19.0の「CSS Layout 2026 Baseline」は[CSS Layout 2026 Showcase](../examples/css-layout-2026)、[Browser-grade Compatibility Showcase](../examples/browser-grade-compat)、[Modern Web Compatibility Showcase](../examples/modern-web-compat)、Tailwind CSS v4.1.12実build artifact、固定Next.js / SvelteKit build、選定WPT、Chromium / Firefox differential、Visual / Performance Regressionで固定したscreen向け範囲を指す。未知の公開サイトとのpixel完全一致、framework / React全API、Shadow DOM、Canvas、video、sideways / Ruby / 完全bidi、Print / Paged Media、全CSS仕様への適合は保証しない。system font discovery、hydration、JavaScript animation state、image lifecycleは`JS`を明示選択したTabだけで有効にし、Go Runtimeの実行経路とobjectを共有しない。
+v0.20.0はこの[CSS Layout 2026 Showcase](../examples/css-layout-2026) Baselineへ、[Modern Web Compatibility Showcase](../examples/modern-web-compat)、[Browser-grade Compatibility Showcase](../examples/browser-grade-compat)、[Visual Fidelity Showcase](../examples/visual-fidelity)、固定Next.js / SvelteKitとTailwind CSS v4.1.12のchecked-in artifact、7サイトのreal-site raster evidenceを追加する。固定fixtureのdesktop / narrowでcascade、flow / intrinsic sizing、Flexbox、Grid、Table、position、overflow、paint、CJK / Latin / symbol fallbackを同じpipelineから検証し、主要region消失をP0、読解を妨げるclip / overlap / geometry崩れをP1として拒否する。OS fontのanti-aliasingや2 CSS px未満の局所的な行box丸め差は、内容と操作を失わない場合だけP2として記録する。
+
+任意の公開サイトとのpixel完全一致、framework / React全API、Shadow DOM、Canvas、video、sideways / Ruby / 完全bidi、Print / Paged Media、3D transform、SVG filter全体、全CSS仕様への適合は保証しない。system font discovery、hydration、JavaScript animation state、image lifecycleは`JS`を明示選択したTabだけで有効にし、Go Runtimeの実行経路とobjectを共有しない。公開サイトの変更はfixtureへ自動反映せず、取得情報・hash・参照browser差分をreviewする。

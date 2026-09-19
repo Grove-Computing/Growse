@@ -346,6 +346,7 @@ type engine struct {
 	boxLimitReported              bool
 	fragmentLimitReported         bool
 	timeLimitReported             bool
+	intrinsicMeasureDepth         int
 }
 
 // withinBudget bounds work while geometry is being generated. The final
@@ -838,6 +839,15 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 	} else {
 		e.y += *topMargin
 	}
+	// An auto-sized block formatting context must keep its margin box outside
+	// adjacent floats. This is common in article/media-object layouts where
+	// overflow:hidden or flow-root contains the text beside a floated image.
+	if style.width.Kind == stylemodel.SizeAuto && establishesBlockFormattingContext(style) && len(e.floats) != 0 {
+		left, right := e.floatEdges(x, width, e.y, max(style.lineHeight, float32(1)))
+		if available := right - left; available > 0 && available < width {
+			x, width = left, available
+		}
+	}
 	x += style.margin.Left
 	availableWidth := width - style.margin.Left - style.margin.Right
 	if availableWidth < 1 {
@@ -922,9 +932,13 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 		}
 	}
 	if !declaredHeightDefinite && style.aspectRatio > 0 {
-		declaredHeight = outerWidth / style.aspectRatio
 		if style.boxSizing == stylemodel.BoxSizingContentBox {
-			declaredHeight = max(declaredHeight-style.padding.Top-style.padding.Bottom-verticalBorder, float32(0))
+			// aspect-ratio follows the box selected by box-sizing. sizingWidth is
+			// the content box here; deriving from outerWidth would incorrectly
+			// subtract vertical extras from horizontal padding and borders.
+			declaredHeight = max(sizingWidth, float32(0)) / style.aspectRatio
+		} else {
+			declaredHeight = outerWidth / style.aspectRatio
 		}
 		declaredHeightDefinite = true
 	}
@@ -956,6 +970,13 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 	}
 	if style.overflowX != stylemodel.OverflowVisible || style.overflowY != stylemodel.OverflowVisible {
 		clipHeight := declaredHeight
+		clipHeightDefinite := declaredHeightDefinite
+		if !clipHeightDefinite {
+			if maximum, ok := resolveSize(style.maxHeight, containingHeight, heightDefinite); ok {
+				clipHeight = maximum
+				clipHeightDefinite = true
+			}
+		}
 		if style.boxSizing == stylemodel.BoxSizingContentBox {
 			clipHeight += style.padding.Top + style.padding.Bottom
 		}
@@ -967,7 +988,7 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 		if style.overflowX == stylemodel.OverflowVisible {
 			clipRect.X, clipRect.Width = -unboundedClip, unboundedClip*2
 		}
-		if style.overflowY == stylemodel.OverflowVisible || !declaredHeightDefinite {
+		if style.overflowY == stylemodel.OverflowVisible || !clipHeightDefinite {
 			clipRect.Y, clipRect.Height = -unboundedClip, unboundedClip*2
 		}
 		e.clip = intersectClip(previousClip, clipRect)
@@ -1272,7 +1293,10 @@ func (e *engine) renderPositionedChildAt(node *dom.Node, style blockStyle, stati
 		}
 	}
 	childX, childY := containingBlock.X, containingBlock.Y
-	if hasLeft {
+	// When left, width and right are all definite, the inline direction
+	// selects which inset wins the over-constrained equation.
+	useRightInRTL := hasLeft && hasRight && widthDefinite && style.direction == stylemodel.DirectionRTL
+	if hasLeft && !useRightInRTL {
 		childX += left
 	} else if hasRight {
 		childX += containingBlock.Width - right - usedWidth
@@ -1826,7 +1850,7 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 		if token.text == " " {
 			if preservesSpaces(token.style.whiteSpace) {
 				spaceWidth, _, _ := measureStyledText(" ", token.style)
-				if usedWidth > 0 && usedWidth+spaceWidth > lineWidth && wrapsWhitespace(token.style.whiteSpace) {
+				if usedWidth > 0 && usedWidth+spaceWidth > lineWidth+1 && wrapsWhitespace(token.style.whiteSpace) {
 					flushLine(false)
 				}
 				appendPiece(token, " ", spaceWidth)
@@ -1844,7 +1868,7 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 			spaceWidth, _, _ = measureStyledText(" ", pendingSpace.style)
 		}
 		wordWidth, _, _ := measureStyledText(token.text, token.style)
-		if usedWidth > 0 && usedWidth+spaceWidth+wordWidth > lineWidth && wrapsWhitespace(token.style.whiteSpace) {
+		if usedWidth > 0 && usedWidth+spaceWidth+wordWidth > lineWidth+1 && wrapsWhitespace(token.style.whiteSpace) {
 			flushLine(false)
 			spaceWidth = 0
 		}

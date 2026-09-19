@@ -82,3 +82,38 @@ func TestInitialContainingBlockSeparatesAbsoluteAndFixedDuringScroll(t *testing.
 		t.Fatalf("scrolled fixed containing block = %#v", got)
 	}
 }
+
+// Adapted from CSS Positioned Layout over-constraint and stacking assertions.
+// Real navigation badges commonly specify both inline insets plus a fixed size.
+func TestRealSitePositionedInsetsRespectDirectionAndZOrder(t *testing.T) {
+	document := dom.NewDocument()
+	host := document.CreateElement("nav", map[string]string{"class": "host"})
+	ltr := document.CreateElement("span", map[string]string{"class": "badge ltr"})
+	rtl := document.CreateElement("span", map[string]string{"class": "badge rtl"})
+	front := document.CreateElement("span", map[string]string{"class": "front"})
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, host}, [2]*dom.Node{host, ltr}, [2]*dom.Node{host, rtl}, [2]*dom.Node{host, front},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.host { position:relative; width:300px; height:80px; padding:10px }
+.badge { position:absolute; left:20px; right:30px; top:10px; width:60px; height:30px; background:#ccc }
+.ltr { direction:ltr; z-index:1 }
+.rtl { direction:rtl; top:40px; z-index:1 }
+.front { position:absolute; inset:0; width:40px; height:40px; z-index:2; background:#333 }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := BuildWithViewport(document, style.Compute(document, stylesheet), 500, 300)
+	hostRect := tree.Bounds[host.ID]
+	if got := tree.Bounds[ltr.ID].X; got != hostRect.X+20 {
+		t.Fatalf("LTR over-constrained inset x = %v, want %v", got, hostRect.X+20)
+	}
+	if got := tree.Bounds[rtl.ID].X; got != hostRect.X+hostRect.Width-30-60 {
+		t.Fatalf("RTL over-constrained inset x = %v, want %v", got, hostRect.X+hostRect.Width-30-60)
+	}
+	frontRect := tree.Bounds[front.ID]
+	if hit, ok := HitTest(tree, frontRect.X+1, frontRect.Y+1); !ok || hit != front.ID {
+		t.Fatalf("positioned z-order hit = (%d, %v), want %d", hit, ok, front.ID)
+	}
+}

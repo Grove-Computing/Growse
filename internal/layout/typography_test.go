@@ -81,6 +81,35 @@ func TestWordBreakingAndEllipsisRespectComputedPolicy(t *testing.T) {
 	}
 }
 
+// Adapted from CSS Text 3 line-height and text-overflow assertions. A normal
+// long heading must reserve every line and must never gain an implicit marker.
+func TestRealSiteHeadingWrapDoesNotOverlapParagraphOrGainImplicitEllipsis(t *testing.T) {
+	document := dom.NewDocument()
+	heading := document.CreateElement("h1", map[string]string{"class": "heading"})
+	paragraph := document.CreateElement("p", map[string]string{"class": "copy"})
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, heading}, [2]*dom.Node{heading, document.CreateText("University of Santo Tomas Remains Oldest University in Asia")},
+		[2]*dom.Node{document.Root, paragraph}, [2]*dom.Node{paragraph, document.CreateText("The following copy must start after every heading line.")},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.heading { display:block; width:260px; margin:0 0 6px; font-size:36px; line-height:1.12; overflow:visible }
+.copy { display:block; width:260px; margin:0; font-size:21px; line-height:1.55 }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, style.Compute(document, stylesheet), 320)
+	headingRect, paragraphRect := tree.Bounds[heading.ID], tree.Bounds[paragraph.ID]
+	if headingRect.Height < 36*1.12*3 || paragraphRect.Y < headingRect.Y+headingRect.Height {
+		t.Fatalf("heading/copy overlap = heading:%#v paragraph:%#v", headingRect, paragraphRect)
+	}
+	for _, box := range tree.Boxes {
+		if box.NodeID == heading.ID && strings.Contains(box.Text, "…") {
+			t.Fatalf("unspecified ellipsis appeared in heading: %q", box.Text)
+		}
+	}
+}
+
 func TestMixedCJKLatinUsesSharedLineMetricsAndNaturalCJKBreaks(t *testing.T) {
 	document := dom.NewDocument()
 	paragraph := document.CreateElement("p", map[string]string{"class": "mixed"})
@@ -120,5 +149,44 @@ func TestMixedCJKLatinUsesSharedLineMetricsAndNaturalCJKBreaks(t *testing.T) {
 	}
 	if joined != "東京でGrowsebrowserを表示します" {
 		t.Fatalf("wrapped text = %q", joined)
+	}
+}
+
+// Adapted from CSS Inline Layout 3 line box assertions. Mixed scripts,
+// symbols and combining marks must share one finite baseline and must reserve
+// every wrapped line before the following block is placed.
+func TestMixedScriptHeadingKeepsCombiningMarksSymbolsAndFollowingCopyVisible(t *testing.T) {
+	document := dom.NewDocument()
+	heading := document.CreateElement("h1", map[string]string{"class": "heading"})
+	copy := document.CreateElement("p", map[string]string{"class": "copy"})
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, heading}, [2]*dom.Node{heading, document.CreateText("Growse e\u0301 日本語 ★ browser rendering")},
+		[2]*dom.Node{document.Root, copy}, [2]*dom.Node{copy, document.CreateText("後続本文 remains readable.")},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.heading { display:block; width:180px; margin:0 0 8px; font-size:28px; line-height:36px; overflow-wrap:anywhere }
+.copy { display:block; width:180px; margin:0; font-size:16px; line-height:24px }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := BuildWithScrollAndResources(document, style.Compute(document, stylesheet), nil, NewFontSetWithSystemFallback(nil), 240, 400, 0, 0)
+	headingRect, copyRect := tree.Bounds[heading.ID], tree.Bounds[copy.ID]
+	if headingRect.Height < 72 || copyRect.Y < headingRect.Y+headingRect.Height {
+		t.Fatalf("mixed-script heading overlaps following copy: heading=%#v copy=%#v", headingRect, copyRect)
+	}
+	joined, headingLines := "", 0
+	for _, box := range tree.Boxes {
+		if box.NodeID != heading.ID {
+			continue
+		}
+		headingLines++
+		joined += box.Text
+		if box.Height != 36 || box.Baseline <= box.Y || box.Baseline > box.Y+box.Height {
+			t.Fatalf("mixed-script line metrics = %#v", box)
+		}
+	}
+	if headingLines < 2 || strings.ReplaceAll(joined, " ", "") != "Growsee\u0301日本語★browserrendering" {
+		t.Fatalf("mixed-script heading lines=%d text=%q", headingLines, joined)
 	}
 }

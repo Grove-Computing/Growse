@@ -102,6 +102,8 @@ func runtimeErrorCategory(message string) string {
 		return "hydration"
 	case strings.Contains(value, "unsupported global") || strings.Contains(value, "unsupported web api"):
 		return "unsupported-global"
+	case strings.Contains(value, "customelements") || strings.Contains(value, "custom element") || strings.Contains(value, "is not defined"):
+		return "unsupported-global"
 	case strings.Contains(value, "event dispatch") || strings.Contains(value, "event listener"):
 		return "event"
 	case strings.Contains(value, "observer") || strings.Contains(value, "loop limit"):

@@ -5,7 +5,7 @@ require() {
     local file=$1
     local value=$2
     if ! grep -Fq -- "$value" "$file"; then
-        echo "${file}にv0.19.0文書の必須記述がありません: ${value}" >&2
+        echo "${file}にv0.20.0文書の必須記述がありません: ${value}" >&2
         exit 1
     fi
 }
@@ -21,8 +21,9 @@ require README.md "examples/external-web-platform"
 require README.md "examples/modern-web-compat"
 require README.md "examples/browser-grade-compat"
 require README.md "examples/css-layout-2026"
-require README.md "GROWSE_VERSION=v0.19.0"
-require README.md "growse:v0.19.0"
+require README.md "examples/visual-fidelity"
+require README.md "GROWSE_VERSION=v0.20.0"
+require README.md "growse:v0.20.0"
 require README.md "Desktop Entry"
 require README.md "GROWSE_DATA_HOME"
 require README.md "GROWSE_APPLICATIONS_DIR"
@@ -48,6 +49,17 @@ require README.md "v0.16.0リリース定義"
 require README.md "v0.17.0リリース定義"
 require README.md "v0.18.0リリース定義"
 require README.md "v0.19.0リリース定義"
+require README.md "v0.20.0リリース定義"
+require docs/v0.20.0.md "Real-World CSS Compatibility"
+require docs/v0.20.0.md "P0 = 0、P1 = 0"
+require docs/v0.20.0.md '`https://1mb.club/`'
+require docs/v0.20.0.md '`https://ja.wikipedia.org/`'
+require docs/v0.20.0.md '`https://github.com/Saku0512`'
+require docs/v0.20.0.md '`https://kidlat.at/`'
+require docs/v0.20.0.md "unsupported script / custom element failure"
+require docs/real-site-corpus.md "Fixture / baseline更新手順"
+require docs/real-site-corpus.md "16 MiB / artifact、256 MiB / corpus artifact"
+require docs/real-site-corpus.md "Google Chrome 153.0.8010.52"
 require README.md "External JavaScript"
 require README.md "WebAssembly"
 require README.md "Service Worker"
@@ -55,8 +67,8 @@ require README.md "Runtime / Web API対応表"
 require README.md "Runtime worker / Web Platform設計"
 require README.md "Modern Web Compatibility"
 require README.md "明示選択"
-require SECURITY.md "| 0.19.x | Yes |"
-require SECURITY.md "| 0.18.x | No |"
+require SECURITY.md "| 0.20.x | Yes |"
+require SECURITY.md "| 0.19.x | No |"
 require SECURITY.md "brokered host I/O"
 require SECURITY.md "未知"
 require SECURITY.md "Service Worker registrationとCache Storage"
@@ -79,7 +91,7 @@ require SECURITY.md "Timer 10,000件"
 require SECURITY.md "Historyは1,024 entry"
 require SECURITY.md "Originごと5 MiB"
 require SECURITY.md "diskは1 entry 4 MiB"
-require docs/css-support.md "Growse v0.19.0"
+require docs/css-support.md "Growse v0.20.0"
 require docs/css-support.md '`grid`、`inline-grid`'
 require docs/css-support.md '`transform`、`transform-origin`'
 require docs/css-support.md '`transition-*`、`transition`'
@@ -95,6 +107,7 @@ require docs/css-support.md "CSS Color Level 4 subset"
 require docs/css-support.md "Modern Web Compatibility Showcase"
 require docs/css-support.md "Tailwind CSS v4.1.12"
 require docs/css-support.md "system font fallback"
+require docs/css-support.md "Visual Fidelity Showcase"
 require SECURITY.md "TabはDOM、Runtime worker、History、Session Storageを分離"
 require docs/form-fetch-cookie-support.md "Growse v0.13.0"
 require docs/form-fetch-cookie-support.md "AbortController"
@@ -132,7 +145,7 @@ require docs/storage-cache-support.md "Body SHA-256"
 require docs/storage-cache-support.md "RFC 9111"
 require docs/storage-cache-support.md "Tab終了時に破棄"
 require docs/storage-cache-support.md "same-origin Tab"
-require docs/runtime-support.md "Growse v0.19.0"
+require docs/runtime-support.md "Growse v0.20.0"
 require docs/runtime-support.md "Yaegi"
 require docs/runtime-support.md "goja"
 require docs/runtime-support.md "ECMAScript Modules"
@@ -146,7 +159,7 @@ require docs/runtime-worker-design.md "typed IPC broker"
 require docs/runtime-worker-design.md "## sandbox検証"
 require docs/runtime-worker-design.md "旧generation"
 require docs/runtime-worker-design.md "seccomp"
-require docs/runtime-worker-design.md "Growse v0.19.0"
+require docs/runtime-worker-design.md "Growse v0.20.0"
 require docs/visual-regression.md "v0.15.0 Modern Web Compatibility"
 require docs/visual-regression.md "tests/v015-visual.sh"
 require docs/visual-regression.md "v0.16.0 Real-site Rendering & Performance"
@@ -157,40 +170,45 @@ require docs/visual-regression.md "v0.17.0 Browser-grade Differential"
 require docs/visual-regression.md "2 CSS px"
 require docs/visual-regression.md "v0.19.0 CSS Layout 2026 Differential"
 require docs/visual-regression.md "ChromiumとFirefox"
+require docs/visual-regression.md "v0.20.0 Typography & CSS Visual Evidence"
+require docs/visual-regression.md "tests/v020-visual.sh"
+require docs/visual-regression.md "css-surface-evidence.png"
 require docs/performance.md "v0.17.0 Browser differential / frame budget"
 require docs/performance.md "performance-gate.json"
 require docs/performance.md "v0.19.0 CSS Layout 2026 safety / performance"
 require docs/performance.md "BenchmarkCSSLayout2026Showcase"
 require docs/wpt.md "## v0.17.0の選定範囲"
 require docs/wpt.md "## v0.19.0の選定範囲"
+require docs/wpt.md "## v0.20.0の選定範囲"
 require docs/wpt.md "TestWPTV019SubgridUsesInheritedTracksAndOwnGap"
 require examples/modern-web-compat/index.html "Tailwind v4 real-site"
 require examples/modern-web-compat/index.html "/real-site/"
-require examples/modern-web-compat/index.html "Growse v0.19.0"
+require examples/modern-web-compat/index.html "Growse v0.20.0"
 require examples/browser-grade-compat/index.html "Browser-grade Compatibility"
-require examples/browser-grade-compat/index.html "Growse v0.19.0"
-require examples/browser-grade-compat/corpus.json '"release": "v0.19.0"'
+require examples/browser-grade-compat/index.html "Growse v0.20.0"
+require examples/browser-grade-compat/corpus.json '"release": "v0.20.0"'
 require examples/css-layout-2026/index.html "CSS Layout 2026"
 require examples/css-layout-2026/app.mjs "column-toggle"
 require Makefile "v018-resource-loading-test"
 require .github/workflows/ci.yml "Run v0.18.0 browser-grade resource loading tests"
-require .github/workflows/ci.yml "Docker package (v0.19.0)"
+require .github/workflows/ci.yml "Docker package (v0.20.0)"
 require .github/workflows/ci.yml "Run CSS Layout 2026 smoke"
+require .github/workflows/ci.yml "Run v0.20.0 visual evidence tests"
 require tests/v018-resource-loading.sh "NextJSDelayedResourcesKeepSSRInteractiveThroughIncrementalCommits"
 require docs/v0.18.0.md "Browser-grade Resource Loading"
 require docs/details-design.md "歴史資料"
 require docs/details-design.md "runtime-worker-design.md"
 
-if grep -Eq "Growse v0\.[4-9]\.0の実装を基準|Growse v0\.1[0-8]\.0の実装を基準" docs/css-support.md; then
+if grep -Eq "Growse v0\.[4-9]\.0の実装を基準|Growse v0\.1[0-9]\.0の実装を基準" docs/css-support.md; then
     echo "CSS対応表に古い実装基準が残っています" >&2
     exit 1
 fi
 
-if grep -Eq 'GROWSE_VERSION=v0\.1[3-8]\.0|growse:v0\.1[3-8]\.0' README.md; then
+if grep -Eq 'GROWSE_VERSION=v0\.1[3-9]\.0|growse:v0\.1[3-9]\.0' README.md; then
     echo "README.mdに古い現行install例が残っています" >&2
     exit 1
 fi
-if grep -Eq '\| 0\.1[3-8]\.x \| Yes \|' SECURITY.md; then
+if grep -Eq '\| 0\.1[3-9]\.x \| Yes \|' SECURITY.md; then
     echo "SECURITY.mdに古いsupport系列が残っています" >&2
     exit 1
 fi
@@ -203,4 +221,4 @@ if grep -Eq 'Growse v0\.1[3-8]\.0は' docs/devtools.md; then
     exit 1
 fi
 
-echo "v0.19.0文書同期検証成功: README, SECURITY.md, CSS / Runtime対応表, WPT, Visual / Performance, CSS Layout 2026 Showcase"
+echo "v0.20.0文書同期検証成功: README, SECURITY.md, CSS対応表, WPT, Visual Evidence, Visual Fidelity Showcase"

@@ -202,7 +202,7 @@ func mustShowcasePNG() []byte {
 }
 
 func main() {
-	address := "localhost:8080"
+	address := "localhost:6053"
 	flag.StringVar(&address, "addr", address, "showcase listen address")
 	flag.Parse()
 	fmt.Printf("Growse Modern Web Compatibility Showcase: http://%s\n", address)

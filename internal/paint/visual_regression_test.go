@@ -9,12 +9,14 @@ import (
 	"image"
 	"image/color"
 	"image/draw"
+	"image/png"
 	"os"
 	"path/filepath"
 	"reflect"
 	"runtime"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/Grove-Computing/Growse/internal/css"
 	"github.com/Grove-Computing/Growse/internal/dom"
@@ -29,9 +31,11 @@ import (
 )
 
 const (
-	visualViewportWidth  = 320
-	visualViewportHeight = 240
-	visualScale          = 1
+	visualViewportWidth      = 320
+	visualViewportHeight     = 240
+	visualScale              = 1
+	maxVisualArtifactPixels  = 16_000_000
+	maxVisualDiagnosticRunes = 50_000
 )
 
 type visualSnapshot struct {
@@ -60,6 +64,22 @@ type persistentVisualSnapshot struct {
 	States    []persistentStateSnapshot `json:"states"`
 }
 
+type visualEvidenceBaseline struct {
+	Name           string `json:"name"`
+	Font           string `json:"font"`
+	PNGHash        string `json:"png_sha256"`
+	BaselineReason string `json:"baseline_reason"`
+}
+
+// visualRasterFont keeps the test rasterizer's primary face and an explicitly
+// selected CJK fallback separate. Production text uses Gio's system fallback;
+// the evidence renderer needs the same distinction instead of silently
+// rasterizing every unsupported rune as Go Regular's .notdef box.
+type visualRasterFont struct {
+	name   string
+	parsed *opentype.Font
+}
+
 // TestDashboardVisualRegression protects pixels, layout geometry, display-list
 // ordering, and hit-testing with one deterministic fixture. The raster uses the
 // embedded Go Regular font with hinting disabled, a fixed viewport, and scale 1.
@@ -79,6 +99,7 @@ func TestDashboardVisualRegression(t *testing.T) {
 	tree := layout.BuildWithViewport(document, style.Compute(document, stylesheet), visualViewportWidth, visualViewportHeight)
 	list := Build(tree)
 	imageValue := rasterVisualFixture(t, list, visualViewportWidth, visualViewportHeight, visualScale)
+	writeVisualArtifact(t, "dashboard.png", imageValue)
 	hash := sha256.Sum256(imageValue.Pix)
 	snapshot := visualSnapshot{
 		Viewport: fmt.Sprintf("%dx%d", visualViewportWidth, visualViewportHeight), Scale: visualScale,
@@ -101,6 +122,109 @@ func TestDashboardVisualRegression(t *testing.T) {
 	}
 	if !reflect.DeepEqual(snapshot, wantSnapshot) {
 		t.Fatalf("visual snapshot changed; inspect the rendering difference before updating testdata/dashboard.golden.json\n--- actual ---\n%s", actual)
+	}
+}
+
+// TestV020TextVisualEvidence verifies an actual rasterized text fixture. It
+// deliberately checks the encoded PNG and painted regions so a blank bitmap or
+// a display-list-only assertion cannot satisfy the visual regression gate.
+func TestV020TextVisualEvidence(t *testing.T) {
+	document := dom.NewDocument()
+	panel := document.CreateElement("main", map[string]string{"class": "panel"})
+	latin := document.CreateElement("p", map[string]string{"class": "latin"})
+	cjk := document.CreateElement("p", map[string]string{"class": "cjk"})
+	if err := document.AppendChild(document.Root, panel); err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range []struct {
+		node *dom.Node
+		text string
+	}{{latin, "Growse visual text"}, {cjk, "日本語 テキスト"}} {
+		requireVisualDiagnosticRunes(t, entry.text)
+		if err := document.AppendChild(panel, entry.node); err != nil {
+			t.Fatal(err)
+		}
+		if err := document.AppendChild(entry.node, document.CreateText(entry.text)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stylesheet, err := css.Parse(strings.NewReader(`
+.panel { display:block; width:256px; height:112px; padding:16px; background-color:#f8fafc; }
+.latin { color:#1d4ed8; font-size:20px; line-height:1.4; text-shadow:1px 1px #bfdbfe; }
+.cjk { color:#047857; font-size:20px; line-height:1.5; }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := layout.BuildWithViewport(document, style.Compute(document, stylesheet), visualViewportWidth, visualViewportHeight)
+	list := Build(tree)
+	fonts := visualRasterFonts(t)
+	if !visualFontsCover(fonts, "日本語テキスト") {
+		t.Skip("a deterministic CJK fallback font is unavailable for visual evidence")
+	}
+	imageValue := rasterVisualFixtureWithFonts(t, list, visualViewportWidth, visualViewportHeight, visualScale, fonts)
+	writeVisualArtifact(t, "text-visual-evidence.png", imageValue)
+
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, imageValue); err != nil {
+		t.Fatalf("encode screenshot: %v", err)
+	}
+	decoded, format, err := image.Decode(bytes.NewReader(encoded.Bytes()))
+	if err != nil {
+		t.Fatalf("decode screenshot: %v", err)
+	}
+	if format != "png" || decoded.Bounds() != imageValue.Bounds() {
+		t.Fatalf("screenshot format/bounds = %q/%v, want png/%v", format, decoded.Bounds(), imageValue.Bounds())
+	}
+	painted, blue, green := 0, 0, 0
+	for y := imageValue.Bounds().Min.Y; y < imageValue.Bounds().Max.Y; y++ {
+		for x := imageValue.Bounds().Min.X; x < imageValue.Bounds().Max.X; x++ {
+			pixel := imageValue.RGBAAt(x, y)
+			if pixel != (color.RGBA{R: 255, G: 255, B: 255, A: 255}) && pixel != (color.RGBA{R: 248, G: 250, B: 252, A: 255}) {
+				painted++
+			}
+			if pixel.B > pixel.R && pixel.B > pixel.G {
+				blue++
+			}
+			if pixel.G > pixel.R && pixel.G > pixel.B {
+				green++
+			}
+		}
+	}
+	if painted < 100 || blue < 20 || green < 20 {
+		t.Fatalf("text screenshot has insufficient painted evidence: painted=%d blue=%d green=%d", painted, blue, green)
+	}
+	baselineBytes, err := os.ReadFile("testdata/v020-text-visual-evidence.golden.json")
+	if err != nil {
+		t.Fatalf("read text visual baseline: %v", err)
+	}
+	var baseline visualEvidenceBaseline
+	if err := json.Unmarshal(baselineBytes, &baseline); err != nil {
+		t.Fatalf("decode text visual baseline: %v", err)
+	}
+	if baseline.Name == "" || baseline.Font == "" || strings.TrimSpace(baseline.BaselineReason) == "" {
+		t.Fatalf("text visual baseline must identify its fixture and update reason: %#v", baseline)
+	}
+	if actualFont := visualFontDescription(fonts); actualFont != baseline.Font {
+		if runtime.GOOS != "linux" {
+			t.Skipf("platform CJK fallback %q differs from Linux visual baseline %q", actualFont, baseline.Font)
+		}
+		t.Fatalf("Linux text visual font = %q, want fixed baseline %q", actualFont, baseline.Font)
+	}
+	hash := sha256.Sum256(encoded.Bytes())
+	if got := hex.EncodeToString(hash[:]); got != baseline.PNGHash {
+		t.Fatalf("text screenshot PNG hash = %s, want %s (%s)", got, baseline.PNGHash, baseline.BaselineReason)
+	}
+}
+
+func requireVisualDiagnosticRunes(t *testing.T, values ...string) {
+	t.Helper()
+	count := 0
+	for _, value := range values {
+		count += utf8.RuneCountInString(value)
+	}
+	if count > maxVisualDiagnosticRunes {
+		t.Fatalf("visual diagnostic runes = %d, limit %d", count, maxVisualDiagnosticRunes)
 	}
 }
 
@@ -524,28 +648,138 @@ func hitSnapshot(tree *layout.Tree, nodes map[string]dom.NodeID) []string {
 }
 
 func rasterVisualFixture(t *testing.T, list *DisplayList, width, height, scale int) *image.RGBA {
+	return rasterVisualFixtureWithFonts(t, list, width, height, scale, visualRasterFonts(t))
+}
+
+func rasterVisualFixtureWithFonts(t *testing.T, list *DisplayList, width, height, scale int, fonts []visualRasterFont) *image.RGBA {
 	t.Helper()
 	canvas := image.NewRGBA(image.Rect(0, 0, width*scale, height*scale))
 	draw.Draw(canvas, canvas.Bounds(), image.NewUniform(color.RGBA{R: 255, G: 255, B: 255, A: 255}), image.Point{}, draw.Src)
-	parsedFont, err := opentype.Parse(goregular.TTF)
-	if err != nil {
-		t.Fatal(err)
-	}
 	for _, candidate := range list.Commands {
 		switch command := candidate.(type) {
 		case DrawBox:
 			rasterBox(canvas, command, scale)
 		case DrawText:
-			face, err := opentype.NewFace(parsedFont, &opentype.FaceOptions{Size: float64(command.FontSize * float32(scale)), DPI: 72, Hinting: font.HintingNone})
-			if err != nil {
-				t.Fatal(err)
-			}
-			drawer := font.Drawer{Dst: canvas, Src: image.NewUniform(colorFromRGBA(command.Color, command.Opacity)), Face: face, Dot: fixed.P(int(command.X*float32(scale)), int((command.Y+command.Baseline)*float32(scale)))}
-			drawer.DrawString(command.Text)
-			_ = face.Close()
+			rasterVisualText(t, canvas, command, scale, fonts)
 		}
 	}
 	return canvas
+}
+
+func visualRasterFonts(t *testing.T) []visualRasterFont {
+	t.Helper()
+	primary, err := opentype.Parse(goregular.TTF)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fonts := []visualRasterFont{{name: "gofont/goregular", parsed: primary}}
+	for _, name := range []string{
+		os.Getenv("GROWSE_VISUAL_CJK_FONT"),
+		"/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+		"/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",
+		"C:/Windows/Fonts/msgothic.ttc",
+	} {
+		if name == "" {
+			continue
+		}
+		data, err := os.ReadFile(name)
+		if err != nil {
+			continue
+		}
+		collection, err := opentype.ParseCollection(data)
+		if err != nil || collection.NumFonts() == 0 {
+			continue
+		}
+		parsed, err := collection.Font(0)
+		if err == nil {
+			fonts = append(fonts, visualRasterFont{name: filepath.Base(name), parsed: parsed})
+			break
+		}
+	}
+	return fonts
+}
+
+func visualFontsCover(fonts []visualRasterFont, value string) bool {
+	for _, character := range value {
+		if character == ' ' {
+			continue
+		}
+		if visualFontForRune(fonts, character) == nil {
+			return false
+		}
+	}
+	return true
+}
+
+func visualFontForRune(fonts []visualRasterFont, character rune) *visualRasterFont {
+	for index := range fonts {
+		glyph, err := fonts[index].parsed.GlyphIndex(nil, character)
+		if err == nil && glyph != 0 {
+			return &fonts[index]
+		}
+	}
+	return nil
+}
+
+func visualFontDescription(fonts []visualRasterFont) string {
+	names := make([]string, 0, len(fonts))
+	for _, face := range fonts {
+		names = append(names, face.name)
+	}
+	return strings.Join(names, " -> ") + "@72dpi-hinting-none"
+}
+
+func rasterVisualText(t *testing.T, canvas *image.RGBA, command DrawText, scale int, fonts []visualRasterFont) {
+	t.Helper()
+	dot := fixed.P(int(command.X*float32(scale)), int((command.Y+command.Baseline)*float32(scale)))
+	for len(command.Text) > 0 {
+		first, size := utf8.DecodeRuneInString(command.Text)
+		selected := visualFontForRune(fonts, first)
+		if selected == nil {
+			selected = &fonts[0]
+		}
+		end := size
+		for end < len(command.Text) {
+			character, characterSize := utf8.DecodeRuneInString(command.Text[end:])
+			if next := visualFontForRune(fonts, character); next == nil || next != selected {
+				break
+			}
+			end += characterSize
+		}
+		face, err := opentype.NewFace(selected.parsed, &opentype.FaceOptions{Size: float64(command.FontSize * float32(scale)), DPI: 72, Hinting: font.HintingNone})
+		if err != nil {
+			t.Fatal(err)
+		}
+		drawer := font.Drawer{Dst: canvas, Src: image.NewUniform(colorFromRGBA(command.Color, command.Opacity)), Face: face, Dot: dot}
+		drawer.DrawString(command.Text[:end])
+		dot = drawer.Dot
+		_ = face.Close()
+		command.Text = command.Text[end:]
+	}
+}
+
+func writeVisualArtifact(t *testing.T, name string, source image.Image) {
+	t.Helper()
+	bounds := source.Bounds()
+	pixels := int64(bounds.Dx()) * int64(bounds.Dy())
+	if bounds.Empty() || pixels > maxVisualArtifactPixels {
+		t.Fatalf("visual artifact bounds = %v (%d pixels), limit %d", bounds, pixels, maxVisualArtifactPixels)
+	}
+	directory := os.Getenv("GROWSE_VISUAL_ARTIFACT_DIR")
+	if directory == "" {
+		return
+	}
+	if err := os.MkdirAll(directory, 0o755); err != nil {
+		t.Fatalf("create visual artifact directory: %v", err)
+	}
+	file, err := os.Create(filepath.Join(directory, name))
+	if err != nil {
+		t.Fatalf("create visual artifact: %v", err)
+	}
+	defer file.Close()
+	if err := png.Encode(file, source); err != nil {
+		t.Fatalf("encode visual artifact: %v", err)
+	}
 }
 
 func rasterBox(canvas *image.RGBA, command DrawBox, scale int) {

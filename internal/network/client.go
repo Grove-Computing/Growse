@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/net/http/httpproxy"
 )
 
 const (
@@ -157,6 +159,15 @@ func NewClientWithCacheRoot(httpClient *http.Client, maxBodyBytes int64, cacheRo
 
 func configuredHTTPClient(source *http.Client) *http.Client {
 	copy := *source
+	if copy.Transport == nil {
+		// http.ProxyFromEnvironment initializes its environment snapshot only
+		// once. A desktop browser can stay open while its proxy is changed, so
+		// use a private transport that reads the current proxy environment for
+		// every request instead of retaining that first snapshot.
+		transport := http.DefaultTransport.(*http.Transport).Clone()
+		transport.Proxy = proxyFromCurrentEnvironment
+		copy.Transport = transport
+	}
 	if copy.Jar == nil {
 		copy.Jar = newPolicyCookieJar()
 	}
@@ -164,6 +175,17 @@ func configuredHTTPClient(source *http.Client) *http.Client {
 		copy.CheckRedirect = applyRedirectPolicy
 	}
 	return &copy
+}
+
+// proxyFromCurrentEnvironment resolves proxy and bypass rules at request time.
+// It deliberately avoids http.ProxyFromEnvironment because that helper caches
+// the process environment after its first use. FromEnvironment also preserves
+// the standard HTTP_PROXY, HTTPS_PROXY, and NO_PROXY semantics.
+func proxyFromCurrentEnvironment(request *http.Request) (*url.URL, error) {
+	if request == nil || request.URL == nil {
+		return nil, nil
+	}
+	return httpproxy.FromEnvironment().ProxyFunc()(request.URL)
 }
 
 func applyRedirectPolicy(request *http.Request, via []*http.Request) error {

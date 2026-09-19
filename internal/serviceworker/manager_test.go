@@ -81,7 +81,7 @@ func TestRegistrationRejectsInsecureCrossOriginAndWideScope(t *testing.T) {
 	if _, err := manager.Register(context.Background(), secure, "/app/sw.js", "/", fetch); !errors.Is(err, ErrScope) {
 		t.Fatalf("wide-scope Register() error = %v", err)
 	}
-	if !IsSecureContext(parseServiceWorkerURL(t, "http://localhost:8080/app")) || !IsSecureContext(parseServiceWorkerURL(t, "http://127.0.0.1/app")) {
+	if !IsSecureContext(parseServiceWorkerURL(t, "http://localhost:6053/app")) || !IsSecureContext(parseServiceWorkerURL(t, "http://127.0.0.1/app")) {
 		t.Fatal("loopback development origin was not secure")
 	}
 }

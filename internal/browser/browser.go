@@ -2067,6 +2067,7 @@ func startRuntime(ctx context.Context, factory runtimemodel.EngineFactory, engin
 		_ = pageRuntime.Stop()
 		return nil
 	}
+	committedDocument := page.Document.Snapshot()
 	if err := pageRuntime.Start(ctx); err != nil {
 		message := fmt.Sprintf("start %s runtime: %v", engine, err)
 		if engine == runtimemodel.EngineJavaScript {
@@ -2079,6 +2080,22 @@ func startRuntime(ctx context.Context, factory runtimemodel.EngineFactory, engin
 			page.windows.unregister(page.window.Self)
 		}
 		_ = pageRuntime.Stop()
+		// A script may publish DOM mutations before a later script times out or
+		// fails. A failed startup is not a committed hydration transaction: keep
+		// the server-rendered document readable instead of leaving a partially
+		// cleared tree behind.
+		if restoreErr := page.Document.ApplySnapshot(committedDocument); restoreErr == nil {
+			page.HoverPath = hoverPath(page.Document, page.HoverTarget)
+			if len(page.HoverPath) == 0 {
+				page.HoverTarget = 0
+			}
+			page.FocusTarget = validFocusTarget(page.Document, page.FocusTarget)
+			recomputePageStyles(page, runtimeNow())
+			page.RecordDOMMutation(page.Document.Root.ID)
+			if onMutation != nil {
+				onMutation()
+			}
+		}
 		return nil
 	}
 	if page.windows != nil {

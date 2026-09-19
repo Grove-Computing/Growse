@@ -46,6 +46,27 @@ func TestBuildGridEstablishesFormattingContexts(t *testing.T) {
 	}
 }
 
+func TestRealSiteAvatarCentersAnonymousGridText(t *testing.T) {
+	document := dom.NewDocument()
+	avatar := document.CreateElement("div", map[string]string{"class": "avatar"})
+	label := document.CreateText("S")
+	appendNodes(t, document, [2]*dom.Node{document.Root, avatar}, [2]*dom.Node{avatar, label})
+	stylesheet, err := css.Parse(strings.NewReader(`
+.avatar { display:grid; place-items:center; width:220px; aspect-ratio:1; border-radius:50%; font-size:58px; background:#d0d7de }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, stylemodel.Compute(document, stylesheet), 400)
+	avatarRect, labelRect := tree.Bounds[avatar.ID], tree.Bounds[label.ID]
+	if labelRect.X <= avatarRect.X+avatarRect.Width/4 || labelRect.X+labelRect.Width >= avatarRect.X+avatarRect.Width*3/4 {
+		t.Fatalf("anonymous grid text was not centered: avatar=%#v label=%#v", avatarRect, labelRect)
+	}
+	if labelRect.Y <= avatarRect.Y+avatarRect.Height/4 || labelRect.Y+labelRect.Height >= avatarRect.Y+avatarRect.Height*3/4 {
+		t.Fatalf("anonymous grid text was not vertically centered: avatar=%#v label=%#v", avatarRect, labelRect)
+	}
+}
+
 func TestBuildGridGeneratesExplicitAndImplicitTracks(t *testing.T) {
 	document := dom.NewDocument()
 	grid := document.CreateElement("div", map[string]string{"class": "grid"})
@@ -146,6 +167,45 @@ func TestBuildGridResolvesMinmaxFitContentAndRepeat(t *testing.T) {
 		if difference := actual - want[index]; difference < -0.01 || difference > 0.01 {
 			t.Fatalf("track %d width = %v, want %v", index, actual, want[index])
 		}
+	}
+}
+
+// Adapted from CSS Grid intrinsic track sizing and flexible track assertions.
+// The shape mirrors a real-site content card: an intrinsic navigation column,
+// a flexible main column, a spanning heading, automatic placement and a gap.
+func TestRealSiteGridKeepsIntrinsicMinimumWithinFractionalContainer(t *testing.T) {
+	document := dom.NewDocument()
+	grid := document.CreateElement("main", map[string]string{"class": "grid"})
+	heading := document.CreateElement("h1", map[string]string{"class": "heading"})
+	navigation := document.CreateElement("nav", map[string]string{"class": "navigation"})
+	content := document.CreateElement("article", map[string]string{"class": "content"})
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, grid},
+		[2]*dom.Node{grid, heading}, [2]*dom.Node{heading, document.CreateText("Compatibility overview")},
+		[2]*dom.Node{grid, navigation}, [2]*dom.Node{navigation, document.CreateText("NavigationDirectory")},
+		[2]*dom.Node{grid, content}, [2]*dom.Node{content, document.CreateText("Main content")},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.grid { display:grid; width:360px; grid-template-columns:minmax(min-content, 1fr) 2fr; grid-auto-rows:32px; gap:12px 20px }
+.heading { grid-column:span 2 }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, stylemodel.Compute(document, stylesheet), 480)
+	gridRect := tree.Bounds[grid.ID]
+	headingRect, navigationRect, contentRect := tree.Bounds[heading.ID], tree.Bounds[navigation.ID], tree.Bounds[content.ID]
+	if headingRect.Width != gridRect.Width {
+		t.Fatalf("spanning heading width = %v, want grid width %v", headingRect.Width, gridRect.Width)
+	}
+	if navigationRect.Y != contentRect.Y || contentRect.X-navigationRect.X-navigationRect.Width != 20 {
+		t.Fatalf("automatic placement/gap = navigation:%#v content:%#v", navigationRect, contentRect)
+	}
+	if navigationRect.Width <= contentRect.Width/2 || contentRect.Width <= navigationRect.Width {
+		t.Fatalf("intrinsic minimum/fraction distribution = navigation:%#v content:%#v", navigationRect, contentRect)
+	}
+	if used := navigationRect.Width + 20 + contentRect.Width; used != gridRect.Width {
+		t.Fatalf("fractional tracks overflow container: used=%v grid=%v", used, gridRect.Width)
 	}
 }
 
@@ -489,5 +549,49 @@ func TestBuildAlignmentHandlesSafeUnsafeLogicalAxesAndGridBaseline(t *testing.T)
 	largeText, smallText := boxForNode(t, tree, large.ID), boxForNode(t, tree, small.ID)
 	if largeText.Baseline != smallText.Baseline {
 		t.Fatalf("grid baselines = %v and %v", largeText.Baseline, smallText.Baseline)
+	}
+}
+
+// Adapted from CSS Grid 2 intrinsic track sizing assertions. An auto row must
+// use the nested block content contribution, not a flattened one-line label.
+func TestGridAutoRowContainsNestedProfileAndCardContent(t *testing.T) {
+	document := dom.NewDocument()
+	grid := document.CreateElement("main", map[string]string{"class": "grid"})
+	profile := document.CreateElement("aside", map[string]string{"class": "profile"})
+	avatar := document.CreateElement("div", map[string]string{"class": "avatar"})
+	heading := document.CreateElement("h1", nil)
+	copy := document.CreateElement("p", nil)
+	card := document.CreateElement("section", map[string]string{"class": "card"})
+	cardHeading := document.CreateElement("h2", nil)
+	cardCopy := document.CreateElement("p", nil)
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, grid}, [2]*dom.Node{grid, profile},
+		[2]*dom.Node{profile, avatar}, [2]*dom.Node{avatar, document.CreateText("S")},
+		[2]*dom.Node{profile, heading}, [2]*dom.Node{heading, document.CreateText("Profile")},
+		[2]*dom.Node{profile, copy}, [2]*dom.Node{copy, document.CreateText("Visible profile copy")},
+		[2]*dom.Node{grid, card}, [2]*dom.Node{card, cardHeading},
+		[2]*dom.Node{cardHeading, document.CreateText("Repository")}, [2]*dom.Node{card, cardCopy},
+		[2]*dom.Node{cardCopy, document.CreateText("Nested card copy remains inside the auto row.")},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.grid { display:grid; width:600px; grid-template-columns:220px 1fr; gap:24px }
+.avatar { display:grid; width:180px; aspect-ratio:1; place-items:center }
+.profile h1 { font-size:26px; line-height:32px }
+.card { padding:16px }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, stylemodel.Compute(document, stylesheet), 700)
+	gridRect, profileRect, cardRect := tree.Bounds[grid.ID], tree.Bounds[profile.ID], tree.Bounds[card.ID]
+	if gridRect.Height < 180 || profileRect.Height != gridRect.Height || cardRect.Height != gridRect.Height {
+		t.Fatalf("auto row did not contain nested content: grid=%#v profile=%#v card=%#v", gridRect, profileRect, cardRect)
+	}
+	for _, box := range tree.Boxes {
+		if box.NodeID == heading.ID || box.NodeID == copy.ID || box.NodeID == cardHeading.ID || box.NodeID == cardCopy.ID {
+			if box.Y < gridRect.Y || box.Y+box.Height > gridRect.Y+gridRect.Height {
+				t.Fatalf("text box escapes auto row: grid=%#v box=%#v", gridRect, box)
+			}
+		}
 	}
 }

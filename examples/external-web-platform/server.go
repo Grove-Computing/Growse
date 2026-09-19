@@ -2,6 +2,7 @@ package main
 
 import (
 	"embed"
+	"flag"
 	"fmt"
 	"io/fs"
 	"log"
@@ -95,7 +96,9 @@ var answerWASM = []byte{
 func main() {
 	go func() { log.Fatal(http.ListenAndServe("localhost:8081", externalCDNHandler())) }()
 	go func() { log.Fatal(http.ListenAndServe("localhost:8082", externalFrameHandler())) }()
-	address := "localhost:8080"
+	address := "localhost:6053"
+	flag.StringVar(&address, "addr", address, "showcase listen address")
+	flag.Parse()
 	fmt.Printf("Growse External Web Platform Showcase: http://%s/app/\n", address)
 	log.Fatal(http.ListenAndServe(address, externalWebPlatformHandler("http://localhost:8081", "http://localhost:8082")))
 }

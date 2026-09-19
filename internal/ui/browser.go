@@ -53,7 +53,7 @@ import (
 var gopherPNG []byte
 
 const (
-	defaultURL         = "http://localhost:8080"
+	defaultURL         = "http://localhost:6053"
 	tabRailWidth       = unit.Dp(224)
 	toolbarHeight      = unit.Dp(92)
 	controlHeight      = unit.Dp(44)
@@ -1950,6 +1950,12 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 }
 
 func (ui *BrowserUI) persistHistoryScroll() {
+	// Browser.load can activate the next Page before its runtime/resource work
+	// returns to the UI. Persisting the still-visible old list position during
+	// that interval would copy the previous document's scroll into the new one.
+	if ui.loading {
+		return
+	}
 	if navigator, ok := ui.navigator.(historyScrollNavigator); ok {
 		navigator.UpdateHistoryScroll(ui.pageList.Position.First, ui.pageList.Position.Offset)
 	}
@@ -2299,7 +2305,7 @@ func (ui *BrowserUI) documentTheme() *material.Theme {
 		ui.theme = material.NewTheme()
 	}
 	pageTheme := *ui.theme
-	pageTheme.Shaper = &text.Shaper{}
+	pageTheme.Shaper = newPageTextShaper(gofont.Collection(), true)
 	ui.pageTheme = &pageTheme
 	return ui.pageTheme
 }
@@ -2313,7 +2319,7 @@ func (ui *BrowserUI) installPageFonts(page *browser.Page) {
 		return
 	}
 	if !page.UsesModernWebCompatibility() {
-		ui.documentTheme().Shaper = &text.Shaper{}
+		ui.documentTheme().Shaper = newPageTextShaper(gofont.Collection(), true)
 		ui.fontPage, ui.fontRevision = page, page.StyleRevision
 		return
 	}
@@ -3531,7 +3537,11 @@ func (ui *BrowserUI) layoutVerticalText(gtx layout.Context, command paintmodel.D
 				paint.FillShape(gtx.Ops, rgba(run.Background), clip.Rect{Max: image.Pt(width, height)}.Op())
 			}
 			return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-				return ui.layoutShadowedText(gtx, run.Text, run.FontSize, run.Bold, run.FontFamilies, run.FontStyle, run.LetterSpacing, run.WordSpacing, run.Color, run.Decoration, run.DecorationColor, 0, run.TextShadows)
+				baseline := run.Baseline
+				if baseline == 0 {
+					baseline = run.FontSize * 0.8
+				}
+				return ui.layoutShadowedText(gtx, run.Text, run.FontSize, run.Bold, run.FontFamilies, run.FontStyle, run.LetterSpacing, run.WordSpacing, run.Color, run.Decoration, run.DecorationColor, baseline, run.TextShadows)
 			})
 		}))
 	}
@@ -3568,11 +3578,14 @@ func commandRoundedClip(gtx layout.Context, region layoutengine.ClipRegion, orig
 }
 
 func (ui *BrowserUI) layoutTextRun(gtx layout.Context, run paintmodel.TextRun, height int) layout.Dimensions {
-	gtx.Constraints.Min.X = 0
-	gtx.Constraints.Min.Y = height
-	gtx.Constraints.Max.Y = height
+	// Layout owns advance and wrapping. Preserve that advance through the UI
+	// backend rather than allowing material.Label to measure a different font
+	// fallback and move all following runs on the line.
+	width := gtx.Dp(unit.Dp(max(run.Width, float32(0))))
 	if run.Atomic {
-		width := gtx.Dp(unit.Dp(max(run.Width, float32(1))))
+		if width < 1 {
+			width = 1
+		}
 		return layout.Dimensions{Size: image.Pt(width, height), Baseline: height}
 	}
 	if run.Opacity < 1 {
@@ -3584,16 +3597,27 @@ func (ui *BrowserUI) layoutTextRun(gtx layout.Context, run paintmodel.TextRun, h
 	text := func(gtx layout.Context) layout.Dimensions {
 		return ui.layoutShadowedText(gtx, run.Text, run.FontSize, run.Bold, run.FontFamilies, run.FontStyle, run.LetterSpacing, run.WordSpacing, run.Color, run.Decoration, run.DecorationColor, run.Baseline, run.TextShadows)
 	}
+	// A system fallback chosen by Gio can have a wider glyph than the face used
+	// to calculate the layout advance. Let it paint within the surrounding line
+	// box instead of clipping it to that advance, then return the layout-owned
+	// advance so following runs never move.
+	gtx.Constraints.Min.X = 0
+	gtx.Constraints.Min.Y = height
+	gtx.Constraints.Max.Y = height
 	if run.Background == 0 {
-		return text(gtx)
+		dimensions := text(gtx)
+		dimensions.Size.X, dimensions.Size.Y = width, height
+		return dimensions
 	}
-	return layout.Stack{Alignment: layout.W}.Layout(gtx,
+	dimensions := layout.Stack{Alignment: layout.W}.Layout(gtx,
 		layout.Expanded(func(gtx layout.Context) layout.Dimensions {
-			paint.FillShape(gtx.Ops, rgba(run.Background), clip.Rect{Max: gtx.Constraints.Min}.Op())
-			return layout.Dimensions{Size: gtx.Constraints.Min}
+			paint.FillShape(gtx.Ops, rgba(run.Background), clip.Rect{Max: image.Pt(width, height)}.Op())
+			return layout.Dimensions{Size: image.Pt(width, height)}
 		}),
 		layout.Stacked(text),
 	)
+	dimensions.Size.X, dimensions.Size.Y = width, height
+	return dimensions
 }
 
 func (ui *BrowserUI) layoutShadowedText(gtx layout.Context, text string, size float32, bold bool, families []string, fontStyle string, letterSpacing, wordSpacing float32, color uint32, decoration stylemodel.TextDecorationLine, decorationColor uint32, baseline float32, shadows []stylemodel.Shadow) layout.Dimensions {

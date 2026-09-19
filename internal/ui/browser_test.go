@@ -5,6 +5,7 @@ import (
 	"image"
 	"image/color"
 	"net/url"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -29,6 +30,13 @@ import (
 	"github.com/Grove-Computing/Growse/internal/style"
 	"github.com/Grove-Computing/Growse/internal/updater"
 )
+
+func TestBrowserUIDefaultAddressUsesGrowsePort(t *testing.T) {
+	ui := NewBrowserUI(nil, nil)
+	if got, want := ui.address.Text(), "http://localhost:6053"; got != want {
+		t.Fatalf("default address = %q, want %q", got, want)
+	}
+}
 
 func TestCommandClipTranslatesDocumentCoordinatesToCommandCoordinates(t *testing.T) {
 	gtx := layout.Context{Metric: unit.Metric{PxPerDp: 2, PxPerSp: 2}}
@@ -114,6 +122,30 @@ func TestPixelBorderRadiiPreservesEllipticalCorners(t *testing.T) {
 type stubNavigator struct {
 	page *browser.Page
 	err  error
+}
+
+type scrollRecordingNavigator struct {
+	stubNavigator
+	updates [][2]int
+}
+
+func (navigator *scrollRecordingNavigator) UpdateHistoryScroll(first, offset int) {
+	navigator.updates = append(navigator.updates, [2]int{first, offset})
+}
+
+func TestLoadingNavigationDoesNotCopyPreviousDocumentScroll(t *testing.T) {
+	navigator := &scrollRecordingNavigator{}
+	ui := NewBrowserUI(navigator, nil)
+	ui.pageList.Position = layout.Position{First: 7, Offset: -19}
+
+	ui.persistHistoryScroll()
+	ui.loading = true
+	ui.pageList.Position = layout.Position{First: 12, Offset: -31}
+	ui.persistHistoryScroll()
+
+	if got, want := navigator.updates, [][2]int{{7, -19}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("history scroll updates = %v, want %v", got, want)
+	}
 }
 
 type stubApplicationUpdater struct {

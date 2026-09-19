@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "release": "v0.20.0",
+  "capturedAt": "2026-09-19",
+  "referenceBrowser": "Google Chrome 153.0.8010.52",
+  "offline": true,
+  "viewports": [
+    {"name": "desktop", "width": 1280, "height": 800, "devicePixelRatio": 1},
+    {"name": "narrow", "width": 720, "height": 800, "devicePixelRatio": 1}
+  ],
+  "locale": "ja-JP",
+  "fontSet": ["Noto Sans", "Noto Sans CJK JP", "Noto Serif", "monospace"],
+  "limits": {"maxPixels": 16000000, "maxArtifactBytes": 16777216, "maxCorpusArtifactBytes": 268435456, "maxGlyphs": 50000, "maxDisplayedElements": 4000, "maxStylesheets": 256, "maxCSSRules": 8192},
+  "cases": [
+    {"id": "one-mb-club", "sourceURL": "https://1mb.club/", "fixture": "fixtures/one-mb-club.html", "sha256": "421d40f9f561e0175a46a1e2d05d8d3d9ddfd866a1704b44cbb0279c409f8b7b", "regions": ["navigation", "heading", "description", "table"]},
+    {"id": "wikipedia-ja", "sourceURL": "https://ja.wikipedia.org/", "fixture": "fixtures/wikipedia-ja.html", "sha256": "4294f1ba9778d8f86ed0fe5ddfc0f71a44a2a5eef4fb0fd43f0a9feb1510caa7", "regions": ["navigation", "logo", "heading", "main", "image"]},
+    {"id": "github-profile", "sourceURL": "https://github.com/Saku0512", "fixture": "fixtures/github-profile.html", "sha256": "db756d2608fb0f1e3f4cfc48a44722716133793b92f9c6cc9676c2e19c8f67a5", "regions": ["navigation", "heading", "profile", "main"]},
+    {"id": "cv-btxx", "sourceURL": "https://cv.btxx.org/", "fixture": "fixtures/cv-btxx.html", "sha256": "4eb1f8f5fdd02520b9beeb00708f8b80efcfd05e58c01e724e8ff42d2a6a463e", "regions": ["main", "pre"]},
+    {"id": "t0-vc", "sourceURL": "https://t0.vc/", "fixture": "fixtures/t0-vc.html", "sha256": "860d5bd661345a9f3b29d6228cf59bebd4e7ef1bab290faa50d1bc5c948a3051", "regions": ["main", "links"]},
+    {"id": "schemescape", "sourceURL": "https://www.schemescape.com/", "fixture": "fixtures/schemescape.html", "sha256": "b96f2a47045e5deaf8b29f939397fd3883f25b45450f90d6c8fdcc324452ce90", "regions": ["heading", "main", "list"]},
+    {"id": "kidlat", "sourceURL": "https://kidlat.at/", "fixture": "fixtures/kidlat.html", "sha256": "72db78804c8fcfae832b038bd8a8312212b047892be6a80bd6057fd26d2366b7", "regions": ["navigation", "heading", "main", "article"]}
+  ]
+}

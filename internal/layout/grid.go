@@ -35,7 +35,15 @@ func (e *engine) addGridChildren(container *dom.Node, containerStyle blockStyle,
 		if child.Type == dom.NodeText {
 			if text := normalizeWhitespace(child.Text); text != "" {
 				anonymous := &dom.Node{ID: child.ID, Type: dom.NodeText, Text: text}
-				items = append(items, gridLayoutItem{node: anonymous, style: e.styleFor(container)})
+				style := e.styleFor(container)
+				style.display = stylemodel.DisplayBlock
+				style.width, style.height = stylemodel.SizeValue{Kind: stylemodel.SizeAuto}, stylemodel.SizeValue{Kind: stylemodel.SizeAuto}
+				style.minWidth, style.minHeight = stylemodel.SizeValue{Kind: stylemodel.SizeAuto}, stylemodel.SizeValue{Kind: stylemodel.SizeAuto}
+				style.maxWidth, style.maxHeight = stylemodel.SizeValue{Kind: stylemodel.SizeNone}, stylemodel.SizeValue{Kind: stylemodel.SizeNone}
+				style.margin, style.padding, style.border = stylemodel.Edges{}, stylemodel.Edges{}, stylemodel.Borders{}
+				style.marginAuto = stylemodel.AutoEdges{}
+				style.aspectRatio = 0
+				items = append(items, gridLayoutItem{node: anonymous, style: style})
 			}
 			continue
 		}
@@ -837,14 +845,43 @@ func resolveGridTracks(explicit, implicit []stylemodel.GridTrackSize, count int,
 		used += result[index]
 	}
 	if flexTotal > 0 && basisDefinite {
-		free := max(basis-used, float32(0))
+		remaining := basis - gap*float32(max(count-1, 0))
+		unfrozen := make([]int, 0, count)
 		for index := range result {
 			if tracks[index].Kind == stylemodel.GridTrackFraction {
-				addition := free * tracks[index].Flex / flexTotal
-				result[index] += addition
+				unfrozen = append(unfrozen, index)
+			} else {
+				remaining -= result[index]
 			}
 		}
-		used += free
+		remaining = max(remaining, float32(0))
+		for len(unfrozen) > 0 && flexTotal > 0 {
+			fraction := remaining / flexTotal
+			frozen := false
+			next := unfrozen[:0]
+			for _, index := range unfrozen {
+				allocated := fraction * tracks[index].Flex
+				if result[index] > allocated {
+					remaining = max(remaining-result[index], float32(0))
+					flexTotal -= tracks[index].Flex
+					frozen = true
+					continue
+				}
+				next = append(next, index)
+			}
+			unfrozen = next
+			if frozen {
+				continue
+			}
+			for _, index := range unfrozen {
+				result[index] = fraction * tracks[index].Flex
+			}
+			break
+		}
+		used = gap * float32(max(count-1, 0))
+		for _, size := range result {
+			used += size
+		}
 	}
 	if autoCount > 0 && basisDefinite && basis > used {
 		share := (basis - used) / float32(autoCount)

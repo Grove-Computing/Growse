@@ -1,0 +1,6 @@
+{
+  "name": "text-visual-evidence.png",
+  "font": "gofont/goregular -> NotoSansCJK-Regular.ttc@72dpi-hinting-none",
+  "png_sha256": "9b3a536801785aa052a2f02f1ce0b8bf3d2a801b8d5a0616e7c29652c9c3d44e",
+  "baseline_reason": "v0.20.0 CJK fallback raster baseline; Noto Sans CJK is selected before PNG comparison"
+}

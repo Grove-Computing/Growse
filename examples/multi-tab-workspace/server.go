@@ -2,6 +2,7 @@ package main
 
 import (
 	"embed"
+	"flag"
 	"fmt"
 	"io/fs"
 	"log"
@@ -44,7 +45,9 @@ func workspaceHandler() http.Handler {
 }
 
 func main() {
-	address := "localhost:8080"
+	address := "localhost:6053"
+	flag.StringVar(&address, "addr", address, "workspace listen address")
+	flag.Parse()
 	fmt.Printf("Multi-Tab Workspace: http://%s\n", address)
 	log.Fatal(http.ListenAndServe(address, workspaceHandler()))
 }

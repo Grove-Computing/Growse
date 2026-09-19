@@ -1,6 +1,6 @@
 # Runtime / Web API対応表
 
-この表はGrowse v0.19.0の実装を基準とする。desktop appの新規TabはJavaScriptを既定Engineとし、Tab単位でGoへ切り替えられる。埋め込み用Browser APIは既存互換のためzero valueをGoとして扱う。切り替えはtop-level、Frame、WASM、dynamic resource、observer、pending hydration / animation callback、image / script resource queueを停止する完全なPage reloadであり、両Engineのobject、Page shaper、image cacheを共有しない。
+この表はGrowse v0.20.0の実装を基準とする。desktop appの新規TabはJavaScriptを既定Engineとし、Tab単位でGoへ切り替えられる。切り替えはtop-level、Frame、WASM、dynamic resource、observer、pending hydration / animation callback、image / script resource queueを停止する完全なPage reloadであり、両Engineのobject、Page shaper、image cacheを共有しない。
 
 ## EngineとScript
 
@@ -20,7 +20,7 @@ classic / module sourceは1件2 MiB、Pageのinitial / dynamic script合計256�
 
 ## Web API
 
-| API | Go | JavaScript | v0.19.0の範囲 |
+| API | Go | JavaScript | v0.20.0の範囲 |
 | --- | --- | --- | --- |
 | Console | `growse/console` | `console.log`、`info`、`warn`、`error` | Engine / context付きrecord、1件4 KiB、Page 1,000件 |
 | DOM検索・生成 | `growse/dom` | `getElementById`、`querySelector(All)`、`getElementsBy*`、`createElement`、`createTextNode` | 対応selectorとBrowser所有Node wrapperに限定 |
@@ -73,7 +73,9 @@ Request 1 MiB、Response 4 MiB、Header 100件 / 64 KiB、redirect 10回、Page 
 - Service Worker Background Sync、Push、Notification、navigation preload、module worker
 - DevTools REPL、source debugger、breakpoint、heap profiler
 
-goja、WASM、HTML、CSS、Web API、Next.js、SvelteKit、Tailwindの仕様全体や任意公開サイトの完全互換は保証しない。対応範囲は本書、v0.19.0定義、固定Chromium / Firefox reference、Tailwind CSS v4実artifactと遅延image / scriptを含むoffline fixture、Showcase、選定WPT / Integration / Differential Testで観測できるsubsetである。
+goja、WASM、HTML、CSS、Web API、Next.js、SvelteKit、Tailwindの仕様全体や任意公開サイトの完全互換は保証しない。対応範囲は本書、v0.20.0定義、固定Chromium / Firefox reference、Tailwind CSS v4実artifactと遅延image / scriptを含むoffline fixture、Showcase、選定WPT / Integration / Differential Testで観測できるsubsetである。
+
+v0.20.0のreal-site gateでは、未対応scriptまたはcustom elementの局所的な失敗が既にcommit済みのSSR / static contentをpage全体から消さないことを検証する。失敗したruntime contextだけをerrorにし、navigation、profile、fallback本文を保持してDevToolsへ有限なcategory / reasonを残す。これはcustom elements、Shadow DOM、任意SPA hydrationへの対応宣言ではない。
 
 ## Security Boundary
 
