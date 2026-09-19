@@ -962,6 +962,20 @@ func applyCustomProperties(inherited map[string]string, winners map[string]winne
 		if !strings.HasPrefix(property, "--") {
 			continue
 		}
+		// At author origin, revert falls back to the preceding origin. Growse's
+		// UA sheet does not declare custom properties, so that is the same
+		// computed result as unset: inherit an unregistered/inheriting property
+		// and restore the initial value of a non-inheriting registration.
+		if strings.EqualFold(strings.TrimSpace(candidate.value), "revert") {
+			if registration, registered := registeredProperty(stylesheet, property); !registered || registration.Inherits {
+				if parentValue, ok := parentValues[property]; ok && canStore(property) {
+					result[property] = parentValue
+				} else if result != nil {
+					delete(result, property)
+				}
+			}
+			continue
+		}
 		switch parseGlobalKeyword(candidate.value) {
 		case globalInitial:
 			if _, registered := registeredProperty(stylesheet, property); !registered && result != nil {

@@ -663,6 +663,45 @@ func TestComputeResolvesInheritedCustomPropertiesFallbackAndCycles(t *testing.T)
 	}
 }
 
+// Adapted from CSS Cascade 5 origin, layer-order and custom-property revert
+// assertions. The shape mirrors navigation rules used by the real-site corpus.
+func TestRealSiteCascadeResolvesOriginsLayersAndCustomPropertyRevert(t *testing.T) {
+	document := dom.NewDocument()
+	body := document.CreateElement("body", map[string]string{"class": "site"})
+	navigation := document.CreateElement("nav", map[string]string{
+		"id": "primary", "class": "navigation", "style": "color: blue !important; --accent: revert",
+	})
+	label := document.CreateElement("span", map[string]string{"class": "label"})
+	appendNode(t, document, document.Root, body)
+	appendNode(t, document, body, navigation)
+	appendNode(t, document, navigation, label)
+	stylesheet, err := css.Parse(strings.NewReader(`
+@layer reset, components;
+.site { --accent: #d21d51; color: var(--accent) }
+@layer reset { .navigation { color: red !important; padding: 1px } }
+@layer components { .navigation { color: green !important; padding: 2px } }
+.navigation { padding: 3px; font-size: 17px }
+nav#primary { font-size: 19px }
+.label { color: var(--accent) }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	computed := ComputeWithEnvironment(document, stylesheet, InteractionState{}, Environment{BrowserDefaults: true})
+	bodyStyle, _ := computed.For(body)
+	navigationStyle, _ := computed.For(navigation)
+	labelStyle, _ := computed.For(label)
+	if bodyStyle.Margin != (Edges{Top: 8, Right: 8, Bottom: 8, Left: 8}) || bodyStyle.Color != 0xd21d51ff {
+		t.Fatalf("UA/author cascade = margin:%#v color:%#08x", bodyStyle.Margin, bodyStyle.Color)
+	}
+	if navigationStyle.Color != 0x0000ffff || navigationStyle.Padding.Top != 3 || navigationStyle.FontSize != 19 {
+		t.Fatalf("inline/layer/specificity cascade = %#v", navigationStyle)
+	}
+	if labelStyle.Color != 0xd21d51ff {
+		t.Fatalf("reverted custom property = %#08x, want inherited accent", labelStyle.Color)
+	}
+}
+
 func TestComputeResolvesFontAndViewportRelativeUnits(t *testing.T) {
 	document := dom.NewDocument()
 	html := document.CreateElement("html", nil)
