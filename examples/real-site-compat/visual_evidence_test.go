@@ -30,6 +30,7 @@ import (
 	layoutmodel "github.com/Grove-Computing/Growse/internal/layout"
 	"github.com/Grove-Computing/Growse/internal/network"
 	paintmodel "github.com/Grove-Computing/Growse/internal/paint"
+	stylemodel "github.com/Grove-Computing/Growse/internal/style"
 )
 
 type visualEvidence struct {
@@ -314,7 +315,15 @@ func rasterDisplayList(list *paintmodel.DisplayList, width, height int) *image.R
 	for _, candidate := range list.Commands {
 		switch command := candidate.(type) {
 		case paintmodel.DrawBox:
-			drawRect(canvas, command.X, command.Y, command.Width, command.Height, rgba(command.Color, command.Opacity))
+			for _, shadow := range command.BoxShadows {
+				if shadow.Inset {
+					continue
+				}
+				spread := shadow.Spread + shadow.Blur/2
+				drawRoundedRect(canvas, command.X+shadow.OffsetX-spread, command.Y+shadow.OffsetY-spread, command.Width+2*spread, command.Height+2*spread, expandRadii(command.Radius, spread), rgba(shadow.Color, command.Opacity))
+			}
+			drawRoundedRect(canvas, command.X, command.Y, command.Width, command.Height, command.Radius, rgba(command.Color, command.Opacity))
+			drawRasterBorders(canvas, command)
 		case paintmodel.DrawText:
 			if len(command.Runs) == 0 {
 				drawRasterText(canvas, command.Text, command.X, command.Y+command.Baseline, command.FontSize, command.Bold, command.Color, command.Opacity)
@@ -330,6 +339,79 @@ func rasterDisplayList(list *paintmodel.DisplayList, width, height int) *image.R
 		}
 	}
 	return canvas
+}
+
+func drawRasterBorders(canvas draw.Image, command paintmodel.DrawBox) {
+	mask := roundedRectMask(command.X, command.Y, command.Width, command.Height, command.Radius)
+	drawSide := func(x, y, width, height float32, side stylemodel.BorderSide) {
+		if side.Width <= 0 || side.Style == stylemodel.BorderNone || uint8(side.Color) == 0 {
+			return
+		}
+		rectangle := image.Rect(int(x), int(y), int(x+width+.5), int(y+height+.5)).Intersect(canvas.Bounds())
+		if !rectangle.Empty() {
+			draw.DrawMask(canvas, rectangle, image.NewUniform(rgba(side.Color, command.Opacity)), image.Point{}, mask, rectangle.Min, draw.Over)
+		}
+	}
+	drawSide(command.X, command.Y, command.Width, command.Border.Top.Width, command.Border.Top)
+	drawSide(command.X+command.Width-command.Border.Right.Width, command.Y, command.Border.Right.Width, command.Height, command.Border.Right)
+	drawSide(command.X, command.Y+command.Height-command.Border.Bottom.Width, command.Width, command.Border.Bottom.Width, command.Border.Bottom)
+	drawSide(command.X, command.Y, command.Border.Left.Width, command.Height, command.Border.Left)
+}
+
+func drawRoundedRect(destination draw.Image, x, y, width, height float32, radius layoutmodel.BorderRadii, fill color.NRGBA) {
+	if width <= 0 || height <= 0 || fill.A == 0 {
+		return
+	}
+	rectangle := image.Rect(int(x), int(y), int(x+width+.5), int(y+height+.5)).Intersect(destination.Bounds())
+	if rectangle.Empty() {
+		return
+	}
+	mask := roundedRectMask(x, y, width, height, radius)
+	draw.DrawMask(destination, rectangle, image.NewUniform(fill), image.Point{}, mask, rectangle.Min, draw.Over)
+}
+
+func roundedRectMask(x, y, width, height float32, radius layoutmodel.BorderRadii) *image.Alpha {
+	bounds := image.Rect(int(x), int(y), int(x+width+.5), int(y+height+.5))
+	mask := image.NewAlpha(bounds)
+	for py := bounds.Min.Y; py < bounds.Max.Y; py++ {
+		for px := bounds.Min.X; px < bounds.Max.X; px++ {
+			if rasterPointInsideRoundedRect(float32(px)+.5, float32(py)+.5, x, y, width, height, radius) {
+				mask.SetAlpha(px, py, color.Alpha{A: 255})
+			}
+		}
+	}
+	return mask
+}
+
+func rasterPointInsideRoundedRect(px, py, x, y, width, height float32, radius layoutmodel.BorderRadii) bool {
+	if px < x || py < y || px >= x+width || py >= y+height {
+		return false
+	}
+	corners := []struct {
+		radius layoutmodel.CornerRadius
+		cx, cy float32
+		corner bool
+	}{
+		{radius.TopLeft, x + radius.TopLeft.X, y + radius.TopLeft.Y, px < x+radius.TopLeft.X && py < y+radius.TopLeft.Y},
+		{radius.TopRight, x + width - radius.TopRight.X, y + radius.TopRight.Y, px > x+width-radius.TopRight.X && py < y+radius.TopRight.Y},
+		{radius.BottomRight, x + width - radius.BottomRight.X, y + height - radius.BottomRight.Y, px > x+width-radius.BottomRight.X && py > y+height-radius.BottomRight.Y},
+		{radius.BottomLeft, x + radius.BottomLeft.X, y + height - radius.BottomLeft.Y, px < x+radius.BottomLeft.X && py > y+height-radius.BottomLeft.Y},
+	}
+	for _, corner := range corners {
+		if !corner.corner || corner.radius.X <= 0 || corner.radius.Y <= 0 {
+			continue
+		}
+		dx, dy := (px-corner.cx)/corner.radius.X, (py-corner.cy)/corner.radius.Y
+		return dx*dx+dy*dy <= 1
+	}
+	return true
+}
+
+func expandRadii(radius layoutmodel.BorderRadii, amount float32) layoutmodel.BorderRadii {
+	expand := func(value layoutmodel.CornerRadius) layoutmodel.CornerRadius {
+		return layoutmodel.CornerRadius{X: max(value.X+amount, 0), Y: max(value.Y+amount, 0)}
+	}
+	return layoutmodel.BorderRadii{TopLeft: expand(radius.TopLeft), TopRight: expand(radius.TopRight), BottomRight: expand(radius.BottomRight), BottomLeft: expand(radius.BottomLeft)}
 }
 
 var rasterFonts struct {
@@ -373,7 +455,7 @@ func rasterFontFace(size float32, bold bool) font.Face {
 	return face
 }
 
-func drawRect(destination draw.Image, x, y, width, height float32, fill color.RGBA) {
+func drawRect(destination draw.Image, x, y, width, height float32, fill color.NRGBA) {
 	if width <= 0 || height <= 0 || fill.A == 0 {
 		return
 	}
@@ -383,8 +465,8 @@ func drawRect(destination draw.Image, x, y, width, height float32, fill color.RG
 	}
 }
 
-func rgba(value uint32, opacity float32) color.RGBA {
-	return color.RGBA{R: uint8(value >> 24), G: uint8(value >> 16), B: uint8(value >> 8), A: uint8(float32(uint8(value)) * opacity)}
+func rgba(value uint32, opacity float32) color.NRGBA {
+	return color.NRGBA{R: uint8(value >> 24), G: uint8(value >> 16), B: uint8(value >> 8), A: uint8(float32(uint8(value)) * opacity)}
 }
 
 func diffImages(left, right image.Image) (*image.RGBA, float64) {
@@ -476,6 +558,29 @@ func TestDiffMetricDetectsStructuralChange(t *testing.T) {
 	difference, ratio := diffImages(left, right)
 	if ratio != 1.0/16.0 || difference.RGBAAt(1, 1).R == 0 || png.Encode(encoded, difference) != nil || encoded.Len() == 0 {
 		t.Fatalf("diff evidence = ratio:%f pixel:%v bytes:%d", ratio, difference.RGBAAt(1, 1), encoded.Len())
+	}
+}
+
+func TestEvidenceRasterPreservesRoundedBorderShadowAndOpacity(t *testing.T) {
+	radius := layoutmodel.BorderRadii{
+		TopLeft: layoutmodel.CornerRadius{X: 20, Y: 20}, TopRight: layoutmodel.CornerRadius{X: 20, Y: 20},
+		BottomRight: layoutmodel.CornerRadius{X: 20, Y: 20}, BottomLeft: layoutmodel.CornerRadius{X: 20, Y: 20},
+	}
+	border := stylemodel.BorderSide{Width: 2, Style: stylemodel.BorderSolid, Color: 0x0000ffff}
+	list := &paintmodel.DisplayList{Background: 0xffffffff, Commands: []paintmodel.Command{paintmodel.DrawBox{
+		X: 10, Y: 10, Width: 40, Height: 40, Color: 0xff0000ff, Radius: radius,
+		Border:     stylemodel.Borders{Top: border, Right: border, Bottom: border, Left: border},
+		BoxShadows: []stylemodel.Shadow{{OffsetX: 2, OffsetY: 2, Spread: 2, Color: 0x00000080}}, Opacity: .75,
+	}}}
+	canvas := rasterDisplayList(list, 64, 64)
+	if corner := canvas.RGBAAt(10, 10); corner.R > 245 && corner.G < 20 {
+		t.Fatalf("rounded corner was painted as a square: %v", corner)
+	}
+	if center := canvas.RGBAAt(30, 30); center.R < 200 || center.G > 80 {
+		t.Fatalf("opaque content disappeared from rounded box: %v", center)
+	}
+	if edge := canvas.RGBAAt(30, 10); edge.B < 100 {
+		t.Fatalf("border was not present in evidence raster: %v", edge)
 	}
 }
 
