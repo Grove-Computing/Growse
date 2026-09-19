@@ -149,6 +149,45 @@ func TestBuildGridResolvesMinmaxFitContentAndRepeat(t *testing.T) {
 	}
 }
 
+// Adapted from CSS Grid intrinsic track sizing and flexible track assertions.
+// The shape mirrors a real-site content card: an intrinsic navigation column,
+// a flexible main column, a spanning heading, automatic placement and a gap.
+func TestRealSiteGridKeepsIntrinsicMinimumWithinFractionalContainer(t *testing.T) {
+	document := dom.NewDocument()
+	grid := document.CreateElement("main", map[string]string{"class": "grid"})
+	heading := document.CreateElement("h1", map[string]string{"class": "heading"})
+	navigation := document.CreateElement("nav", map[string]string{"class": "navigation"})
+	content := document.CreateElement("article", map[string]string{"class": "content"})
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, grid},
+		[2]*dom.Node{grid, heading}, [2]*dom.Node{heading, document.CreateText("Compatibility overview")},
+		[2]*dom.Node{grid, navigation}, [2]*dom.Node{navigation, document.CreateText("NavigationDirectory")},
+		[2]*dom.Node{grid, content}, [2]*dom.Node{content, document.CreateText("Main content")},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.grid { display:grid; width:360px; grid-template-columns:minmax(min-content, 1fr) 2fr; grid-auto-rows:32px; gap:12px 20px }
+.heading { grid-column:span 2 }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, stylemodel.Compute(document, stylesheet), 480)
+	gridRect := tree.Bounds[grid.ID]
+	headingRect, navigationRect, contentRect := tree.Bounds[heading.ID], tree.Bounds[navigation.ID], tree.Bounds[content.ID]
+	if headingRect.Width != gridRect.Width {
+		t.Fatalf("spanning heading width = %v, want grid width %v", headingRect.Width, gridRect.Width)
+	}
+	if navigationRect.Y != contentRect.Y || contentRect.X-navigationRect.X-navigationRect.Width != 20 {
+		t.Fatalf("automatic placement/gap = navigation:%#v content:%#v", navigationRect, contentRect)
+	}
+	if navigationRect.Width <= contentRect.Width/2 || contentRect.Width <= navigationRect.Width {
+		t.Fatalf("intrinsic minimum/fraction distribution = navigation:%#v content:%#v", navigationRect, contentRect)
+	}
+	if used := navigationRect.Width + 20 + contentRect.Width; used != gridRect.Width {
+		t.Fatalf("fractional tracks overflow container: used=%v grid=%v", used, gridRect.Width)
+	}
+}
+
 func TestBuildGridPlacesNamedLinesSpansAndTemplateAreas(t *testing.T) {
 	document := dom.NewDocument()
 	grid := document.CreateElement("div", map[string]string{"class": "grid"})
