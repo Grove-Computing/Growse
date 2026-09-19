@@ -838,6 +838,15 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 	} else {
 		e.y += *topMargin
 	}
+	// An auto-sized block formatting context must keep its margin box outside
+	// adjacent floats. This is common in article/media-object layouts where
+	// overflow:hidden or flow-root contains the text beside a floated image.
+	if style.width.Kind == stylemodel.SizeAuto && establishesBlockFormattingContext(style) && len(e.floats) != 0 {
+		left, right := e.floatEdges(x, width, e.y, max(style.lineHeight, float32(1)))
+		if available := right - left; available > 0 && available < width {
+			x, width = left, available
+		}
+	}
 	x += style.margin.Left
 	availableWidth := width - style.margin.Left - style.margin.Right
 	if availableWidth < 1 {

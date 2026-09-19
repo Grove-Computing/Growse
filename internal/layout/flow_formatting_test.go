@@ -80,6 +80,51 @@ func TestFlowRootContainsAndIsolatesFloats(t *testing.T) {
 	}
 }
 
+// Adapted from CSS2 floats-142 and containing-block assertions. This mirrors
+// an editorial media object with a floated replaced image and BFC body.
+func TestRealSiteFloatBFCReplacedElementAndContainingBlockStayDisjoint(t *testing.T) {
+	document := dom.NewDocument()
+	article := document.CreateElement("article", map[string]string{"class": "article"})
+	imageNode := document.CreateElement("img", map[string]string{"class": "thumb", "src": "thumb.png"})
+	content := document.CreateElement("section", map[string]string{"class": "content"})
+	label := document.CreateElement("span", map[string]string{"class": "label"})
+	footer := document.CreateElement("footer", map[string]string{"class": "footer"})
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, article}, [2]*dom.Node{article, imageNode},
+		[2]*dom.Node{article, content}, [2]*dom.Node{content, document.CreateText("Readable text beside the image")},
+		[2]*dom.Node{content, label}, [2]*dom.Node{label, document.CreateText("new")},
+		[2]*dom.Node{article, footer}, [2]*dom.Node{footer, document.CreateText("following section")},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.article { display:block; width:320px }
+.thumb { float:left; width:80px; height:auto; margin-right:12px }
+.content { display:block; position:relative; overflow:hidden; min-height:48px }
+.label { position:absolute; right:0; top:0 }
+.footer { display:block; clear:both; margin-top:10px }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	computed := stylemodel.Compute(document, stylesheet)
+	tree := BuildWithScrollAndImages(document, computed, map[dom.NodeID]ImageResource{
+		imageNode.ID: {URL: "https://example.test/thumb.png", IntrinsicWidth: 160, IntrinsicHeight: 96, Loaded: true},
+	}, 400, 300, 0, 0)
+	imageRect, contentRect := tree.Bounds[imageNode.ID], tree.Bounds[content.ID]
+	labelRect, footerRect := tree.Bounds[label.ID], tree.Bounds[footer.ID]
+	if imageRect.Width != 80 || imageRect.Height != 48 {
+		t.Fatalf("replaced float ratio = %#v", imageRect)
+	}
+	if contentRect.X < imageRect.X+imageRect.Width || contentRect.Width >= 320 {
+		t.Fatalf("BFC overlaps float: image=%#v content=%#v", imageRect, contentRect)
+	}
+	if labelRect.X < contentRect.X || labelRect.X+labelRect.Width > contentRect.X+contentRect.Width {
+		t.Fatalf("positioned child escaped BFC containing block: content=%#v label=%#v", contentRect, labelRect)
+	}
+	if footerRect.Y < imageRect.Y+imageRect.Height {
+		t.Fatalf("clear did not pass replaced float: image=%#v footer=%#v", imageRect, footerRect)
+	}
+}
+
 func TestAtomicInlineBaselineWrapAndHitGeometryAgree(t *testing.T) {
 	document := dom.NewDocument()
 	paragraph := document.CreateElement("p", map[string]string{"class": "line"})
