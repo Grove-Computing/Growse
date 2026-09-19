@@ -1,0 +1,1 @@
+const button=document.querySelector('#toggle'),state=document.querySelector('#state');button.addEventListener('click',()=>{document.body.classList.toggle('alternate');state.textContent=document.body.classList.contains('alternate')?'alternate':'baseline'});
