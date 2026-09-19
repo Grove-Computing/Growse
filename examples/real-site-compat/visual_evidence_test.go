@@ -455,16 +455,6 @@ func rasterFontFace(size float32, bold bool) font.Face {
 	return face
 }
 
-func drawRect(destination draw.Image, x, y, width, height float32, fill color.NRGBA) {
-	if width <= 0 || height <= 0 || fill.A == 0 {
-		return
-	}
-	rectangle := image.Rect(int(x), int(y), int(x+width+.5), int(y+height+.5)).Intersect(destination.Bounds())
-	if !rectangle.Empty() {
-		draw.Draw(destination, rectangle, image.NewUniform(fill), image.Point{}, draw.Over)
-	}
-}
-
 func rgba(value uint32, opacity float32) color.NRGBA {
 	return color.NRGBA{R: uint8(value >> 24), G: uint8(value >> 16), B: uint8(value >> 8), A: uint8(float32(uint8(value)) * opacity)}
 }
