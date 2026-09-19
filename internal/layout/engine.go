@@ -1285,7 +1285,10 @@ func (e *engine) renderPositionedChildAt(node *dom.Node, style blockStyle, stati
 		}
 	}
 	childX, childY := containingBlock.X, containingBlock.Y
-	if hasLeft {
+	// When left, width and right are all definite, the inline direction
+	// selects which inset wins the over-constrained equation.
+	useRightInRTL := hasLeft && hasRight && widthDefinite && style.direction == stylemodel.DirectionRTL
+	if hasLeft && !useRightInRTL {
 		childX += left
 	} else if hasRight {
 		childX += containingBlock.Width - right - usedWidth
