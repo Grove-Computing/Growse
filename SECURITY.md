@@ -120,3 +120,5 @@ Gradient、Shadow、Transform、Clip、Opacityは取得したコードを実行�
 CSS Animationは、1要素あたり32件、Page全体で4096件、Stylesheetあたり256個の`@keyframes`に制限します。各`@keyframes`のFrame数、Declaration数、Selector数にも上限を設け、極端なDuration、Iteration、Easingを非有限値やbusy loopへ発展させないよう検証します。`requestAnimationFrame()`はPage 10,000件、1 frame 256 callbackのFIFO budgetを持ち、残りを次frameへ送って入力やNavigationへ制御を戻します。
 
 JavaScript compatibility profileの画像は、URLごとのfetch bodyとdecode結果をPage generation内だけで共有し、256 MiB・512 resourceのLRU上限を適用します。target raster、background、gradient、filter cacheもbyte / entry上限を持ち、Page close、Navigation、Engine切替で破棄します。stale generationやcancel後のresource completionを新Pageへcommitせず、診断にはbody、decoded pixel、rasterを複製しません。
+
+v0.20.0のreal-site corpusは認証情報、Cookie、個人化response、tracking payload、不要な大容量assetを保存しないsanitized fixtureです。公開URLはrelease candidateのlive smokeにだけ使い、CIではsource URL、取得日、content hash、固定resource manifestを持つoffline fixtureを実行します。live内容を自動でbaselineへ取り込まず、更新時はprovenance、sanitization、hash、reference差分をreviewします。evidenceは1画像16 megapixel・16 MiB、corpus合計256 MiB、1 page 50,000 glyph・4,000 displayed element・256 stylesheet・8,192 CSS ruleを上限とし、超過時は対象caseを有限な失敗にします。

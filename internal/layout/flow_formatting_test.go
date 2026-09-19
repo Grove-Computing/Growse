@@ -48,6 +48,45 @@ func TestBuildCollapsesParentChildMarginsAndCentersAutoBlock(t *testing.T) {
 	}
 }
 
+// Adapted from css/CSS2/box-display/block-in-inline-001.xht.
+func TestWPTInlineCustomWrapperSplitsAroundBlockContent(t *testing.T) {
+	document := dom.NewDocument()
+	body := document.CreateElement("body", nil)
+	wrapper := document.CreateElement("react-partial", map[string]string{"class": "custom"})
+	shell := document.CreateElement("div", map[string]string{"class": "shell"})
+	header := document.CreateElement("header", map[string]string{"class": "header"})
+	bar := document.CreateElement("div", map[string]string{"class": "bar"})
+	label := document.CreateElement("span", nil)
+	main := document.CreateElement("main", map[string]string{"class": "main"})
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, body}, [2]*dom.Node{body, wrapper},
+		[2]*dom.Node{wrapper, shell}, [2]*dom.Node{shell, header},
+		[2]*dom.Node{header, bar}, [2]*dom.Node{bar, label},
+		[2]*dom.Node{label, document.CreateText("Navigation")}, [2]*dom.Node{body, main},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.custom { display:inline }
+.shell, .header { display:block }
+.header { padding:16px }
+.bar { display:flex; height:100% }
+.main { display:block; height:20px }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := BuildWithViewport(document, stylemodel.Compute(document, stylesheet), 800, 600)
+	headerRect, barRect, mainRect := tree.Bounds[header.ID], tree.Bounds[bar.ID], tree.Bounds[main.ID]
+	if headerRect.Height <= 0 || barRect.Height <= 0 {
+		t.Fatalf("block content inside inline wrapper was flattened into text: header=%#v bar=%#v", headerRect, barRect)
+	}
+	if headerRect.Height >= 200 || mainRect.Y >= 200 {
+		t.Fatalf("indefinite percentage height expanded against viewport: header=%#v main=%#v", headerRect, mainRect)
+	}
+	if mainRect.Y < headerRect.Y+headerRect.Height {
+		t.Fatalf("following flow overlaps split block: header=%#v main=%#v", headerRect, mainRect)
+	}
+}
+
 func TestFlowRootContainsAndIsolatesFloats(t *testing.T) {
 	document := dom.NewDocument()
 	flowRoot := document.CreateElement("section", map[string]string{"class": "flow-root"})

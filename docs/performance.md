@@ -144,3 +144,9 @@ go test ./internal/layout -run '^$' \
 | `BenchmarkCSSLayout2026Showcase-16` | 2,542,474 ns/op | 6,731,565 B/op | 7,460 allocs/op |
 
 wall-clock baselineとは別に、1 Layout passを2秒、visual boxを32,768件、box / decoration fragment合計を65,536件、recursionを192段、line boxを16,384件、floatを4,096件、column fragmentainerを32件、balancing探索を64 iterationへ制限する。生成中に上限へ達したsubtreeは`layout time|box|fragment|recursion|line box|float|multi-column ... limit exceeded`のpayload-free fallbackを残して停止し、Page全体をpanicさせない。`TestLayoutSafetyLimitsReturnFiniteFallbacks`と`TestMalformedCSSValuesStillProduceFiniteLayout`が期限切れclock、件数上限、深いtree、過剰fragment、非妥当CSS値を決定的に検証する。
+
+## v0.20.0 real-site gate budget
+
+real-site evidenceはwall-clockや公開network速度を合否条件にせず、sanitized offline fixtureを使う。1画像16 megapixel・16 MiB、corpus合計256 MiB、1 page 50,000 glyph・4,000 displayed element・256 stylesheet・8,192 CSS ruleを上限とする。超過はartifact欠落やhangではなく、caseとlimitを示す有限な失敗になる。
+
+desktop / narrow、reload、scroll、focus、resource完了は同じbounded pipelineを通す。Growse / reference / diff画像とregion diagnosticを生成してもresource body、font bytes、decoded imageをdiagnosticへ複製しない。release間の性能評価では既存の決定的counterと固定runner baselineを使い、実サイトの応答時間やsystem font raster時間を混在させない。
