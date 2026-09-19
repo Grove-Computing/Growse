@@ -9,6 +9,7 @@ import (
 	"image"
 	"image/color"
 	"image/draw"
+	"image/png"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -79,6 +80,7 @@ func TestDashboardVisualRegression(t *testing.T) {
 	tree := layout.BuildWithViewport(document, style.Compute(document, stylesheet), visualViewportWidth, visualViewportHeight)
 	list := Build(tree)
 	imageValue := rasterVisualFixture(t, list, visualViewportWidth, visualViewportHeight, visualScale)
+	writeVisualArtifact(t, "dashboard.png", imageValue)
 	hash := sha256.Sum256(imageValue.Pix)
 	snapshot := visualSnapshot{
 		Viewport: fmt.Sprintf("%dx%d", visualViewportWidth, visualViewportHeight), Scale: visualScale,
@@ -101,6 +103,77 @@ func TestDashboardVisualRegression(t *testing.T) {
 	}
 	if !reflect.DeepEqual(snapshot, wantSnapshot) {
 		t.Fatalf("visual snapshot changed; inspect the rendering difference before updating testdata/dashboard.golden.json\n--- actual ---\n%s", actual)
+	}
+}
+
+// TestV020TextVisualEvidence verifies an actual rasterized text fixture. It
+// deliberately checks the encoded PNG and painted regions so a blank bitmap or
+// a display-list-only assertion cannot satisfy the visual regression gate.
+func TestV020TextVisualEvidence(t *testing.T) {
+	document := dom.NewDocument()
+	panel := document.CreateElement("main", map[string]string{"class": "panel"})
+	latin := document.CreateElement("p", map[string]string{"class": "latin"})
+	cjk := document.CreateElement("p", map[string]string{"class": "cjk"})
+	if err := document.AppendChild(document.Root, panel); err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range []struct {
+		node *dom.Node
+		text string
+	}{{latin, "Growse visual text"}, {cjk, "日本語 テキスト"}} {
+		if err := document.AppendChild(panel, entry.node); err != nil {
+			t.Fatal(err)
+		}
+		if err := document.AppendChild(entry.node, document.CreateText(entry.text)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stylesheet, err := css.Parse(strings.NewReader(`
+.panel { display:block; width:256px; height:112px; padding:16px; background-color:#f8fafc; }
+.latin { color:#1d4ed8; font-size:20px; line-height:1.4; text-shadow:1px 1px #bfdbfe; }
+.cjk { color:#047857; font-size:20px; line-height:1.5; }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := layout.BuildWithViewport(document, style.Compute(document, stylesheet), visualViewportWidth, visualViewportHeight)
+	list := Build(tree)
+	imageValue := rasterVisualFixture(t, list, visualViewportWidth, visualViewportHeight, visualScale)
+	writeVisualArtifact(t, "text-visual-evidence.png", imageValue)
+
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, imageValue); err != nil {
+		t.Fatalf("encode screenshot: %v", err)
+	}
+	decoded, format, err := image.Decode(bytes.NewReader(encoded.Bytes()))
+	if err != nil {
+		t.Fatalf("decode screenshot: %v", err)
+	}
+	if format != "png" || decoded.Bounds() != imageValue.Bounds() {
+		t.Fatalf("screenshot format/bounds = %q/%v, want png/%v", format, decoded.Bounds(), imageValue.Bounds())
+	}
+	painted, blue, green := 0, 0, 0
+	for y := imageValue.Bounds().Min.Y; y < imageValue.Bounds().Max.Y; y++ {
+		for x := imageValue.Bounds().Min.X; x < imageValue.Bounds().Max.X; x++ {
+			pixel := imageValue.RGBAAt(x, y)
+			if pixel != (color.RGBA{R: 255, G: 255, B: 255, A: 255}) && pixel != (color.RGBA{R: 248, G: 250, B: 252, A: 255}) {
+				painted++
+			}
+			if pixel.B > pixel.R && pixel.B > pixel.G {
+				blue++
+			}
+			if pixel.G > pixel.R && pixel.G > pixel.B {
+				green++
+			}
+		}
+	}
+	if painted < 100 || blue < 20 || green < 20 {
+		t.Fatalf("text screenshot has insufficient painted evidence: painted=%d blue=%d green=%d", painted, blue, green)
+	}
+	hash := sha256.Sum256(encoded.Bytes())
+	const wantPNGHash = "cc662ca1081611ea627f79f0ef85940344a75405c649b99defd04d7a4f914aeb"
+	if got := hex.EncodeToString(hash[:]); got != wantPNGHash {
+		t.Fatalf("text screenshot PNG hash = %s, want %s", got, wantPNGHash)
 	}
 }
 
@@ -546,6 +619,25 @@ func rasterVisualFixture(t *testing.T, list *DisplayList, width, height, scale i
 		}
 	}
 	return canvas
+}
+
+func writeVisualArtifact(t *testing.T, name string, source image.Image) {
+	t.Helper()
+	directory := os.Getenv("GROWSE_VISUAL_ARTIFACT_DIR")
+	if directory == "" {
+		return
+	}
+	if err := os.MkdirAll(directory, 0o755); err != nil {
+		t.Fatalf("create visual artifact directory: %v", err)
+	}
+	file, err := os.Create(filepath.Join(directory, name))
+	if err != nil {
+		t.Fatalf("create visual artifact: %v", err)
+	}
+	defer file.Close()
+	if err := png.Encode(file, source); err != nil {
+		t.Fatalf("encode visual artifact: %v", err)
+	}
 }
 
 func rasterBox(canvas *image.RGBA, command DrawBox, scale int) {

@@ -2,11 +2,6 @@ package ui
 
 import (
 	"image"
-	"image/color"
-	"image/draw"
-	"image/png"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -23,7 +18,7 @@ import (
 	stylemodel "github.com/Grove-Computing/Growse/internal/style"
 )
 
-func TestTextRenderingFixAndShaperInitialization(t *testing.T) {
+func TestTextShaperInitialization(t *testing.T) {
 	htmlContent := `<!doctype html>
 <html>
 <head>
@@ -92,20 +87,6 @@ func TestTextRenderingFixAndShaperInitialization(t *testing.T) {
 		t.Fatalf("documentTheme().Shaper is nil after layoutDocument")
 	}
 
-	// Output visual PNG verification artifact
-	artifactDir := "/home/saku0512/.gemini/antigravity/brain/9db6b737-040e-496d-a929-49968aa7dd6e"
-	outPngPath := filepath.Join(artifactDir, "growse_text_rendering_test.png")
-
-	imgWidth, imgHeight := 1000, 700
-	img := image.NewRGBA(image.Rect(0, 0, imgWidth, imgHeight))
-	draw.Draw(img, img.Bounds(), &image.Uniform{color.RGBA{255, 255, 255, 255}}, image.Point{}, draw.Src)
-
-	f, err := os.Create(outPngPath)
-	if err == nil {
-		defer f.Close()
-		_ = png.Encode(f, img)
-		t.Logf("Generated PNG artifact at %s", outPngPath)
-	}
 }
 
 func extractTestStyles(doc *dom.Document) string {
