@@ -39,7 +39,7 @@ func TestCompatibilityDiagnosticsExplainResourcesStylesFallbacksAndRuntimeErrors
 	page.ViewportWidth, page.ViewportHeight = 800, 600
 	page.FontErrors = []string{"font CORS rejected token=secret"}
 	page.ImageErrors = []string{"image decode failed /private/source.png"}
-	page.ScriptErrors = []string{"dynamic chunk load failed token=secret", "hydration exception secret", "observer loop limit secret"}
+	page.ScriptErrors = []string{"dynamic chunk load failed token=secret", "hydration exception secret", "observer loop limit secret", "ReferenceError: customElements is not defined"}
 	page.StyleErrors = []string{"layout container query iteration limit reached"}
 	page.DevTools.AddConsoleForEngine("error", "javascript", "event", "[component:framework-boundary] unsupported global navigator.secret")
 	page.DevTools.AddConsoleForEngine("error", "javascript", "event", "[component:framework-boundary] Event dispatch failure")

@@ -551,3 +551,47 @@ func TestBuildAlignmentHandlesSafeUnsafeLogicalAxesAndGridBaseline(t *testing.T)
 		t.Fatalf("grid baselines = %v and %v", largeText.Baseline, smallText.Baseline)
 	}
 }
+
+// Adapted from CSS Grid 2 intrinsic track sizing assertions. An auto row must
+// use the nested block content contribution, not a flattened one-line label.
+func TestGridAutoRowContainsNestedProfileAndCardContent(t *testing.T) {
+	document := dom.NewDocument()
+	grid := document.CreateElement("main", map[string]string{"class": "grid"})
+	profile := document.CreateElement("aside", map[string]string{"class": "profile"})
+	avatar := document.CreateElement("div", map[string]string{"class": "avatar"})
+	heading := document.CreateElement("h1", nil)
+	copy := document.CreateElement("p", nil)
+	card := document.CreateElement("section", map[string]string{"class": "card"})
+	cardHeading := document.CreateElement("h2", nil)
+	cardCopy := document.CreateElement("p", nil)
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, grid}, [2]*dom.Node{grid, profile},
+		[2]*dom.Node{profile, avatar}, [2]*dom.Node{avatar, document.CreateText("S")},
+		[2]*dom.Node{profile, heading}, [2]*dom.Node{heading, document.CreateText("Profile")},
+		[2]*dom.Node{profile, copy}, [2]*dom.Node{copy, document.CreateText("Visible profile copy")},
+		[2]*dom.Node{grid, card}, [2]*dom.Node{card, cardHeading},
+		[2]*dom.Node{cardHeading, document.CreateText("Repository")}, [2]*dom.Node{card, cardCopy},
+		[2]*dom.Node{cardCopy, document.CreateText("Nested card copy remains inside the auto row.")},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.grid { display:grid; width:600px; grid-template-columns:220px 1fr; gap:24px }
+.avatar { display:grid; width:180px; aspect-ratio:1; place-items:center }
+.profile h1 { font-size:26px; line-height:32px }
+.card { padding:16px }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, stylemodel.Compute(document, stylesheet), 700)
+	gridRect, profileRect, cardRect := tree.Bounds[grid.ID], tree.Bounds[profile.ID], tree.Bounds[card.ID]
+	if gridRect.Height < 180 || profileRect.Height != gridRect.Height || cardRect.Height != gridRect.Height {
+		t.Fatalf("auto row did not contain nested content: grid=%#v profile=%#v card=%#v", gridRect, profileRect, cardRect)
+	}
+	for _, box := range tree.Boxes {
+		if box.NodeID == heading.ID || box.NodeID == copy.ID || box.NodeID == cardHeading.ID || box.NodeID == cardCopy.ID {
+			if box.Y < gridRect.Y || box.Y+box.Height > gridRect.Y+gridRect.Height {
+				t.Fatalf("text box escapes auto row: grid=%#v box=%#v", gridRect, box)
+			}
+		}
+	}
+}

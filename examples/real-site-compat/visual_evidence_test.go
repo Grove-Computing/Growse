@@ -416,33 +416,88 @@ func expandRadii(radius layoutmodel.BorderRadii, amount float32) layoutmodel.Bor
 
 var rasterFonts struct {
 	sync.Mutex
-	once    sync.Once
-	regular *opentype.Font
-	bold    *opentype.Font
-	faces   map[string]font.Face
+	once     sync.Once
+	regular  *opentype.Font
+	bold     *opentype.Font
+	fallback *opentype.Font
+	faces    map[string]font.Face
 }
 
 func drawRasterText(canvas draw.Image, text string, x, baseline, size float32, bold bool, color uint32, opacity float32) {
-	face := rasterFontFace(size, bold)
-	drawer := font.Drawer{Dst: canvas, Src: image.NewUniform(rgba(color, opacity)), Face: face, Dot: fixed.P(int(x), int(baseline))}
-	drawer.DrawString(text)
+	dot := fixed.P(int(x), int(baseline))
+	for text != "" {
+		first, runeSize := utf8.DecodeRuneInString(text)
+		parsed, family := rasterFontForRune(first, bold)
+		end := runeSize
+		for end < len(text) {
+			character, characterSize := utf8.DecodeRuneInString(text[end:])
+			_, nextFamily := rasterFontForRune(character, bold)
+			if nextFamily != family {
+				break
+			}
+			end += characterSize
+		}
+		face := rasterFontFace(parsed, family, size)
+		drawer := font.Drawer{Dst: canvas, Src: image.NewUniform(rgba(color, opacity)), Face: face, Dot: dot}
+		drawer.DrawString(text[:end])
+		dot = drawer.Dot
+		text = text[end:]
+	}
 }
 
-func rasterFontFace(size float32, bold bool) font.Face {
+func rasterFontForRune(character rune, bold bool) (*opentype.Font, string) {
 	rasterFonts.Lock()
 	defer rasterFonts.Unlock()
 	rasterFonts.once.Do(func() {
 		rasterFonts.regular, _ = opentype.Parse(goregular.TTF)
 		rasterFonts.bold, _ = opentype.Parse(gobold.TTF)
 		rasterFonts.faces = make(map[string]font.Face)
+		for _, name := range []string{
+			os.Getenv("GROWSE_VISUAL_CJK_FONT"),
+			"/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+			"/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",
+			"C:/Windows/Fonts/msgothic.ttc",
+		} {
+			if name == "" {
+				continue
+			}
+			data, err := os.ReadFile(name)
+			if err != nil {
+				continue
+			}
+			collection, err := opentype.ParseCollection(data)
+			if err != nil || collection.NumFonts() == 0 {
+				continue
+			}
+			rasterFonts.fallback, _ = collection.Font(0)
+			if rasterFonts.fallback != nil {
+				break
+			}
+		}
 	})
-	key := fmt.Sprintf("%t/%.3f", bold, size)
+	primary, family := rasterFonts.regular, "regular"
+	if bold {
+		primary, family = rasterFonts.bold, "bold"
+	}
+	if primary != nil {
+		if glyph, err := primary.GlyphIndex(nil, character); err == nil && glyph != 0 {
+			return primary, family
+		}
+	}
+	if rasterFonts.fallback != nil {
+		if glyph, err := rasterFonts.fallback.GlyphIndex(nil, character); err == nil && glyph != 0 {
+			return rasterFonts.fallback, "cjk-fallback"
+		}
+	}
+	return primary, family
+}
+
+func rasterFontFace(parsed *opentype.Font, family string, size float32) font.Face {
+	rasterFonts.Lock()
+	defer rasterFonts.Unlock()
+	key := fmt.Sprintf("%s/%.3f", family, size)
 	if face := rasterFonts.faces[key]; face != nil {
 		return face
-	}
-	parsed := rasterFonts.regular
-	if bold {
-		parsed = rasterFonts.bold
 	}
 	if parsed == nil || size <= 0 {
 		return basicfont.Face7x13
@@ -453,6 +508,19 @@ func rasterFontFace(size float32, bold bool) font.Face {
 	}
 	rasterFonts.faces[key] = face
 	return face
+}
+
+func TestVisualEvidenceRasterUsesDistinctCJKFallbackGlyphsWhenAvailable(t *testing.T) {
+	firstFont, firstFamily := rasterFontForRune('日', false)
+	secondFont, secondFamily := rasterFontForRune('語', false)
+	if firstFamily != "cjk-fallback" || secondFamily != "cjk-fallback" {
+		t.Skip("no CJK fallback font is installed on this platform")
+	}
+	first, firstErr := firstFont.GlyphIndex(nil, '日')
+	second, secondErr := secondFont.GlyphIndex(nil, '語')
+	if firstErr != nil || secondErr != nil || first == 0 || second == 0 || first == second {
+		t.Fatalf("CJK evidence glyphs are not distinct: 日=%d/%v 語=%d/%v", first, firstErr, second, secondErr)
+	}
 }
 
 func rgba(value uint32, opacity float32) color.NRGBA {

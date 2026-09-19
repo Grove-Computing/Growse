@@ -546,6 +546,11 @@ func (e *engine) flexIntrinsicSizes(node *dom.Node, style blockStyle, axis flexA
 	horizontalExtras := style.padding.Left + style.padding.Right + style.border.Left.Width + style.border.Right.Width
 	verticalExtras := style.padding.Top + style.padding.Bottom + style.border.Top.Width + style.border.Bottom.Width
 	intrinsicWidth, intrinsicHeight := textWidth+horizontalExtras, textHeight+verticalExtras
+	if style.height.Kind == stylemodel.SizeAuto && e.intrinsicMeasureDepth < 8 && hasElementChildren(node) {
+		if measured := e.measureIntrinsicBlockHeight(node, style, width, height, heightDefinite); measured > intrinsicHeight {
+			intrinsicHeight = measured
+		}
+	}
 	if resolved, ok := resolveSize(style.width, width, true); ok {
 		intrinsicWidth = resolved
 		if style.boxSizing == stylemodel.BoxSizingContentBox {
@@ -593,6 +598,38 @@ func (e *engine) flexIntrinsicSizes(node *dom.Node, style blockStyle, axis flexA
 		return max(base, float32(0)), max(intrinsicHeight, float32(1)), max(minTextWidth+horizontalExtras, float32(0))
 	}
 	return max(base, float32(0)), max(intrinsicWidth, float32(1)), max(textHeight+verticalExtras, float32(0))
+}
+
+func hasElementChildren(node *dom.Node) bool {
+	if node == nil {
+		return false
+	}
+	for _, child := range node.Children {
+		if child.Type == dom.NodeElement {
+			return true
+		}
+	}
+	return false
+}
+
+// measureIntrinsicBlockHeight performs a bounded, isolated layout pass so an
+// auto-sized Grid/Flex item includes nested block, Grid and replaced content.
+// Flattening descendant text into one line is not a valid block-size
+// contribution and used to collapse real profile/card rows to one line.
+func (e *engine) measureIntrinsicBlockHeight(node *dom.Node, style blockStyle, width, containingHeight float32, heightDefinite bool) float32 {
+	probe := *e
+	probe.tree = &Tree{
+		Width: width, ViewportHeight: containingHeight, Background: 0xffffffff,
+		StackingContexts: []StackingContext{{Parent: -1}}, Parents: make(map[dom.NodeID]dom.NodeID),
+		Bounds: make(map[dom.NodeID]Rect), ScrollOffsets: make(map[dom.NodeID]ScrollOffset),
+	}
+	probe.y, probe.clip, probe.clips = 0, nil, nil
+	probe.order, probe.opacity, probe.stackingID = 0, 1, 0
+	probe.positionCB, probe.fixedCB, probe.floats = nil, nil, nil
+	probe.subgrids = make(map[dom.NodeID]subgridContext)
+	probe.intrinsicMeasureDepth++
+	probe.addBlock(node, style, 0, max(width, float32(1)), containingHeight, heightDefinite, nil)
+	return probe.tree.Bounds[node.ID].Height
 }
 
 func mainOverflow(style blockStyle, axis flexAxis) stylemodel.Overflow {

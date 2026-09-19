@@ -346,6 +346,7 @@ type engine struct {
 	boxLimitReported              bool
 	fragmentLimitReported         bool
 	timeLimitReported             bool
+	intrinsicMeasureDepth         int
 }
 
 // withinBudget bounds work while geometry is being generated. The final
