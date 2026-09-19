@@ -35,6 +35,44 @@ func TestClientGetHTML(t *testing.T) {
 	}
 }
 
+func TestNewClientReadsProxyEnvironmentForEachRequest(t *testing.T) {
+	for _, name := range []string{"HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "NO_PROXY", "no_proxy"} {
+		t.Setenv(name, "")
+	}
+	t.Setenv("HTTPS_PROXY", "http://first-proxy.test:8080")
+	client := NewClient()
+	transport, ok := client.httpClient.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("transport = %T, want *http.Transport", client.httpClient.Transport)
+	}
+	target := mustParseURL(t, "https://search.example.test/query")
+	first, err := transport.Proxy(&http.Request{URL: target})
+	if err != nil {
+		t.Fatalf("first proxy lookup: %v", err)
+	}
+	if got, want := first.String(), "http://first-proxy.test:8080"; got != want {
+		t.Fatalf("first proxy = %q, want %q", got, want)
+	}
+
+	t.Setenv("HTTPS_PROXY", "http://second-proxy.test:8080")
+	second, err := transport.Proxy(&http.Request{URL: target})
+	if err != nil {
+		t.Fatalf("second proxy lookup: %v", err)
+	}
+	if got, want := second.String(), "http://second-proxy.test:8080"; got != want {
+		t.Fatalf("proxy after switch = %q, want %q", got, want)
+	}
+
+	t.Setenv("NO_PROXY", "search.example.test")
+	bypassed, err := transport.Proxy(&http.Request{URL: target})
+	if err != nil {
+		t.Fatalf("bypass lookup: %v", err)
+	}
+	if bypassed != nil {
+		t.Fatalf("proxy with NO_PROXY = %v, want direct connection", bypassed)
+	}
+}
+
 func TestClientEmitsBodyFreeObservationForMissAndHit(t *testing.T) {
 	requests := 0
 	client := NewClientWithLimits(&http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
