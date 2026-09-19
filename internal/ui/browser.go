@@ -3576,14 +3576,9 @@ func (ui *BrowserUI) layoutTextRun(gtx layout.Context, run paintmodel.TextRun, h
 	// backend rather than allowing material.Label to measure a different font
 	// fallback and move all following runs on the line.
 	width := gtx.Dp(unit.Dp(max(run.Width, float32(0))))
-	gtx.Constraints.Min.X = width
-	gtx.Constraints.Max.X = width
-	gtx.Constraints.Min.Y = height
-	gtx.Constraints.Max.Y = height
 	if run.Atomic {
 		if width < 1 {
 			width = 1
-			gtx.Constraints.Min.X, gtx.Constraints.Max.X = width, width
 		}
 		return layout.Dimensions{Size: image.Pt(width, height), Baseline: height}
 	}
@@ -3596,16 +3591,27 @@ func (ui *BrowserUI) layoutTextRun(gtx layout.Context, run paintmodel.TextRun, h
 	text := func(gtx layout.Context) layout.Dimensions {
 		return ui.layoutShadowedText(gtx, run.Text, run.FontSize, run.Bold, run.FontFamilies, run.FontStyle, run.LetterSpacing, run.WordSpacing, run.Color, run.Decoration, run.DecorationColor, run.Baseline, run.TextShadows)
 	}
+	// A system fallback chosen by Gio can have a wider glyph than the face used
+	// to calculate the layout advance. Let it paint within the surrounding line
+	// box instead of clipping it to that advance, then return the layout-owned
+	// advance so following runs never move.
+	gtx.Constraints.Min.X = 0
+	gtx.Constraints.Min.Y = height
+	gtx.Constraints.Max.Y = height
 	if run.Background == 0 {
-		return text(gtx)
+		dimensions := text(gtx)
+		dimensions.Size.X, dimensions.Size.Y = width, height
+		return dimensions
 	}
-	return layout.Stack{Alignment: layout.W}.Layout(gtx,
+	dimensions := layout.Stack{Alignment: layout.W}.Layout(gtx,
 		layout.Expanded(func(gtx layout.Context) layout.Dimensions {
-			paint.FillShape(gtx.Ops, rgba(run.Background), clip.Rect{Max: gtx.Constraints.Min}.Op())
-			return layout.Dimensions{Size: gtx.Constraints.Min}
+			paint.FillShape(gtx.Ops, rgba(run.Background), clip.Rect{Max: image.Pt(width, height)}.Op())
+			return layout.Dimensions{Size: image.Pt(width, height)}
 		}),
 		layout.Stacked(text),
 	)
+	dimensions.Size.X, dimensions.Size.Y = width, height
+	return dimensions
 }
 
 func (ui *BrowserUI) layoutShadowedText(gtx layout.Context, text string, size float32, bold bool, families []string, fontStyle string, letterSpacing, wordSpacing float32, color uint32, decoration stylemodel.TextDecorationLine, decorationColor uint32, baseline float32, shadows []stylemodel.Shadow) layout.Dimensions {
