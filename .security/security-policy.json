@@ -11,6 +11,76 @@
       "reason": "READMEとProject brandingで使用するGrowse logo"
     },
     {
+      "path": "examples/real-site-compat/testdata/reference/cv-btxx-desktop.png",
+      "sha256": "1b05f5950db4a91f99fdbd9041e21e4bd27d19fb23575e3407231fae406dc651",
+      "reason": "v0.20.0実サイトvisual regressionの固定Chrome desktop参照画像"
+    },
+    {
+      "path": "examples/real-site-compat/testdata/reference/cv-btxx-narrow.png",
+      "sha256": "321980c1d070c294495f2a1457787a53eb5a33083156ff4db39f177a3f600989",
+      "reason": "v0.20.0実サイトvisual regressionの固定Chrome narrow参照画像"
+    },
+    {
+      "path": "examples/real-site-compat/testdata/reference/github-profile-desktop.png",
+      "sha256": "3c6646f61c0c26ff3d45958bf78cf39bd5923520813952e60766469d7e9052f3",
+      "reason": "v0.20.0実サイトvisual regressionの固定Chrome desktop参照画像"
+    },
+    {
+      "path": "examples/real-site-compat/testdata/reference/github-profile-narrow.png",
+      "sha256": "94090cd7e15d24710df06907813d63bc2170fe9470e87989c5144f791091390c",
+      "reason": "v0.20.0実サイトvisual regressionの固定Chrome narrow参照画像"
+    },
+    {
+      "path": "examples/real-site-compat/testdata/reference/kidlat-desktop.png",
+      "sha256": "bd58014419159e65011a1359d82ddf980f05cc7ba66bd839b79e6e995b2a5994",
+      "reason": "v0.20.0実サイトvisual regressionの固定Chrome desktop参照画像"
+    },
+    {
+      "path": "examples/real-site-compat/testdata/reference/kidlat-narrow.png",
+      "sha256": "10833bdb5c720436db0ce061a751d2588525dc78689bc99d4c9a18c56cc8ca60",
+      "reason": "v0.20.0実サイトvisual regressionの固定Chrome narrow参照画像"
+    },
+    {
+      "path": "examples/real-site-compat/testdata/reference/one-mb-club-desktop.png",
+      "sha256": "90316ad3772b5b38207e83eb4d7c7cec91295be056fa095a87220cf9639b109c",
+      "reason": "v0.20.0実サイトvisual regressionの固定Chrome desktop参照画像"
+    },
+    {
+      "path": "examples/real-site-compat/testdata/reference/one-mb-club-narrow.png",
+      "sha256": "e85e8ef7e1b112a846527a8a77e1620a8779a63e14061d7b3ef6661fda718e03",
+      "reason": "v0.20.0実サイトvisual regressionの固定Chrome narrow参照画像"
+    },
+    {
+      "path": "examples/real-site-compat/testdata/reference/schemescape-desktop.png",
+      "sha256": "f1dce7bbb8bb2dd7e1d0f8c29d0f0b10ce68a203f4119fb6139c33c7125bc024",
+      "reason": "v0.20.0実サイトvisual regressionの固定Chrome desktop参照画像"
+    },
+    {
+      "path": "examples/real-site-compat/testdata/reference/schemescape-narrow.png",
+      "sha256": "ce2b420f2506f51c5af4b7355f16304a8bdd0ed81081b452245e790e0351994a",
+      "reason": "v0.20.0実サイトvisual regressionの固定Chrome narrow参照画像"
+    },
+    {
+      "path": "examples/real-site-compat/testdata/reference/t0-vc-desktop.png",
+      "sha256": "7157ffbe946aa8ff77290e57742ecbc6f535c1ccfe4e1a9de247ab25d391c66a",
+      "reason": "v0.20.0実サイトvisual regressionの固定Chrome desktop参照画像"
+    },
+    {
+      "path": "examples/real-site-compat/testdata/reference/t0-vc-narrow.png",
+      "sha256": "830fa3c894f5b13ee055de8f4e417bd4d8f8e026dd379543b746e10af0ce1bc4",
+      "reason": "v0.20.0実サイトvisual regressionの固定Chrome narrow参照画像"
+    },
+    {
+      "path": "examples/real-site-compat/testdata/reference/wikipedia-ja-desktop.png",
+      "sha256": "29d1cde908cd6ac7f8a5771e05f25fd02932c56409fe925cd1111c7eefff5aab",
+      "reason": "v0.20.0実サイトvisual regressionの固定Chrome desktop参照画像"
+    },
+    {
+      "path": "examples/real-site-compat/testdata/reference/wikipedia-ja-narrow.png",
+      "sha256": "4c8562d360e968921144752095553fea911838086554e4aca99092c281703e6d",
+      "reason": "v0.20.0実サイトvisual regressionの固定Chrome narrow参照画像"
+    },
+    {
       "path": "internal/ui/assets/gopher-blue.png",
       "sha256": "a59454a213cbcd02e9a75691ce6254a58a27c0a0edf5510ec00cb432724f7cf0",
       "reason": "go:embedでGopher cursorへ組み込むPNG"
