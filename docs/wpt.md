@@ -58,6 +58,12 @@ GrowseはWeb Platform Tests（WPT）をブラウザで直接実行せず、対�
 | `TestWPTV019StickyTopRespectsConstraintAndContainerEnd` | `css/css-position/sticky/position-sticky-top.html` | normal / stuck / container-endの3 phaseをaxis geometryへ縮約 | DOM scroll harnessを決定的な数値入力へ変換 |
 | `TestWPTV019OverflowClipCannotScroll` | `css/css-overflow/overflow-clip-cant-scroll.html` | overflow:clipがscroll containerを作らずoffsetを拒否することを比較 | onloadとscreenshotをlayout API assertionへ変換 |
 | `TestWPTV019MultiColumnFirstChildMarginDoesNotCollapse` | `css/css-multicol/multicol-margin-001.xht` | first childのblock-start marginがmulticol parent外へcollapseしないことを比較 | Ahem text分割を固定block geometryへ縮約 |
+| `TestMixedCJKLatinUsesSharedLineMetricsAndNaturalCJKBreaks` | `css/css-text/line-break/line-break-ja.html` | CJK/Latin 混在の折返し、baseline、line-height を数値geometryで比較 | platform font rasterは固定fallback PNGへ分離 |
+| `TestSystemFontSetMeasuresMixedCJKLatinText` | `css/css-fonts/font-family-fallback.html` | system fallback のCJK/Latin metricが有限であることを比較 | OS固有face名は要求しない |
+| `TestRasterLinearGradientInterpolatesAllColorStops` | `css/css-images/linear-gradient-color-stops.html` | linear gradientの両端・中間stopをraster pixelで比較 | background-position全組合せは対象外 |
+| `TestRasterRadialGradientUsesCenterAndStops` | `css/css-images/radial-gradient-center.html` | radial gradient中心とstopをraster pixelで比較 | ellipse size keywordは対象外 |
+| `TestRasterConicGradientUsesAngleCenterAndStops` | `css/css-images/conic-gradient-from.html` | conic gradient角度と中心をraster pixelで比較 | repeating conic gradientは対象外 |
+| `TestWPTTransformOriginZeroDiffersFromDefaultCenter` | `css/css-transforms/transform-origin-001.html` | transform-originとinverse hit-test共有行列を比較 | 3D transformは対象外 |
 
 Upstreamのファイル全体はコピーせず、assertionの意味と最小入力だけを移植する。ケースを追加または更新するときは、Revision、Source、適応内容、および意図的な差分をこの表へ記録する。
 
