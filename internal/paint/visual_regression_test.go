@@ -16,6 +16,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/Grove-Computing/Growse/internal/css"
 	"github.com/Grove-Computing/Growse/internal/dom"
@@ -30,9 +31,11 @@ import (
 )
 
 const (
-	visualViewportWidth  = 320
-	visualViewportHeight = 240
-	visualScale          = 1
+	visualViewportWidth      = 320
+	visualViewportHeight     = 240
+	visualScale              = 1
+	maxVisualArtifactPixels  = 16_000_000
+	maxVisualDiagnosticRunes = 50_000
 )
 
 type visualSnapshot struct {
@@ -59,6 +62,12 @@ type persistentVisualSnapshot struct {
 	Font      string                    `json:"font"`
 	Timestamp string                    `json:"timestamp"`
 	States    []persistentStateSnapshot `json:"states"`
+}
+
+type visualEvidenceBaseline struct {
+	Name           string `json:"name"`
+	PNGHash        string `json:"png_sha256"`
+	BaselineReason string `json:"baseline_reason"`
 }
 
 // TestDashboardVisualRegression protects pixels, layout geometry, display-list
@@ -121,6 +130,7 @@ func TestV020TextVisualEvidence(t *testing.T) {
 		node *dom.Node
 		text string
 	}{{latin, "Growse visual text"}, {cjk, "日本語 テキスト"}} {
+		requireVisualDiagnosticRunes(t, entry.text)
 		if err := document.AppendChild(panel, entry.node); err != nil {
 			t.Fatal(err)
 		}
@@ -170,10 +180,31 @@ func TestV020TextVisualEvidence(t *testing.T) {
 	if painted < 100 || blue < 20 || green < 20 {
 		t.Fatalf("text screenshot has insufficient painted evidence: painted=%d blue=%d green=%d", painted, blue, green)
 	}
+	baselineBytes, err := os.ReadFile("testdata/v020-text-visual-evidence.golden.json")
+	if err != nil {
+		t.Fatalf("read text visual baseline: %v", err)
+	}
+	var baseline visualEvidenceBaseline
+	if err := json.Unmarshal(baselineBytes, &baseline); err != nil {
+		t.Fatalf("decode text visual baseline: %v", err)
+	}
+	if baseline.Name == "" || strings.TrimSpace(baseline.BaselineReason) == "" {
+		t.Fatalf("text visual baseline must identify its fixture and update reason: %#v", baseline)
+	}
 	hash := sha256.Sum256(encoded.Bytes())
-	const wantPNGHash = "cc662ca1081611ea627f79f0ef85940344a75405c649b99defd04d7a4f914aeb"
-	if got := hex.EncodeToString(hash[:]); got != wantPNGHash {
-		t.Fatalf("text screenshot PNG hash = %s, want %s", got, wantPNGHash)
+	if got := hex.EncodeToString(hash[:]); got != baseline.PNGHash {
+		t.Fatalf("text screenshot PNG hash = %s, want %s (%s)", got, baseline.PNGHash, baseline.BaselineReason)
+	}
+}
+
+func requireVisualDiagnosticRunes(t *testing.T, values ...string) {
+	t.Helper()
+	count := 0
+	for _, value := range values {
+		count += utf8.RuneCountInString(value)
+	}
+	if count > maxVisualDiagnosticRunes {
+		t.Fatalf("visual diagnostic runes = %d, limit %d", count, maxVisualDiagnosticRunes)
 	}
 }
 
@@ -623,6 +654,11 @@ func rasterVisualFixture(t *testing.T, list *DisplayList, width, height, scale i
 
 func writeVisualArtifact(t *testing.T, name string, source image.Image) {
 	t.Helper()
+	bounds := source.Bounds()
+	pixels := int64(bounds.Dx()) * int64(bounds.Dy())
+	if bounds.Empty() || pixels > maxVisualArtifactPixels {
+		t.Fatalf("visual artifact bounds = %v (%d pixels), limit %d", bounds, pixels, maxVisualArtifactPixels)
+	}
 	directory := os.Getenv("GROWSE_VISUAL_ARTIFACT_DIR")
 	if directory == "" {
 		return
