@@ -121,6 +121,7 @@ python3 -m http.server 6053 --directory examples/data-app
 | External Web Platform | `go run ./examples/external-web-platform` | 外部classic / Module、dynamic import、WASM、same / cross-origin iframe、Service Worker offline、cross-origin CSS、sandbox |
 | Modern Web Compatibility | `go run ./examples/modern-web-compat` | Next.js / SvelteKit SSR、Tailwind CSS v4実artifact、SSR先行表示、段階的image更新、hydration、priority / cache / lifecycle診断 |
 | Browser-grade Compatibility | `go run ./examples/browser-grade-compat` | desktop / narrow・DPR 1 / 2 corpus、Chromium差分、visual / performance Gate、resource queue・dirty subtree・layer・damage診断 |
+| Visual Fidelity Showcase | `go run ./examples/visual-fidelity` | CJK fallback、wrap、vertical writing、shadow、gradient、radius、clip、transform、filter、responsive viewport、resource completion |
 | CSS Layout 2026 | `go run ./examples/css-layout-2026` | Flow、Sizing / Table、Flex / Grid / Subgrid、Writing Mode、Sticky / Overflow、Multi-column、動的reflow |
 
 WebGoソースは通常のGo build対象から除外するため、各Demoでは`_app.go`として配置しています。
