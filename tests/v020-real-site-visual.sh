@@ -4,7 +4,7 @@ set -euo pipefail
 artifact_dir=${GROWSE_REAL_SITE_ARTIFACT_DIR:-${TMPDIR:-/tmp}/growse-v020-real-site-visual}
 export GROWSE_REAL_SITE_ARTIFACT_DIR="$artifact_dir"
 
-go test ./examples/real-site-compat -run 'TestRealSiteCorpusProducesGrowseReferenceDiffAndRegionArtifacts|TestDiffMetricDetectsStructuralChange|TestStructuralClassifierDetectsMissingEmptyClippedAndOverlappingContent' -count=1
+go test ./examples/real-site-compat -run 'TestRealSiteCorpusProducesGrowseReferenceDiffAndRegionArtifacts|TestDiffMetricDetectsStructuralChange|TestStructuralClassifierDetectsMissingEmptyClippedAndOverlappingContent|TestEvidenceLimitsFailWithNamedFiniteErrors' -count=1
 
 for fixture in one-mb-club wikipedia-ja github-profile cv-btxx t0-vc schemescape kidlat; do
   for viewport in desktop narrow; do

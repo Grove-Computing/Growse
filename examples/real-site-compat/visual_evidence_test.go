@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/basicfont"
@@ -34,6 +35,10 @@ type visualEvidence struct {
 	Height          int            `json:"height"`
 	DisplayedBoxes  int            `json:"displayedBoxes"`
 	PaintCommands   int            `json:"paintCommands"`
+	DisplayedNodes  int            `json:"displayedNodes"`
+	Stylesheets     int            `json:"stylesheets"`
+	CSSRules        int            `json:"cssRules"`
+	Glyphs          int            `json:"glyphs"`
 	DifferenceRatio float64        `json:"differenceRatio"`
 	Regions         []regionMetric `json:"regions"`
 	Issues          []visualIssue  `json:"issues,omitempty"`
@@ -68,6 +73,7 @@ func TestRealSiteCorpusProducesGrowseReferenceDiffAndRegionArtifacts(t *testing.
 	defer server.Close()
 	engine := browser.New(network.NewClientWithLimits(server.Client(), 8<<20))
 	defer engine.Close()
+	artifactDirectory := os.Getenv("GROWSE_REAL_SITE_ARTIFACT_DIR")
 
 	for _, fixture := range manifest.Cases {
 		for _, viewport := range manifest.Viewports {
@@ -85,10 +91,23 @@ func TestRealSiteCorpusProducesGrowseReferenceDiffAndRegionArtifacts(t *testing.
 				reference := readPNG(t, filepath.Join("testdata", "reference", name+".png"))
 				difference, ratio := diffImages(growse, reference)
 				regions, issues := analyzeRegions(page.Document, tree, fixture.Regions)
+				glyphs := 0
+				for _, box := range tree.Boxes {
+					glyphs += utf8.RuneCountInString(box.Text)
+				}
+				stylesheets, rules := 0, 0
+				if page.Stylesheet != nil {
+					stylesheets = 1 + len(page.Stylesheet.Imports)
+					rules = len(page.Stylesheet.Rules)
+				}
 				metric := visualEvidence{
 					Case: fixture.ID, Viewport: viewport.Name, Width: viewport.Width, Height: viewport.Height,
 					DisplayedBoxes: len(tree.Boxes), PaintCommands: len(list.Commands), DifferenceRatio: ratio,
+					DisplayedNodes: len(tree.Decorations), Stylesheets: stylesheets, CSSRules: rules, Glyphs: glyphs,
 					Regions: regions, Issues: issues,
+				}
+				if err := validateEvidenceLimits(metric, manifest); err != nil {
+					t.Fatal(err)
 				}
 				if len(metric.Regions) < len(fixture.Regions) || metric.DisplayedBoxes == 0 || metric.PaintCommands == 0 {
 					t.Fatalf("incomplete semantic evidence: %#v", metric)
@@ -100,6 +119,54 @@ func TestRealSiteCorpusProducesGrowseReferenceDiffAndRegionArtifacts(t *testing.
 			})
 		}
 	}
+	if artifactDirectory != "" {
+		if err := validateArtifactDirectory(artifactDirectory, int64(manifest.Limits.MaxArtifactBytes), int64(manifest.Limits.MaxCorpusArtifactBytes)); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func validateEvidenceLimits(evidence visualEvidence, manifest corpusManifest) error {
+	pixels := int64(evidence.Width) * int64(evidence.Height)
+	switch {
+	case evidence.Width <= 0 || evidence.Height <= 0 || pixels > int64(manifest.Limits.MaxPixels):
+		return fmt.Errorf("%s/%s pixels %d exceed limit %d", evidence.Case, evidence.Viewport, pixels, manifest.Limits.MaxPixels)
+	case evidence.DisplayedNodes > manifest.Limits.MaxDisplayedElements:
+		return fmt.Errorf("%s/%s displayed nodes %d exceed limit %d", evidence.Case, evidence.Viewport, evidence.DisplayedNodes, manifest.Limits.MaxDisplayedElements)
+	case evidence.Stylesheets > manifest.Limits.MaxStylesheets:
+		return fmt.Errorf("%s/%s stylesheets %d exceed limit %d", evidence.Case, evidence.Viewport, evidence.Stylesheets, manifest.Limits.MaxStylesheets)
+	case evidence.CSSRules > manifest.Limits.MaxCSSRules:
+		return fmt.Errorf("%s/%s CSS rules %d exceed limit %d", evidence.Case, evidence.Viewport, evidence.CSSRules, manifest.Limits.MaxCSSRules)
+	case evidence.Glyphs > manifest.Limits.MaxGlyphs:
+		return fmt.Errorf("%s/%s glyphs %d exceed limit %d", evidence.Case, evidence.Viewport, evidence.Glyphs, manifest.Limits.MaxGlyphs)
+	default:
+		return nil
+	}
+}
+
+func validateArtifactDirectory(directory string, maxSingle, maxTotal int64) error {
+	var total int64
+	err := filepath.WalkDir(directory, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if info.Size() > maxSingle {
+			return fmt.Errorf("artifact %s is %d bytes, limit %d", filepath.Base(path), info.Size(), maxSingle)
+		}
+		total += info.Size()
+		if total > maxTotal {
+			return fmt.Errorf("corpus artifacts are %d bytes, limit %d", total, maxTotal)
+		}
+		return nil
+	})
+	return err
 }
 
 func analyzeRegions(document *dom.Document, tree *layoutmodel.Tree, required []string) ([]regionMetric, []visualIssue) {
@@ -350,6 +417,24 @@ func TestStructuralClassifierDetectsMissingEmptyClippedAndOverlappingContent(t *
 		if !found {
 			t.Fatalf("missing %s/%s in %#v", want.severity, want.code, issues)
 		}
+	}
+}
+
+func TestEvidenceLimitsFailWithNamedFiniteErrors(t *testing.T) {
+	manifest := readCorpusManifest(t)
+	over := visualEvidence{Case: "fixture", Viewport: "desktop", Width: manifest.Limits.MaxPixels + 1, Height: 1}
+	if err := validateEvidenceLimits(over, manifest); err == nil || !strings.Contains(err.Error(), "pixels") {
+		t.Fatalf("pixel limit error = %v", err)
+	}
+	directory := t.TempDir()
+	if err := os.WriteFile(filepath.Join(directory, "oversized.png"), make([]byte, 9), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateArtifactDirectory(directory, 8, 32); err == nil || !strings.Contains(err.Error(), "oversized.png") {
+		t.Fatalf("artifact limit error = %v", err)
+	}
+	if err := validateArtifactDirectory(directory, 16, 8); err == nil || !strings.Contains(err.Error(), "corpus artifacts") {
+		t.Fatalf("corpus limit error = %v", err)
 	}
 }
 

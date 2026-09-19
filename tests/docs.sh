@@ -57,6 +57,9 @@ require docs/v0.20.0.md '`https://ja.wikipedia.org/`'
 require docs/v0.20.0.md '`https://github.com/Saku0512`'
 require docs/v0.20.0.md '`https://kidlat.at/`'
 require docs/v0.20.0.md "unsupported script / custom element failure"
+require docs/real-site-corpus.md "Fixture / baseline更新手順"
+require docs/real-site-corpus.md "16 MiB / artifact、256 MiB / corpus artifact"
+require docs/real-site-corpus.md "Google Chrome 153.0.8010.52"
 require README.md "External JavaScript"
 require README.md "WebAssembly"
 require README.md "Service Worker"
