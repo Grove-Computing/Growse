@@ -442,7 +442,7 @@ func (e *engine) collectFlexItems(container *dom.Node, axis flexAxis, availableM
 			minimum: minimum, maximum: maximum, grow: style.flexGrow, shrink: style.flexShrink,
 			marginStart: mainStart, marginEnd: mainEnd,
 		}
-		_, _, ascent := measureText("Mg", style.fontSize, style.bold)
+		_, ascent := usedLineMetrics(inlineRun{style: style})
 		item := &flexLayoutItem{
 			algorithm: algorithm, node: node, style: style, crossSize: cross,
 			crossStart: crossStart, crossEnd: crossEnd,
