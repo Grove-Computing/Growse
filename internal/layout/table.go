@@ -111,6 +111,13 @@ func (e *engine) addTable(node *dom.Node, tableStyle blockStyle, x, availableWid
 		}
 		rowHeights[index] = max(rowHeights[index], float32(1))
 	}
+	rowBaselines := make([]float32, len(rowHeights))
+	for _, cell := range cells {
+		cellStyle := e.styleFor(cell.node)
+		if cell.rowSpan == 1 && cellStyle.verticalAlign.Kind == stylemodel.VerticalAlignBaseline {
+			rowBaselines[cell.row] = max(rowBaselines[cell.row], tableCellBaseline(cellStyle))
+		}
+	}
 
 	boxTop := e.y
 	topCaptions, bottomCaptions := e.tableCaptions(node)
@@ -159,6 +166,9 @@ func (e *engine) addTable(node *dom.Node, tableStyle blockStyle, x, availableWid
 				cellStyle.border.Top.Width = 0
 			}
 		}
+		if cell.rowSpan == 1 && cellStyle.verticalAlign.Kind == stylemodel.VerticalAlignBaseline {
+			cellStyle.padding.Top += max(rowBaselines[cell.row]-tableCellBaseline(cellStyle), float32(0))
+		}
 		cellStyle.display = stylemodel.DisplayBlock
 		e.renderGridItem(cell.node, cellStyle, cellX, cellY, cellWidth, cellHeight)
 		e.tree.Bounds[cell.node.ID] = Rect{X: cellX, Y: cellY, Width: cellWidth, Height: cellHeight}
@@ -187,6 +197,11 @@ func (e *engine) addTable(node *dom.Node, tableStyle blockStyle, x, availableWid
 		e.tree.Decorations[decorationIndex].Radius = resolveBorderRadii(tableStyle.radius, tableWidth, tableGridHeight)
 	}
 	e.y = boxTop + tableHeight + tableStyle.margin.Bottom
+}
+
+func tableCellBaseline(style blockStyle) float32 {
+	_, ascent := usedLineMetrics(inlineRun{style: style})
+	return style.border.Top.Width + style.padding.Top + ascent
 }
 
 func (e *engine) resolveTableColumnWidths(cells []tableCell, columns []tableColumn, count int, available, containingHeight float32, heightDefinite bool, algorithm stylemodel.TableLayout) []float32 {

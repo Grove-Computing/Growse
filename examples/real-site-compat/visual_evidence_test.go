@@ -130,6 +130,38 @@ func TestRealSiteCorpusProducesGrowseReferenceDiffAndRegionArtifacts(t *testing.
 	}
 }
 
+func TestOneMBClubTableKeepsColumnsAndCellBaselinesAligned(t *testing.T) {
+	server := httptest.NewServer(http.FileServer(http.Dir(".")))
+	defer server.Close()
+	engine := browser.New(network.NewClientWithLimits(server.Client(), 8<<20))
+	defer engine.Close()
+	if _, err := engine.Navigate(context.Background(), server.URL+"/fixtures/one-mb-club.html"); err != nil {
+		t.Fatal(err)
+	}
+	page := engine.Page()
+	tree := layoutmodel.BuildWithViewport(page.Document, page.ComputedStyles, 1280, 900)
+	values := make(map[string]layoutmodel.Box)
+	for _, box := range tree.Boxes {
+		text := strings.TrimSpace(box.Text)
+		if text == "0.3" || text == "0.9" || text == "3.5" {
+			values[text] = box
+		}
+	}
+	if len(values) != 3 {
+		t.Fatalf("size column text boxes = %#v", values)
+	}
+	first := values["0.3"]
+	for _, value := range []string{"0.9", "3.5"} {
+		box := values[value]
+		if difference := box.X - first.X; difference < -0.01 || difference > 0.01 {
+			t.Fatalf("size column is not aligned: 0.3=%#v %s=%#v", first, value, box)
+		}
+		if box.Baseline <= box.Y || box.Baseline > box.Y+box.Height {
+			t.Fatalf("cell baseline is outside %s: %#v", value, box)
+		}
+	}
+}
+
 func validateEvidenceLimits(evidence visualEvidence, manifest corpusManifest) error {
 	pixels := int64(evidence.Width) * int64(evidence.Height)
 	switch {

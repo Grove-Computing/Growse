@@ -71,6 +71,61 @@ td { background:#def; border:1px solid #369; padding:4px }
 	}
 }
 
+func TestOneMBStyleTableAlignsColumnsCaptionBordersAndCellBaselines(t *testing.T) {
+	document := dom.NewDocument()
+	table := document.CreateElement("table", map[string]string{"class": "members"})
+	caption := document.CreateElement("caption", nil)
+	tbody := document.CreateElement("tbody", nil)
+	headerRow := document.CreateElement("tr", nil)
+	nameHeader := document.CreateElement("th", map[string]string{"colspan": "2"})
+	sizeHeader := document.CreateElement("th", nil)
+	dataRow := document.CreateElement("tr", nil)
+	badge := document.CreateElement("td", map[string]string{"class": "badge"})
+	name := document.CreateElement("td", nil)
+	size := document.CreateElement("td", map[string]string{"class": "size"})
+	appendTableNodes(t, document,
+		[2]*dom.Node{document.Root, table},
+		[2]*dom.Node{table, caption}, [2]*dom.Node{caption, document.CreateText("Official Members")},
+		[2]*dom.Node{table, tbody}, [2]*dom.Node{tbody, headerRow},
+		[2]*dom.Node{headerRow, nameHeader}, [2]*dom.Node{nameHeader, document.CreateText("URL")},
+		[2]*dom.Node{headerRow, sizeHeader}, [2]*dom.Node{sizeHeader, document.CreateText("Size (KB)")},
+		[2]*dom.Node{tbody, dataRow}, [2]*dom.Node{dataRow, badge}, [2]*dom.Node{badge, document.CreateText("HTTP")},
+		[2]*dom.Node{dataRow, name}, [2]*dom.Node{name, document.CreateText("schemescape.com")},
+		[2]*dom.Node{dataRow, size}, [2]*dom.Node{size, document.CreateText("3.5")},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.members { width:600px; border-collapse:collapse; border:2px solid #273142 }
+caption { caption-side:top; font-size:24px }
+th, td { padding:7px 8px; border-bottom:1px solid #aaa; vertical-align:baseline }
+.badge { width:20%; font-size:12px }
+td { font-size:16px }
+.size { width:30%; text-align:right }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	computed := style.ComputeWithEnvironment(document, stylesheet, style.InteractionState{}, style.Environment{BrowserDefaults: true})
+	tree := layout.Build(document, computed, 720)
+	if tree.Bounds[caption.ID].Y >= tree.Bounds[table.ID].Y+tree.Bounds[table.ID].Height {
+		t.Fatalf("caption is outside table wrapper: caption=%#v table=%#v", tree.Bounds[caption.ID], tree.Bounds[table.ID])
+	}
+	if tree.Bounds[nameHeader.ID].Width <= tree.Bounds[name.ID].Width || tree.Bounds[size.ID].X <= tree.Bounds[name.ID].X {
+		t.Fatalf("column/span geometry = header:%#v name:%#v size:%#v", tree.Bounds[nameHeader.ID], tree.Bounds[name.ID], tree.Bounds[size.ID])
+	}
+	var badgeBaseline, nameBaseline float32
+	for _, box := range tree.Boxes {
+		if box.NodeID == badge.ID {
+			badgeBaseline = box.Baseline
+		}
+		if box.NodeID == name.ID {
+			nameBaseline = box.Baseline
+		}
+	}
+	if badgeBaseline == 0 || nameBaseline == 0 || badgeBaseline != nameBaseline {
+		t.Fatalf("cell baselines = badge:%v name:%v", badgeBaseline, nameBaseline)
+	}
+}
+
 func appendTableNodes(t *testing.T, document *dom.Document, edges ...[2]*dom.Node) {
 	t.Helper()
 	for _, edge := range edges {

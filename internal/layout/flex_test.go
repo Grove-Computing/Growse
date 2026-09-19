@@ -304,6 +304,57 @@ func TestBuildFlexAppliesAutomaticMinimumSizeAndOverflowException(t *testing.T) 
 	}
 }
 
+// Adapted from CSS Flexbox automatic-minimum, wrapping, baseline and
+// percentage sizing assertions. The labels mirror the 1MB Club navigation.
+func TestRealSiteNavigationFlexWrapDistributionBaselineAndPercentage(t *testing.T) {
+	document := dom.NewDocument()
+	navigation := document.CreateElement("nav", map[string]string{"class": "navigation"})
+	labels := []string{"Home", "About", "Hall of Fame", "Members", "Blog", "Submit"}
+	links := make([]*dom.Node, 0, len(labels))
+	appendNodes(t, document, [2]*dom.Node{document.Root, navigation})
+	for index, label := range labels {
+		class := "link"
+		if index == 1 {
+			class += " tall"
+		}
+		if index == 2 {
+			class += " wide"
+		}
+		link := document.CreateElement("a", map[string]string{"class": class})
+		links = append(links, link)
+		appendNodes(t, document, [2]*dom.Node{navigation, link}, [2]*dom.Node{link, document.CreateText(label)})
+	}
+	stylesheet, err := css.Parse(strings.NewReader(`
+.navigation { display:flex; width:240px; flex-wrap:wrap; justify-content:center; align-items:baseline; gap:12px }
+.link { flex:0 1 auto; min-width:0; font-size:16px; line-height:24px }
+.tall { font-size:18px }
+.wide { flex-basis:25%; font-size:18px }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, stylemodel.Compute(document, stylesheet), 320)
+	first, wide, last := tree.Bounds[links[0].ID], tree.Bounds[links[2].ID], tree.Bounds[links[5].ID]
+	if wide.Width < 60 || wide.Width > 80 {
+		t.Fatalf("percentage flex basis = %#v", wide)
+	}
+	if last.Y <= first.Y || first.X < tree.Bounds[navigation.ID].X || last.X+last.Width > tree.Bounds[navigation.ID].X+tree.Bounds[navigation.ID].Width {
+		t.Fatalf("wrapped navigation geometry = first:%#v last:%#v nav:%#v", first, last, tree.Bounds[navigation.ID])
+	}
+	var firstBaseline, tallBaseline float32
+	for _, box := range tree.Boxes {
+		if box.NodeID == links[0].ID {
+			firstBaseline = box.Baseline
+		}
+		if box.NodeID == links[1].ID {
+			tallBaseline = box.Baseline
+		}
+	}
+	if firstBaseline == 0 || tallBaseline == 0 || firstBaseline != tallBaseline {
+		t.Fatalf("first-line baseline alignment = first:%v tall:%v", firstBaseline, tallBaseline)
+	}
+}
+
 func TestBuildFlexUsesPercentageFallbackAndAspectRatio(t *testing.T) {
 	document := dom.NewDocument()
 	column := document.CreateElement("div", map[string]string{"class": "column"})
