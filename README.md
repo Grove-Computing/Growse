@@ -97,10 +97,10 @@ go run ./cmd/growse
 
 ## Demoを試す
 
-別のターミナルでDemoを1つ配信し、Growseで`http://localhost:8080`を開きます。
+別のターミナルでDemoを1つ配信し、Growseで`http://localhost:6053`を開きます。
 
 ```sh
-python3 -m http.server 8080 --directory examples/data-app
+python3 -m http.server 6053 --directory examples/data-app
 ```
 
 ほかのDemoへ切り替える場合は、配信するディレクトリを変更します。
@@ -125,7 +125,7 @@ python3 -m http.server 8080 --directory examples/data-app
 
 WebGoソースは通常のGo build対象から除外するため、各Demoでは`_app.go`として配置しています。
 
-Multi-Tab Workspaceは専用のlocal fixture serverを起動し、Growseで`http://localhost:8080`を開きます。Notes画面のリンクからTasksとActivityを新しいVertical Tabへ開けます。外部ServiceやAPI keyは不要です。
+Multi-Tab Workspaceは専用のlocal fixture serverを起動し、Growseで`http://localhost:6053`を開きます。Notes画面のリンクからTasksとActivityを新しいVertical Tabへ開けます。外部ServiceやAPI keyは不要です。
 
 DevTools Showcaseも専用のlocal fixture serverだけを使用します。外部通信や実Credentialなしで、Console、Inspector、Networkの通常・error・timeout・cache状態を再現できます。
 

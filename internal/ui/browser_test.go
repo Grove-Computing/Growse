@@ -30,6 +30,13 @@ import (
 	"github.com/Grove-Computing/Growse/internal/updater"
 )
 
+func TestBrowserUIDefaultAddressUsesGrowsePort(t *testing.T) {
+	ui := NewBrowserUI(nil, nil)
+	if got, want := ui.address.Text(), "http://localhost:6053"; got != want {
+		t.Fatalf("default address = %q, want %q", got, want)
+	}
+}
+
 func TestCommandClipTranslatesDocumentCoordinatesToCommandCoordinates(t *testing.T) {
 	gtx := layout.Context{Metric: unit.Metric{PxPerDp: 2, PxPerSp: 2}}
 	got := commandClip(gtx, &layoutengine.Rect{X: 20, Y: 30, Width: 50, Height: 40}, 10, 15)

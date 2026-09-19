@@ -1450,13 +1450,13 @@ EnterキーまたはGoボタンでNavigationを開始する。
 入力：
 
 ```text
-localhost:8080
+localhost:6053
 ```
 
 の場合、MVPでは
 
 ```text
-http://localhost:8080
+http://localhost:6053
 ```
 
 へ補完してよい。
@@ -2116,7 +2116,7 @@ type BrowserError struct {
 time=...
 level=ERROR
 component=runtime
-url=http://localhost:8080/app.go
+url=http://localhost:6053/app.go
 message="script evaluation failed"
 error="..."
 ```
@@ -2190,7 +2190,7 @@ growse
 または、
 
 ```bash
-growse http://localhost:8080
+growse http://localhost:6053
 ```
 
 ---
@@ -2866,7 +2866,7 @@ Rendererより前のDisplay Listを主要なテスト境界とする。
 `--debug` を指定した場合、
 
 ```bash
-growse --debug http://localhost:8080
+growse --debug http://localhost:6053
 ```
 
 詳細ログを出す。
@@ -2942,7 +2942,7 @@ go run ./cmd/growse
 Counter Demo：
 
 ```bash
-go run ./cmd/growse http://localhost:8080
+go run ./cmd/growse http://localhost:6053
 ```
 
 ---
@@ -3216,7 +3216,7 @@ func main() {
 ```text
 Growse起動
  ↓
-http://localhost:8080
+http://localhost:6053
  ↓
 HTML取得
  ↓

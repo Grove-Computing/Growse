@@ -15,9 +15,9 @@ import (
 )
 
 func TestNavigateCollectsInlineAndExternalGoScripts(t *testing.T) {
-	pageURL := mustParseURL(t, "http://localhost:8080/index.html")
-	externalURL := mustParseURL(t, "http://localhost:8080/app.go")
-	missingURL := mustParseURL(t, "http://localhost:8080/missing.go")
+	pageURL := mustParseURL(t, "http://localhost:6053/index.html")
+	externalURL := mustParseURL(t, "http://localhost:6053/app.go")
+	missingURL := mustParseURL(t, "http://localhost:6053/missing.go")
 	loader := &routeLoader{responses: map[string]*network.Response{
 		pageURL.String(): {
 			URL: pageURL, StatusCode: 200, ContentType: "text/html",
@@ -58,10 +58,10 @@ func inline() {}</script>
 }
 
 func TestLoadScriptsBlocksCrossOriginAndRedirectedSources(t *testing.T) {
-	pageURL := mustParseURL(t, "http://localhost:8080/index.html")
+	pageURL := mustParseURL(t, "http://localhost:6053/index.html")
 	crossOriginURL := mustParseURL(t, "http://localhost:9090/cross.go")
-	redirectURL := mustParseURL(t, "http://localhost:8080/redirect.go")
-	redirectedFinalURL := mustParseURL(t, "http://127.0.0.1:8080/final.go")
+	redirectURL := mustParseURL(t, "http://localhost:6053/redirect.go")
+	redirectedFinalURL := mustParseURL(t, "http://127.0.0.1:6053/final.go")
 	document, err := html.Parse(strings.NewReader(`
 <script type="text/go" src="http://localhost:9090/cross.go"></script>
 <script type="text/go" src="/redirect.go"></script>`))
@@ -209,9 +209,9 @@ func TestIsTrustedOriginAllowsOnlyLoopbackHosts(t *testing.T) {
 		url  string
 		want bool
 	}{
-		{url: "http://localhost:8080", want: true},
+		{url: "http://localhost:6053", want: true},
 		{url: "https://127.0.0.1/app", want: true},
-		{url: "http://[::1]:8080", want: true},
+		{url: "http://[::1]:6053", want: true},
 		{url: "https://localhost.example.com", want: false},
 		{url: "file:///tmp/app.go", want: false},
 	}

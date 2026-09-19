@@ -2,6 +2,7 @@ package main
 
 import (
 	"embed"
+	"flag"
 	"fmt"
 	"io/fs"
 	"log"
@@ -35,7 +36,9 @@ func dualRuntimeHandler() http.Handler {
 }
 
 func main() {
-	address := "localhost:8080"
+	address := "localhost:6053"
+	flag.StringVar(&address, "addr", address, "showcase listen address")
+	flag.Parse()
 	fmt.Printf("Growse Dual Runtime Showcase: http://%s\n", address)
 	log.Fatal(http.ListenAndServe(address, dualRuntimeHandler()))
 }
