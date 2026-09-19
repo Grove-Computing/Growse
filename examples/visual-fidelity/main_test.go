@@ -1,6 +1,7 @@
 package main
 
 import (
+	"io"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -26,5 +27,14 @@ func TestVisualFidelityShowcaseServesInteractiveSurface(t *testing.T) {
 	defer response.Body.Close()
 	if !strings.Contains(response.Header.Get("Content-Type"), "text/html") {
 		t.Fatalf("content type = %q", response.Header.Get("Content-Type"))
+	}
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, marker := range []string{"href=\"#resource\"", "id=\"resource\"", "tabindex=\"-1\""} {
+		if !strings.Contains(string(body), marker) {
+			t.Fatalf("showcase markup is missing %q", marker)
+		}
 	}
 }
