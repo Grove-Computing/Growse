@@ -205,8 +205,14 @@ func TestV020TextVisualEvidence(t *testing.T) {
 	if baseline.Name == "" || baseline.Font == "" || strings.TrimSpace(baseline.BaselineReason) == "" {
 		t.Fatalf("text visual baseline must identify its fixture and update reason: %#v", baseline)
 	}
+	if actualFont := visualFontDescription(fonts); actualFont != baseline.Font {
+		if runtime.GOOS != "linux" {
+			t.Skipf("platform CJK fallback %q differs from Linux visual baseline %q", actualFont, baseline.Font)
+		}
+		t.Fatalf("Linux text visual font = %q, want fixed baseline %q", actualFont, baseline.Font)
+	}
 	hash := sha256.Sum256(encoded.Bytes())
-	if got := hex.EncodeToString(hash[:]); got != baseline.PNGHash || baseline.Font != visualFontDescription(fonts) {
+	if got := hex.EncodeToString(hash[:]); got != baseline.PNGHash {
 		t.Fatalf("text screenshot PNG hash = %s, want %s (%s)", got, baseline.PNGHash, baseline.BaselineReason)
 	}
 }
