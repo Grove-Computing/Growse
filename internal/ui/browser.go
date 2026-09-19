@@ -3572,11 +3572,19 @@ func commandRoundedClip(gtx layout.Context, region layoutengine.ClipRegion, orig
 }
 
 func (ui *BrowserUI) layoutTextRun(gtx layout.Context, run paintmodel.TextRun, height int) layout.Dimensions {
-	gtx.Constraints.Min.X = 0
+	// Layout owns advance and wrapping. Preserve that advance through the UI
+	// backend rather than allowing material.Label to measure a different font
+	// fallback and move all following runs on the line.
+	width := gtx.Dp(unit.Dp(max(run.Width, float32(0))))
+	gtx.Constraints.Min.X = width
+	gtx.Constraints.Max.X = width
 	gtx.Constraints.Min.Y = height
 	gtx.Constraints.Max.Y = height
 	if run.Atomic {
-		width := gtx.Dp(unit.Dp(max(run.Width, float32(1))))
+		if width < 1 {
+			width = 1
+			gtx.Constraints.Min.X, gtx.Constraints.Max.X = width, width
+		}
 		return layout.Dimensions{Size: image.Pt(width, height), Baseline: height}
 	}
 	if run.Opacity < 1 {
