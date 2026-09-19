@@ -36,6 +36,7 @@ type visualEvidence struct {
 	PaintCommands   int            `json:"paintCommands"`
 	DifferenceRatio float64        `json:"differenceRatio"`
 	Regions         []regionMetric `json:"regions"`
+	Issues          []visualIssue  `json:"issues,omitempty"`
 }
 
 type regionMetric struct {
@@ -47,6 +48,18 @@ type regionMetric struct {
 	Height       float32 `json:"height"`
 	VisibleBoxes int     `json:"visibleBoxes"`
 	TextBytes    int     `json:"textBytes"`
+}
+
+type visualIssue struct {
+	Severity string `json:"severity"`
+	Code     string `json:"code"`
+	Region   string `json:"region"`
+	Detail   string `json:"detail"`
+}
+
+type regionObservation struct {
+	Metric regionMetric
+	Boxes  []layoutmodel.Box
 }
 
 func TestRealSiteCorpusProducesGrowseReferenceDiffAndRegionArtifacts(t *testing.T) {
@@ -71,10 +84,11 @@ func TestRealSiteCorpusProducesGrowseReferenceDiffAndRegionArtifacts(t *testing.
 				growse := rasterDisplayList(list, viewport.Width, viewport.Height)
 				reference := readPNG(t, filepath.Join("testdata", "reference", name+".png"))
 				difference, ratio := diffImages(growse, reference)
+				regions, issues := analyzeRegions(page.Document, tree, fixture.Regions)
 				metric := visualEvidence{
 					Case: fixture.ID, Viewport: viewport.Name, Width: viewport.Width, Height: viewport.Height,
 					DisplayedBoxes: len(tree.Boxes), PaintCommands: len(list.Commands), DifferenceRatio: ratio,
-					Regions: collectRegionMetrics(page.Document, tree),
+					Regions: regions, Issues: issues,
 				}
 				if len(metric.Regions) < len(fixture.Regions) || metric.DisplayedBoxes == 0 || metric.PaintCommands == 0 {
 					t.Fatalf("incomplete semantic evidence: %#v", metric)
@@ -88,8 +102,9 @@ func TestRealSiteCorpusProducesGrowseReferenceDiffAndRegionArtifacts(t *testing.
 	}
 }
 
-func collectRegionMetrics(document *dom.Document, tree *layoutmodel.Tree) []regionMetric {
+func analyzeRegions(document *dom.Document, tree *layoutmodel.Tree, required []string) ([]regionMetric, []visualIssue) {
 	var metrics []regionMetric
+	observations := make(map[string][]regionObservation)
 	var walk func(*dom.Node)
 	walk = func(node *dom.Node) {
 		if node == nil {
@@ -98,20 +113,83 @@ func collectRegionMetrics(document *dom.Document, tree *layoutmodel.Tree) []regi
 		if name, ok := node.Attribute("data-region"); ok {
 			bounds := tree.Bounds[node.ID]
 			metric := regionMetric{Name: name, NodeID: uint64(node.ID), X: bounds.X, Y: bounds.Y, Width: bounds.Width, Height: bounds.Height}
+			observation := regionObservation{Metric: metric}
 			for _, box := range tree.Boxes {
 				if nodeContains(document, node, box.NodeID) && !box.Hidden && box.Width > 0 && box.Height > 0 {
 					metric.VisibleBoxes++
 					metric.TextBytes += len(strings.TrimSpace(box.Text))
+					observation.Boxes = append(observation.Boxes, box)
 				}
 			}
+			observation.Metric = metric
 			metrics = append(metrics, metric)
+			observations[name] = append(observations[name], observation)
 		}
 		for _, child := range node.Children {
 			walk(child)
 		}
 	}
 	walk(document.Root)
-	return metrics
+	return metrics, classifyStructuralIssues(required, observations)
+}
+
+func classifyStructuralIssues(required []string, observations map[string][]regionObservation) []visualIssue {
+	var issues []visualIssue
+	for _, name := range required {
+		candidates := observations[name]
+		if len(candidates) == 0 {
+			issues = append(issues, visualIssue{Severity: "P0", Code: "region-missing", Region: name, Detail: "required semantic region is absent"})
+			continue
+		}
+		visible := false
+		for _, candidate := range candidates {
+			metric := candidate.Metric
+			if metric.Width > 0 && metric.Height > 0 && metric.VisibleBoxes > 0 {
+				visible = true
+			}
+			region := layoutmodel.Rect{X: metric.X, Y: metric.Y, Width: metric.Width, Height: metric.Height}
+			for index, box := range candidate.Boxes {
+				if strings.TrimSpace(box.Text) == "" {
+					continue
+				}
+				if !rectContains(region, layoutmodel.Rect{X: box.X, Y: box.Y, Width: box.Width, Height: box.Height}, 1) {
+					issues = appendBoundedIssue(issues, visualIssue{Severity: "P1", Code: "text-clipped", Region: name, Detail: fmt.Sprintf("text box %d exceeds region bounds", index)})
+				}
+				for other := index + 1; other < len(candidate.Boxes); other++ {
+					next := candidate.Boxes[other]
+					if strings.TrimSpace(next.Text) != "" && boxesStructurallyOverlap(box, next) {
+						issues = appendBoundedIssue(issues, visualIssue{Severity: "P1", Code: "text-overlap", Region: name, Detail: fmt.Sprintf("text boxes %d and %d overlap", index, other)})
+					}
+				}
+			}
+		}
+		if !visible {
+			issues = append(issues, visualIssue{Severity: "P0", Code: "region-empty", Region: name, Detail: "required semantic region has no visible boxes"})
+		}
+	}
+	return issues
+}
+
+func appendBoundedIssue(issues []visualIssue, issue visualIssue) []visualIssue {
+	if len(issues) >= 256 {
+		return issues
+	}
+	return append(issues, issue)
+}
+
+func rectContains(outer, inner layoutmodel.Rect, tolerance float32) bool {
+	return inner.X >= outer.X-tolerance && inner.Y >= outer.Y-tolerance && inner.X+inner.Width <= outer.X+outer.Width+tolerance && inner.Y+inner.Height <= outer.Y+outer.Height+tolerance
+}
+
+func boxesStructurallyOverlap(left, right layoutmodel.Box) bool {
+	intersectionWidth := min(left.X+left.Width, right.X+right.Width) - max(left.X, right.X)
+	intersectionHeight := min(left.Y+left.Height, right.Y+right.Height) - max(left.Y, right.Y)
+	if intersectionWidth <= 1 || intersectionHeight <= 1 {
+		return false
+	}
+	// Inline fragments sharing one line may touch in the cross axis. Only a
+	// substantial two-dimensional collision is a structural overlap.
+	return intersectionWidth > min(left.Width, right.Width)*0.15 && intersectionHeight > min(left.Height, right.Height)*0.25
 }
 
 func nodeContains(document *dom.Document, ancestor *dom.Node, id dom.NodeID) bool {
@@ -246,6 +324,32 @@ func TestDiffMetricDetectsStructuralChange(t *testing.T) {
 	difference, ratio := diffImages(left, right)
 	if ratio != 1.0/16.0 || difference.RGBAAt(1, 1).R == 0 || png.Encode(encoded, difference) != nil || encoded.Len() == 0 {
 		t.Fatalf("diff evidence = ratio:%f pixel:%v bytes:%d", ratio, difference.RGBAAt(1, 1), encoded.Len())
+	}
+}
+
+func TestStructuralClassifierDetectsMissingEmptyClippedAndOverlappingContent(t *testing.T) {
+	observations := map[string][]regionObservation{
+		"empty": {{Metric: regionMetric{Name: "empty", Width: 100, Height: 40}}},
+		"broken": {{
+			Metric: regionMetric{Name: "broken", Width: 100, Height: 40, VisibleBoxes: 2, TextBytes: 8},
+			Boxes: []layoutmodel.Box{
+				{Text: "first", X: 0, Y: 0, Width: 80, Height: 24},
+				{Text: "second", X: 20, Y: 10, Width: 100, Height: 24},
+			},
+		}},
+	}
+	issues := classifyStructuralIssues([]string{"missing", "empty", "broken"}, observations)
+	for _, want := range []struct{ severity, code string }{{"P0", "region-missing"}, {"P0", "region-empty"}, {"P1", "text-clipped"}, {"P1", "text-overlap"}} {
+		found := false
+		for _, issue := range issues {
+			if issue.Severity == want.severity && issue.Code == want.code {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("missing %s/%s in %#v", want.severity, want.code, issues)
+		}
 	}
 }
 
