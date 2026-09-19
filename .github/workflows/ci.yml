@@ -119,6 +119,19 @@ jobs:
       - name: Run v0.18.0 browser-grade resource loading tests
         run: bash tests/v018-resource-loading.sh
 
+      - name: Run v0.20.0 visual evidence tests
+        env:
+          GROWSE_VISUAL_ARTIFACT_DIR: ${{ runner.temp }}/growse-visual
+        run: bash tests/v020-visual.sh
+
+      - name: Upload v0.20.0 visual evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: v020-visual-evidence
+          path: ${{ runner.temp }}/growse-visual
+          if-no-files-found: error
+
       - name: Run race tests with coverage
         run: go test -race -covermode=atomic -coverprofile=coverage.out ./...
 
