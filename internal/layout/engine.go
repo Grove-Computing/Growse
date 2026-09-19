@@ -969,6 +969,13 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 	}
 	if style.overflowX != stylemodel.OverflowVisible || style.overflowY != stylemodel.OverflowVisible {
 		clipHeight := declaredHeight
+		clipHeightDefinite := declaredHeightDefinite
+		if !clipHeightDefinite {
+			if maximum, ok := resolveSize(style.maxHeight, containingHeight, heightDefinite); ok {
+				clipHeight = maximum
+				clipHeightDefinite = true
+			}
+		}
 		if style.boxSizing == stylemodel.BoxSizingContentBox {
 			clipHeight += style.padding.Top + style.padding.Bottom
 		}
@@ -980,7 +987,7 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 		if style.overflowX == stylemodel.OverflowVisible {
 			clipRect.X, clipRect.Width = -unboundedClip, unboundedClip*2
 		}
-		if style.overflowY == stylemodel.OverflowVisible || !declaredHeightDefinite {
+		if style.overflowY == stylemodel.OverflowVisible || !clipHeightDefinite {
 			clipRect.Y, clipRect.Height = -unboundedClip, unboundedClip*2
 		}
 		e.clip = intersectClip(previousClip, clipRect)
