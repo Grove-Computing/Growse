@@ -50,6 +50,13 @@ require README.md "v0.17.0リリース定義"
 require README.md "v0.18.0リリース定義"
 require README.md "v0.19.0リリース定義"
 require README.md "v0.20.0リリース定義"
+require docs/v0.20.0.md "Real-World CSS Compatibility"
+require docs/v0.20.0.md "P0 = 0、P1 = 0"
+require docs/v0.20.0.md '`https://1mb.club/`'
+require docs/v0.20.0.md '`https://ja.wikipedia.org/`'
+require docs/v0.20.0.md '`https://github.com/Saku0512`'
+require docs/v0.20.0.md '`https://kidlat.at/`'
+require docs/v0.20.0.md "unsupported script / custom element failure"
 require README.md "External JavaScript"
 require README.md "WebAssembly"
 require README.md "Service Worker"
