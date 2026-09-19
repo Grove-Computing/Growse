@@ -424,6 +424,37 @@ p::after { content: none; }
 	}
 }
 
+// Adapted from CSS Generated Content 3 content-list and CSS Logical 1
+// flow-relative longhand assertions.
+func TestRealSiteShorthandLogicalCalcAndGeneratedAttributeContent(t *testing.T) {
+	document := dom.NewDocument()
+	badge := document.CreateElement("a", map[string]string{"class": "badge", "data-label": "Members"})
+	appendNode(t, document, document.Root, badge)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.badge {
+  --space: 4px;
+  margin: 1px 2px;
+  margin-inline-start: calc(var(--space) * 2);
+  padding: 3px;
+  padding-left: calc(var(--space) + 2px);
+}
+.badge::before { content: "[" attr(data-label) "] "; }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	computed, _ := Compute(document, stylesheet).For(badge)
+	if computed.Margin != (Edges{Top: 1, Right: 2, Bottom: 1, Left: 8}) {
+		t.Fatalf("logical margin over shorthand = %#v", computed.Margin)
+	}
+	if computed.Padding != (Edges{Top: 3, Right: 3, Bottom: 3, Left: 6}) {
+		t.Fatalf("longhand padding over shorthand = %#v", computed.Padding)
+	}
+	if computed.BeforeContent != "[Members] " {
+		t.Fatalf("generated attribute content = %q", computed.BeforeContent)
+	}
+}
+
 func TestSelectorListUsesSpecificityOfMatchingSelector(t *testing.T) {
 	document := dom.NewDocument()
 	target := document.CreateElement("div", map[string]string{"class": "target"})
