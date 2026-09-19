@@ -144,3 +144,9 @@ Upstreamのファイル全体はコピーせず、assertionの意味と最小入
 - CSS 2.1、Flexbox、Grid Level 2 Subgrid、Writing Modes、Position、Overflow、Multi-columnから、screen layoutのlandmark geometryへ縮約できるassertionを各1件以上選定する。
 - `internal/layout/wpt_v019_test.go`は固定Revisionのsource pathを各Test直前に記録し、Ahemやscreenshot比較を決定的なbox、track、axis、scroll、fragment geometryへ置換する。
 - sideways writing mode、print fragmentation、paged media、native scrollbar pixel parityはv0.19.0対象外とし、対応済み値のassertionを拡張解釈しない。
+
+## v0.20.0の選定範囲
+
+- CSS Text / FontsからCJK・Latin混在のline-height、baseline、自然な改行、system fallbackの有限metricを選定し、OS固有のface名やcomplex scriptのpixel完全一致は対象外とする。
+- CSS Images / Transformsからlinear / radial / conic gradientのstop、center、angleと2D transform-originを選定し、repeating gradient、3D transform、perspective、SVG filter全体は対象外とする。
+- `internal/layout`と`internal/ui`のWPT由来assertionは固定した数値geometry・raster pixel・inverse hit-testへ縮約する。実raster PNGは`tests/v020-visual.sh`で別途固定し、WPT harness、公開network、browser screenshot runnerを直接実行しない。

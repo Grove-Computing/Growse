@@ -88,3 +88,15 @@ go test ./internal/conformance ./internal/layout ./examples/css-layout-2026 -cou
 参照更新時は両ブラウザのversion、720×520 content viewport、採取日を同時に更新する。片方だけの参照更新、threshold拡大、fontや動的領域を持つfixtureへの置換は行わない。
 
 `TestV019FrameworkCorpusDesktopNarrowHydrationInteractionAndScroll`はNext.js 16.3.3 / React 19.2.8、SvelteKit 2.70.3 / Svelte 5.57.0、Tailwind CSS 4.1.12のchecked-in artifactを対象にする。Next.js / SvelteKitはSSR root identityを保持したhydrationとevent後state、TailwindはCSS-only resource完了を起点に、1024px / 640px幅、document scroll、native buttonのPaint / Hit Testing、layout fallback不在を検証する。
+
+## v0.20.0 Typography & CSS Visual Evidence
+
+`tests/v020-visual.sh`はDisplay Listやsemantic snapshotだけで成功しないvisual gateである。`TestV020TextVisualEvidence`は固定320×240・scale 1でLatinと日本語を実PNGへraster化し、非白紙pixel、text regionの色、PNG format / bounds、Linuxの固定CJK fallback baselineを検証する。platform固有fontがLinux baselineと異なる場合は、glyph coverageを確認したうえでpixel hashの比較を意図的にskipする。
+
+`TestV020CSSSurfaceRasterEvidence`はdesktop UIと同じbackground raster cacheでlinear / radial / conic gradientと選定filterを272×112のPNGへ描画し、surface variationとSHA-256を固定する。`GROWSE_VISUAL_ARTIFACT_DIR`を指定すると、`dashboard.png`、`text-visual-evidence.png`、`css-surface-evidence.png`を出力する。単一artifactは16 MiB、比較対象は16 megapixel、visual corpusは256 MiB、glyph diagnosticはPageあたり50,000 glyphを上限とし、上限超過は有限なtest failureにする。
+
+```sh
+GROWSE_VISUAL_ARTIFACT_DIR=/tmp/growse-visual bash tests/v020-visual.sh
+```
+
+Visual Fidelity Showcase、CSS Layout 2026、Modern Web Compatibilityのdesktop / narrow観測はこのraster fixtureを補完する。任意Web site、任意OS font、complex script、3D transform、SVG filter全体とのpixel完全一致はこのgateの対象外である。

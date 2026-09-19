@@ -55,7 +55,7 @@ wget -qO- https://github.com/Grove-Computing/Growse/releases/latest/download/ins
 Versionとインストール先を指定する場合は、環境変数を利用します。
 
 ```sh
-wget -qO- https://github.com/Grove-Computing/Growse/releases/latest/download/install.sh | GROWSE_VERSION=v0.19.0 GROWSE_INSTALL_DIR=/usr/local/bin bash
+wget -qO- https://github.com/Grove-Computing/Growse/releases/latest/download/install.sh | GROWSE_VERSION=v0.20.0 GROWSE_INSTALL_DIR=/usr/local/bin bash
 ```
 
 GUI Applicationの配置先は、`GROWSE_DATA_HOME`、`GROWSE_APPLICATIONS_DIR`、`GROWSE_WINDOWS_PROGRAMS_DIR`で変更できます。
@@ -65,7 +65,7 @@ GUI Applicationの配置先は、`GROWSE_DATA_HOME`、`GROWSE_APPLICATIONS_DIR`�
 Linux amd64のDocker imageを、GitHub Container Registryから取得できます。
 
 ```sh
-docker pull ghcr.io/grove-computing/growse:v0.19.0
+docker pull ghcr.io/grove-computing/growse:v0.20.0
 ```
 
 GrowseはGUI applicationのため、Containerから起動する場合はホストのDisplay ServerとGPU deviceを接続する必要があります。
@@ -140,6 +140,8 @@ Browser-grade Compatibility Showcaseは同じ固定framework artifactをdesktop 
 
 CSS Layout 2026 Showcaseはv0.19.0のscreen向けbaselineを1ページへ集約します。6個の操作ボタンでfloat / BFC、Table、Writing Mode / direction、relative / transform、Multi-columnを動的に切り替え、late image、nested scroll、Sticky、Paint / Hit Testingを同じrevisionで確認できます。固定Chromium 153とFirefox 156との差分fixture、選定WPT、Next.js / SvelteKit / Tailwind corpusはoffline CIで検証します。
 
+Visual Fidelity Showcaseはv0.20.0の実raster evidenceを補完するローカルfixtureです。Latin / CJK / combining mark のfallbackと折返し、vertical writing、shadow、gradient、radius、clip、2D transform、filter、focus、resize、scroll、resource completionを一画面で確認できます。pixelを完全一致させる対象は固定font・viewport・DPRのCI fixtureに限り、任意サイト、全font、complex script、3D transform、SVG filter全体との完全一致は保証しません。
+
 ## ブラウザの仕組み
 
 ### Rendering Pipeline
@@ -205,7 +207,7 @@ DevToolsはRequest / Response body、Header、Cookie、Authorizationを保持し
 | [CSS対応表](docs/css-support.md) | CSS Property、Layout、Animationの対応状況と制限 |
 | [Form / Fetch / Cookie対応表](docs/form-fetch-cookie-support.md) | Form、HTTP、Cookie、CORSの対応状況と制限 |
 | [Storage / Cache対応表](docs/storage-cache-support.md) | Web Storage、HTTP Cache、永続化、quotaの対応状況と制限 |
-| [Visual Regression Test](docs/visual-regression.md) | 固定Viewport、Font、ScaleによるDashboard、Persistent App、DevTools、framework状態遷移の回帰テスト |
+| [Visual Regression Test](docs/visual-regression.md) | 固定Viewport、Font、ScaleによるDashboard、Persistent App、framework状態遷移、v0.20.0のtext / CSS raster PNG回帰テスト |
 | [Performance Baseline](docs/performance.md) | Layout、Paint、Form、Scheduler、History、Storage、CacheのBenchmark基準値 |
 | [WPT由来テスト](docs/wpt.md) | Web Platform Testsから移植したTestと出典 |
 | [Developer Supply Chain Security](docs/developer-security.md) | 不可視Code検査、Extension管理、署名、Credential、Incident Response |
@@ -223,6 +225,7 @@ DevToolsはRequest / Response body、Header、Cookie、Authorizationを保持し
 | [v0.17.0リリース定義](docs/v0.17.0.md) | v0.17.0 Browser-grade Web Compatibility、実framework corpus、media pipeline、incremental rendering、compositor、differential Gateの完了条件 |
 | [v0.18.0リリース定義](docs/v0.18.0.md) | v0.18.0 Browser-grade Resource Loading、非同期image commit、script lifecycle、priority、cache / cancel診断の完了条件 |
 | [v0.19.0リリース定義](docs/v0.19.0.md) | v0.19.0 CSS Layout 2026、Flow / Table / Flex / Grid / Subgrid / Writing Mode / Sticky / Multi-columnと仕様適合の完了条件 |
+| [v0.20.0リリース定義](docs/v0.20.0.md) | v0.20.0 Typography & CSS Visual Fidelity、CJK fallback、text run、CSS surface、実raster evidenceの完了条件 |
 
 ## 品質チェック
 
@@ -247,13 +250,13 @@ Go Modules、GitHub Actions、Docker base imageの依存関係は、Dependabot�
 
 ## セキュリティ
 
-v0.19.0のRuntime workerは外部JavaScriptとhydration resourceのhost作用をdefault denyにし、image / script queue、cache、dirty propagation、compositor layer、Animation callback、診断にもPage単位の上限を適用します。Layoutも実行時間、box / fragment、recursion、line / float、column balancingへ上限を設けます。Navigation、Page close、Engine切替では進行中resourceをcancelしますが、実験的browserとして未知のnative/runtime/decoder脆弱性への完全耐性は保証しません。外部Go sourceは引き続きtrusted loopbackだけに限定されます。Growseを権限の高いユーザーや機密profileで実行しないでください。
+v0.20.0はRuntime workerのdefault-deny境界を維持し、font fallback、visual raster、gradient / filter surfaceにもglyph 50,000件、画像16 megapixel、artifact 1件16 MiB・corpus合計256 MiBの上限を適用します。Layoutも実行時間、box / fragment、recursion、line / float、column balancingへ上限を設けます。Navigation、Page close、Engine切替では進行中resourceをcancelしますが、実験的browserとして未知のnative/runtime/decoder脆弱性への完全耐性は保証しません。外部Go sourceは引き続きtrusted loopbackだけに限定されます。Growseを権限の高いユーザーや機密profileで実行しないでください。
 
 脆弱性の非公開報告方法、サポート対象、通信とResource LoadingのSecurity Boundaryは[SECURITY.md](SECURITY.md)を参照してください。
 
 ## リリース成果物
 
-`v0.19.0`のようなVersion tagをpushすると、GitHub Actionsが次の成果物、SHA-256 checksum、SPDX JSON SBOMをGitHub Releaseへ公開します。ArchiveとSBOMにはGitHub Artifact Attestation、Docker imageにはBuildKitのSBOMとSLSA Provenanceを付与します。
+`v0.20.0`のようなVersion tagをpushすると、GitHub Actionsが次の成果物、SHA-256 checksum、SPDX JSON SBOMをGitHub Releaseへ公開します。ArchiveとSBOMにはGitHub Artifact Attestation、Docker imageにはBuildKitのSBOMとSLSA Provenanceを付与します。
 
 - Linux amd64
 - macOS Intel
