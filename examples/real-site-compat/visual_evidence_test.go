@@ -114,6 +114,9 @@ func TestRealSiteCorpusProducesGrowseReferenceDiffAndRegionArtifacts(t *testing.
 				if err := validateEvidenceLimits(metric, manifest); err != nil {
 					t.Fatal(err)
 				}
+				if len(metric.Issues) != 0 {
+					t.Fatalf("release-blocking structural issues: %#v", metric.Issues)
+				}
 				if len(metric.Regions) < len(fixture.Regions) || metric.DisplayedBoxes == 0 || metric.PaintCommands == 0 {
 					t.Fatalf("incomplete semantic evidence: %#v", metric)
 				}
