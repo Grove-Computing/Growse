@@ -79,12 +79,12 @@ func TestRealSiteCorpusProducesGrowseReferenceDiffAndRegionArtifacts(t *testing.
 		for _, viewport := range manifest.Viewports {
 			name := fixture.ID + "-" + viewport.Name
 			t.Run(name, func(t *testing.T) {
-				page, err := engine.Navigate(context.Background(), server.URL+"/"+fixture.Fixture)
+				_, err := engine.Navigate(context.Background(), server.URL+"/"+fixture.Fixture)
 				if err != nil {
 					t.Fatal(err)
 				}
 				engine.UpdateViewport(float32(viewport.Width), float32(viewport.Height))
-				page = engine.Page()
+				page := engine.Page()
 				tree := layoutmodel.BuildWithScrollAndResources(page.Document, page.ComputedStyles, page.ImageResources, page.WebFonts, float32(viewport.Width), float32(viewport.Height), 0, 0)
 				list := paintmodel.Build(tree)
 				growse := rasterDisplayList(list, viewport.Width, viewport.Height)
