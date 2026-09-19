@@ -2,13 +2,18 @@ package ui
 
 import (
 	"bytes"
+	"image"
 	"testing"
 
 	"gioui.org/font"
 	"gioui.org/font/gofont"
+	"gioui.org/layout"
+	"gioui.org/op"
 	"gioui.org/text"
+	"gioui.org/unit"
 	"gioui.org/widget/material"
 	"github.com/Grove-Computing/Growse/internal/browser"
+	paintmodel "github.com/Grove-Computing/Growse/internal/paint"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 	textfont "github.com/go-text/typesetting/font"
 	"golang.org/x/image/font/gofont/goregular"
@@ -152,5 +157,20 @@ func TestPageShaperTerminatesWithBundledFallbackWhenSystemFontsAreUnavailable(t 
 	}
 	if runes != len([]rune(textValue)) || glyphs == 0 {
 		t.Fatalf("finite fallback = runes:%d glyphs:%d", runes, glyphs)
+	}
+}
+
+func TestLayoutTextRunPreservesLayoutAdvanceAcrossFontFallback(t *testing.T) {
+	ui := &BrowserUI{theme: material.NewTheme()}
+	gtx := layout.Context{
+		Ops:         new(op.Ops),
+		Constraints: layout.Exact(image.Pt(200, 24)),
+		Metric:      unit.Metric{PxPerDp: 1, PxPerSp: 1},
+	}
+	dimensions := ui.layoutTextRun(gtx, paintmodel.TextRun{
+		Text: "日本語", FontSize: 16, Width: 73, Color: 0x111827ff,
+	}, 24)
+	if dimensions.Size != image.Pt(73, 24) {
+		t.Fatalf("text run dimensions = %v, want layout advance 73x24", dimensions.Size)
 	}
 }
