@@ -163,6 +163,25 @@ func TestOneMBClubTableKeepsColumnsAndCellBaselinesAligned(t *testing.T) {
 	}
 }
 
+func TestSchemescapeInlineIconsAndLinksDoNotTriggerStructuralOverlap(t *testing.T) {
+	server := httptest.NewServer(http.FileServer(http.Dir(".")))
+	defer server.Close()
+	engine := browser.New(network.NewClientWithLimits(server.Client(), 8<<20))
+	defer engine.Close()
+	if _, err := engine.Navigate(context.Background(), server.URL+"/fixtures/schemescape.html"); err != nil {
+		t.Fatal(err)
+	}
+	page := engine.Page()
+	tree := layoutmodel.BuildWithScrollAndResources(page.Document, page.ComputedStyles, page.ImageResources, page.WebFonts, 1280, 800, 0, 0)
+	_, issues := analyzeRegions(page.Document, tree, []string{"main", "list"})
+	if len(issues) != 0 {
+		for index, box := range tree.Boxes {
+			t.Logf("box[%d]=node:%d tag:%s text:%q rect:%v,%v %vx%v", index, box.NodeID, box.Tag, box.Text, box.X, box.Y, box.Width, box.Height)
+		}
+		t.Fatalf("Schemescape structural issues = %#v", issues)
+	}
+}
+
 func validateEvidenceLimits(evidence visualEvidence, manifest corpusManifest) error {
 	pixels := int64(evidence.Width) * int64(evidence.Height)
 	switch {
@@ -234,10 +253,10 @@ func analyzeRegions(document *dom.Document, tree *layoutmodel.Tree, required []s
 		}
 	}
 	walk(document.Root)
-	return metrics, classifyStructuralIssues(required, observations)
+	return metrics, classifyStructuralIssues(document, required, observations)
 }
 
-func classifyStructuralIssues(required []string, observations map[string][]regionObservation) []visualIssue {
+func classifyStructuralIssues(document *dom.Document, required []string, observations map[string][]regionObservation) []visualIssue {
 	var issues []visualIssue
 	for _, name := range required {
 		candidates := observations[name]
@@ -261,7 +280,7 @@ func classifyStructuralIssues(required []string, observations map[string][]regio
 				}
 				for other := index + 1; other < len(candidate.Boxes); other++ {
 					next := candidate.Boxes[other]
-					if strings.TrimSpace(next.Text) != "" && boxesStructurallyOverlap(box, next) {
+					if strings.TrimSpace(next.Text) != "" && !nodesAreAncestorRelated(document, box.NodeID, next.NodeID) && boxesStructurallyOverlap(box, next) {
 						issues = appendBoundedIssue(issues, visualIssue{Severity: "P1", Code: "text-overlap", Region: name, Detail: fmt.Sprintf("text boxes %d and %d overlap", index, other)})
 					}
 				}
@@ -272,6 +291,31 @@ func classifyStructuralIssues(required []string, observations map[string][]regio
 		}
 	}
 	return issues
+}
+
+func nodesAreAncestorRelated(document *dom.Document, leftID, rightID dom.NodeID) bool {
+	if document == nil {
+		return false
+	}
+	if leftID == rightID {
+		return leftID == rightID
+	}
+	left, leftOK := document.NodeByID(leftID)
+	right, rightOK := document.NodeByID(rightID)
+	if !leftOK || !rightOK {
+		return false
+	}
+	for current := left.Parent; current != nil; current = current.Parent {
+		if current == right {
+			return true
+		}
+	}
+	for current := right.Parent; current != nil; current = current.Parent {
+		if current == left {
+			return true
+		}
+	}
+	return false
 }
 
 func appendBoundedIssue(issues []visualIssue, issue visualIssue) []visualIssue {
@@ -420,6 +464,7 @@ var rasterFonts struct {
 	regular  *opentype.Font
 	bold     *opentype.Font
 	fallback *opentype.Font
+	symbols  []*opentype.Font
 	faces    map[string]font.Face
 }
 
@@ -427,6 +472,10 @@ func drawRasterText(canvas draw.Image, text string, x, baseline, size float32, b
 	dot := fixed.P(int(x), int(baseline))
 	for text != "" {
 		first, runeSize := utf8.DecodeRuneInString(text)
+		if first == '\ufe0e' || first == '\ufe0f' {
+			text = text[runeSize:]
+			continue
+		}
 		parsed, family := rasterFontForRune(first, bold)
 		end := runeSize
 		for end < len(text) {
@@ -474,6 +523,20 @@ func rasterFontForRune(character rune, bold bool) (*opentype.Font, string) {
 				break
 			}
 		}
+		for _, name := range []string{
+			"/usr/share/fonts/truetype/noto/NotoSansSymbols2-Regular.ttf",
+			"/usr/share/fonts/opentype/unifont/unifont_upper.otf",
+			"/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+		} {
+			data, err := os.ReadFile(name)
+			if err != nil {
+				continue
+			}
+			parsed, err := opentype.Parse(data)
+			if err == nil {
+				rasterFonts.symbols = append(rasterFonts.symbols, parsed)
+			}
+		}
 	})
 	primary, family := rasterFonts.regular, "regular"
 	if bold {
@@ -487,6 +550,11 @@ func rasterFontForRune(character rune, bold bool) (*opentype.Font, string) {
 	if rasterFonts.fallback != nil {
 		if glyph, err := rasterFonts.fallback.GlyphIndex(nil, character); err == nil && glyph != 0 {
 			return rasterFonts.fallback, "cjk-fallback"
+		}
+	}
+	for index, candidate := range rasterFonts.symbols {
+		if glyph, err := candidate.GlyphIndex(nil, character); err == nil && glyph != 0 {
+			return candidate, fmt.Sprintf("symbol-fallback-%d", index)
 		}
 	}
 	return primary, family
@@ -653,7 +721,7 @@ func TestStructuralClassifierDetectsMissingEmptyClippedAndOverlappingContent(t *
 			},
 		}},
 	}
-	issues := classifyStructuralIssues([]string{"missing", "empty", "broken"}, observations)
+	issues := classifyStructuralIssues(nil, []string{"missing", "empty", "broken"}, observations)
 	for _, want := range []struct{ severity, code string }{{"P0", "region-missing"}, {"P0", "region-empty"}, {"P1", "text-clipped"}, {"P1", "text-overlap"}} {
 		found := false
 		for _, issue := range issues {
