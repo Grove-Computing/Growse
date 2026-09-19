@@ -60,6 +60,9 @@ func supportsDeclaration(property, value string) bool {
 	}
 	context := LengthContext{FontSize: 16, RootFontSize: 16, ViewportWidth: 1280, ViewportHeight: 720, PercentageBase: 1280}
 	switch property {
+	case "content":
+		_, ok := parseGeneratedContent(nil, value)
+		return ok
 	case "display":
 		_, ok := parseDisplay(value)
 		return ok
@@ -344,7 +347,7 @@ func supportsProperty(property string) bool {
 		"overflow", "overflow-x", "overflow-y", "visibility", "opacity", "white-space", "writing-mode", "direction", "transform",
 		"flex", "flex-flow", "flex-basis", "flex-grow", "flex-shrink", "order", "gap", "row-gap", "column-gap", "justify-content", "align-content", "align-items", "justify-items", "align-self", "justify-self",
 		"columns", "column-count", "column-width", "column-rule", "column-rule-width", "column-rule-style", "column-rule-color", "column-fill", "column-span", "break-before", "break-after", "break-inside", "widows", "orphans",
-		"grid-template-columns", "grid-template-rows", "grid-auto-flow", "grid-column", "grid-row", "grid-area", "place-content", "place-items", "place-self", "container-type", "container-name":
+		"grid-template-columns", "grid-template-rows", "grid-auto-flow", "grid-column", "grid-row", "grid-area", "place-content", "place-items", "place-self", "container-type", "container-name", "content":
 		return true
 	default:
 		return false

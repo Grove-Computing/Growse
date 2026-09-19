@@ -962,6 +962,20 @@ func applyCustomProperties(inherited map[string]string, winners map[string]winne
 		if !strings.HasPrefix(property, "--") {
 			continue
 		}
+		// At author origin, revert falls back to the preceding origin. Growse's
+		// UA sheet does not declare custom properties, so that is the same
+		// computed result as unset: inherit an unregistered/inheriting property
+		// and restore the initial value of a non-inheriting registration.
+		if strings.EqualFold(strings.TrimSpace(candidate.value), "revert") {
+			if registration, registered := registeredProperty(stylesheet, property); !registered || registration.Inherits {
+				if parentValue, ok := parentValues[property]; ok && canStore(property) {
+					result[property] = parentValue
+				} else if result != nil {
+					delete(result, property)
+				}
+			}
+			continue
+		}
 		switch parseGlobalKeyword(candidate.value) {
 		case globalInitial:
 			if _, registered := registeredProperty(stylesheet, property); !registered && result != nil {
@@ -1248,7 +1262,7 @@ func applyGeneratedContent(node *dom.Node, computed ComputedStyle, stylesheet *c
 			if !valid {
 				continue
 			}
-			if content, valid := parseGeneratedContent(resolved); valid {
+			if content, valid := parseGeneratedContent(node, resolved); valid {
 				*target.destination = content
 			}
 		}
@@ -1263,12 +1277,75 @@ func selectorPseudoElement(selector css.Selector) css.PseudoElementKind {
 	return selector.Compounds[len(selector.Compounds)-1].PseudoElement
 }
 
-func parseGeneratedContent(value string) (string, bool) {
+func parseGeneratedContent(node *dom.Node, value string) (string, bool) {
 	value = strings.TrimSpace(value)
 	if strings.EqualFold(value, "none") || strings.EqualFold(value, "normal") || parseGlobalKeyword(value) != globalNone {
 		return "", true
 	}
-	return css.DecodeString(value)
+	const maxGeneratedContentBytes = 64 << 10
+	var result strings.Builder
+	for position := 0; position < len(value); {
+		for position < len(value) && isCSSSpace(value[position]) {
+			position++
+		}
+		if position == len(value) {
+			break
+		}
+		if value[position] == '\'' || value[position] == '"' {
+			quote, end := value[position], position+1
+			for end < len(value) {
+				if value[end] == '\\' {
+					end += 2
+					continue
+				}
+				if value[end] == quote {
+					break
+				}
+				end++
+			}
+			if end >= len(value) {
+				return "", false
+			}
+			decoded, valid := css.DecodeString(value[position : end+1])
+			if !valid || result.Len()+len(decoded) > maxGeneratedContentBytes {
+				return "", false
+			}
+			result.WriteString(decoded)
+			position = end + 1
+			continue
+		}
+		if len(value)-position >= 5 && strings.EqualFold(value[position:position+5], "attr(") {
+			end := strings.IndexByte(value[position+5:], ')')
+			if end < 0 {
+				return "", false
+			}
+			end += position + 5
+			name := strings.TrimSpace(value[position+5 : end])
+			if name == "" {
+				return "", false
+			}
+			for index := range len(name) {
+				if !isCSSNameByte(name[index]) {
+					return "", false
+				}
+			}
+			if node != nil {
+				attribute, _ := node.Attribute(strings.ToLower(name))
+				if result.Len()+len(attribute) > maxGeneratedContentBytes {
+					return "", false
+				}
+				result.WriteString(attribute)
+			}
+			position = end + 1
+			continue
+		}
+		return "", false
+	}
+	return result.String(), true
+}
+
+func isCSSSpace(value byte) bool {
+	return value == ' ' || value == '\t' || value == '\n' || value == '\r' || value == '\f'
 }
 
 func expandedProperties(property string) []string {
