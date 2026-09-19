@@ -931,9 +931,13 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 		}
 	}
 	if !declaredHeightDefinite && style.aspectRatio > 0 {
-		declaredHeight = outerWidth / style.aspectRatio
 		if style.boxSizing == stylemodel.BoxSizingContentBox {
-			declaredHeight = max(declaredHeight-style.padding.Top-style.padding.Bottom-verticalBorder, float32(0))
+			// aspect-ratio follows the box selected by box-sizing. sizingWidth is
+			// the content box here; deriving from outerWidth would incorrectly
+			// subtract vertical extras from horizontal padding and borders.
+			declaredHeight = max(sizingWidth, float32(0)) / style.aspectRatio
+		} else {
+			declaredHeight = outerWidth / style.aspectRatio
 		}
 		declaredHeightDefinite = true
 	}
