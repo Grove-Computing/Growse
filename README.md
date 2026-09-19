@@ -1,5 +1,11 @@
 # Growse
 
+## プロキシ
+
+Growse は標準の `HTTP_PROXY`、`HTTPS_PROXY`、`NO_PROXY` 環境変数を使用する。
+プロキシ設定を切り替えた後の新しいリクエストでは、その時点の値を読み直すため、
+アプリケーションを再起動する必要はない。
+
 Growseは、GoまたはJavaScriptをクライアントサイド言語として実行する実験的なWebブラウザです。
 
 HTMLとCSSで画面を構築し、Tab単位の`Go` / `JS` selectorでWebGoまたはJavaScriptから同じDOM、Event、Scheduler、Fetch、Storage、Navigationを操作できます。desktop appの新規TabはJavaScriptが既定で、WebGo Pageは`Go`へ明示的に切り替えられます。
