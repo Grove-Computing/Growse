@@ -51,7 +51,7 @@ func TestFixtureManifestIsCompleteAndUntampered(t *testing.T) {
 	if err := json.Unmarshal(encoded, &manifest); err != nil {
 		t.Fatal(err)
 	}
-	if manifest.SchemaVersion != 1 || manifest.Release != "v0.19.0" || manifest.PublicInternetRequired || manifest.ArtifactPolicy != "checked-in deterministic build artifacts" {
+	if manifest.SchemaVersion != 1 || manifest.Release != "v0.20.0" || manifest.PublicInternetRequired || manifest.ArtifactPolicy != "checked-in deterministic build artifacts" {
 		t.Fatalf("offline fixture manifest header = %#v", manifest)
 	}
 	if manifest.VerificationCommand == "" || len(manifest.Fixtures) != 4 {

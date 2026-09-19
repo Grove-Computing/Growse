@@ -18,7 +18,7 @@ type verticalInlineItem struct {
 }
 
 // addVerticalInlineRuns implements the bounded upright-glyph subset declared
-// by v0.19.0. Each glyph advances on the physical Y axis; columns progress on
+// by v0.20.0. Each glyph advances on the physical Y axis; columns progress on
 // the physical X axis according to vertical-rl or vertical-lr. Complex bidi,
 // text-orientation variants, ruby, and tate-chu-yoko remain deliberately out
 // of scope, but every emitted rectangle is shared by paint and hit testing.
