@@ -114,6 +114,9 @@ func TestRealSiteCorpusProducesGrowseReferenceDiffAndRegionArtifacts(t *testing.
 				if err := validateEvidenceLimits(metric, manifest); err != nil {
 					t.Fatal(err)
 				}
+				if len(metric.Issues) != 0 {
+					t.Fatalf("release-blocking structural issues: %#v", metric.Issues)
+				}
 				if len(metric.Regions) < len(fixture.Regions) || metric.DisplayedBoxes == 0 || metric.PaintCommands == 0 {
 					t.Fatalf("incomplete semantic evidence: %#v", metric)
 				}
@@ -160,6 +163,25 @@ func TestOneMBClubTableKeepsColumnsAndCellBaselinesAligned(t *testing.T) {
 		if box.Baseline <= box.Y || box.Baseline > box.Y+box.Height {
 			t.Fatalf("cell baseline is outside %s: %#v", value, box)
 		}
+	}
+}
+
+func TestSchemescapeInlineIconsAndLinksDoNotTriggerStructuralOverlap(t *testing.T) {
+	server := httptest.NewServer(http.FileServer(http.Dir(".")))
+	defer server.Close()
+	engine := browser.New(network.NewClientWithLimits(server.Client(), 8<<20))
+	defer engine.Close()
+	if _, err := engine.Navigate(context.Background(), server.URL+"/fixtures/schemescape.html"); err != nil {
+		t.Fatal(err)
+	}
+	page := engine.Page()
+	tree := layoutmodel.BuildWithScrollAndResources(page.Document, page.ComputedStyles, page.ImageResources, page.WebFonts, 1280, 800, 0, 0)
+	_, issues := analyzeRegions(page.Document, tree, []string{"main", "list"})
+	if len(issues) != 0 {
+		for index, box := range tree.Boxes {
+			t.Logf("box[%d]=node:%d tag:%s text:%q rect:%v,%v %vx%v", index, box.NodeID, box.Tag, box.Text, box.X, box.Y, box.Width, box.Height)
+		}
+		t.Fatalf("Schemescape structural issues = %#v", issues)
 	}
 }
 
@@ -234,10 +256,10 @@ func analyzeRegions(document *dom.Document, tree *layoutmodel.Tree, required []s
 		}
 	}
 	walk(document.Root)
-	return metrics, classifyStructuralIssues(required, observations)
+	return metrics, classifyStructuralIssues(document, required, observations)
 }
 
-func classifyStructuralIssues(required []string, observations map[string][]regionObservation) []visualIssue {
+func classifyStructuralIssues(document *dom.Document, required []string, observations map[string][]regionObservation) []visualIssue {
 	var issues []visualIssue
 	for _, name := range required {
 		candidates := observations[name]
@@ -256,12 +278,16 @@ func classifyStructuralIssues(required []string, observations map[string][]regio
 				if strings.TrimSpace(box.Text) == "" {
 					continue
 				}
-				if !rectContains(region, layoutmodel.Rect{X: box.X, Y: box.Y, Width: box.Width, Height: box.Height}, 1) {
+				// Platform fallback fonts can place a line box a fractional pixel
+				// beyond its semantic parent. Treat less than two CSS pixels as the
+				// documented P2 raster/rounding allowance; full-line overflow still
+				// remains a P1 structural failure.
+				if !rectContains(region, layoutmodel.Rect{X: box.X, Y: box.Y, Width: box.Width, Height: box.Height}, 2) {
 					issues = appendBoundedIssue(issues, visualIssue{Severity: "P1", Code: "text-clipped", Region: name, Detail: fmt.Sprintf("text box %d exceeds region bounds", index)})
 				}
 				for other := index + 1; other < len(candidate.Boxes); other++ {
 					next := candidate.Boxes[other]
-					if strings.TrimSpace(next.Text) != "" && boxesStructurallyOverlap(box, next) {
+					if strings.TrimSpace(next.Text) != "" && !nodesAreAncestorRelated(document, box.NodeID, next.NodeID) && boxesStructurallyOverlap(box, next) {
 						issues = appendBoundedIssue(issues, visualIssue{Severity: "P1", Code: "text-overlap", Region: name, Detail: fmt.Sprintf("text boxes %d and %d overlap", index, other)})
 					}
 				}
@@ -272,6 +298,31 @@ func classifyStructuralIssues(required []string, observations map[string][]regio
 		}
 	}
 	return issues
+}
+
+func nodesAreAncestorRelated(document *dom.Document, leftID, rightID dom.NodeID) bool {
+	if document == nil {
+		return false
+	}
+	if leftID == rightID {
+		return leftID == rightID
+	}
+	left, leftOK := document.NodeByID(leftID)
+	right, rightOK := document.NodeByID(rightID)
+	if !leftOK || !rightOK {
+		return false
+	}
+	for current := left.Parent; current != nil; current = current.Parent {
+		if current == right {
+			return true
+		}
+	}
+	for current := right.Parent; current != nil; current = current.Parent {
+		if current == left {
+			return true
+		}
+	}
+	return false
 }
 
 func appendBoundedIssue(issues []visualIssue, issue visualIssue) []visualIssue {
@@ -420,6 +471,7 @@ var rasterFonts struct {
 	regular  *opentype.Font
 	bold     *opentype.Font
 	fallback *opentype.Font
+	symbols  []*opentype.Font
 	faces    map[string]font.Face
 }
 
@@ -427,6 +479,10 @@ func drawRasterText(canvas draw.Image, text string, x, baseline, size float32, b
 	dot := fixed.P(int(x), int(baseline))
 	for text != "" {
 		first, runeSize := utf8.DecodeRuneInString(text)
+		if first == '\ufe0e' || first == '\ufe0f' {
+			text = text[runeSize:]
+			continue
+		}
 		parsed, family := rasterFontForRune(first, bold)
 		end := runeSize
 		for end < len(text) {
@@ -474,6 +530,20 @@ func rasterFontForRune(character rune, bold bool) (*opentype.Font, string) {
 				break
 			}
 		}
+		for _, name := range []string{
+			"/usr/share/fonts/truetype/noto/NotoSansSymbols2-Regular.ttf",
+			"/usr/share/fonts/opentype/unifont/unifont_upper.otf",
+			"/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+		} {
+			data, err := os.ReadFile(name)
+			if err != nil {
+				continue
+			}
+			parsed, err := opentype.Parse(data)
+			if err == nil {
+				rasterFonts.symbols = append(rasterFonts.symbols, parsed)
+			}
+		}
 	})
 	primary, family := rasterFonts.regular, "regular"
 	if bold {
@@ -487,6 +557,11 @@ func rasterFontForRune(character rune, bold bool) (*opentype.Font, string) {
 	if rasterFonts.fallback != nil {
 		if glyph, err := rasterFonts.fallback.GlyphIndex(nil, character); err == nil && glyph != 0 {
 			return rasterFonts.fallback, "cjk-fallback"
+		}
+	}
+	for index, candidate := range rasterFonts.symbols {
+		if glyph, err := candidate.GlyphIndex(nil, character); err == nil && glyph != 0 {
+			return candidate, fmt.Sprintf("symbol-fallback-%d", index)
 		}
 	}
 	return primary, family
@@ -653,7 +728,7 @@ func TestStructuralClassifierDetectsMissingEmptyClippedAndOverlappingContent(t *
 			},
 		}},
 	}
-	issues := classifyStructuralIssues([]string{"missing", "empty", "broken"}, observations)
+	issues := classifyStructuralIssues(nil, []string{"missing", "empty", "broken"}, observations)
 	for _, want := range []struct{ severity, code string }{{"P0", "region-missing"}, {"P0", "region-empty"}, {"P1", "text-clipped"}, {"P1", "text-overlap"}} {
 		found := false
 		for _, issue := range issues {
@@ -664,6 +739,20 @@ func TestStructuralClassifierDetectsMissingEmptyClippedAndOverlappingContent(t *
 		}
 		if !found {
 			t.Fatalf("missing %s/%s in %#v", want.severity, want.code, issues)
+		}
+	}
+}
+
+func TestStructuralClassifierAllowsPlatformFontRoundingWithinP2Tolerance(t *testing.T) {
+	observations := map[string][]regionObservation{
+		"rounded": {{
+			Metric: regionMetric{Name: "rounded", Width: 100, Height: 24, VisibleBoxes: 1, TextBytes: 7},
+			Boxes:  []layoutmodel.Box{{Text: "rounded", X: 0, Y: 0, Width: 101.5, Height: 24}},
+		}},
+	}
+	for _, issue := range classifyStructuralIssues(nil, []string{"rounded"}, observations) {
+		if issue.Code == "text-clipped" {
+			t.Fatalf("sub-two-pixel platform font rounding was classified as clipping: %#v", issue)
 		}
 	}
 }

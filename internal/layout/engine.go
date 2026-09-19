@@ -1850,7 +1850,7 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 		if token.text == " " {
 			if preservesSpaces(token.style.whiteSpace) {
 				spaceWidth, _, _ := measureStyledText(" ", token.style)
-				if usedWidth > 0 && usedWidth+spaceWidth > lineWidth && wrapsWhitespace(token.style.whiteSpace) {
+				if usedWidth > 0 && usedWidth+spaceWidth > lineWidth+1 && wrapsWhitespace(token.style.whiteSpace) {
 					flushLine(false)
 				}
 				appendPiece(token, " ", spaceWidth)
@@ -1868,7 +1868,7 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 			spaceWidth, _, _ = measureStyledText(" ", pendingSpace.style)
 		}
 		wordWidth, _, _ := measureStyledText(token.text, token.style)
-		if usedWidth > 0 && usedWidth+spaceWidth+wordWidth > lineWidth && wrapsWhitespace(token.style.whiteSpace) {
+		if usedWidth > 0 && usedWidth+spaceWidth+wordWidth > lineWidth+1 && wrapsWhitespace(token.style.whiteSpace) {
 			flushLine(false)
 			spaceWidth = 0
 		}
