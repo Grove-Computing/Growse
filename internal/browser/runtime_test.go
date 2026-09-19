@@ -21,20 +21,21 @@ import (
 )
 
 type runtimeStub struct {
-	loadCalls        atomic.Int32
-	startCalls       atomic.Int32
-	stopCalls        atomic.Int32
-	loadErr          error
-	startErr         error
-	stopErr          error
-	loadContext      context.Context
-	scripts          []runtimemodel.Script
-	environment      runtimemodel.Environment
-	mutateOnStart    bool
-	navigateOnStart  string
-	popStates        []string
-	hashChanges      [][2]string
-	navigationEvents []string
+	loadCalls         atomic.Int32
+	startCalls        atomic.Int32
+	stopCalls         atomic.Int32
+	loadErr           error
+	startErr          error
+	stopErr           error
+	loadContext       context.Context
+	scripts           []runtimemodel.Script
+	environment       runtimemodel.Environment
+	mutateOnStart     bool
+	mutateTextOnStart string
+	navigateOnStart   string
+	popStates         []string
+	hashChanges       [][2]string
+	navigationEvents  []string
 }
 
 func TestJavaScriptConsoleRecordRetainsSelectedEngine(t *testing.T) {
@@ -502,6 +503,11 @@ func TestFailedEngineReloadNeverReusesStoppedRuntime(t *testing.T) {
 
 func (runtime *runtimeStub) Start(context.Context) error {
 	runtime.startCalls.Add(1)
+	if runtime.mutateTextOnStart != "" && runtime.environment.Document != nil {
+		if content, exists := runtime.environment.Document.GetElementByID("content"); exists {
+			runtime.environment.Document.SetTextContent(content.ID, runtime.mutateTextOnStart)
+		}
+	}
 	if runtime.mutateOnStart && runtime.environment.OnMutation != nil {
 		runtime.environment.OnMutation()
 	}
@@ -982,7 +988,11 @@ func TestJavaScriptRuntimeStartErrorPreservesCommittedPageWithoutTabError(t *tes
 		URL: pageURL, StatusCode: 200, ContentType: "text/html",
 		Body: []byte(`<h1 id="content">Readable</h1><script>for (;;) {}</script>`),
 	}}
-	runtime := &runtimeStub{startErr: errors.New("runtime.start timed out")}
+	runtime := &runtimeStub{
+		startErr:          errors.New("runtime.start timed out"),
+		mutateTextOnStart: "partially hydrated",
+		mutateOnStart:     true,
+	}
 	browserState := NewWithEngineFactory(loader, func(engine runtimemodel.Engine) runtimemodel.Runtime { return runtime })
 	if _, err := browserState.SetEngine(context.Background(), runtimemodel.EngineJavaScript); err != nil {
 		t.Fatal(err)
