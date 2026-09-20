@@ -554,6 +554,15 @@ func (e *engine) flexIntrinsicSizes(node *dom.Node, style blockStyle, axis flexA
 	horizontalExtras := style.padding.Left + style.padding.Right + style.border.Left.Width + style.border.Right.Width
 	verticalExtras := style.padding.Top + style.padding.Bottom + style.border.Top.Width + style.border.Bottom.Width
 	intrinsicWidth, intrinsicHeight := textWidth+horizontalExtras, textHeight+verticalExtras
+	if node.Type == dom.NodeElement && (style.display == stylemodel.DisplayFlex || style.display == stylemodel.DisplayInlineFlex) && hasElementChildren(node) {
+		// A flex container contributes the max-content size of its flex items,
+		// including their padding, margins and the container gap. Measuring only
+		// flattened descendant text underestimates nested navigation rows and can
+		// make them wrap even when their ancestor has ample available width.
+		flexWidth, flexHeight, _ := e.resolveInlineFlexSize(node, style, width)
+		intrinsicWidth = max(intrinsicWidth, flexWidth)
+		intrinsicHeight = max(intrinsicHeight, flexHeight)
+	}
 	if style.height.Kind == stylemodel.SizeAuto && e.intrinsicMeasureDepth < 8 && hasElementChildren(node) {
 		if measured := e.measureIntrinsicBlockHeight(node, style, width, height, heightDefinite); measured > intrinsicHeight {
 			intrinsicHeight = measured
@@ -731,6 +740,9 @@ func (e *engine) resolveInlineFlexSize(node *dom.Node, containerStyle blockStyle
 		}
 		childStyle := e.styleFor(child)
 		if childStyle.display == stylemodel.DisplayNone {
+			continue
+		}
+		if childStyle.layoutPosition == stylemodel.PositionAbsolute || childStyle.layoutPosition == stylemodel.PositionFixed {
 			continue
 		}
 		main, cross, _ := e.flexIntrinsicSizes(child, childStyle, axis, containingWidth, containingWidth, 0, false)

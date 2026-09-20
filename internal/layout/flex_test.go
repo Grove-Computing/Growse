@@ -664,6 +664,41 @@ func TestFlexIntrinsicWidthExcludesAbsoluteDropdownContent(t *testing.T) {
 	}
 }
 
+// Adapted from the nested responsive header used by saku0512.com. A flex
+// container's max-content contribution includes descendant padding and gaps;
+// flattening only its text makes the navigation wrap despite ample space.
+func TestNestedFlexMaxContentIncludesDescendantGapsAndPadding(t *testing.T) {
+	document := dom.NewDocument()
+	header := document.CreateElement("header", map[string]string{"class": "header"})
+	row := document.CreateElement("div", map[string]string{"class": "row"})
+	brand := document.CreateElement("div", map[string]string{"class": "brand"})
+	navigation := document.CreateElement("nav", map[string]string{"class": "navigation"})
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, header}, [2]*dom.Node{header, row},
+		[2]*dom.Node{row, brand}, [2]*dom.Node{brand, document.CreateText("Saku0512")},
+		[2]*dom.Node{row, navigation},
+	)
+	for _, label := range []string{"Home", "Articles", "SNS Link", "English", "Make a donation"} {
+		link := document.CreateElement("a", map[string]string{"class": "link"})
+		appendNodes(t, document, [2]*dom.Node{navigation, link}, [2]*dom.Node{link, document.CreateText(label)})
+	}
+	stylesheet, err := css.Parse(strings.NewReader(`
+.header { display:flex; width:1020px; height:64px; align-items:center }
+.row { display:flex; align-items:center; gap:24px }
+.brand { display:flex; flex-shrink:0; font-size:20px; font-weight:700 }
+.navigation { display:flex; flex-wrap:wrap; align-items:center; gap:16px }
+.link { padding:8px 12px; font-size:14px }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, stylemodel.Compute(document, stylesheet), 1100)
+	brandRect, navigationRect := tree.Bounds[brand.ID], tree.Bounds[navigation.ID]
+	if navigationRect.Height > 40 || navigationRect.Width < 450 {
+		t.Fatalf("nested header wrapped despite sufficient width: brand=%#v navigation=%#v row=%#v", brandRect, navigationRect, tree.Bounds[row.ID])
+	}
+}
+
 func decorationForNode(t *testing.T, tree *Tree, nodeID dom.NodeID) Decoration {
 	t.Helper()
 	for _, decoration := range tree.Decorations {
