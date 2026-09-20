@@ -138,7 +138,40 @@ func pathologicalCompoundPathRaster(source []byte, raster *image.RGBA) bool {
 			}
 		}
 	}
-	return opaque*100 >= total*95
+	coverage := opaque * 100 / total
+	if coverage >= 95 {
+		return true
+	}
+	// oksvg can also collapse a dense, multi-subpath wordmark into several
+	// broad black bands without covering the complete surface. Legitimate
+	// glyph outlines contain many independent move commands, but their ink
+	// coverage stays sparse at the declared logo dimensions.
+	return coverage >= 30 && svgPathSubpaths(source) >= 8
+}
+
+func svgPathSubpaths(source []byte) int {
+	decoder := xml.NewDecoder(bytes.NewReader(source))
+	count := 0
+	for {
+		token, err := decoder.Token()
+		if err != nil {
+			return count
+		}
+		start, ok := token.(xml.StartElement)
+		if !ok || canonicalSVGName(start.Name.Local) != "path" {
+			continue
+		}
+		for _, attribute := range start.Attr {
+			if canonicalSVGName(attribute.Name.Local) != "d" {
+				continue
+			}
+			for _, value := range attribute.Value {
+				if value == 'M' || value == 'm' {
+					count++
+				}
+			}
+		}
+	}
 }
 
 func validateSVG(source []byte) error {

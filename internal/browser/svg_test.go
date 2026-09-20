@@ -97,6 +97,20 @@ func TestPathologicalCompoundPathRasterIsRejected(t *testing.T) {
 	if pathologicalCompoundPathRaster([]byte(`<svg><path fill-rule="nonzero" d="M0 0z"/></svg>`), canvas) {
 		t.Fatal("ordinary compound path coverage was rejected")
 	}
+
+	wordmark := image.NewRGBA(image.Rect(0, 0, 100, 14))
+	for y := 3; y < 11; y++ {
+		for x := 10; x < 70; x++ {
+			wordmark.SetRGBA(x, y, color.RGBA{A: 255})
+		}
+	}
+	denseGlyphs := []byte(`<svg><path fill-rule="nonzero" d="M0 0z M1 0z M2 0z M3 0z M4 0z M5 0z M6 0z M7 0z"/></svg>`)
+	if !pathologicalCompoundPathRaster(denseGlyphs, wordmark) {
+		t.Fatal("dense multi-subpath wordmark corruption was accepted")
+	}
+	if pathologicalCompoundPathRaster([]byte(`<svg><path fill-rule="nonzero" d="M0 0z"/></svg>`), wordmark) {
+		t.Fatal("dense simple icon was rejected as a wordmark corruption")
+	}
 }
 
 func TestRasterizeSVGAllowsSafeClassStylesheet(t *testing.T) {
