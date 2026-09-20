@@ -224,19 +224,20 @@ func build(document *dom.Document, computed stylemodel.Map, images map[dom.NodeI
 	}
 	recordNodeParents(tree, document)
 	state := engine{
-		tree:           tree,
-		computed:       computed,
-		images:         images,
-		fonts:          fonts,
-		y:              pageInset,
-		opacity:        1,
-		viewportWidth:  viewportWidth,
-		viewportHeight: viewportHeight,
-		scrollX:        scrollX,
-		scrollY:        scrollY,
-		subgrids:       make(map[dom.NodeID]subgridContext),
-		now:            time.Now,
-		deadline:       startedAt.Add(maxLayoutTime),
+		tree:                tree,
+		computed:            computed,
+		images:              images,
+		fonts:               fonts,
+		y:                   pageInset,
+		opacity:             1,
+		viewportWidth:       viewportWidth,
+		viewportHeight:      viewportHeight,
+		scrollX:             scrollX,
+		scrollY:             scrollY,
+		subgrids:            make(map[dom.NodeID]subgridContext),
+		selfCollapsingCache: make(map[dom.NodeID]uint8),
+		now:                 time.Now,
+		deadline:            startedAt.Add(maxLayoutTime),
 	}
 	if document != nil {
 		if body := findElement(document.Root, "body"); body != nil {
@@ -347,6 +348,7 @@ type engine struct {
 	fragmentLimitReported         bool
 	timeLimitReported             bool
 	intrinsicMeasureDepth         int
+	selfCollapsingCache           map[dom.NodeID]uint8
 }
 
 // withinBudget bounds work while geometry is being generated. The final
@@ -1012,8 +1014,10 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 		firstInFlow := true
 		flushInline := func() {
 			if len(inlineRuns) != 0 {
-				e.addInlineRuns(node.ID, node.TagName, inlineRuns, style, contentX, contentWidth)
-				previousBlock = false
+				if !onlyCollapsibleWhitespaceRuns(inlineRuns) {
+					e.addInlineRuns(node.ID, node.TagName, inlineRuns, style, contentX, contentWidth)
+					previousBlock = false
+				}
 			}
 			inlineRuns = inlineRuns[:0]
 		}
@@ -1093,7 +1097,8 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 				if isBlockLevelDisplay(childStyle.display) {
 					flushInline()
 					childTop := e.collapsingTopMargin(child, childStyle, 0)
-					if firstInFlow && firstCollapsibleChild == child {
+					collapsedThroughParentStart := firstInFlow && firstCollapsibleChild == child
+					if collapsedThroughParentStart {
 						zero := float32(0)
 						e.addBlock(child, childStyle, contentX, contentWidth, childContainingHeight, declaredHeightDefinite, &zero)
 					} else if previousBlock {
@@ -1104,7 +1109,15 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 						e.addBlock(child, childStyle, contentX, contentWidth, childContainingHeight, declaredHeightDefinite, nil)
 					}
 					previousBlock = true
-					previousBottomMargin = e.collapsingBottomMargin(child, childStyle, 0)
+					if collapsedThroughParentStart && e.isSelfCollapsingEmptyBlock(child, childStyle, 0) {
+						// The empty child's start and end margins are one collapsed
+						// group with the parent's start margin. Do not apply that same
+						// group again before the following sibling.
+						e.y -= e.collapsingBottomMargin(child, childStyle, 0).value()
+						previousBottomMargin = marginGroup{}
+					} else {
+						previousBottomMargin = e.collapsingBottomMargin(child, childStyle, 0)
+					}
 					firstInFlow = false
 					continue
 				}
@@ -1418,7 +1431,48 @@ func (e *engine) collapsingTopMargin(node *dom.Node, style blockStyle, depth int
 	if child := e.firstCollapsibleBlockChild(node, style); child != nil {
 		result = result.merge(e.collapsingTopMargin(child, e.styleFor(child), depth+1))
 	}
+	if e.isSelfCollapsingEmptyBlock(node, style, depth) {
+		result = result.merge(marginGroupFor(style.margin.Bottom))
+	}
 	return result
+}
+
+func (e *engine) isSelfCollapsingEmptyBlock(node *dom.Node, style blockStyle, depth int) (result bool) {
+	if node == nil || depth >= maxLayoutDepth || !canCollapseBlockEnd(style) {
+		return false
+	}
+	if cached := e.selfCollapsingCache[node.ID]; cached != 0 {
+		return cached == 2
+	}
+	defer func() {
+		if result {
+			e.selfCollapsingCache[node.ID] = 2
+		} else {
+			e.selfCollapsingCache[node.ID] = 1
+		}
+	}()
+	if computed, ok := e.computed.For(node); ok && (computed.BeforeContent != "" || computed.AfterContent != "") {
+		return false
+	}
+	for _, child := range e.flowChildren(node) {
+		if child == nil {
+			continue
+		}
+		if child.Type == dom.NodeText {
+			if strings.TrimSpace(child.Text) == "" {
+				continue
+			}
+			return false
+		}
+		childStyle := e.styleFor(child)
+		if childStyle.display == stylemodel.DisplayNone || childStyle.float != stylemodel.FloatNone || childStyle.layoutPosition == stylemodel.PositionAbsolute || childStyle.layoutPosition == stylemodel.PositionFixed {
+			continue
+		}
+		if childStyle.display != stylemodel.DisplayBlock || !e.isSelfCollapsingEmptyBlock(child, childStyle, depth+1) {
+			return false
+		}
+	}
+	return true
 }
 
 func (e *engine) collapsingBottomMargin(node *dom.Node, style blockStyle, depth int) marginGroup {
@@ -1922,6 +1976,18 @@ func (e *engine) addInlineRuns(nodeID dom.NodeID, tag string, runs []inlineRun, 
 		}
 	}
 	flushLine(true)
+}
+
+func onlyCollapsibleWhitespaceRuns(runs []inlineRun) bool {
+	if len(runs) == 0 {
+		return false
+	}
+	for _, run := range runs {
+		if run.atomic || run.image || run.flex || run.grid || strings.TrimSpace(run.text) != "" || preservesSpaces(run.style.whiteSpace) {
+			return false
+		}
+	}
+	return true
 }
 
 func isBlockLevelDisplay(display stylemodel.Display) bool {
