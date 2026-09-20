@@ -168,9 +168,31 @@ func TestLayoutTextRunPreservesLayoutAdvanceAcrossFontFallback(t *testing.T) {
 		Metric:      unit.Metric{PxPerDp: 1, PxPerSp: 1},
 	}
 	dimensions := ui.layoutTextRun(gtx, paintmodel.TextRun{
-		Text: "日本語", FontSize: 16, Width: 73, Color: 0x111827ff,
+		Text: "日本語", FontSize: 16, Width: 73, Baseline: 18, Color: 0x111827ff,
 	}, 24)
 	if dimensions.Size != image.Pt(73, 24) {
 		t.Fatalf("text run dimensions = %v, want layout advance 73x24", dimensions.Size)
+	}
+	if dimensions.Baseline != 6 {
+		t.Fatalf("text run baseline from bottom = %d, want CSS baseline 18px from top in a 24px line", dimensions.Baseline)
+	}
+}
+
+func TestLayoutDecoratedLabelDoesNotConstrainGlyphInkToCSSLineHeight(t *testing.T) {
+	gtx := layout.Context{
+		Ops:         new(op.Ops),
+		Constraints: layout.Exact(image.Pt(120, 24)),
+		Metric:      unit.Metric{PxPerDp: 1, PxPerSp: 1},
+	}
+	measured := layout.Constraints{}
+	dimensions := layoutDecoratedLabel(gtx, func(gtx layout.Context) layout.Dimensions {
+		measured = gtx.Constraints
+		return layout.Dimensions{Size: image.Pt(80, 30), Baseline: 7}
+	}, 0, 0, 18, 16)
+	if measured.Min.Y != 0 || measured.Max.Y < 48 {
+		t.Fatalf("glyph measurement constraints = %v, want relaxed height beyond the 24px CSS line", measured)
+	}
+	if dimensions.Size != image.Pt(80, 24) || dimensions.Baseline != 6 {
+		t.Fatalf("baseline-aligned line dimensions = %v baseline:%d, want 80x24 baseline:6", dimensions.Size, dimensions.Baseline)
 	}
 }

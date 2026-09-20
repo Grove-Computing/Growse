@@ -3673,15 +3673,40 @@ func (ui *BrowserUI) layoutShadowedText(gtx layout.Context, text string, size fl
 }
 
 func layoutDecoratedLabel(gtx layout.Context, label layout.Widget, decoration stylemodel.TextDecorationLine, decorationColor uint32, baseline, fontSize float32) layout.Dimensions {
+	lineHeight := 0
+	if gtx.Constraints.Min.Y == gtx.Constraints.Max.Y {
+		lineHeight = gtx.Constraints.Max.Y
+	}
+	// Shape the glyphs without constraining them to the CSS line box. Font
+	// ascent/descent can extend beyond line-height, and CSS allows that ink to
+	// overflow unless an ancestor establishes an explicit clip.
+	measure := gtx
+	measure.Constraints.Min.Y = 0
+	if lineHeight > 0 {
+		measure.Constraints.Max.Y = max(lineHeight, gtx.Dp(unit.Dp(fontSize*3)))
+	}
 	macro := op.Record(gtx.Ops)
-	dimensions := label(gtx)
+	dimensions := label(measure)
 	call := macro.Stop()
+	desiredBaseline := gtx.Dp(unit.Dp(baseline))
+	if desiredBaseline <= 0 {
+		desiredBaseline = dimensions.Size.Y - dimensions.Baseline
+	}
+	if lineHeight == 0 {
+		lineHeight = max(dimensions.Size.Y, desiredBaseline)
+	}
+	desiredBaseline = min(max(desiredBaseline, 0), lineHeight)
+	actualBaseline := dimensions.Size.Y - dimensions.Baseline
+	offset := op.Offset(image.Pt(0, desiredBaseline-actualBaseline)).Push(gtx.Ops)
 	call.Add(gtx.Ops)
+	offset.Pop()
+	dimensions.Size.Y = lineHeight
+	dimensions.Baseline = lineHeight - desiredBaseline
 	if decoration == stylemodel.TextDecorationNone || dimensions.Size.X <= 0 {
 		return dimensions
 	}
 	thickness := max(gtx.Dp(unit.Dp(fontSize/16)), 1)
-	baselinePixels := gtx.Dp(unit.Dp(baseline))
+	baselinePixels := desiredBaseline
 	drawLine := func(y int) {
 		y = min(max(y, 0), max(dimensions.Size.Y-thickness, 0))
 		paint.FillShape(gtx.Ops, rgba(decorationColor), clip.Rect{Min: image.Pt(0, y), Max: image.Pt(dimensions.Size.X, y+thickness)}.Op())
