@@ -3471,31 +3471,40 @@ func (ui *BrowserUI) layoutDrawText(gtx layout.Context, command paintmodel.DrawT
 		}
 		gtx.Constraints.Min.Y = height
 		gtx.Constraints.Max.Y = height
-		cursorArea := clip.Rect{Max: image.Pt(gtx.Dp(unit.Dp(command.Width)), height)}.Push(gtx.Ops)
-		cssCursor(command.Cursor).Add(gtx.Ops)
-		defer cursorArea.Pop()
-		if command.Background != 0 {
-			paint.FillShape(gtx.Ops, rgba(command.Background), clip.Rect{Max: gtx.Constraints.Min}.Op())
-		}
-		if command.WritingMode != stylemodel.WritingModeHorizontalTB {
-			return ui.layoutVerticalText(gtx, command)
-		}
-		if len(command.Runs) > 0 {
-			children := make([]layout.FlexChild, 0, len(command.Runs))
-			for _, run := range command.Runs {
-				run := run
-				children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					return ui.layoutTextRun(gtx, run, height)
-				}))
+		return layoutTextCursorArea(gtx, gtx.Dp(unit.Dp(command.Width)), height, command.Cursor, func(gtx layout.Context) layout.Dimensions {
+			if command.Background != 0 {
+				paint.FillShape(gtx.Ops, rgba(command.Background), clip.Rect{Max: gtx.Constraints.Min}.Op())
 			}
-			return layout.Flex{Alignment: layout.Baseline}.Layout(gtx, children...)
-		}
-		if command.Opacity < 1 {
-			defer paint.PushOpacity(gtx.Ops, max(command.Opacity, 0)).Pop()
-		}
+			if command.WritingMode != stylemodel.WritingModeHorizontalTB {
+				return ui.layoutVerticalText(gtx, command)
+			}
+			if len(command.Runs) > 0 {
+				children := make([]layout.FlexChild, 0, len(command.Runs))
+				for _, run := range command.Runs {
+					run := run
+					children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return ui.layoutTextRun(gtx, run, height)
+					}))
+				}
+				return layout.Flex{Alignment: layout.Baseline}.Layout(gtx, children...)
+			}
+			if command.Opacity < 1 {
+				defer paint.PushOpacity(gtx.Ops, max(command.Opacity, 0)).Pop()
+			}
 
-		return ui.layoutShadowedText(gtx, command.Text, command.FontSize, command.Bold, command.FontFamilies, command.FontStyle, command.LetterSpacing, command.WordSpacing, command.Color, command.Decoration, command.DecorationColor, command.Baseline, command.TextShadows)
+			return ui.layoutShadowedText(gtx, command.Text, command.FontSize, command.Bold, command.FontFamilies, command.FontStyle, command.LetterSpacing, command.WordSpacing, command.Color, command.Decoration, command.DecorationColor, command.Baseline, command.TextShadows)
+		})
 	})
+}
+
+func layoutTextCursorArea(gtx layout.Context, width, height int, cursor stylemodel.Cursor, content layout.Widget) layout.Dimensions {
+	area := clip.Rect{Max: image.Pt(width, height)}.Push(gtx.Ops)
+	cssCursor(cursor).Add(gtx.Ops)
+	// The cursor hit area is not a CSS overflow clip. Pop it before painting
+	// so glyph ink may extend beyond a tight line-height; explicit ancestor
+	// clips established by the caller remain in force.
+	area.Pop()
+	return content(gtx)
 }
 
 func (ui *BrowserUI) layoutVerticalText(gtx layout.Context, command paintmodel.DrawText) layout.Dimensions {
@@ -3681,6 +3690,11 @@ func layoutDecoratedLabel(gtx layout.Context, label layout.Widget, decoration st
 	// ascent/descent can extend beyond line-height, and CSS allows that ink to
 	// overflow unless an ancestor establishes an explicit clip.
 	measure := gtx
+	measure.Constraints.Min.X = 0
+	// CSS layout already owns wrapping and text-overflow. A fallback face can be
+	// slightly wider than the face used by the layout engine; do not let Gio
+	// independently replace that run with an ellipsis.
+	measure.Constraints.Max.X = 1 << 20
 	measure.Constraints.Min.Y = 0
 	if lineHeight > 0 {
 		measure.Constraints.Max.Y = max(lineHeight, gtx.Dp(unit.Dp(fontSize*3)))
