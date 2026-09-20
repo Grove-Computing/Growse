@@ -202,7 +202,9 @@ func TestRuntimeTimesOutPendingTopLevelAwait(t *testing.T) {
 	pageURL := moduleTestURL(t, "https://app.example/page.html")
 	var records [][2]string
 	runtime := New()
-	runtime.moduleTimeout = 20 * time.Millisecond
+	// Leave enough time for esbuild to cold-start on Windows runners so this
+	// assertion reaches the intentionally pending top-level await.
+	runtime.moduleTimeout = time.Second
 	t.Cleanup(func() { _ = runtime.Stop() })
 	script := runtimemodel.Script{
 		Engine: runtimemodel.EngineJavaScript, Kind: runtimemodel.ScriptModule, SourceURL: pageURL,
@@ -215,7 +217,7 @@ func TestRuntimeTimesOutPendingTopLevelAwait(t *testing.T) {
 	if err := runtime.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(records) != 1 || records[0][0] != "error" || !strings.Contains(records[0][1], "exceeded 20ms") {
+	if len(records) != 1 || records[0][0] != "error" || !strings.Contains(records[0][1], "exceeded 1s") {
 		t.Fatalf("top-level await timeout records = %v", records)
 	}
 }
