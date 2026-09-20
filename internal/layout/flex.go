@@ -399,7 +399,7 @@ func (e *engine) collectFlexItems(container *dom.Node, axis flexAxis, availableM
 	var items []*flexLayoutItem
 	byAlgorithm := make(map[*flexItem]*flexLayoutItem)
 	for index, node := range container.Children {
-		if node.Type != dom.NodeElement && (node.Type != dom.NodeText || strings.TrimSpace(node.Text) == "") {
+		if node == nil || node.Type != dom.NodeElement && (node.Type != dom.NodeText || strings.TrimSpace(node.Text) == "") {
 			continue
 		}
 		style := e.styleFor(node)
@@ -467,7 +467,10 @@ func (e *engine) collectFlexItems(container *dom.Node, axis flexAxis, availableM
 
 func (e *engine) renderFlexPositionedChildren(container *dom.Node, containerStyle blockStyle, axis flexAxis, x, y, width, height float32, heightDefinite bool) {
 	for _, node := range container.Children {
-		if node.Type != dom.NodeElement {
+		// A JavaScript mutation can detach a child between Page snapshots. Treat
+		// the transient nil entry like a non-element instead of crashing the
+		// renderer while the next style revision is being prepared.
+		if node == nil || node.Type != dom.NodeElement {
 			continue
 		}
 		itemStyle := e.styleFor(node)

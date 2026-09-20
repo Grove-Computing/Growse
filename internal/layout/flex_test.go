@@ -129,6 +129,31 @@ func TestBuildFlexRowGrowsItemsAndUsesOrderModifiedVisualOrder(t *testing.T) {
 	}
 }
 
+func TestBuildFlexIgnoresDetachedNilChildDuringPositionedPass(t *testing.T) {
+	document := dom.NewDocument()
+	container := document.CreateElement("div", map[string]string{"class": "container"})
+	item := document.CreateElement("div", map[string]string{"class": "item"})
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, container},
+		[2]*dom.Node{container, item},
+		[2]*dom.Node{item, document.CreateText("visible")},
+	)
+	// Runtime DOM replacement can leave a transient detached slot in the
+	// snapshot consumed by layout.
+	container.Children = append(container.Children, nil)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.container { display:flex; width:300px }
+.item { flex:1; min-height:30px }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, stylemodel.Compute(document, stylesheet), 500)
+	if tree == nil {
+		t.Fatal("layout returned a nil tree")
+	}
+}
+
 func TestBuildFlexColumnShrinksItems(t *testing.T) {
 	document := dom.NewDocument()
 	container := document.CreateElement("section", map[string]string{"class": "container"})
