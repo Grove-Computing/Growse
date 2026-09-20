@@ -3415,13 +3415,17 @@ func (ui *BrowserUI) layoutDrawButton(gtx layout.Context, command paintmodel.Dra
 		gtx.Constraints.Max.Y = gtx.Constraints.Min.Y
 		style := material.Button(ui.documentTheme(), button, command.Label)
 		style.Color = rgba(command.Color)
-		background := command.Background
-		if background == 0 {
-			background = command.AccentColor
+		if containsEmojiPresentation(command.Label) {
+			style.Font.Typeface = font.Typeface("Noto Color Emoji")
 		}
-		style.Background = rgba(background)
-		if command.Appearance == stylemodel.AppearanceNone {
+		// CSS controls the page background and padding. Material's accent fill
+		// and horizontal inset would turn transparent navigation buttons blue
+		// and truncate labels whose measured CSS width is otherwise sufficient.
+		style.Inset = layout.Inset{}
+		if command.Background == 0 || command.Appearance == stylemodel.AppearanceNone {
 			style.Background = color.NRGBA{}
+		} else {
+			style.Background = rgba(command.Background)
 		}
 		return style.Layout(gtx)
 	})
@@ -3678,6 +3682,9 @@ func (ui *BrowserUI) layoutShadowedText(gtx layout.Context, text string, size fl
 			if len(families) != 0 {
 				label.Font.Typeface = font.Typeface(families[0])
 			}
+			if containsEmojiPresentation(text) {
+				label.Font.Typeface = font.Typeface("Noto Color Emoji")
+			}
 			if fontStyle == "italic" || strings.HasPrefix(fontStyle, "oblique") {
 				label.Font.Style = font.Italic
 			}
@@ -3699,6 +3706,20 @@ func (ui *BrowserUI) layoutShadowedText(gtx layout.Context, text string, size fl
 	}
 	children = append(children, layout.Stacked(labelLayout(color)))
 	return layout.Stack{Alignment: layout.NW}.Layout(gtx, children...)
+}
+
+func containsEmojiPresentation(value string) bool {
+	for _, character := range value {
+		switch {
+		case character >= 0x1f000 && character <= 0x1faff:
+			return true
+		case character >= 0x2600 && character <= 0x27ff:
+			return true
+		case character == 0xfe0f:
+			return true
+		}
+	}
+	return false
 }
 
 func layoutDecoratedLabel(gtx layout.Context, label layout.Widget, decoration stylemodel.TextDecorationLine, decorationColor uint32, baseline, fontSize float32) layout.Dimensions {

@@ -332,3 +332,16 @@ func TestDocumentPaintLayerDrawsReplacedImageAtDocumentCoordinates(t *testing.T)
 		t.Fatalf("replaced image pixel = %#v, want red paint", pixel)
 	}
 }
+
+func TestContainsEmojiPresentationRecognizesSymbolsAndFlags(t *testing.T) {
+	for _, value := range []string{"📝", "🇺🇸 English", "☀️"} {
+		if !containsEmojiPresentation(value) {
+			t.Fatalf("containsEmojiPresentation(%q) = false", value)
+		}
+	}
+	for _, value := range []string{"English", "日本語", "→"} {
+		if containsEmojiPresentation(value) {
+			t.Fatalf("containsEmojiPresentation(%q) = true", value)
+		}
+	}
+}
