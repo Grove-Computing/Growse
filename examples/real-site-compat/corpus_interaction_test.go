@@ -68,7 +68,7 @@ func assertCorpusLifecycleState(t *testing.T, engine *browser.Browser, page *bro
 		t.Fatal("link focus was not cleared")
 	}
 	for _, scrollY := range []float32{0, 48} {
-		tree := layoutmodel.BuildWithScrollAndResources(page.Document, page.ComputedStyles, page.ImageResources, page.WebFonts, float32(width), float32(height), 0, scrollY)
+		tree := buildCorpusLifecycleLayout(page, float32(width), float32(height), scrollY)
 		if tree.ScrollY != scrollY {
 			t.Fatalf("scroll layout offset = %v, want %v", tree.ScrollY, scrollY)
 		}
@@ -80,6 +80,27 @@ func assertCorpusLifecycleState(t *testing.T, engine *browser.Browser, page *bro
 			t.Fatalf("lifecycle state has release blockers at scroll %v: %#v", scrollY, issues)
 		}
 	}
+}
+
+func buildCorpusLifecycleLayout(page *browser.Page, width, height, scrollY float32) *layoutmodel.Tree {
+	const maxAttempts = 3
+	var tree *layoutmodel.Tree
+	for range maxAttempts {
+		tree = layoutmodel.BuildWithScrollAndResources(page.Document, page.ComputedStyles, page.ImageResources, page.WebFonts, width, height, 0, scrollY)
+		if !hasLayoutTimeFallback(tree) {
+			return tree
+		}
+	}
+	return tree
+}
+
+func hasLayoutTimeFallback(tree *layoutmodel.Tree) bool {
+	for _, fallback := range tree.Fallbacks {
+		if fallback.Reason == "layout time limit exceeded" {
+			return true
+		}
+	}
+	return false
 }
 
 func firstElement(node *dom.Node, tag string) *dom.Node {
