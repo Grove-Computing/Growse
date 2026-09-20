@@ -114,7 +114,10 @@ func assertRuntimeDiagnostics(t *testing.T, page *browser.Page) {
 
 func waitForExternalPlatform(t *testing.T, engine *browser.Browser, workers *serviceworker.Manager, mutations <-chan struct{}) {
 	t.Helper()
-	deadline := time.NewTimer(5 * time.Second)
+	// Windows CI cold starts the isolated runtime and Service Worker processes
+	// noticeably slower than the other platforms. Keep the assertion bounded,
+	// while allowing the final offline fetch to complete under runner load.
+	deadline := time.NewTimer(15 * time.Second)
 	defer deadline.Stop()
 	for {
 		ready := false
