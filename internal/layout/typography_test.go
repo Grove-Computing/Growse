@@ -110,6 +110,38 @@ func TestRealSiteHeadingWrapDoesNotOverlapParagraphOrGainImplicitEllipsis(t *tes
 	}
 }
 
+// Adapted from CSS Inline Layout 3 line-height inheritance. The 1MB Club sets
+// a unitless line-height on body and relies on h2's larger UA font-size; the
+// inherited number must produce a taller line box for the heading.
+func TestUnitlessLineHeightExpandsRealSiteHeadingLineBox(t *testing.T) {
+	document := dom.NewDocument()
+	body := document.CreateElement("body", nil)
+	heading := document.CreateElement("h2", nil)
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, body},
+		[2]*dom.Node{body, heading},
+		[2]*dom.Node{heading, document.CreateText("Official Members")},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`
+body { font-size:15px; line-height:1.4 }
+h2 { margin:0; padding:10px }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	computed := style.ComputeWithEnvironment(document, stylesheet, style.InteractionState{}, style.Environment{BrowserDefaults: true})
+	tree := Build(document, computed, 900)
+	headingRect := tree.Bounds[heading.ID]
+	if headingRect.Height < 51 {
+		t.Fatalf("heading height = %g, want at least 51px from 31.5px inherited line-height plus padding", headingRect.Height)
+	}
+	for _, box := range tree.Boxes {
+		if box.NodeID == heading.ID && box.Height < 31 {
+			t.Fatalf("heading line box height = %g, want inherited 1.4 multiplied by 22.5px font", box.Height)
+		}
+	}
+}
+
 func TestMixedCJKLatinUsesSharedLineMetricsAndNaturalCJKBreaks(t *testing.T) {
 	document := dom.NewDocument()
 	paragraph := document.CreateElement("p", map[string]string{"class": "mixed"})

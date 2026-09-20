@@ -686,6 +686,8 @@ type ComputedStyle struct {
 	FontStretch          string
 	FontFaceIndex        int
 	LineHeight           float32
+	LineHeightNumber     float32
+	LineHeightUnitless   bool
 	WhiteSpace           WhiteSpace
 	WritingMode          WritingMode
 	Direction            Direction
