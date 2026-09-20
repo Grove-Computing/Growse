@@ -1650,6 +1650,15 @@ func (e *engine) inlineText(node *dom.Node) string {
 	}
 	var text strings.Builder
 	for _, child := range node.Children {
+		if child == nil {
+			continue
+		}
+		if child.Type == dom.NodeElement {
+			childStyle := e.styleFor(child)
+			if childStyle.layoutPosition == stylemodel.PositionAbsolute || childStyle.layoutPosition == stylemodel.PositionFixed {
+				continue
+			}
+		}
 		text.WriteString(e.inlineText(child))
 	}
 	return text.String()

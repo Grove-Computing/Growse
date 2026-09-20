@@ -632,6 +632,38 @@ func TestFlexItemTranslatesNestedOverflowClipsIntoParentCoordinates(t *testing.T
 	}
 }
 
+func TestFlexIntrinsicWidthExcludesAbsoluteDropdownContent(t *testing.T) {
+	document := dom.NewDocument()
+	header := document.CreateElement("header", map[string]string{"class": "header"})
+	start := document.CreateElement("div", map[string]string{"class": "start"})
+	menuButton := document.CreateElement("span", nil)
+	dropdown := document.CreateElement("div", map[string]string{"class": "dropdown"})
+	end := document.CreateElement("nav", map[string]string{"class": "end"})
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, header}, [2]*dom.Node{header, start},
+		[2]*dom.Node{start, menuButton}, [2]*dom.Node{menuButton, document.CreateText("Menu")},
+		[2]*dom.Node{start, dropdown}, [2]*dom.Node{dropdown, document.CreateText("An absolutely positioned menu with very long off-flow content")},
+		[2]*dom.Node{header, end}, [2]*dom.Node{end, document.CreateText("Account Login")},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.header { display:flex; flex-wrap:wrap; width:600px; gap:16px }
+.start { display:flex; gap:12px }
+.dropdown { position:absolute; width:900px }
+.end { width:180px }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, stylemodel.Compute(document, stylesheet), 700)
+	startRect, endRect := tree.Bounds[start.ID], tree.Bounds[end.ID]
+	if startRect.Y != endRect.Y {
+		t.Fatalf("off-flow dropdown forced header wrapping: start=%#v end=%#v", startRect, endRect)
+	}
+	if startRect.Width+endRect.Width+16 > 600.01 {
+		t.Fatalf("off-flow dropdown contributed intrinsic width: start=%#v end=%#v", startRect, endRect)
+	}
+}
+
 func decorationForNode(t *testing.T, tree *Tree, nodeID dom.NodeID) Decoration {
 	t.Helper()
 	for _, decoration := range tree.Decorations {
