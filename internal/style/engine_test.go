@@ -967,6 +967,27 @@ func TestComputeResolvesLineHeightAndWhiteSpace(t *testing.T) {
 	}
 }
 
+func TestComputeInheritsUnitlessLineHeightAgainstChildFontSize(t *testing.T) {
+	document := dom.NewDocument()
+	body := document.CreateElement("body", nil)
+	heading := document.CreateElement("h2", nil)
+	appendNode(t, document, document.Root, body)
+	appendNode(t, document, body, heading)
+	stylesheet, err := css.Parse(strings.NewReader(`body { font-size:15px; line-height:1.4 } h2 { font-size:1.5em }`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	computed := ComputeWithEnvironment(document, stylesheet, InteractionState{}, Environment{BrowserDefaults: true})
+	bodyStyle, _ := computed.For(body)
+	headingStyle, _ := computed.For(heading)
+	if bodyStyle.LineHeight != 21 || !bodyStyle.LineHeightUnitless || bodyStyle.LineHeightNumber != 1.4 {
+		t.Fatalf("body line-height = %g number:%g unitless:%t, want 21/1.4/true", bodyStyle.LineHeight, bodyStyle.LineHeightNumber, bodyStyle.LineHeightUnitless)
+	}
+	if headingStyle.FontSize != 22.5 || headingStyle.LineHeight != 31.5 || !headingStyle.LineHeightUnitless || headingStyle.LineHeightNumber != 1.4 {
+		t.Fatalf("heading typography = size:%g line-height:%g number:%g unitless:%t, want 22.5/31.5/1.4/true", headingStyle.FontSize, headingStyle.LineHeight, headingStyle.LineHeightNumber, headingStyle.LineHeightUnitless)
+	}
+}
+
 func TestComputeResolvesOverflowShorthandAndAxes(t *testing.T) {
 	document := dom.NewDocument()
 	box := document.CreateElement("div", nil)

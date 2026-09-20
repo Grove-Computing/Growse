@@ -16,66 +16,7 @@ import (
 	"github.com/Grove-Computing/Growse/internal/style"
 )
 
-func TestEmbeddedGopherCursorSVGCanBeRasterized(t *testing.T) {
-	imageValue, err := rasterizeGopherCursor(gopherCursorSVG)
-	if err != nil {
-		t.Fatalf("rasterizeGopherCursor() error = %v", err)
-	}
-	if got, want := imageValue.Bounds().Size(), image.Pt(336, 457); got != want {
-		t.Fatalf("cursor image size = %v, want %v", got, want)
-	}
-
-	visible := false
-	for y := imageValue.Bounds().Min.Y; y < imageValue.Bounds().Max.Y && !visible; y++ {
-		for x := imageValue.Bounds().Min.X; x < imageValue.Bounds().Max.X; x++ {
-			_, _, _, alpha := imageValue.At(x, y).RGBA()
-			if alpha != 0 {
-				visible = true
-				break
-			}
-		}
-	}
-	if !visible {
-		t.Fatal("rasterized cursor image is fully transparent")
-	}
-}
-
-func TestRasterizeGopherCursorRejectsInvalidSVG(t *testing.T) {
-	for name, source := range map[string][]byte{
-		"empty":   nil,
-		"invalid": []byte("<svg>"),
-		"viewBox": []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 0 0"></svg>`),
-	} {
-		t.Run(name, func(t *testing.T) {
-			if imageValue, err := rasterizeGopherCursor(source); err == nil || imageValue != nil {
-				t.Fatalf("rasterizeGopherCursor() = (%v, %v), want nil error", imageValue, err)
-			}
-		})
-	}
-}
-
-func TestCursorGeometryPreservesAspectRatioAndDPI(t *testing.T) {
-	source := image.Pt(336, 457)
-	position := f32.Pt(100, 80)
-
-	size, origin := cursorGeometry(source, unit.Metric{PxPerDp: 1}, position)
-	if got, want := size, image.Pt(24, 32); got != want {
-		t.Fatalf("1x cursor size = %v, want %v", got, want)
-	}
-	if got, want := origin, image.Pt(98, 78); got != want {
-		t.Fatalf("1x cursor origin = %v, want %v", got, want)
-	}
-
-	size, origin = cursorGeometry(source, unit.Metric{PxPerDp: 2}, position)
-	if got, want := size, image.Pt(47, 64); got != want {
-		t.Fatalf("2x cursor size = %v, want %v", got, want)
-	}
-	if got, want := origin, image.Pt(96, 76); got != want {
-		t.Fatalf("2x cursor origin = %v, want %v", got, want)
-	}
-}
-
-func TestBrowserUITracksMouseAndHidesNativeCursor(t *testing.T) {
+func TestBrowserUITracksMouseAndKeepsNativeCursorVisible(t *testing.T) {
 	invalidations := 0
 	ui := NewBrowserUI(nil, func() { invalidations++ })
 	router := new(input.Router)
@@ -96,7 +37,7 @@ func TestBrowserUITracksMouseAndHidesNativeCursor(t *testing.T) {
 	if !ui.pointer.inside || ui.pointer.position != f32.Pt(120, 80) {
 		t.Fatalf("pointer state = %#v, want inside at (120,80)", ui.pointer)
 	}
-	if got, want := router.Cursor(), pointer.CursorNone; got != want {
+	if got, want := router.Cursor(), pointer.CursorDefault; got != want {
 		t.Fatalf("native cursor = %v, want %v", got, want)
 	}
 	if invalidations == 0 {
@@ -131,7 +72,7 @@ func TestPointerTrackerIgnoresTouchInput(t *testing.T) {
 	}
 }
 
-func TestGopherCursorOverlayDoesNotStealInputFocus(t *testing.T) {
+func TestPlatformCursorTrackingDoesNotStealInputFocus(t *testing.T) {
 	document := dom.NewDocument()
 	inputNode := document.CreateElement("input", map[string]string{"type": "text"})
 	if err := document.AppendChild(document.Root, inputNode); err != nil {
@@ -160,6 +101,24 @@ func TestGopherCursorOverlayDoesNotStealInputFocus(t *testing.T) {
 
 	editor := ui.inputEditors[inputNode.ID]
 	if editor == nil || !gtx.Focused(editor) {
-		t.Fatal("Gopher cursor overlay prevented input focus")
+		t.Fatal("platform cursor tracking prevented input focus")
+	}
+}
+
+func TestCSSCursorMapsToPlatformCursor(t *testing.T) {
+	for name, test := range map[string]struct {
+		value style.Cursor
+		want  pointer.Cursor
+	}{
+		"default": {value: style.CursorAuto, want: pointer.CursorDefault},
+		"link":    {value: style.CursorPointer, want: pointer.CursorPointer},
+		"text":    {value: style.CursorText, want: pointer.CursorText},
+		"wait":    {value: style.CursorWait, want: pointer.CursorWait},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := cssCursor(test.value); got != test.want {
+				t.Fatalf("cssCursor(%v) = %v, want %v", test.value, got, test.want)
+			}
+		})
 	}
 }

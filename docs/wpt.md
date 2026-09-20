@@ -150,5 +150,6 @@ Upstreamのファイル全体はコピーせず、assertionの意味と最小入
 ## v0.20.0の選定範囲
 
 - CSS Text / FontsからCJK・Latin混在のline-height、baseline、自然な改行、system fallbackの有限metricを選定し、OS固有のface名やcomplex scriptのpixel完全一致は対象外とする。
+- CSS Inline Layout 3のunitless line-height継承を、親の数値を子のfont-sizeへ乗算するcomputed styleと1MB Club相当のh2 line box geometryへ縮約する。
 - CSS Images / Transformsからlinear / radial / conic gradientのstop、center、angleと2D transform-originを選定し、repeating gradient、3D transform、perspective、SVG filter全体は対象外とする。
 - `internal/layout`と`internal/ui`のWPT由来assertionは固定した数値geometry・raster pixel・inverse hit-testへ縮約する。実raster PNGは`tests/v020-visual.sh`で別途固定し、WPT harness、公開network、browser screenshot runnerを直接実行しない。

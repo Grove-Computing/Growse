@@ -167,7 +167,8 @@ func inheritedStyle(parent ComputedStyle) ComputedStyle {
 	computed := ComputedStyle{
 		Color: parent.Color, FontSize: parent.FontSize, FontWeight: parent.FontWeight,
 		FontFamilies: append([]string(nil), parent.FontFamilies...), FontStyle: parent.FontStyle, FontStretch: parent.FontStretch, FontFaceIndex: parent.FontFaceIndex,
-		LineHeight: parent.LineHeight, WhiteSpace: parent.WhiteSpace, WritingMode: parent.WritingMode, Direction: parent.Direction, Visibility: parent.Visibility,
+		LineHeight: parent.LineHeight, LineHeightNumber: parent.LineHeightNumber, LineHeightUnitless: parent.LineHeightUnitless,
+		WhiteSpace: parent.WhiteSpace, WritingMode: parent.WritingMode, Direction: parent.Direction, Visibility: parent.Visibility,
 		TextAlign: parent.TextAlign, TextTransform: parent.TextTransform, TextIndent: parent.TextIndent,
 		LetterSpacing: parent.LetterSpacing, WordSpacing: parent.WordSpacing, WordBreak: parent.WordBreak, OverflowWrap: parent.OverflowWrap,
 		BorderCollapse: parent.BorderCollapse, BorderSpacingX: parent.BorderSpacingX, BorderSpacingY: parent.BorderSpacingY, CaptionSide: parent.CaptionSide,
@@ -517,11 +518,19 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 		}
 	}
 	computed.FontFaceIndex = selectFontFace(stylesheet, computed.FontFamilies, computed.FontStyle, computed.FontWeight, computed.FontStretch)
+	// The computed value of a unitless line-height is the number itself. It is
+	// inherited as that number and multiplied by each descendant's own font
+	// size, rather than inheriting the parent's used pixel height.
+	if computed.LineHeightUnitless {
+		computed.LineHeight = computed.LineHeightNumber * computed.FontSize
+	}
 	if value, ok := winners["line-height"]; ok {
 		if resolved, ok := resolveVariables(value.value, computed.CustomProperties); ok {
 			resolved = fontCandidateComponent(value, resolved, "line-height")
-			if parsed, valid := resolveLineHeight(resolved, parent.LineHeight, computed.FontSize, fontContext); valid {
+			if parsed, number, unitless, valid := resolveComputedLineHeight(resolved, parent, computed.FontSize, fontContext); valid {
 				computed.LineHeight = parsed
+				computed.LineHeightNumber = number
+				computed.LineHeightUnitless = unitless
 			}
 		}
 	}
@@ -871,6 +880,30 @@ func resolveLineHeight(value string, parent, fontSize float32, context LengthCon
 	length, ok := ResolveLength(value, context)
 	resolved := length.Resolve(fontSize)
 	return resolved, ok && resolved >= 0
+}
+
+func resolveComputedLineHeight(value string, parent ComputedStyle, fontSize float32, context LengthContext) (height, number float32, unitless, valid bool) {
+	switch parseGlobalKeyword(value) {
+	case globalInherit, globalUnset:
+		if parent.LineHeightUnitless {
+			return parent.LineHeightNumber * fontSize, parent.LineHeightNumber, true, true
+		}
+		return parent.LineHeight, 0, false, true
+	case globalInitial:
+		return 0, 0, false, true
+	}
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "normal" {
+		return 0, 0, false, true
+	}
+	if multiplier, err := strconv.ParseFloat(value, 32); err == nil {
+		if multiplier < 0 {
+			return 0, 0, false, false
+		}
+		return float32(multiplier) * fontSize, float32(multiplier), true, true
+	}
+	height, valid = resolveLineHeight(value, parent.LineHeight, fontSize, context)
+	return height, 0, false, valid
 }
 
 func resolveWhiteSpace(value string, parent WhiteSpace) (WhiteSpace, bool) {

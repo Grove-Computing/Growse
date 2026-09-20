@@ -107,7 +107,7 @@ DevToolsはPageごとのread-only診断境界です。Consoleは1件4 KiB・Page
 
 リンク先プレビューはURLの表示だけを行い、hoverを理由とするDNS問い合わせ、HTTPリクエスト、先読み、WebGo実行は行いません。URLにuserinfoが含まれる場合は認証情報全体を除去しますが、表示されたリンク先と接続先を利用者自身でも確認してください。
 
-Gopherカーソルには`internal/ui/assets/blue.svg`から生成してビルドへ埋め込んだ`gopher-blue.png`だけを使用します。閲覧ページから取得したSVGをカーソルとして実行時に読み込む機能はありません。
+カーソルはplatform cursorを使用し、閲覧pageのCSS `cursor`は実装済みの標準shapeへだけ対応付けます。外部画像や閲覧page由来のSVGをcursorとして読み込み、application frameへ描画する機能はありません。
 
 ## CSS Resource
 
