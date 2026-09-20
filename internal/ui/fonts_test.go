@@ -7,8 +7,11 @@ import (
 
 	"gioui.org/font"
 	"gioui.org/font/gofont"
+	"gioui.org/gpu/headless"
 	"gioui.org/layout"
 	"gioui.org/op"
+	"gioui.org/op/clip"
+	"gioui.org/op/paint"
 	"gioui.org/text"
 	"gioui.org/unit"
 	"gioui.org/widget/material"
@@ -189,10 +192,58 @@ func TestLayoutDecoratedLabelDoesNotConstrainGlyphInkToCSSLineHeight(t *testing.
 		measured = gtx.Constraints
 		return layout.Dimensions{Size: image.Pt(80, 30), Baseline: 7}
 	}, 0, 0, 18, 16)
-	if measured.Min.Y != 0 || measured.Max.Y < 48 {
+	if measured.Min.X != 0 || measured.Max.X < 1<<20 || measured.Min.Y != 0 || measured.Max.Y < 48 {
 		t.Fatalf("glyph measurement constraints = %v, want relaxed height beyond the 24px CSS line", measured)
 	}
 	if dimensions.Size != image.Pt(80, 24) || dimensions.Baseline != 6 {
 		t.Fatalf("baseline-aligned line dimensions = %v baseline:%d, want 80x24 baseline:6", dimensions.Size, dimensions.Baseline)
+	}
+}
+
+func TestLayoutDrawTextRasterKeepsGlyphInkOutsideTightLineBox(t *testing.T) {
+	const width, height = 120, 80
+	window, err := headless.NewWindow(width, height)
+	if err != nil {
+		t.Skipf("headless raster backend unavailable: %v", err)
+	}
+	defer window.Release()
+
+	ops := new(op.Ops)
+	gtx := layout.Context{
+		Ops:         ops,
+		Constraints: layout.Constraints{Max: image.Pt(width, height)},
+		Metric:      unit.Metric{PxPerDp: 1, PxPerSp: 1},
+	}
+	offset := op.Offset(image.Pt(0, 30)).Push(ops)
+	layoutTextCursorArea(gtx, 80, 8, 0, func(gtx layout.Context) layout.Dimensions {
+		// Model glyph ink with an ascent/descent larger than line-height.
+		paint.FillShape(gtx.Ops, rgba(0xff0000ff), clip.Rect{Min: image.Pt(10, -20), Max: image.Pt(40, 30)}.Op())
+		return layout.Dimensions{Size: image.Pt(80, 8), Baseline: 2}
+	})
+	offset.Pop()
+	if err := window.Frame(ops); err != nil {
+		t.Fatal(err)
+	}
+	result := image.NewRGBA(image.Rect(0, 0, width, height))
+	if err := window.Screenshot(result); err != nil {
+		t.Fatal(err)
+	}
+
+	outsideInk, totalInk := 0, 0
+	minInkY, maxInkY := height, -1
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			pixel := result.RGBAAt(x, y)
+			if pixel.A != 0 && (pixel.R != 0 || pixel.G != 0 || pixel.B != 0) {
+				totalInk++
+				minInkY, maxInkY = min(minInkY, y), max(maxInkY, y)
+				if y < 30 || y >= 38 {
+					outsideInk++
+				}
+			}
+		}
+	}
+	if outsideInk == 0 {
+		t.Fatalf("glyph ink was clipped to the CSS line box: total=%d y=%d..%d", totalInk, minInkY, maxInkY)
 	}
 }
