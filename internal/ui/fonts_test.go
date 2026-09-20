@@ -369,6 +369,25 @@ func TestFailedImageAltTextIsClippedToImageBounds(t *testing.T) {
 	}
 }
 
+func TestFailedImageAltTextSizeFitsShortLogoSlot(t *testing.T) {
+	tests := []struct {
+		height float32
+		want   unit.Sp
+	}{
+		{height: 12, want: 0},
+		{height: 15.9, want: 0},
+		{height: 16, want: 8},
+		{height: 18, want: 10},
+		{height: 22, want: 14},
+		{height: 80, want: 14},
+	}
+	for _, test := range tests {
+		if got := failedImageAltTextSize(test.height); got != test.want {
+			t.Fatalf("failedImageAltTextSize(%v) = %v, want %v", test.height, got, test.want)
+		}
+	}
+}
+
 func TestContainsEmojiPresentationRecognizesSymbolsAndFlags(t *testing.T) {
 	for _, value := range []string{"📝", "🇺🇸 English", "☀️"} {
 		if !containsEmojiPresentation(value) {

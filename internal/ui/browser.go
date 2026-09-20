@@ -2775,16 +2775,32 @@ func (ui *BrowserUI) layoutDrawImage(gtx layout.Context, command paintmodel.Draw
 		} else if command.Alt != "" {
 			altClip := clip.Rect{Max: image.Pt(width, height)}.Push(gtx.Ops)
 			defer altClip.Pop()
-			inset := layout.UniformInset(unit.Dp(4))
-			inset.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-				label := material.Label(ui.documentTheme(), unit.Sp(14), command.Alt)
-				label.Color = rgba(command.Color)
-				return label.Layout(gtx)
-			})
+			if textSize := failedImageAltTextSize(command.Height); textSize > 0 {
+				inset := layout.UniformInset(unit.Dp(4))
+				inset.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					// A failed replaced image must not turn a short logo slot into a
+					// wrapped stack of glyphs. Browsers keep the fallback on one line;
+					// scale it to the available inner height and truncate horizontally.
+					label := material.Label(ui.documentTheme(), textSize, command.Alt)
+					label.Color = rgba(command.Color)
+					label.MaxLines = 1
+					return label.Layout(gtx)
+				})
+			}
 		}
 		paintBoxBorder(gtx, command.Border, width, height)
 		return layout.Dimensions{Size: image.Pt(width, height)}
 	})
+}
+
+func failedImageAltTextSize(height float32) unit.Sp {
+	// Tiny decorative wordmark/tagline slots cannot fit even the minimum
+	// fallback line. Leaving them blank is preferable to unreadable overprint;
+	// the enclosing link and adjacent logo remain available to users.
+	if height < 16 {
+		return 0
+	}
+	return unit.Sp(min(max(height-8, 8), 14))
 }
 
 func (ui *BrowserUI) layoutDrawBox(gtx layout.Context, command paintmodel.DrawBox, backgroundImages map[string]image.Image, styleRevision uint64) layout.Dimensions {
