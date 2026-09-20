@@ -521,7 +521,9 @@ func (e *engine) flexIntrinsicSizes(node *dom.Node, style blockStyle, axis flexA
 	textWidth, textHeight, _ := measureStyledText(text, style)
 	minTextWidth := minimumTextWidth(text, style)
 	replacedImage := isImageElement(node, e.images)
-	if textHeight <= 0 {
+	if strings.TrimSpace(text) == "" {
+		textWidth, textHeight, minTextWidth = 0, 0, 0
+	} else if textHeight <= 0 {
 		textHeight = style.fontSize * 1.4
 	}
 	if isEditableTextControl(node) || isSelectControl(node) {
@@ -563,12 +565,6 @@ func (e *engine) flexIntrinsicSizes(node *dom.Node, style blockStyle, axis flexA
 		flexWidth, flexHeight, _ := e.resolveInlineFlexSize(node, style, width)
 		intrinsicWidth = max(intrinsicWidth, flexWidth)
 		intrinsicHeight = max(intrinsicHeight, flexHeight)
-		if style.flexWrap == stylemodel.FlexNoWrap {
-			// A single-line flex container cannot wrap its children to satisfy
-			// min-content sizing. Preserve the complete child/gap contribution so
-			// replaced logo images are not shrunk into one another.
-			minTextWidth = max(minTextWidth, flexWidth-horizontalExtras)
-		}
 	} else if node.Type == dom.NodeElement && strings.TrimSpace(text) == "" && hasElementChildren(node) {
 		// Empty wrapper spans are commonly used to stack replaced images (for
 		// example Wikipedia's wordmark and tagline). They have no flattened text
@@ -586,7 +582,10 @@ func (e *engine) flexIntrinsicSizes(node *dom.Node, style blockStyle, axis flexA
 			intrinsicWidth += horizontalExtras
 		}
 		if replacedImage {
-			minTextWidth = max(minTextWidth, intrinsicWidth-horizontalExtras)
+			// A definite CSS width replaces the intrinsic width for the automatic
+			// minimum size. Keeping a large source bitmap width here makes a 32px
+			// logo consume hundreds of pixels after its resource finishes loading.
+			minTextWidth = max(intrinsicWidth-horizontalExtras, float32(0))
 		}
 	} else if resolved, ok := e.intrinsicKeywordSize(node, style.width, style, width, true); ok {
 		intrinsicWidth = resolved
@@ -627,9 +626,9 @@ func (e *engine) flexIntrinsicSizes(node *dom.Node, style blockStyle, axis flexA
 		}
 	}
 	if axis.horizontal {
-		return max(base, float32(0)), max(intrinsicHeight, float32(1)), max(minTextWidth+horizontalExtras, float32(0))
+		return max(base, float32(0)), max(intrinsicHeight, float32(0)), max(minTextWidth+horizontalExtras, float32(0))
 	}
-	return max(base, float32(0)), max(intrinsicWidth, float32(1)), max(textHeight+verticalExtras, float32(0))
+	return max(base, float32(0)), max(intrinsicWidth, float32(1)), max(intrinsicHeight, float32(0))
 }
 
 func (e *engine) emptyWrapperIntrinsicWidth(node *dom.Node, width, height float32, heightDefinite bool) float32 {

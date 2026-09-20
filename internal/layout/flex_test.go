@@ -699,6 +699,41 @@ func TestNestedFlexMaxContentIncludesDescendantGapsAndPadding(t *testing.T) {
 	}
 }
 
+func TestFlexImageDefiniteWidthOverridesLoadedIntrinsicMinimum(t *testing.T) {
+	document := dom.NewDocument()
+	header := document.CreateElement("header", map[string]string{"class": "header"})
+	brand := document.CreateElement("div", map[string]string{"class": "brand"})
+	logo := document.CreateElement("img", map[string]string{"class": "logo", "src": "logo.png"})
+	navigation := document.CreateElement("nav", map[string]string{"class": "navigation"})
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, header}, [2]*dom.Node{header, brand}, [2]*dom.Node{brand, logo},
+		[2]*dom.Node{brand, document.CreateText("Saku0512")}, [2]*dom.Node{header, navigation},
+	)
+	for _, label := range []string{"Home", "Articles", "SNS Link", "English", "Donate"} {
+		link := document.CreateElement("a", nil)
+		appendNodes(t, document, [2]*dom.Node{navigation, link}, [2]*dom.Node{link, document.CreateText(label)})
+	}
+	stylesheet, err := css.Parse(strings.NewReader(`
+.header,.brand,.navigation { display:flex; align-items:center }
+.header { width:900px; gap:24px }
+.brand { flex-shrink:0; gap:8px }
+.logo { width:32px; height:32px }
+.navigation { flex-wrap:wrap; gap:16px }
+a { padding:8px 12px }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	computed := stylemodel.Compute(document, stylesheet)
+	tree := BuildWithScrollAndImages(document, computed, map[dom.NodeID]ImageResource{
+		logo.ID: {URL: "logo.png", IntrinsicWidth: 512, IntrinsicHeight: 512, Loaded: true},
+	}, 1000, 700, 0, 0)
+	logoRect, navigationRect := tree.Bounds[logo.ID], tree.Bounds[navigation.ID]
+	if logoRect.Width != 32 || navigationRect.Width < 400 || navigationRect.Height > 50 {
+		t.Fatalf("loaded intrinsic image collapsed header navigation: logo=%#v navigation=%#v brand=%#v", logoRect, navigationRect, tree.Bounds[brand.ID])
+	}
+}
+
 func TestNestedFlexMaxContentIncludesImagesInsideEmptyWrapper(t *testing.T) {
 	document := dom.NewDocument()
 	header := document.CreateElement("header", map[string]string{"class": "header"})
@@ -717,7 +752,7 @@ func TestNestedFlexMaxContentIncludesImagesInsideEmptyWrapper(t *testing.T) {
 	)
 	stylesheet, err := css.Parse(strings.NewReader(`
 .header,.start,.logo { display:flex; align-items:center }
-.header { width:250px; gap:24px }
+.header { width:600px; gap:24px }
 .start { gap:24px }
 .menu { display:inline-block; width:20px; height:20px; background:#111 }
 .mark { display:block; width:50px; height:50px; margin-right:10px }
@@ -736,6 +771,57 @@ func TestNestedFlexMaxContentIncludesImagesInsideEmptyWrapper(t *testing.T) {
 	endBox := boxForNode(t, tree, end.ID)
 	if endBox.X < wordmarkBox.X+wordmarkBox.Width+20 {
 		t.Fatalf("following header content overlaps wordmark: wordmark=%#v end=%#v", wordmarkBox.Rect(), endBox.Rect())
+	}
+}
+
+func TestEmptyFlexWithOnlyHiddenChildrenHasZeroHeight(t *testing.T) {
+	document := dom.NewDocument()
+	container := document.CreateElement("div", map[string]string{"class": "container"})
+	hidden := document.CreateElement("span", map[string]string{"class": "hidden"})
+	appendNodes(t, document, [2]*dom.Node{document.Root, container}, [2]*dom.Node{container, hidden})
+	stylesheet, err := css.Parse(strings.NewReader(`.container { display:flex } .hidden { display:none }`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, stylemodel.Compute(document, stylesheet), 400)
+	if got := tree.Bounds[container.ID].Height; got != 0 {
+		t.Fatalf("empty flex height = %v, want 0", got)
+	}
+}
+
+func TestFlexWithOnlyCollapsibleWhitespaceHasZeroHeight(t *testing.T) {
+	document := dom.NewDocument()
+	container := document.CreateElement("div", map[string]string{"class": "container"})
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, container},
+		[2]*dom.Node{container, document.CreateText("\n    ")},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`.container { display:flex }`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, stylemodel.Compute(document, stylesheet), 400)
+	if got := tree.Bounds[container.ID].Height; got != 0 {
+		t.Fatalf("whitespace-only flex height = %v, want 0", got)
+	}
+}
+
+func TestFlexLineWithEmptyFlexItemHasZeroHeight(t *testing.T) {
+	document := dom.NewDocument()
+	header := document.CreateElement("header", map[string]string{"class": "header"})
+	indicator := document.CreateElement("div", map[string]string{"class": "indicator"})
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, header},
+		[2]*dom.Node{header, indicator},
+		[2]*dom.Node{indicator, document.CreateText("\n")},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`.header,.indicator { display:flex }`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, stylemodel.Compute(document, stylesheet), 400)
+	if got := tree.Bounds[header.ID].Height; got != 0 {
+		t.Fatalf("empty flex item established line height = %v, want 0", got)
 	}
 }
 
