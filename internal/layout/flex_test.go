@@ -699,6 +699,46 @@ func TestNestedFlexMaxContentIncludesDescendantGapsAndPadding(t *testing.T) {
 	}
 }
 
+func TestNestedFlexMaxContentIncludesImagesInsideEmptyWrapper(t *testing.T) {
+	document := dom.NewDocument()
+	header := document.CreateElement("header", map[string]string{"class": "header"})
+	start := document.CreateElement("div", map[string]string{"class": "start"})
+	menu := document.CreateElement("span", map[string]string{"class": "menu"})
+	logo := document.CreateElement("a", map[string]string{"class": "logo"})
+	mark := document.CreateElement("img", map[string]string{"class": "mark"})
+	words := document.CreateElement("span", map[string]string{"class": "words"})
+	wordmark := document.CreateElement("img", map[string]string{"class": "wordmark"})
+	tagline := document.CreateElement("img", map[string]string{"class": "tagline"})
+	end := document.CreateElement("div", map[string]string{"class": "end"})
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, header}, [2]*dom.Node{header, start}, [2]*dom.Node{header, end},
+		[2]*dom.Node{start, menu}, [2]*dom.Node{start, logo}, [2]*dom.Node{logo, mark}, [2]*dom.Node{logo, words},
+		[2]*dom.Node{words, wordmark}, [2]*dom.Node{words, tagline}, [2]*dom.Node{end, document.CreateText("Account")},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.header,.start,.logo { display:flex; align-items:center }
+.header { width:250px; gap:24px }
+.start { gap:24px }
+.menu { display:inline-block; width:20px; height:20px; background:#111 }
+.mark { display:block; width:50px; height:50px; margin-right:10px }
+.wordmark { display:block; width:120px; height:20px }
+.tagline { display:block; width:100px; height:14px; margin-top:5px }
+.end { width:100px }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, stylemodel.Compute(document, stylesheet), 700)
+	markBox, wordmarkBox := boxForNode(t, tree, mark.ID), boxForNode(t, tree, wordmark.ID)
+	if wordmarkBox.X < markBox.X+markBox.Width+9 {
+		t.Fatalf("wordmark overlaps logo image: mark=%#v wordmark=%#v", markBox.Rect(), wordmarkBox.Rect())
+	}
+	endBox := boxForNode(t, tree, end.ID)
+	if endBox.X < wordmarkBox.X+wordmarkBox.Width+20 {
+		t.Fatalf("following header content overlaps wordmark: wordmark=%#v end=%#v", wordmarkBox.Rect(), endBox.Rect())
+	}
+}
+
 func decorationForNode(t *testing.T, tree *Tree, nodeID dom.NodeID) Decoration {
 	t.Helper()
 	for _, decoration := range tree.Decorations {

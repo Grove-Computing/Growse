@@ -520,6 +520,7 @@ func (e *engine) flexIntrinsicSizes(node *dom.Node, style blockStyle, axis flexA
 	text := normalizeWhitespace(e.inlineText(node))
 	textWidth, textHeight, _ := measureStyledText(text, style)
 	minTextWidth := minimumTextWidth(text, style)
+	replacedImage := isImageElement(node, e.images)
 	if textHeight <= 0 {
 		textHeight = style.fontSize * 1.4
 	}
@@ -539,7 +540,7 @@ func (e *engine) flexIntrinsicSizes(node *dom.Node, style blockStyle, axis flexA
 		}
 		textWidth, textHeight, _ = measureStyledText(label, style)
 		minTextWidth = textWidth
-	} else if isImageElement(node, e.images) {
+	} else if replacedImage {
 		resource := e.images[node.ID]
 		textWidth, textHeight = resource.IntrinsicWidth, resource.IntrinsicHeight
 		if attribute, ok := imageDimensionAttribute(node, "width"); ok {
@@ -562,6 +563,17 @@ func (e *engine) flexIntrinsicSizes(node *dom.Node, style blockStyle, axis flexA
 		flexWidth, flexHeight, _ := e.resolveInlineFlexSize(node, style, width)
 		intrinsicWidth = max(intrinsicWidth, flexWidth)
 		intrinsicHeight = max(intrinsicHeight, flexHeight)
+		if style.flexWrap == stylemodel.FlexNoWrap {
+			// A single-line flex container cannot wrap its children to satisfy
+			// min-content sizing. Preserve the complete child/gap contribution so
+			// replaced logo images are not shrunk into one another.
+			minTextWidth = max(minTextWidth, flexWidth-horizontalExtras)
+		}
+	} else if node.Type == dom.NodeElement && strings.TrimSpace(text) == "" && hasElementChildren(node) {
+		// Empty wrapper spans are commonly used to stack replaced images (for
+		// example Wikipedia's wordmark and tagline). They have no flattened text
+		// contribution, but their child image widths still determine max-content.
+		intrinsicWidth = max(intrinsicWidth, e.emptyWrapperIntrinsicWidth(node, width, height, heightDefinite)+horizontalExtras)
 	}
 	if style.height.Kind == stylemodel.SizeAuto && e.intrinsicMeasureDepth < 8 && hasElementChildren(node) {
 		if measured := e.measureIntrinsicBlockHeight(node, style, width, height, heightDefinite); measured > intrinsicHeight {
@@ -572,6 +584,9 @@ func (e *engine) flexIntrinsicSizes(node *dom.Node, style blockStyle, axis flexA
 		intrinsicWidth = resolved
 		if style.boxSizing == stylemodel.BoxSizingContentBox {
 			intrinsicWidth += horizontalExtras
+		}
+		if replacedImage {
+			minTextWidth = max(minTextWidth, intrinsicWidth-horizontalExtras)
 		}
 	} else if resolved, ok := e.intrinsicKeywordSize(node, style.width, style, width, true); ok {
 		intrinsicWidth = resolved
@@ -615,6 +630,34 @@ func (e *engine) flexIntrinsicSizes(node *dom.Node, style blockStyle, axis flexA
 		return max(base, float32(0)), max(intrinsicHeight, float32(1)), max(minTextWidth+horizontalExtras, float32(0))
 	}
 	return max(base, float32(0)), max(intrinsicWidth, float32(1)), max(textHeight+verticalExtras, float32(0))
+}
+
+func (e *engine) emptyWrapperIntrinsicWidth(node *dom.Node, width, height float32, heightDefinite bool) float32 {
+	maximum, inlineLine := float32(0), float32(0)
+	flushInline := func() {
+		maximum = max(maximum, inlineLine)
+		inlineLine = 0
+	}
+	for _, child := range node.Children {
+		if child == nil || child.Type != dom.NodeElement {
+			continue
+		}
+		childStyle := e.styleFor(child)
+		if childStyle.display == stylemodel.DisplayNone || childStyle.layoutPosition == stylemodel.PositionAbsolute || childStyle.layoutPosition == stylemodel.PositionFixed {
+			continue
+		}
+		childWidth, _, _ := e.flexIntrinsicSizes(child, childStyle, flexAxis{horizontal: true}, width, width, height, heightDefinite)
+		childWidth += childStyle.margin.Left + childStyle.margin.Right
+		switch childStyle.display {
+		case stylemodel.DisplayInline, stylemodel.DisplayInlineBlock, stylemodel.DisplayInlineFlex, stylemodel.DisplayInlineGrid:
+			inlineLine += childWidth
+		default:
+			flushInline()
+			maximum = max(maximum, childWidth)
+		}
+	}
+	flushInline()
+	return maximum
 }
 
 func minimumTextWidth(value string, style blockStyle) float32 {
