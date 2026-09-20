@@ -1,7 +1,7 @@
 {
-  "frame_paint_sha256": "8b1c813ff929566bc2e560e9dd069832e8e4ce16c25564c565455caf2b5011a3",
-  "back_paint_sha256": "8b1c813ff929566bc2e560e9dd069832e8e4ce16c25564c565455caf2b5011a3",
-  "forward_paint_sha256": "b6558b28666652072b3cd9223b00b9a606be5e52c64a5838ed10cf0f63a1d807",
+  "frame_paint_sha256": "552b70ce430e42ba1d15d25dac4dc734311c3e243db48608baaeba7d76c2d7db",
+  "back_paint_sha256": "552b70ce430e42ba1d15d25dac4dc734311c3e243db48608baaeba7d76c2d7db",
+  "forward_paint_sha256": "d7a2e7250807b7c54f3f6bfaffe9f77a9c2876325a14b767e1281181f9e97f07",
   "back_scroll": "first=2 offset=-10",
   "forward_scroll": "first=5 offset=-24"
 }
