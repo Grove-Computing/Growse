@@ -1898,25 +1898,13 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 	ui.handleViewportClicks(gtx, page, tree, displayList)
 
 	area := clip.Rect{Max: gtx.Constraints.Max}.Push(gtx.Ops)
-	dimensions := material.List(ui.documentTheme(), &ui.pageList).Layout(gtx, len(displayList.Commands), func(gtx layout.Context, index int) layout.Dimensions {
-		switch command := displayList.Commands[index].(type) {
-		case paintmodel.DrawText:
-			return ui.layoutDrawText(gtx, command)
-		case paintmodel.DrawInput:
-			return ui.layoutDrawInput(gtx, command)
-		case paintmodel.DrawSelect:
-			return ui.layoutDrawSelect(gtx, command)
-		case paintmodel.DrawCheckable:
-			return ui.layoutDrawCheckable(gtx, command)
-		case paintmodel.DrawButton:
-			return ui.layoutDrawButton(gtx, command)
-		case paintmodel.DrawBox:
-			return ui.layoutDrawBox(gtx, command, page.BackgroundImages, page.StyleRevision)
-		case paintmodel.DrawImage:
-			return ui.layoutDrawImage(gtx, command, page.Images)
-		default:
-			return layout.Dimensions{}
-		}
+	// Paint the document as one scroll item. A command-per-item virtual list can
+	// stop after a tall left grid/flex item has moved its cursor below the
+	// viewport, even though later paint-order commands belong to a right-hand
+	// sibling near the top of the page. Keeping commands in one layer preserves
+	// CSS paint order and makes those signed vertical backtracks visible.
+	dimensions := material.List(ui.documentTheme(), &ui.pageList).Layout(gtx, 1, func(gtx layout.Context, _ int) layout.Dimensions {
+		return ui.layoutDocumentPaintLayer(gtx, displayList, page)
 	})
 	if nestedScrollConsumed {
 		ui.pageList.Position = documentPosition
@@ -1937,6 +1925,48 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 	}
 	ui.persistHistoryScroll()
 	return dimensions
+}
+
+func (ui *BrowserUI) layoutDocumentPaintLayer(gtx layout.Context, displayList *paintmodel.DisplayList, page *browser.Page) layout.Dimensions {
+	children := make([]layout.StackChild, 0, len(displayList.Commands)+1)
+	children = append(children, layout.Stacked(func(gtx layout.Context) layout.Dimensions {
+		return layout.Spacer{Height: unit.Dp(max(displayList.ScrollHeight, displayList.Height))}.Layout(gtx)
+	}))
+	for _, source := range displayList.Commands {
+		command := source
+		children = append(children, layout.Stacked(func(gtx layout.Context) layout.Dimensions {
+			return ui.layoutAbsolutePaintCommand(gtx, command, page)
+		}))
+	}
+	return layout.Stack{Alignment: layout.NW}.Layout(gtx, children...)
+}
+
+func (ui *BrowserUI) layoutAbsolutePaintCommand(gtx layout.Context, source paintmodel.Command, page *browser.Page) layout.Dimensions {
+	switch command := source.(type) {
+	case paintmodel.DrawText:
+		command.Top = command.Y
+		return ui.layoutDrawText(gtx, command)
+	case paintmodel.DrawInput:
+		command.Top = command.Y
+		return ui.layoutDrawInput(gtx, command)
+	case paintmodel.DrawSelect:
+		command.Top = command.Y
+		return ui.layoutDrawSelect(gtx, command)
+	case paintmodel.DrawCheckable:
+		command.Top = command.Y
+		return ui.layoutDrawCheckable(gtx, command)
+	case paintmodel.DrawButton:
+		command.Top = command.Y
+		return ui.layoutDrawButton(gtx, command)
+	case paintmodel.DrawBox:
+		command.Top = command.Y
+		return ui.layoutDrawBox(gtx, command, page.BackgroundImages, page.StyleRevision)
+	case paintmodel.DrawImage:
+		command.Top = command.Y
+		return ui.layoutDrawImage(gtx, command, page.Images)
+	default:
+		return layout.Dimensions{}
+	}
 }
 
 func (ui *BrowserUI) persistHistoryScroll() {

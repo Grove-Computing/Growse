@@ -247,3 +247,43 @@ func TestLayoutDrawTextRasterKeepsGlyphInkOutsideTightLineBox(t *testing.T) {
 		t.Fatalf("glyph ink was clipped to the CSS line box: total=%d y=%d..%d", totalInk, minInkY, maxInkY)
 	}
 }
+
+func TestDocumentPaintLayerKeepsBacktrackedSiblingVisible(t *testing.T) {
+	const width, height = 240, 180
+	window, err := headless.NewWindow(width, height)
+	if err != nil {
+		t.Skipf("headless raster backend unavailable: %v", err)
+	}
+	defer window.Release()
+
+	ui := &BrowserUI{theme: material.NewTheme()}
+	page := &browser.Page{}
+	displayList := &paintmodel.DisplayList{
+		Height: 800, ScrollHeight: 800,
+		Commands: []paintmodel.Command{
+			paintmodel.DrawBox{NodeID: 1, X: 0, Y: 0, Top: 0, Width: 90, Height: 700, Color: 0x2563ebff, Opacity: 1},
+			// This sibling is later in paint order but backtracks near the top,
+			// matching a tall left card followed by a right-hand grid card.
+			paintmodel.DrawBox{NodeID: 2, X: 120, Y: 30, Top: -670, Width: 80, Height: 60, Color: 0xdc2626ff, Opacity: 1},
+		},
+	}
+	ops := new(op.Ops)
+	gtx := layout.Context{
+		Ops: ops, Constraints: layout.Exact(image.Pt(width, height)),
+		Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1},
+	}
+	material.List(ui.documentTheme(), &ui.pageList).Layout(gtx, 1, func(gtx layout.Context, _ int) layout.Dimensions {
+		return ui.layoutDocumentPaintLayer(gtx, displayList, page)
+	})
+	if err := window.Frame(ops); err != nil {
+		t.Fatal(err)
+	}
+	result := image.NewRGBA(image.Rect(0, 0, width, height))
+	if err := window.Screenshot(result); err != nil {
+		t.Fatal(err)
+	}
+	pixel := result.RGBAAt(150, 50)
+	if pixel.R < 180 || pixel.G > 80 || pixel.B > 80 {
+		t.Fatalf("backtracked right sibling pixel = %#v, want red paint", pixel)
+	}
+}
