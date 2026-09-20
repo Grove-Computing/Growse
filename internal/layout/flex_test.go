@@ -355,7 +355,10 @@ func TestRealSiteNavigationFlexWrapDistributionBaselineAndPercentage(t *testing.
 	}
 }
 
-func TestFlexAutoCrossSizeIncludesTextWrappedAfterShrink(t *testing.T) {
+// Adapted from css/css-flexbox/flex-002.htm. In addition to the upstream
+// negative free-space assertion, verify the auto cross-size after the used
+// width makes text wrap.
+func TestWPTFlexShrinkRecomputesAutoCrossSizeForWrappedText(t *testing.T) {
 	document := dom.NewDocument()
 	container := document.CreateElement("div", map[string]string{"class": "badge"})
 	label := document.CreateElement("strong", nil)
