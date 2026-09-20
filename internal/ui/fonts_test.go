@@ -3,6 +3,7 @@ package ui
 import (
 	"bytes"
 	"image"
+	"image/color"
 	"testing"
 
 	"gioui.org/font"
@@ -16,6 +17,7 @@ import (
 	"gioui.org/unit"
 	"gioui.org/widget/material"
 	"github.com/Grove-Computing/Growse/internal/browser"
+	layoutengine "github.com/Grove-Computing/Growse/internal/layout"
 	paintmodel "github.com/Grove-Computing/Growse/internal/paint"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 	textfont "github.com/go-text/typesetting/font"
@@ -285,5 +287,48 @@ func TestDocumentPaintLayerKeepsBacktrackedSiblingVisible(t *testing.T) {
 	pixel := result.RGBAAt(150, 50)
 	if pixel.R < 180 || pixel.G > 80 || pixel.B > 80 {
 		t.Fatalf("backtracked right sibling pixel = %#v, want red paint", pixel)
+	}
+}
+
+func TestDocumentPaintLayerDrawsReplacedImageAtDocumentCoordinates(t *testing.T) {
+	const width, height = 240, 180
+	window, err := headless.NewWindow(width, height)
+	if err != nil {
+		t.Skipf("headless raster backend unavailable: %v", err)
+	}
+	defer window.Release()
+
+	source := image.NewNRGBA(image.Rect(0, 0, 20, 20))
+	for y := 0; y < 20; y++ {
+		for x := 0; x < 20; x++ {
+			source.SetNRGBA(x, y, color.NRGBA{R: 240, A: 255})
+		}
+	}
+	const sourceURL = "https://example.com/image.png"
+	page := &browser.Page{Images: map[string]image.Image{sourceURL: source}}
+	ui := &BrowserUI{theme: material.NewTheme()}
+	ui.imagePaintCache.prepare(page)
+	displayList := &paintmodel.DisplayList{Height: height, ScrollHeight: height, Commands: []paintmodel.Command{
+		paintmodel.DrawImage{
+			NodeID: 1, URL: sourceURL, X: 80, Y: 40, Top: -700, Width: 60, Height: 50,
+			ImageRect: layoutengine.Rect{X: 80, Y: 40, Width: 60, Height: 50},
+			ImageClip: layoutengine.Rect{X: 80, Y: 40, Width: 60, Height: 50}, Opacity: 1,
+		},
+	}}
+	ops := new(op.Ops)
+	gtx := layout.Context{Ops: ops, Constraints: layout.Exact(image.Pt(width, height)), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}}
+	material.List(ui.documentTheme(), &ui.pageList).Layout(gtx, 1, func(gtx layout.Context, _ int) layout.Dimensions {
+		return ui.layoutDocumentPaintLayer(gtx, displayList, page)
+	})
+	if err := window.Frame(ops); err != nil {
+		t.Fatal(err)
+	}
+	result := image.NewRGBA(image.Rect(0, 0, width, height))
+	if err := window.Screenshot(result); err != nil {
+		t.Fatal(err)
+	}
+	pixel := result.RGBAAt(100, 60)
+	if pixel.R < 180 || pixel.G > 80 || pixel.B > 80 {
+		t.Fatalf("replaced image pixel = %#v, want red paint", pixel)
 	}
 }
