@@ -31,6 +31,8 @@ const staticSVGFixture = `<svg xmlns="http://www.w3.org/2000/svg" width="120" he
 </g>
 </svg>`
 
+const classStyledSVGFixture = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 20"><defs><style type="text/css">.badge{fill:#516c95}.label{fill:#fff}</style></defs><title>HTTP badge</title><rect class="badge" width="40" height="20"/><path class="label" d="M8 6h4v8H8z"/></svg>`
+
 func TestRasterizeSVGDrawsStaticSubsetWithViewBoxGradientClipAndText(t *testing.T) {
 	decoded, width, height, err := rasterizeSVG([]byte(staticSVGFixture))
 	if err != nil {
@@ -52,6 +54,24 @@ func TestRasterizeSVGDrawsStaticSubsetWithViewBoxGradientClipAndText(t *testing.
 	}
 	if painted < 500 {
 		t.Fatalf("painted pixels = %d, want representative shapes and text", painted)
+	}
+}
+
+func TestRasterizeSVGAllowsSafeClassStylesheet(t *testing.T) {
+	decoded, width, height, err := rasterizeSVG([]byte(classStyledSVGFixture))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if width != 40 || height != 20 {
+		t.Fatalf("class styled SVG dimensions = %dx%d", width, height)
+	}
+	background := color.NRGBAModel.Convert(decoded.At(2, 2)).(color.NRGBA)
+	label := color.NRGBAModel.Convert(decoded.At(9, 9)).(color.NRGBA)
+	if background.R != 0x51 || background.G != 0x6c || background.B != 0x95 || background.A != 0xff {
+		t.Fatalf("class background color = %#v", background)
+	}
+	if label.R != 0xff || label.G != 0xff || label.B != 0xff || label.A != 0xff {
+		t.Fatalf("class label color = %#v", label)
 	}
 }
 
@@ -101,6 +121,7 @@ func TestValidateSVGRejectsExecutableAndExternalContent(t *testing.T) {
 		"external image":  `<svg width="10" height="10"><image href="https://example.com/x.png"/></svg>`,
 		"animation":       `<svg width="10" height="10"><rect width="10" height="10"><animate attributeName="x"/></rect></svg>`,
 		"external paint":  `<svg width="10" height="10"><rect width="10" height="10" fill="url(https://example.com/p.svg#x)"/></svg>`,
+		"stylesheet URL":  `<svg width="10" height="10"><style>.x{fill:url(https://example.com/p.svg#x)}</style><rect class="x" width="10" height="10"/></svg>`,
 		"entity":          `<!DOCTYPE svg [<!ENTITY xxe SYSTEM "file:///etc/passwd">]><svg width="10" height="10"><text>&xxe;</text></svg>`,
 		"surface":         `<svg width="32768" height="32768"><rect width="1" height="1"/></svg>`,
 		"unsupported tag": `<svg width="10" height="10"><filter id="blur"/></svg>`,
