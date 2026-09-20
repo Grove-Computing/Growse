@@ -106,8 +106,6 @@ type BrowserUI struct {
 	viewportClick     gesture.Click
 	address           widget.Editor
 	gopher            paint.ImageOp
-	gopherCursor      paint.ImageOp
-	gopherCursorReady bool
 	pointerTag        pointerTag
 	pointer           pointerState
 	nestedScrollPage  *browser.Page
@@ -308,7 +306,6 @@ func NewBrowserUIWithTabsAndUpdater(navigator Navigator, tabs TabController, inv
 		panic("decode embedded Go Gopher image: " + err.Error())
 	}
 
-	cursorImage, cursorErr := loadGopherCursor()
 	updateContext, cancelUpdate := context.WithCancel(context.Background())
 	ui := &BrowserUI{
 		theme:             material.NewTheme(),
@@ -348,12 +345,6 @@ func NewBrowserUIWithTabsAndUpdater(navigator Navigator, tabs TabController, inv
 		cancelUpdate:      cancelUpdate,
 		onUpdateApplied:   onUpdateApplied,
 	}
-	if cursorErr != nil {
-		slog.Error("Gopherカーソルを初期化できませんでした", "component", "ui", "error", cursorErr)
-	} else {
-		ui.gopherCursor = paint.NewImageOp(cursorImage)
-		ui.gopherCursorReady = true
-	}
 	if ui.invalidate == nil {
 		ui.invalidate = func() {}
 	}
@@ -385,7 +376,6 @@ func (ui *BrowserUI) Layout(gtx layout.Context) layout.Dimensions {
 	layoutRegion(gtx, geometry.devTools, ui.layoutDevTools)
 	layoutRegion(gtx, geometry.toolbar, ui.layoutToolbar)
 	layoutRegion(gtx, geometry.tabRail, ui.layoutTabRail)
-	ui.layoutGopherCursor(gtx)
 	ui.registerPointerTracker(gtx)
 	return layout.Dimensions{Size: gtx.Constraints.Max}
 }
