@@ -53,7 +53,7 @@ const (
 var allowedSVGElements = map[string]bool{
 	"svg": true, "g": true, "defs": true, "path": true, "rect": true, "circle": true,
 	"ellipse": true, "line": true, "polyline": true, "polygon": true, "text": true, "tspan": true,
-	"clipPath": true, "linearGradient": true, "radialGradient": true, "stop": true, "title": true, "desc": true,
+	"clipPath": true, "linearGradient": true, "radialGradient": true, "stop": true, "style": true, "title": true, "desc": true,
 }
 
 func rasterizeSVG(source []byte) (image.Image, int, int, error) {
@@ -119,7 +119,7 @@ func validateSVG(source []byte) error {
 	}
 	decoder := xml.NewDecoder(bytes.NewReader(source))
 	decoder.Strict = true
-	nodes, depth, pathCommands := 0, 0, 0
+	nodes, depth, pathCommands, styleDepth := 0, 0, 0, 0
 	rootSeen := false
 	for {
 		token, err := decoder.Token()
@@ -152,6 +152,9 @@ func validateSVG(source []byte) error {
 			if !allowedSVGElements[name] {
 				return fmt.Errorf("SVG element %q is not allowed", name)
 			}
+			if name == "style" {
+				styleDepth++
+			}
 			for _, attribute := range value.Attr {
 				attributeName := strings.ToLower(attribute.Name.Local)
 				attributeValue := strings.TrimSpace(attribute.Value)
@@ -182,9 +185,19 @@ func validateSVG(source []byte) error {
 				}
 			}
 		case xml.EndElement:
+			if canonicalSVGName(value.Name.Local) == "style" {
+				styleDepth--
+			}
 			depth--
 			if depth < 0 {
 				return errors.New("SVG tree is unbalanced")
+			}
+		case xml.CharData:
+			if styleDepth > 0 {
+				stylesheet := strings.ToLower(string(value))
+				if strings.Contains(stylesheet, "url(") || strings.Contains(stylesheet, "@import") || strings.Contains(stylesheet, "javascript:") || strings.Contains(stylesheet, "expression(") {
+					return errors.New("SVG stylesheet external or executable content is not allowed")
+				}
 			}
 		}
 	}
