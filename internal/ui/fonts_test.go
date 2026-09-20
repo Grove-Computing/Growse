@@ -333,6 +333,42 @@ func TestDocumentPaintLayerDrawsReplacedImageAtDocumentCoordinates(t *testing.T)
 	}
 }
 
+func TestFailedImageAltTextIsClippedToImageBounds(t *testing.T) {
+	const width, height = 240, 120
+	window, err := headless.NewWindow(width, height)
+	if err != nil {
+		t.Skipf("headless raster backend unavailable: %v", err)
+	}
+	defer window.Release()
+
+	ui := &BrowserUI{theme: material.NewTheme()}
+	page := &browser.Page{}
+	displayList := &paintmodel.DisplayList{Height: height, ScrollHeight: height, Commands: []paintmodel.Command{
+		paintmodel.DrawBox{NodeID: 1, X: 0, Y: 0, Width: width, Height: height, Color: 0xffffffff, Opacity: 1},
+		paintmodel.DrawImage{NodeID: 2, X: 80, Y: 40, Width: 32, Height: 20, Alt: "Wikipedia wordmark that must not escape", Color: 0x000000ff, Failed: true, Opacity: 1},
+	}}
+	ops := new(op.Ops)
+	gtx := layout.Context{Ops: ops, Constraints: layout.Exact(image.Pt(width, height)), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}}
+	material.List(ui.documentTheme(), &ui.pageList).Layout(gtx, 1, func(gtx layout.Context, _ int) layout.Dimensions {
+		return ui.layoutDocumentPaintLayer(gtx, displayList, page)
+	})
+	if err := window.Frame(ops); err != nil {
+		t.Fatal(err)
+	}
+	result := image.NewRGBA(image.Rect(0, 0, width, height))
+	if err := window.Screenshot(result); err != nil {
+		t.Fatal(err)
+	}
+	for y := 40; y < 70; y++ {
+		for x := 112; x < 220; x++ {
+			pixel := result.RGBAAt(x, y)
+			if pixel.R < 245 || pixel.G < 245 || pixel.B < 245 {
+				t.Fatalf("alt text escaped image bounds at (%d,%d): %#v", x, y, pixel)
+			}
+		}
+	}
+}
+
 func TestContainsEmojiPresentationRecognizesSymbolsAndFlags(t *testing.T) {
 	for _, value := range []string{"📝", "🇺🇸 English", "☀️"} {
 		if !containsEmojiPresentation(value) {

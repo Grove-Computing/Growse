@@ -2773,6 +2773,8 @@ func (ui *BrowserUI) layoutDrawImage(gtx layout.Context, command paintmodel.Draw
 			offset.Pop()
 			area.Pop()
 		} else if command.Alt != "" {
+			altClip := clip.Rect{Max: image.Pt(width, height)}.Push(gtx.Ops)
+			defer altClip.Pop()
 			inset := layout.UniformInset(unit.Dp(4))
 			inset.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 				label := material.Label(ui.documentTheme(), unit.Sp(14), command.Alt)
