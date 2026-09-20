@@ -236,6 +236,14 @@ func (e *engine) addFlexChildren(container *dom.Node, containerStyle blockStyle,
 		resolveFlexibleLengths(&lines[lineIndex], availableMain, mainGap)
 		for _, algorithm := range lines[lineIndex].items {
 			item := byAlgorithm[algorithm]
+			// An auto cross-size is based on the item's used main size. Intrinsic
+			// measurement above happens before flex-shrink, so text that wraps only
+			// after shrinking must be measured again at the resolved width.
+			if axis.horizontal && item.crossAutoSize && item.node.Type == dom.NodeElement && e.intrinsicMeasureDepth < 8 {
+				if measured := e.measureIntrinsicBlockHeight(item.node, item.style, algorithm.target, containingHeight, heightDefinite); measured > 0 {
+					item.crossSize = measured
+				}
+			}
 			lineCrossSizes[lineIndex] = max(lineCrossSizes[lineIndex], item.crossSize+item.crossStart+item.crossEnd)
 		}
 	}
