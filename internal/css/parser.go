@@ -691,6 +691,14 @@ func parseCompoundSelectorDepth(value string, depth int) (CompoundSelector, bool
 				position = next
 				continue
 			}
+			// CSS keeps the legacy single-colon spelling of ::before and
+			// ::after valid. Treating it as an unknown pseudo-class invalidates
+			// common reset lists such as *,:after,:before,::backdrop.
+			if pseudoElement, next, ok := parseLegacyPseudoElement(value, position); ok {
+				compound.PseudoElement = pseudoElement
+				position = next
+				continue
+			}
 			pseudo, next, ok := parsePseudoClassDepth(value, position, depth)
 			if !ok {
 				return CompoundSelector{}, false
@@ -717,6 +725,26 @@ func parsePseudoElement(value string, start int) (PseudoElementKind, int, bool) 
 		return PseudoElementNone, 0, false
 	}
 	name, nameEnd, ok := parseSelectorName(value, nameStart)
+	if !ok {
+		return PseudoElementNone, 0, false
+	}
+	switch strings.ToLower(name) {
+	case "before":
+		return PseudoElementBefore, nameEnd, true
+	case "after":
+		return PseudoElementAfter, nameEnd, true
+	case "backdrop":
+		return PseudoElementBackdrop, nameEnd, true
+	default:
+		return PseudoElementNone, 0, false
+	}
+}
+
+func parseLegacyPseudoElement(value string, start int) (PseudoElementKind, int, bool) {
+	if start+1 >= len(value) || value[start+1] == ':' {
+		return PseudoElementNone, 0, false
+	}
+	name, nameEnd, ok := parseSelectorName(value, start+1)
 	if !ok {
 		return PseudoElementNone, 0, false
 	}

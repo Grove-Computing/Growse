@@ -560,6 +560,22 @@ func TestParseBeforeAndAfterPseudoElements(t *testing.T) {
 	}
 }
 
+func TestParseTailwindResetPseudoElementList(t *testing.T) {
+	stylesheet, err := Parse(strings.NewReader(`*,:after,:before,::backdrop { box-sizing:border-box; margin:0 }`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stylesheet.Rules) != 1 || len(stylesheet.Rules[0].Selectors) != 4 {
+		t.Fatalf("Tailwind reset selector list = %#v", stylesheet.Rules)
+	}
+	want := []PseudoElementKind{PseudoElementNone, PseudoElementAfter, PseudoElementBefore, PseudoElementBackdrop}
+	for index, selector := range stylesheet.Rules[0].Selectors {
+		if got := selectorPseudoElementKind(selector); got != want[index] {
+			t.Fatalf("selector %d pseudo-element = %v, want %v", index, got, want[index])
+		}
+	}
+}
+
 func TestSelectorSpecificityCountsEveryComponent(t *testing.T) {
 	stylesheet, err := Parse(strings.NewReader(`
 main#app.card[lang]:hover:first-child:not(.skip)::before { content: "x" }
