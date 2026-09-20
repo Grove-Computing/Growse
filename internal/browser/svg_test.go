@@ -2,6 +2,7 @@ package browser
 
 import (
 	"context"
+	"image"
 	"image/color"
 	"strings"
 	"testing"
@@ -54,6 +55,47 @@ func TestRasterizeSVGDrawsStaticSubsetWithViewBoxGradientClipAndText(t *testing.
 	}
 	if painted < 500 {
 		t.Fatalf("painted pixels = %d, want representative shapes and text", painted)
+	}
+}
+
+func TestRasterizeSVGWithoutViewBoxPreservesPathGeometry(t *testing.T) {
+	decoded, width, height, err := rasterizeSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" width="120" height="20"><path fill="#000" d="M0 0h10v10H0z"/></svg>`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if width != 120 || height != 20 {
+		t.Fatalf("raster size = %dx%d, want 120x20", width, height)
+	}
+	inside := color.NRGBAModel.Convert(decoded.At(5, 5)).(color.NRGBA).A
+	outside := color.NRGBAModel.Convert(decoded.At(60, 10)).(color.NRGBA).A
+	if inside == 0 || outside != 0 {
+		t.Fatalf("path alpha inside=%d outside=%d, want painted path on transparent canvas", inside, outside)
+	}
+}
+
+func TestPathologicalCompoundPathRasterIsRejected(t *testing.T) {
+	canvas := image.NewRGBA(image.Rect(0, 0, 20, 10))
+	for y := 0; y < 10; y++ {
+		for x := 0; x < 20; x++ {
+			canvas.SetRGBA(x, y, color.RGBA{A: 255})
+		}
+	}
+	if !pathologicalCompoundPathRaster([]byte(`<svg><path fill-rule="nonzero" d="M0 0z"/></svg>`), canvas) {
+		t.Fatal("near-solid compound path corruption was accepted")
+	}
+	canvas.SetRGBA(0, 0, color.RGBA{})
+	canvas.SetRGBA(1, 0, color.RGBA{})
+	canvas.SetRGBA(2, 0, color.RGBA{})
+	canvas.SetRGBA(3, 0, color.RGBA{})
+	canvas.SetRGBA(4, 0, color.RGBA{})
+	canvas.SetRGBA(5, 0, color.RGBA{})
+	canvas.SetRGBA(6, 0, color.RGBA{})
+	canvas.SetRGBA(7, 0, color.RGBA{})
+	canvas.SetRGBA(8, 0, color.RGBA{})
+	canvas.SetRGBA(9, 0, color.RGBA{})
+	canvas.SetRGBA(10, 0, color.RGBA{})
+	if pathologicalCompoundPathRaster([]byte(`<svg><path fill-rule="nonzero" d="M0 0z"/></svg>`), canvas) {
+		t.Fatal("ordinary compound path coverage was rejected")
 	}
 }
 
