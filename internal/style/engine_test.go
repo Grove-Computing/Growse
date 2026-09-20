@@ -77,6 +77,33 @@ func TestComputeResolvesDisplayMarginAndPadding(t *testing.T) {
 	}
 }
 
+func TestTailwindResponsiveSpaceUtilityResolvesRegisteredReverseValue(t *testing.T) {
+	document := dom.NewDocument()
+	stack := document.CreateElement("div", map[string]string{"class": "sm:space-y-16"})
+	first := document.CreateElement("section", nil)
+	second := document.CreateElement("section", nil)
+	appendNode(t, document, document.Root, stack)
+	appendNode(t, document, stack, first)
+	appendNode(t, document, stack, second)
+	stylesheet, err := css.Parse(strings.NewReader(`
+@property --tw-space-y-reverse { syntax:"*"; inherits:false; initial-value:0 }
+:where(.sm\:space-y-16>:not(:last-child)) {
+  --tw-space-y-reverse:0;
+  margin-block-start:calc(calc(.25rem * 16) * var(--tw-space-y-reverse));
+  margin-block-end:calc(calc(.25rem * 16) * calc(1 - var(--tw-space-y-reverse)))
+}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	computed := ComputeWithEnvironment(document, stylesheet, InteractionState{}, Environment{ViewportWidth: 1052, ViewportHeight: 703, RootFontSize: 16})
+	firstStyle, _ := computed.For(first)
+	secondStyle, _ := computed.For(second)
+	if firstStyle.Margin.Bottom != 64 || firstStyle.Margin.Top != 0 || secondStyle.Margin.Bottom != 0 {
+		t.Fatalf("Tailwind vertical spacing = first:%#v second:%#v", firstStyle.Margin, secondStyle.Margin)
+	}
+}
+
 func TestComputeWithStateAppliesHoverToTargetAndAncestor(t *testing.T) {
 	document := dom.NewDocument()
 	button := document.CreateElement("button", map[string]string{"id": "save", "class": "action"})
