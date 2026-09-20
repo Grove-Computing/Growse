@@ -520,6 +520,9 @@ func TestBrowserUAStylesheetProvidesDefaultsBelowAuthorOrigin(t *testing.T) {
 	heading := document.CreateElement("h1", nil)
 	input := document.CreateElement("input", nil)
 	hidden := document.CreateElement("section", map[string]string{"hidden": ""})
+	details := document.CreateElement("details", nil)
+	summary := document.CreateElement("summary", nil)
+	detailsContent := document.CreateElement("div", nil)
 	picture := document.CreateElement("picture", nil)
 	source := document.CreateElement("source", map[string]string{"type": "image/avif"})
 	table := document.CreateElement("table", nil)
@@ -527,6 +530,7 @@ func TestBrowserUAStylesheetProvidesDefaultsBelowAuthorOrigin(t *testing.T) {
 	cell := document.CreateElement("td", nil)
 	for _, edge := range [][2]*dom.Node{
 		{document.Root, html}, {html, body}, {body, heading}, {body, input}, {body, hidden},
+		{body, details}, {details, summary}, {details, detailsContent},
 		{body, picture}, {picture, source}, {body, table}, {table, row}, {row, cell},
 	} {
 		appendNode(t, document, edge[0], edge[1])
@@ -548,6 +552,11 @@ func TestBrowserUAStylesheetProvidesDefaultsBelowAuthorOrigin(t *testing.T) {
 	}
 	if hiddenStyle.Display != DisplayNone {
 		t.Fatalf("browser hidden display = %v, want none", hiddenStyle.Display)
+	}
+	summaryStyle, _ := browserStyles.For(summary)
+	detailsContentStyle, _ := browserStyles.For(detailsContent)
+	if summaryStyle.Display != DisplayBlock || detailsContentStyle.Display != DisplayNone {
+		t.Fatalf("closed details displays = summary:%v content:%v, want block/none", summaryStyle.Display, detailsContentStyle.Display)
 	}
 	pictureStyle, _ := browserStyles.For(picture)
 	sourceStyle, _ := browserStyles.For(source)
