@@ -1186,7 +1186,7 @@ func (e *engine) addBlock(node *dom.Node, style blockStyle, x, width, containing
 	e.y = boxTop + outerHeight + bottomMargin.value()
 	if style.layoutPosition == stylemodel.PositionRelative {
 		dx, dy := relativeOffset(style.inset, width, containingHeight, heightDefinite, style.direction)
-		translateFlexGeometry(e.tree, geometryBoxStart, geometryDecorationStart, dx, dy, nil)
+		translateFlexGeometry(e.tree, geometryBoxStart, geometryDecorationStart, dx, dy, nil, nil)
 	}
 	if len(style.transform) != 0 {
 		originX := x + style.transformOrigin.X.Resolve(outerWidth)

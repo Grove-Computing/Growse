@@ -942,8 +942,8 @@ func (e *engine) renderGridItem(node *dom.Node, style blockStyle, x, y, width, h
 	style.boxSizing = stylemodel.BoxSizingBorderBox
 	style.width, style.height = pixelSize(width), pixelSize(height)
 	startBoxes, startDecorations := len(e.tree.Boxes), len(e.tree.Decorations)
-	savedY, savedClip := e.y, e.clip
-	e.y, e.clip = 0, nil
+	savedY, savedClip, savedClips := e.y, e.clip, e.clips
+	e.y, e.clip, e.clips = 0, nil, nil
 	if node.Type == dom.NodeText {
 		e.addText(node.ID, "text", normalizeWhitespace(node.Text), style, 0, width)
 	} else if isEditableTextControl(node) {
@@ -959,8 +959,8 @@ func (e *engine) renderGridItem(node *dom.Node, style blockStyle, x, y, width, h
 	} else {
 		e.addBlock(node, style, 0, width, height, true, nil)
 	}
-	e.y, e.clip = savedY, savedClip
-	translateFlexGeometry(e.tree, startBoxes, startDecorations, x, y, savedClip)
+	e.y, e.clip, e.clips = savedY, savedClip, savedClips
+	translateFlexGeometry(e.tree, startBoxes, startDecorations, x, y, savedClip, savedClips)
 	e.tree.Bounds[node.ID] = Rect{X: x, Y: y, Width: width, Height: height}
 }
 
@@ -1012,9 +1012,9 @@ func (e *engine) renderInlineGrid(run inlineRun, x, y float32) {
 	style.boxSizing = stylemodel.BoxSizingBorderBox
 	style.width, style.height = pixelSize(run.width), pixelSize(run.height)
 	startBoxes, startDecorations := len(e.tree.Boxes), len(e.tree.Decorations)
-	savedY, savedClip := e.y, e.clip
-	e.y, e.clip = 0, nil
+	savedY, savedClip, savedClips := e.y, e.clip, e.clips
+	e.y, e.clip, e.clips = 0, nil, nil
 	e.addBlock(run.node, style, 0, run.width, run.height, true, nil)
-	e.y, e.clip = savedY, savedClip
-	translateFlexGeometry(e.tree, startBoxes, startDecorations, x, y, savedClip)
+	e.y, e.clip, e.clips = savedY, savedClip, savedClips
+	translateFlexGeometry(e.tree, startBoxes, startDecorations, x, y, savedClip, savedClips)
 }

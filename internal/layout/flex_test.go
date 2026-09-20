@@ -601,6 +601,37 @@ func TestBuildFlexOverflowClipScrollAndHitTestingShareGeometry(t *testing.T) {
 	}
 }
 
+func TestFlexItemTranslatesNestedOverflowClipsIntoParentCoordinates(t *testing.T) {
+	document := dom.NewDocument()
+	container := document.CreateElement("main", map[string]string{"class": "container"})
+	left := document.CreateElement("section", map[string]string{"class": "left"})
+	right := document.CreateElement("section", map[string]string{"class": "right"})
+	inner := document.CreateElement("h2", map[string]string{"class": "inner"})
+	text := document.CreateText("今日の一枚")
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, container}, [2]*dom.Node{container, left},
+		[2]*dom.Node{container, right}, [2]*dom.Node{right, inner}, [2]*dom.Node{inner, text},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.container { display:flex; width:600px; overflow:hidden; gap:20px }
+.left { flex:3 1 0; height:400px }
+.right { flex:1 1 0; overflow:hidden; padding:8px }
+.inner { overflow-x:hidden; margin:0; height:40px }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, stylemodel.Compute(document, stylesheet), 700)
+	box := boxForNode(t, tree, inner.ID)
+	if box.Clip == nil || box.Clip.Width <= 0 || box.X < box.Clip.X || box.X >= box.Clip.X+box.Clip.Width {
+		t.Fatalf("right-column text was clipped in mixed coordinates: box=%#v clip=%#v clips=%#v", box.Rect(), box.Clip, box.Clips)
+	}
+	rightRect := tree.Bounds[right.ID]
+	if box.Clip.X < rightRect.X || box.Clip.X+box.Clip.Width > rightRect.X+rightRect.Width+0.01 {
+		t.Fatalf("nested clip escaped right flex item: right=%#v clip=%#v", rightRect, box.Clip)
+	}
+}
+
 func decorationForNode(t *testing.T, tree *Tree, nodeID dom.NodeID) Decoration {
 	t.Helper()
 	for _, decoration := range tree.Decorations {
