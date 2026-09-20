@@ -95,6 +95,12 @@ func rasterizeSVGWithBudget(source []byte, budget *imageDecodeBudget) (decoded i
 	if width <= 0 || height <= 0 || width > 32768 || height > 32768 {
 		return nil, 0, 0, errors.New("SVG has invalid dimensions")
 	}
+	if viewBox[2] <= 0 || viewBox[3] <= 0 {
+		// SVG 1.1 allows width/height without an explicit viewBox. oksvg leaves
+		// its ViewBox empty for those assets; feeding that zero-sized box into
+		// SetTarget collapses path coordinates and can fill the whole raster.
+		viewBox = [4]float64{0, 0, width, height}
+	}
 	pixelWidth, pixelHeight := int(math.Ceil(width)), int(math.Ceil(height))
 	if pixelWidth <= 0 || pixelHeight <= 0 || pixelWidth > maxSVGSurfaceBytes/4/pixelHeight {
 		return nil, 0, 0, errors.New("SVG raster surface is too large")
@@ -110,7 +116,62 @@ func rasterizeSVGWithBudget(source []byte, budget *imageDecodeBudget) (decoded i
 	icon.Draw(rasterx.NewDasher(pixelWidth, pixelHeight, scanner), 1)
 	paintSVGText(result, metadata)
 	applySVGClip(result, metadata)
+	if pathologicalCompoundPathRaster(source, result) {
+		return nil, 0, 0, errors.New("SVG compound path rasterization is invalid")
+	}
 	return result, pixelWidth, pixelHeight, nil
+}
+
+func pathologicalCompoundPathRaster(source []byte, raster *image.RGBA) bool {
+	if raster == nil || !bytes.Contains(source, []byte("fill-rule=\"nonzero\"")) || bytes.Contains(source, []byte("<rect")) {
+		return false
+	}
+	total := raster.Bounds().Dx() * raster.Bounds().Dy()
+	if total <= 0 {
+		return false
+	}
+	opaque := 0
+	for y := raster.Bounds().Min.Y; y < raster.Bounds().Max.Y; y++ {
+		for x := raster.Bounds().Min.X; x < raster.Bounds().Max.X; x++ {
+			if raster.RGBAAt(x, y).A != 0 {
+				opaque++
+			}
+		}
+	}
+	coverage := opaque * 100 / total
+	if coverage >= 95 {
+		return true
+	}
+	// oksvg can also collapse a dense, multi-subpath wordmark into several
+	// broad black bands without covering the complete surface. Legitimate
+	// glyph outlines contain many independent move commands, but their ink
+	// coverage stays sparse at the declared logo dimensions.
+	return coverage >= 30 && svgPathSubpaths(source) >= 8
+}
+
+func svgPathSubpaths(source []byte) int {
+	decoder := xml.NewDecoder(bytes.NewReader(source))
+	count := 0
+	for {
+		token, err := decoder.Token()
+		if err != nil {
+			return count
+		}
+		start, ok := token.(xml.StartElement)
+		if !ok || canonicalSVGName(start.Name.Local) != "path" {
+			continue
+		}
+		for _, attribute := range start.Attr {
+			if canonicalSVGName(attribute.Name.Local) != "d" {
+				continue
+			}
+			for _, value := range attribute.Value {
+				if value == 'M' || value == 'm' {
+					count++
+				}
+			}
+		}
+	}
 }
 
 func validateSVG(source []byte) error {
@@ -258,6 +319,12 @@ func prepareSVG(source []byte) ([]byte, svgMetadata, error) {
 			}
 			if value.Name.Local == "svg" {
 				readSVGRootMetadata(value.Attr, &metadata)
+				if svgAttribute(value.Attr, "viewBox") == "" && metadata.width > 0 && metadata.height > 0 {
+					// oksvg must see the implicit viewport while parsing compound
+					// paths. Assigning Icon.ViewBox after parsing is too late and can
+					// join distant subpaths into an almost solid rectangle.
+					value.Attr = append(value.Attr, xml.Attr{Name: xml.Name{Local: "viewBox"}, Value: fmt.Sprintf("0 0 %g %g", metadata.width, metadata.height)})
+				}
 			}
 			if value.Name.Local == "clipPath" {
 				currentClip = svgAttribute(value.Attr, "id")

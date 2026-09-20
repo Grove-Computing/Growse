@@ -440,6 +440,22 @@ func TestParseMediaQueriesAndNestedRules(t *testing.T) {
 	}
 }
 
+func TestParseExplicitAllMediaTypeWithFeature(t *testing.T) {
+	stylesheet, err := Parse(strings.NewReader(`
+@media all and (min-width: 640px) { .logo { display: block } }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stylesheet.Rules) != 1 || len(stylesheet.Rules[0].Media) != 1 || len(stylesheet.Rules[0].Media[0]) != 1 {
+		t.Fatalf("rules = %#v", stylesheet.Rules)
+	}
+	query := stylesheet.Rules[0].Media[0][0]
+	if query.Type != "all" || len(query.Features) != 1 || query.Features[0].Name != "min-width" || query.Features[0].Value != "640px" {
+		t.Fatalf("all media query = %#v", query)
+	}
+}
+
 func TestParseMediaRangeSyntaxUsedByTailwindV4(t *testing.T) {
 	stylesheet, err := Parse(strings.NewReader(`
 @media (width >= 40rem) { .sm\:grid-cols-2 { display: grid } }
@@ -557,6 +573,22 @@ func TestParseBeforeAndAfterPseudoElements(t *testing.T) {
 	}
 	if got, want := selectors[0].Specificity(), [3]int{0, 1, 2}; got != want {
 		t.Fatalf("specificity = %v, want %v", got, want)
+	}
+}
+
+func TestParseTailwindResetPseudoElementList(t *testing.T) {
+	stylesheet, err := Parse(strings.NewReader(`*,:after,:before,::backdrop { box-sizing:border-box; margin:0 }`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stylesheet.Rules) != 1 || len(stylesheet.Rules[0].Selectors) != 4 {
+		t.Fatalf("Tailwind reset selector list = %#v", stylesheet.Rules)
+	}
+	want := []PseudoElementKind{PseudoElementNone, PseudoElementAfter, PseudoElementBefore, PseudoElementBackdrop}
+	for index, selector := range stylesheet.Rules[0].Selectors {
+		if got := selectorPseudoElementKind(selector); got != want[index] {
+			t.Fatalf("selector %d pseudo-element = %v, want %v", index, got, want[index])
+		}
 	}
 }
 

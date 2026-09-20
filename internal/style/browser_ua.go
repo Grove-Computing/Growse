@@ -14,6 +14,7 @@ const BrowserUAStylesheetVersion = "growse-browser-ua-v1"
 const browserUASource = `
 html, body, address, article, aside, footer, header, hgroup, main, nav, section,
 div, form, fieldset, figure, figcaption, details, summary { display: block; }
+details:not([open]) > :not(summary) { display: none; }
 table { display: table; border-collapse: separate; border-spacing: 2px; }
 caption { display: table-caption; text-align: center; }
 colgroup { display: table-column-group; }

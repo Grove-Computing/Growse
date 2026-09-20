@@ -1898,25 +1898,13 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 	ui.handleViewportClicks(gtx, page, tree, displayList)
 
 	area := clip.Rect{Max: gtx.Constraints.Max}.Push(gtx.Ops)
-	dimensions := material.List(ui.documentTheme(), &ui.pageList).Layout(gtx, len(displayList.Commands), func(gtx layout.Context, index int) layout.Dimensions {
-		switch command := displayList.Commands[index].(type) {
-		case paintmodel.DrawText:
-			return ui.layoutDrawText(gtx, command)
-		case paintmodel.DrawInput:
-			return ui.layoutDrawInput(gtx, command)
-		case paintmodel.DrawSelect:
-			return ui.layoutDrawSelect(gtx, command)
-		case paintmodel.DrawCheckable:
-			return ui.layoutDrawCheckable(gtx, command)
-		case paintmodel.DrawButton:
-			return ui.layoutDrawButton(gtx, command)
-		case paintmodel.DrawBox:
-			return ui.layoutDrawBox(gtx, command, page.BackgroundImages, page.StyleRevision)
-		case paintmodel.DrawImage:
-			return ui.layoutDrawImage(gtx, command, page.Images)
-		default:
-			return layout.Dimensions{}
-		}
+	// Paint the document as one scroll item. A command-per-item virtual list can
+	// stop after a tall left grid/flex item has moved its cursor below the
+	// viewport, even though later paint-order commands belong to a right-hand
+	// sibling near the top of the page. Keeping commands in one layer preserves
+	// CSS paint order and makes those signed vertical backtracks visible.
+	dimensions := material.List(ui.documentTheme(), &ui.pageList).Layout(gtx, 1, func(gtx layout.Context, _ int) layout.Dimensions {
+		return ui.layoutDocumentPaintLayer(gtx, displayList, page)
 	})
 	if nestedScrollConsumed {
 		ui.pageList.Position = documentPosition
@@ -1937,6 +1925,48 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 	}
 	ui.persistHistoryScroll()
 	return dimensions
+}
+
+func (ui *BrowserUI) layoutDocumentPaintLayer(gtx layout.Context, displayList *paintmodel.DisplayList, page *browser.Page) layout.Dimensions {
+	children := make([]layout.StackChild, 0, len(displayList.Commands)+1)
+	children = append(children, layout.Stacked(func(gtx layout.Context) layout.Dimensions {
+		return layout.Spacer{Height: unit.Dp(max(displayList.ScrollHeight, displayList.Height))}.Layout(gtx)
+	}))
+	for _, source := range displayList.Commands {
+		command := source
+		children = append(children, layout.Stacked(func(gtx layout.Context) layout.Dimensions {
+			return ui.layoutAbsolutePaintCommand(gtx, command, page)
+		}))
+	}
+	return layout.Stack{Alignment: layout.NW}.Layout(gtx, children...)
+}
+
+func (ui *BrowserUI) layoutAbsolutePaintCommand(gtx layout.Context, source paintmodel.Command, page *browser.Page) layout.Dimensions {
+	switch command := source.(type) {
+	case paintmodel.DrawText:
+		command.Top = command.Y
+		return ui.layoutDrawText(gtx, command)
+	case paintmodel.DrawInput:
+		command.Top = command.Y
+		return ui.layoutDrawInput(gtx, command)
+	case paintmodel.DrawSelect:
+		command.Top = command.Y
+		return ui.layoutDrawSelect(gtx, command)
+	case paintmodel.DrawCheckable:
+		command.Top = command.Y
+		return ui.layoutDrawCheckable(gtx, command)
+	case paintmodel.DrawButton:
+		command.Top = command.Y
+		return ui.layoutDrawButton(gtx, command)
+	case paintmodel.DrawBox:
+		command.Top = command.Y
+		return ui.layoutDrawBox(gtx, command, page.BackgroundImages, page.StyleRevision)
+	case paintmodel.DrawImage:
+		command.Top = command.Y
+		return ui.layoutDrawImage(gtx, command, page.Images)
+	default:
+		return layout.Dimensions{}
+	}
 }
 
 func (ui *BrowserUI) persistHistoryScroll() {
@@ -2743,16 +2773,34 @@ func (ui *BrowserUI) layoutDrawImage(gtx layout.Context, command paintmodel.Draw
 			offset.Pop()
 			area.Pop()
 		} else if command.Alt != "" {
-			inset := layout.UniformInset(unit.Dp(4))
-			inset.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-				label := material.Label(ui.documentTheme(), unit.Sp(14), command.Alt)
-				label.Color = rgba(command.Color)
-				return label.Layout(gtx)
-			})
+			altClip := clip.Rect{Max: image.Pt(width, height)}.Push(gtx.Ops)
+			defer altClip.Pop()
+			if textSize := failedImageAltTextSize(command.Height); textSize > 0 {
+				inset := layout.UniformInset(unit.Dp(4))
+				inset.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					// A failed replaced image must not turn a short logo slot into a
+					// wrapped stack of glyphs. Browsers keep the fallback on one line;
+					// scale it to the available inner height and truncate horizontally.
+					label := material.Label(ui.documentTheme(), textSize, command.Alt)
+					label.Color = rgba(command.Color)
+					label.MaxLines = 1
+					return label.Layout(gtx)
+				})
+			}
 		}
 		paintBoxBorder(gtx, command.Border, width, height)
 		return layout.Dimensions{Size: image.Pt(width, height)}
 	})
+}
+
+func failedImageAltTextSize(height float32) unit.Sp {
+	// Tiny decorative wordmark/tagline slots cannot fit even the minimum
+	// fallback line. Leaving them blank is preferable to unreadable overprint;
+	// the enclosing link and adjacent logo remain available to users.
+	if height < 16 {
+		return 0
+	}
+	return unit.Sp(min(max(height-8, 8), 14))
 }
 
 func (ui *BrowserUI) layoutDrawBox(gtx layout.Context, command paintmodel.DrawBox, backgroundImages map[string]image.Image, styleRevision uint64) layout.Dimensions {
@@ -3385,13 +3433,17 @@ func (ui *BrowserUI) layoutDrawButton(gtx layout.Context, command paintmodel.Dra
 		gtx.Constraints.Max.Y = gtx.Constraints.Min.Y
 		style := material.Button(ui.documentTheme(), button, command.Label)
 		style.Color = rgba(command.Color)
-		background := command.Background
-		if background == 0 {
-			background = command.AccentColor
+		if containsEmojiPresentation(command.Label) {
+			style.Font.Typeface = font.Typeface("Noto Color Emoji")
 		}
-		style.Background = rgba(background)
-		if command.Appearance == stylemodel.AppearanceNone {
+		// CSS controls the page background and padding. Material's accent fill
+		// and horizontal inset would turn transparent navigation buttons blue
+		// and truncate labels whose measured CSS width is otherwise sufficient.
+		style.Inset = layout.Inset{}
+		if command.Background == 0 || command.Appearance == stylemodel.AppearanceNone {
 			style.Background = color.NRGBA{}
+		} else {
+			style.Background = rgba(command.Background)
 		}
 		return style.Layout(gtx)
 	})
@@ -3648,6 +3700,9 @@ func (ui *BrowserUI) layoutShadowedText(gtx layout.Context, text string, size fl
 			if len(families) != 0 {
 				label.Font.Typeface = font.Typeface(families[0])
 			}
+			if containsEmojiPresentation(text) {
+				label.Font.Typeface = font.Typeface("Noto Color Emoji")
+			}
 			if fontStyle == "italic" || strings.HasPrefix(fontStyle, "oblique") {
 				label.Font.Style = font.Italic
 			}
@@ -3669,6 +3724,20 @@ func (ui *BrowserUI) layoutShadowedText(gtx layout.Context, text string, size fl
 	}
 	children = append(children, layout.Stacked(labelLayout(color)))
 	return layout.Stack{Alignment: layout.NW}.Layout(gtx, children...)
+}
+
+func containsEmojiPresentation(value string) bool {
+	for _, character := range value {
+		switch {
+		case character >= 0x1f000 && character <= 0x1faff:
+			return true
+		case character >= 0x2600 && character <= 0x27ff:
+			return true
+		case character == 0xfe0f:
+			return true
+		}
+	}
+	return false
 }
 
 func layoutDecoratedLabel(gtx layout.Context, label layout.Widget, decoration stylemodel.TextDecorationLine, decorationColor uint32, baseline, fontSize float32) layout.Dimensions {

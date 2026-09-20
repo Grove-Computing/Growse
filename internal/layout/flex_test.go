@@ -129,6 +129,31 @@ func TestBuildFlexRowGrowsItemsAndUsesOrderModifiedVisualOrder(t *testing.T) {
 	}
 }
 
+func TestBuildFlexIgnoresDetachedNilChildDuringPositionedPass(t *testing.T) {
+	document := dom.NewDocument()
+	container := document.CreateElement("div", map[string]string{"class": "container"})
+	item := document.CreateElement("div", map[string]string{"class": "item"})
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, container},
+		[2]*dom.Node{container, item},
+		[2]*dom.Node{item, document.CreateText("visible")},
+	)
+	// Runtime DOM replacement can leave a transient detached slot in the
+	// snapshot consumed by layout.
+	container.Children = append(container.Children, nil)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.container { display:flex; width:300px }
+.item { flex:1; min-height:30px }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, stylemodel.Compute(document, stylesheet), 500)
+	if tree == nil {
+		t.Fatal("layout returned a nil tree")
+	}
+}
+
 func TestBuildFlexColumnShrinksItems(t *testing.T) {
 	document := dom.NewDocument()
 	container := document.CreateElement("section", map[string]string{"class": "container"})
@@ -573,6 +598,230 @@ func TestBuildFlexOverflowClipScrollAndHitTestingShareGeometry(t *testing.T) {
 	}
 	if _, ok := HitTest(tree, itemBox.X+150, itemBox.Y+1); ok {
 		t.Fatal("hit testing ignored flex overflow clip")
+	}
+}
+
+func TestFlexItemTranslatesNestedOverflowClipsIntoParentCoordinates(t *testing.T) {
+	document := dom.NewDocument()
+	container := document.CreateElement("main", map[string]string{"class": "container"})
+	left := document.CreateElement("section", map[string]string{"class": "left"})
+	right := document.CreateElement("section", map[string]string{"class": "right"})
+	inner := document.CreateElement("h2", map[string]string{"class": "inner"})
+	text := document.CreateText("今日の一枚")
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, container}, [2]*dom.Node{container, left},
+		[2]*dom.Node{container, right}, [2]*dom.Node{right, inner}, [2]*dom.Node{inner, text},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.container { display:flex; width:600px; overflow:hidden; gap:20px }
+.left { flex:3 1 0; height:400px }
+.right { flex:1 1 0; overflow:hidden; padding:8px }
+.inner { overflow-x:hidden; margin:0; height:40px }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, stylemodel.Compute(document, stylesheet), 700)
+	box := boxForNode(t, tree, inner.ID)
+	if box.Clip == nil || box.Clip.Width <= 0 || box.X < box.Clip.X || box.X >= box.Clip.X+box.Clip.Width {
+		t.Fatalf("right-column text was clipped in mixed coordinates: box=%#v clip=%#v clips=%#v", box.Rect(), box.Clip, box.Clips)
+	}
+	rightRect := tree.Bounds[right.ID]
+	if box.Clip.X < rightRect.X || box.Clip.X+box.Clip.Width > rightRect.X+rightRect.Width+0.01 {
+		t.Fatalf("nested clip escaped right flex item: right=%#v clip=%#v", rightRect, box.Clip)
+	}
+}
+
+func TestFlexIntrinsicWidthExcludesAbsoluteDropdownContent(t *testing.T) {
+	document := dom.NewDocument()
+	header := document.CreateElement("header", map[string]string{"class": "header"})
+	start := document.CreateElement("div", map[string]string{"class": "start"})
+	menuButton := document.CreateElement("span", nil)
+	dropdown := document.CreateElement("div", map[string]string{"class": "dropdown"})
+	end := document.CreateElement("nav", map[string]string{"class": "end"})
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, header}, [2]*dom.Node{header, start},
+		[2]*dom.Node{start, menuButton}, [2]*dom.Node{menuButton, document.CreateText("Menu")},
+		[2]*dom.Node{start, dropdown}, [2]*dom.Node{dropdown, document.CreateText("An absolutely positioned menu with very long off-flow content")},
+		[2]*dom.Node{header, end}, [2]*dom.Node{end, document.CreateText("Account Login")},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.header { display:flex; flex-wrap:wrap; width:600px; gap:16px }
+.start { display:flex; gap:12px }
+.dropdown { position:absolute; width:900px }
+.end { width:180px }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, stylemodel.Compute(document, stylesheet), 700)
+	startRect, endRect := tree.Bounds[start.ID], tree.Bounds[end.ID]
+	if startRect.Y != endRect.Y {
+		t.Fatalf("off-flow dropdown forced header wrapping: start=%#v end=%#v", startRect, endRect)
+	}
+	if startRect.Width+endRect.Width+16 > 600.01 {
+		t.Fatalf("off-flow dropdown contributed intrinsic width: start=%#v end=%#v", startRect, endRect)
+	}
+}
+
+// Adapted from the nested responsive header used by saku0512.com. A flex
+// container's max-content contribution includes descendant padding and gaps;
+// flattening only its text makes the navigation wrap despite ample space.
+func TestNestedFlexMaxContentIncludesDescendantGapsAndPadding(t *testing.T) {
+	document := dom.NewDocument()
+	header := document.CreateElement("header", map[string]string{"class": "header"})
+	row := document.CreateElement("div", map[string]string{"class": "row"})
+	brand := document.CreateElement("div", map[string]string{"class": "brand"})
+	navigation := document.CreateElement("nav", map[string]string{"class": "navigation"})
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, header}, [2]*dom.Node{header, row},
+		[2]*dom.Node{row, brand}, [2]*dom.Node{brand, document.CreateText("Saku0512")},
+		[2]*dom.Node{row, navigation},
+	)
+	for _, label := range []string{"Home", "Articles", "SNS Link", "English", "Make a donation"} {
+		link := document.CreateElement("a", map[string]string{"class": "link"})
+		appendNodes(t, document, [2]*dom.Node{navigation, link}, [2]*dom.Node{link, document.CreateText(label)})
+	}
+	stylesheet, err := css.Parse(strings.NewReader(`
+.header { display:flex; width:1020px; height:64px; align-items:center }
+.row { display:flex; align-items:center; gap:24px }
+.brand { display:flex; flex-shrink:0; font-size:20px; font-weight:700 }
+.navigation { display:flex; flex-wrap:wrap; align-items:center; gap:16px }
+.link { padding:8px 12px; font-size:14px }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, stylemodel.Compute(document, stylesheet), 1100)
+	brandRect, navigationRect := tree.Bounds[brand.ID], tree.Bounds[navigation.ID]
+	if navigationRect.Height > 40 || navigationRect.Width < 450 {
+		t.Fatalf("nested header wrapped despite sufficient width: brand=%#v navigation=%#v row=%#v", brandRect, navigationRect, tree.Bounds[row.ID])
+	}
+}
+
+func TestFlexImageDefiniteWidthOverridesLoadedIntrinsicMinimum(t *testing.T) {
+	document := dom.NewDocument()
+	header := document.CreateElement("header", map[string]string{"class": "header"})
+	brand := document.CreateElement("div", map[string]string{"class": "brand"})
+	logo := document.CreateElement("img", map[string]string{"class": "logo", "src": "logo.png"})
+	navigation := document.CreateElement("nav", map[string]string{"class": "navigation"})
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, header}, [2]*dom.Node{header, brand}, [2]*dom.Node{brand, logo},
+		[2]*dom.Node{brand, document.CreateText("Saku0512")}, [2]*dom.Node{header, navigation},
+	)
+	for _, label := range []string{"Home", "Articles", "SNS Link", "English", "Donate"} {
+		link := document.CreateElement("a", nil)
+		appendNodes(t, document, [2]*dom.Node{navigation, link}, [2]*dom.Node{link, document.CreateText(label)})
+	}
+	stylesheet, err := css.Parse(strings.NewReader(`
+.header,.brand,.navigation { display:flex; align-items:center }
+.header { width:900px; gap:24px }
+.brand { flex-shrink:0; gap:8px }
+.logo { width:32px; height:32px }
+.navigation { flex-wrap:wrap; gap:16px }
+a { padding:8px 12px }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	computed := stylemodel.Compute(document, stylesheet)
+	tree := BuildWithScrollAndImages(document, computed, map[dom.NodeID]ImageResource{
+		logo.ID: {URL: "logo.png", IntrinsicWidth: 512, IntrinsicHeight: 512, Loaded: true},
+	}, 1000, 700, 0, 0)
+	logoRect, navigationRect := tree.Bounds[logo.ID], tree.Bounds[navigation.ID]
+	if logoRect.Width != 32 || navigationRect.Width < 400 || navigationRect.Height > 50 {
+		t.Fatalf("loaded intrinsic image collapsed header navigation: logo=%#v navigation=%#v brand=%#v", logoRect, navigationRect, tree.Bounds[brand.ID])
+	}
+}
+
+func TestNestedFlexMaxContentIncludesImagesInsideEmptyWrapper(t *testing.T) {
+	document := dom.NewDocument()
+	header := document.CreateElement("header", map[string]string{"class": "header"})
+	start := document.CreateElement("div", map[string]string{"class": "start"})
+	menu := document.CreateElement("span", map[string]string{"class": "menu"})
+	logo := document.CreateElement("a", map[string]string{"class": "logo"})
+	mark := document.CreateElement("img", map[string]string{"class": "mark"})
+	words := document.CreateElement("span", map[string]string{"class": "words"})
+	wordmark := document.CreateElement("img", map[string]string{"class": "wordmark"})
+	tagline := document.CreateElement("img", map[string]string{"class": "tagline"})
+	end := document.CreateElement("div", map[string]string{"class": "end"})
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, header}, [2]*dom.Node{header, start}, [2]*dom.Node{header, end},
+		[2]*dom.Node{start, menu}, [2]*dom.Node{start, logo}, [2]*dom.Node{logo, mark}, [2]*dom.Node{logo, words},
+		[2]*dom.Node{words, wordmark}, [2]*dom.Node{words, tagline}, [2]*dom.Node{end, document.CreateText("Account")},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.header,.start,.logo { display:flex; align-items:center }
+.header { width:600px; gap:24px }
+.start { gap:24px }
+.menu { display:inline-block; width:20px; height:20px; background:#111 }
+.mark { display:block; width:50px; height:50px; margin-right:10px }
+.wordmark { display:block; width:120px; height:20px }
+.tagline { display:block; width:100px; height:14px; margin-top:5px }
+.end { width:100px }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, stylemodel.Compute(document, stylesheet), 700)
+	markBox, wordmarkBox := boxForNode(t, tree, mark.ID), boxForNode(t, tree, wordmark.ID)
+	if wordmarkBox.X < markBox.X+markBox.Width+9 {
+		t.Fatalf("wordmark overlaps logo image: mark=%#v wordmark=%#v", markBox.Rect(), wordmarkBox.Rect())
+	}
+	endBox := boxForNode(t, tree, end.ID)
+	if endBox.X < wordmarkBox.X+wordmarkBox.Width+20 {
+		t.Fatalf("following header content overlaps wordmark: wordmark=%#v end=%#v", wordmarkBox.Rect(), endBox.Rect())
+	}
+}
+
+func TestEmptyFlexWithOnlyHiddenChildrenHasZeroHeight(t *testing.T) {
+	document := dom.NewDocument()
+	container := document.CreateElement("div", map[string]string{"class": "container"})
+	hidden := document.CreateElement("span", map[string]string{"class": "hidden"})
+	appendNodes(t, document, [2]*dom.Node{document.Root, container}, [2]*dom.Node{container, hidden})
+	stylesheet, err := css.Parse(strings.NewReader(`.container { display:flex } .hidden { display:none }`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, stylemodel.Compute(document, stylesheet), 400)
+	if got := tree.Bounds[container.ID].Height; got != 0 {
+		t.Fatalf("empty flex height = %v, want 0", got)
+	}
+}
+
+func TestFlexWithOnlyCollapsibleWhitespaceHasZeroHeight(t *testing.T) {
+	document := dom.NewDocument()
+	container := document.CreateElement("div", map[string]string{"class": "container"})
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, container},
+		[2]*dom.Node{container, document.CreateText("\n    ")},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`.container { display:flex }`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, stylemodel.Compute(document, stylesheet), 400)
+	if got := tree.Bounds[container.ID].Height; got != 0 {
+		t.Fatalf("whitespace-only flex height = %v, want 0", got)
+	}
+}
+
+func TestFlexLineWithEmptyFlexItemHasZeroHeight(t *testing.T) {
+	document := dom.NewDocument()
+	header := document.CreateElement("header", map[string]string{"class": "header"})
+	indicator := document.CreateElement("div", map[string]string{"class": "indicator"})
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, header},
+		[2]*dom.Node{header, indicator},
+		[2]*dom.Node{indicator, document.CreateText("\n")},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`.header,.indicator { display:flex }`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, stylemodel.Compute(document, stylesheet), 400)
+	if got := tree.Bounds[header.ID].Height; got != 0 {
+		t.Fatalf("empty flex item established line height = %v, want 0", got)
 	}
 }
 

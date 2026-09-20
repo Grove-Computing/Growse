@@ -364,10 +364,8 @@ func loadReplacedImageNodeWithCache(ctx context.Context, client ResourceLoader, 
 		resource.Error = "image source is missing or invalid"
 		return resource, nil, ""
 	}
-	if loading, _ := node.Attribute("loading"); strings.EqualFold(strings.TrimSpace(loading), "lazy") && !eligible {
-		resource.URL, resource.Deferred = candidates[0].String(), true
-		return resource, nil, ""
-	}
+	loading, _ := node.Attribute("loading")
+	deferred := strings.EqualFold(strings.TrimSpace(loading), "lazy") && !eligible
 	var lastTarget *url.URL
 	for _, target := range candidates {
 		if ctx.Err() != nil {
@@ -379,7 +377,17 @@ func loadReplacedImageNodeWithCache(ctx context.Context, client ResourceLoader, 
 			resource.Error = "image URL is not a supported HTTP(S) URL"
 			continue
 		}
-		cached := cache.load(ctx, client, target, budget)
+		var cached cachedImageResource
+		if deferred {
+			var exists bool
+			cached, exists = cache.loadExisting(ctx, target)
+			if !exists {
+				resource.Deferred = true
+				return resource, nil, ""
+			}
+		} else {
+			cached = cache.load(ctx, client, target, budget)
+		}
 		switch cached.failure {
 		case imageLoadRequestFailure:
 			resource.Error = "image request failed"
@@ -510,7 +518,11 @@ func imageViewportPolicy(document *dom.Document, computed style.Map, baseURL *ur
 	}
 	visit(document.Root)
 	tree := layout.BuildWithScrollAndImages(document, computed, placeholders, viewportWidth, viewportHeight, 0, 0)
-	nearBottom := viewportHeight * 2
+	// Browsers start lazy images well before they enter the viewport. A wider
+	// preload margin also tolerates the conservative placeholder layout used
+	// before intrinsic image dimensions are available (notably in wrapped flex
+	// columns such as Wikipedia's main page).
+	nearBottom := viewportHeight * 4
 	for nodeID := range placeholders {
 		if bounds, ok := tree.Bounds[nodeID]; ok && bounds.Y <= nearBottom && bounds.Y+bounds.Height >= -viewportHeight {
 			eligible[nodeID] = true

@@ -87,3 +87,42 @@ func TestTailwindV4ThemeUtilitiesReachStyleLayoutAndPaint(t *testing.T) {
 		t.Fatalf("Tailwind card paint = %#v", cardPaint)
 	}
 }
+
+func TestTailwindV4RegisteredShadowVariablesReachPaint(t *testing.T) {
+	document := dom.NewDocument()
+	card := document.CreateElement("article", map[string]string{"class": "card"})
+	if err := document.AppendChild(document.Root, card); err != nil {
+		t.Fatal(err)
+	}
+	stylesheet, err := css.Parse(strings.NewReader(`
+*,:after,:before,::backdrop { box-sizing:border-box; border:0 solid; margin:0; padding:0 }
+@property --tw-shadow { syntax:"*"; inherits:false; initial-value:0 0 #0000 }
+@property --tw-inset-shadow { syntax:"*"; inherits:false; initial-value:0 0 #0000 }
+@property --tw-ring-offset-shadow { syntax:"*"; inherits:false; initial-value:0 0 #0000 }
+@property --tw-ring-shadow { syntax:"*"; inherits:false; initial-value:0 0 #0000 }
+.card {
+  width:240px; height:120px; padding:24px; border-width:1px; border-color:#f3f4f6; border-radius:8px; background:#fff;
+  --tw-shadow:0 1px 3px 0 #0000001a,0 1px 2px -1px #0000001a;
+  box-shadow:var(--tw-inset-shadow),var(--tw-ring-offset-shadow),var(--tw-ring-shadow),var(--tw-shadow)
+}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	computed := style.Compute(document, stylesheet)
+	cardStyle, _ := computed.For(card)
+	if cardStyle.BoxSizing != style.BoxSizingBorderBox || cardStyle.Border.Top.Style != style.BorderSolid || len(cardStyle.BoxShadows) != 5 {
+		t.Fatalf("registered Tailwind shadows = %#v, want transparent reset layers plus two visible layers", cardStyle.BoxShadows)
+	}
+	tree := layout.Build(document, computed, 320)
+	var command *DrawBox
+	for _, candidate := range Build(tree).Commands {
+		if box, ok := candidate.(DrawBox); ok && box.NodeID == card.ID {
+			command = &box
+			break
+		}
+	}
+	if command == nil || command.Width != 240 || command.Radius.TopLeft.X != 8 || command.Border.Top.Width != 1 || command.Border.Top.Style != style.BorderSolid || len(command.BoxShadows) != 5 {
+		t.Fatalf("Tailwind card boundary paint = %#v", command)
+	}
+}

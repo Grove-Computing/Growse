@@ -14,8 +14,8 @@ type gridLayoutItem struct {
 }
 
 type gridSpanContribution struct {
-	start, end int
-	required   float32
+	start, end       int
+	minimum, maximum float32
 }
 
 type subgridContext struct {
@@ -190,7 +190,7 @@ func (e *engine) addGridChildren(container *dom.Node, containerStyle blockStyle,
 			columnMaxContent[item.colStart] = max(columnMaxContent[item.colStart], maxContent+axisMargin)
 			columnMinContent[item.colStart] = max(columnMinContent[item.colStart], minContent+axisMargin)
 		} else {
-			columnSpans = append(columnSpans, gridSpanContribution{start: item.colStart, end: item.colEnd, required: max(maxContent, minContent) + axisMargin})
+			columnSpans = append(columnSpans, gridSpanContribution{start: item.colStart, end: item.colEnd, minimum: minContent + axisMargin, maximum: maxContent + axisMargin})
 		}
 	}
 	columns := append([]float32(nil), inherited.columns...)
@@ -220,7 +220,7 @@ func (e *engine) addGridChildren(container *dom.Node, containerStyle blockStyle,
 		if rowSpan == 1 {
 			rowMaxContent[item.rowStart] = max(rowMaxContent[item.rowStart], required)
 		} else {
-			rowSpans = append(rowSpans, gridSpanContribution{start: item.rowStart, end: item.rowEnd, required: required})
+			rowSpans = append(rowSpans, gridSpanContribution{start: item.rowStart, end: item.rowEnd, minimum: required, maximum: required})
 		}
 	}
 	rows := append([]float32(nil), inherited.rows...)
@@ -375,7 +375,7 @@ func (e *engine) addSubgridColumnContributions(item gridLayoutItem, parentLines 
 			maximum[start] = max(maximum[start], requiredMax)
 			minimum[start] = max(minimum[start], requiredMin)
 		} else {
-			*spans = append(*spans, gridSpanContribution{start: start, end: end, required: max(requiredMax, requiredMin)})
+			*spans = append(*spans, gridSpanContribution{start: start, end: end, minimum: requiredMin, maximum: requiredMax})
 		}
 	}
 	return true
@@ -394,7 +394,7 @@ func (e *engine) addSubgridRowContributions(item gridLayoutItem, parentLines map
 		if end-start == 1 && start >= 0 && start < len(maximum) {
 			maximum[start] = max(maximum[start], required)
 		} else {
-			*spans = append(*spans, gridSpanContribution{start: start, end: end, required: required})
+			*spans = append(*spans, gridSpanContribution{start: start, end: end, minimum: required, maximum: required})
 		}
 	}
 	return true
@@ -515,16 +515,27 @@ func growGridSpan(tracks []float32, contribution gridSpanContribution, gap float
 	if end <= start {
 		return
 	}
-	shortfall := contribution.required - trackSpanSize(tracks, start, end, gap)
-	if shortfall <= 0 {
-		return
-	}
 	growable := make([]int, 0, end-start)
+	required := contribution.maximum
+	allFlexibleWithFixedMinimum := true
 	for index := start; index < end; index++ {
 		track := gridTrackAt(explicit, implicit, index)
 		if track.Kind != stylemodel.GridTrackLength {
 			growable = append(growable, index)
 		}
+		if track.Kind != stylemodel.GridTrackFraction || !track.MinSet || track.MinKind != stylemodel.GridTrackLength {
+			allFlexibleWithFixedMinimum = false
+		}
+	}
+	// minmax(0, 1fr) intentionally allows content to wrap inside a definite
+	// container. Growing those tracks to a spanning item's max-content width
+	// moves real-site card text thousands of pixels outside the viewport.
+	if allFlexibleWithFixedMinimum {
+		required = contribution.minimum
+	}
+	shortfall := required - trackSpanSize(tracks, start, end, gap)
+	if shortfall <= 0 {
+		return
 	}
 	if len(growable) == 0 {
 		return
@@ -931,8 +942,8 @@ func (e *engine) renderGridItem(node *dom.Node, style blockStyle, x, y, width, h
 	style.boxSizing = stylemodel.BoxSizingBorderBox
 	style.width, style.height = pixelSize(width), pixelSize(height)
 	startBoxes, startDecorations := len(e.tree.Boxes), len(e.tree.Decorations)
-	savedY, savedClip := e.y, e.clip
-	e.y, e.clip = 0, nil
+	savedY, savedClip, savedClips := e.y, e.clip, e.clips
+	e.y, e.clip, e.clips = 0, nil, nil
 	if node.Type == dom.NodeText {
 		e.addText(node.ID, "text", normalizeWhitespace(node.Text), style, 0, width)
 	} else if isEditableTextControl(node) {
@@ -948,8 +959,8 @@ func (e *engine) renderGridItem(node *dom.Node, style blockStyle, x, y, width, h
 	} else {
 		e.addBlock(node, style, 0, width, height, true, nil)
 	}
-	e.y, e.clip = savedY, savedClip
-	translateFlexGeometry(e.tree, startBoxes, startDecorations, x, y, savedClip)
+	e.y, e.clip, e.clips = savedY, savedClip, savedClips
+	translateFlexGeometry(e.tree, startBoxes, startDecorations, x, y, savedClip, savedClips)
 	e.tree.Bounds[node.ID] = Rect{X: x, Y: y, Width: width, Height: height}
 }
 
@@ -1001,9 +1012,9 @@ func (e *engine) renderInlineGrid(run inlineRun, x, y float32) {
 	style.boxSizing = stylemodel.BoxSizingBorderBox
 	style.width, style.height = pixelSize(run.width), pixelSize(run.height)
 	startBoxes, startDecorations := len(e.tree.Boxes), len(e.tree.Decorations)
-	savedY, savedClip := e.y, e.clip
-	e.y, e.clip = 0, nil
+	savedY, savedClip, savedClips := e.y, e.clip, e.clips
+	e.y, e.clip, e.clips = 0, nil, nil
 	e.addBlock(run.node, style, 0, run.width, run.height, true, nil)
-	e.y, e.clip = savedY, savedClip
-	translateFlexGeometry(e.tree, startBoxes, startDecorations, x, y, savedClip)
+	e.y, e.clip, e.clips = savedY, savedClip, savedClips
+	translateFlexGeometry(e.tree, startBoxes, startDecorations, x, y, savedClip, savedClips)
 }

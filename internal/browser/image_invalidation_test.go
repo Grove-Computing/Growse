@@ -87,3 +87,47 @@ func TestImageCompletionRejectsStaleGeneration(t *testing.T) {
 		t.Fatal("current image completion was rejected")
 	}
 }
+
+func TestDynamicImageCompletionDoesNotCancelPageImageBatch(t *testing.T) {
+	document := dom.NewDocument()
+	target := document.CreateElement("img", nil)
+	if err := document.AppendChild(document.Root, target); err != nil {
+		t.Fatal(err)
+	}
+	page := &Page{
+		Document:       document,
+		ImageResources: map[dom.NodeID]layout.ImageResource{},
+		Images:         map[string]image.Image{},
+	}
+	batchContext, generation := page.beginImageLoad(context.Background())
+	t.Cleanup(page.cancelImageLoads)
+
+	resource := layout.ImageResource{URL: "https://example.com/dynamic.png", Loaded: true, IntrinsicWidth: 20, IntrinsicHeight: 10}
+	page.commitDynamicImageResourceLoad(target.ID, resource, image.NewNRGBA(image.Rect(0, 0, 20, 10)), "")
+	if batchContext.Err() != nil {
+		t.Fatalf("dynamic image cancelled page batch: %v", batchContext.Err())
+	}
+	if !page.stageImageLoad(generation, map[dom.NodeID]layout.ImageResource{target.ID: resource}, map[string]image.Image{}, nil, nil, nil, false) {
+		t.Fatal("page batch became stale after dynamic image completion")
+	}
+}
+
+func TestPageRequestsFrameAfterPublishingStagedImages(t *testing.T) {
+	page := &Page{ImageResources: map[dom.NodeID]layout.ImageResource{}, Images: map[string]image.Image{}}
+	_, generation := page.beginImageLoad(context.Background())
+	t.Cleanup(page.cancelImageLoads)
+	if !page.stageImageLoad(generation, map[dom.NodeID]layout.ImageResource{}, map[string]image.Image{}, nil, nil, nil, false) {
+		t.Fatal("image batch was not staged")
+	}
+	invalidations := 0
+	browserState := &Browser{page: page, onMutation: func() { invalidations++ }}
+	if got := browserState.Page(); got != page {
+		t.Fatalf("Page() = %p, want %p", got, page)
+	}
+	if invalidations != 1 {
+		t.Fatalf("post-publication invalidations = %d, want 1", invalidations)
+	}
+	if browserState.Page() != page || invalidations != 1 {
+		t.Fatalf("committed batch requested another frame: invalidations=%d", invalidations)
+	}
+}
