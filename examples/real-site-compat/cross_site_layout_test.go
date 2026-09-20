@@ -17,14 +17,22 @@ func TestSaku0512LiveCSSKeepsProfileAndLaterSectionsVisible(t *testing.T) {
 	for _, width := range []float32{1280, 720} {
 		t.Run(viewportName(width), func(t *testing.T) {
 			page, tree := loadCrossSiteFixture(t, "fixtures/saku0512.html", width, 800)
+			header := regionBounds(t, page.Document, tree, "header")
+			brandIcon := regionBounds(t, page.Document, tree, "brand-icon")
 			navigation := regionBounds(t, page.Document, tree, "navigation")
 			profile := regionBounds(t, page.Document, tree, "profile")
 			achievements := regionBounds(t, page.Document, tree, "achievements")
 			later := regionBounds(t, page.Document, tree, "later")
-			if navigation.Height <= 0 || navigation.Height > 160 || profile.Width <= 0 || achievements.Width <= 0 {
+			if header.Height <= 0 || header.Height > 160 || navigation.Height <= 0 || navigation.Height > 160 || profile.Width <= 0 || achievements.Width <= 0 {
 				t.Fatalf("missing or oversized header/profile regions: nav=%#v profile=%#v achievements=%#v", navigation, profile, achievements)
 			}
+			if brandIcon.Width != 32 || brandIcon.Height != 32 {
+				t.Fatalf("loaded intrinsic brand icon ignored CSS size: %#v", brandIcon)
+			}
 			if width > 720 {
+				if abs32(navigation.Y-brandIcon.Y) > 16 {
+					t.Fatalf("desktop header navigation wrapped below brand: icon=%#v nav=%#v", brandIcon, navigation)
+				}
 				if achievements.X <= profile.X+profile.Width || abs32(achievements.Y-profile.Y) > 1 {
 					t.Fatalf("desktop profile grid is not two columns: profile=%#v achievements=%#v", profile, achievements)
 				}
@@ -34,6 +42,8 @@ func TestSaku0512LiveCSSKeepsProfileAndLaterSectionsVisible(t *testing.T) {
 			if later.Y < max(profile.Y+profile.Height, achievements.Y+achievements.Height)-1 {
 				t.Fatalf("later section overlaps profile grid: later=%#v", later)
 			}
+			assertRegionBorderAndRadius(t, page.Document, tree, "profile")
+			assertRegionBorderAndRadius(t, page.Document, tree, "achievements")
 			assertRegionTextWithinViewport(t, page.Document, tree, width, "navigation", "profile", "achievements", "later")
 		})
 	}
@@ -44,11 +54,19 @@ func TestWikipediaLiveCSSKeepsHeaderWelcomeAndColumnsVisible(t *testing.T) {
 		t.Run(viewportName(width), func(t *testing.T) {
 			page, tree := loadCrossSiteFixture(t, "fixtures/wikipedia-ja.html", width, 800)
 			header := regionBounds(t, page.Document, tree, "header")
+			logoIcon := regionBounds(t, page.Document, tree, "logo-icon")
+			navigation := regionBounds(t, page.Document, tree, "navigation")
 			heading := regionBounds(t, page.Document, tree, "heading")
 			article := regionBounds(t, page.Document, tree, "article")
 			picture := regionBounds(t, page.Document, tree, "image")
 			if header.Height <= 0 || header.Height > 140 || heading.Y > 260 {
 				t.Fatalf("Wikipedia header/welcome escaped initial viewport: header=%#v heading=%#v", header, heading)
+			}
+			if logoIcon.Width != 50 || logoIcon.Height != 50 {
+				t.Fatalf("Wikipedia responsive logo icon is not visible at %.0fpx: %#v", width, logoIcon)
+			}
+			if gap := navigation.Y - (header.Y + header.Height); gap < 23 || gap > 25 {
+				t.Fatalf("empty site notice margin was not collapsed once: gap=%v header=%#v nav=%#v", gap, header, navigation)
 			}
 			if width > 720 {
 				if picture.X <= article.X+article.Width || abs32(picture.Y-article.Y) > 1 {
@@ -57,9 +75,29 @@ func TestWikipediaLiveCSSKeepsHeaderWelcomeAndColumnsVisible(t *testing.T) {
 			} else if picture.Y < article.Y+article.Height-1 {
 				t.Fatalf("narrow Wikipedia columns overlap: article=%#v image=%#v", article, picture)
 			}
+			assertRegionBorderAndRadius(t, page.Document, tree, "article")
+			assertRegionBorderAndRadius(t, page.Document, tree, "image")
 			assertRegionTextWithinViewport(t, page.Document, tree, width, "header", "navigation", "heading", "article", "image")
 		})
 	}
+}
+
+func assertRegionBorderAndRadius(t *testing.T, document *dom.Document, tree *layoutmodel.Tree, name string) {
+	t.Helper()
+	node := regionNode(document, name)
+	for _, decoration := range tree.Decorations {
+		if decoration.NodeID != node.ID {
+			continue
+		}
+		if decoration.Border.Top.Width <= 0 || decoration.Border.Right.Width <= 0 || decoration.Border.Bottom.Width <= 0 || decoration.Border.Left.Width <= 0 {
+			t.Fatalf("region %q lost a card border: %#v", name, decoration.Border)
+		}
+		if decoration.Radius.TopLeft.X <= 0 || decoration.Radius.TopRight.X <= 0 || decoration.Radius.BottomRight.X <= 0 || decoration.Radius.BottomLeft.X <= 0 {
+			t.Fatalf("region %q lost rounded corners: %#v", name, decoration.Radius)
+		}
+		return
+	}
+	t.Fatalf("region %q has no decoration", name)
 }
 
 func loadCrossSiteFixture(t *testing.T, fixture string, width, height float32) (*browser.Page, *layoutmodel.Tree) {

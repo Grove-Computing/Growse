@@ -13,7 +13,7 @@
   "limits": {"maxPixels": 16000000, "maxArtifactBytes": 16777216, "maxCorpusArtifactBytes": 268435456, "maxGlyphs": 50000, "maxDisplayedElements": 4000, "maxStylesheets": 256, "maxCSSRules": 8192},
   "cases": [
     {"id": "one-mb-club", "sourceURL": "https://1mb.club/", "fixture": "fixtures/one-mb-club.html", "sha256": "bc309677beea78d5e4658db679b02831e49c68ec1e8fba9131c9104734cae9ae", "regions": ["navigation", "heading", "description", "badge", "table"]},
-    {"id": "wikipedia-ja", "sourceURL": "https://ja.wikipedia.org/", "fixture": "fixtures/wikipedia-ja.html", "sha256": "6707758025d910d02b79150e5ebf2b366e3891490133271225c4346810b8245d", "regions": ["navigation", "logo", "heading", "main", "image"]},
+    {"id": "wikipedia-ja", "sourceURL": "https://ja.wikipedia.org/", "fixture": "fixtures/wikipedia-ja.html", "sha256": "9a05db7d20e7539284e9ced3b4e9829bf2123b2cbf82aefded17cc45202d59d4", "regions": ["navigation", "logo", "heading", "main", "image"]},
     {"id": "github-profile", "sourceURL": "https://github.com/Saku0512", "fixture": "fixtures/github-profile.html", "sha256": "db756d2608fb0f1e3f4cfc48a44722716133793b92f9c6cc9676c2e19c8f67a5", "regions": ["navigation", "heading", "profile", "main"]},
     {"id": "cv-btxx", "sourceURL": "https://cv.btxx.org/", "fixture": "fixtures/cv-btxx.html", "sha256": "4eb1f8f5fdd02520b9beeb00708f8b80efcfd05e58c01e724e8ff42d2a6a463e", "regions": ["main", "pre"]},
     {"id": "t0-vc", "sourceURL": "https://t0.vc/", "fixture": "fixtures/t0-vc.html", "sha256": "860d5bd661345a9f3b29d6228cf59bebd4e7ef1bab290faa50d1bc5c948a3051", "regions": ["main", "links"]},
