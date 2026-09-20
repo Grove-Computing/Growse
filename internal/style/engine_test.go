@@ -891,6 +891,24 @@ p { color: black; }
 	}
 }
 
+func TestComputeEvaluatesExplicitAllMediaTypeWithWidth(t *testing.T) {
+	document := dom.NewDocument()
+	logo := document.CreateElement("img", map[string]string{"class": "logo"})
+	appendNode(t, document, document.Root, logo)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.logo { display: none }
+@media all and (min-width: 640px) { .logo { display: block } }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	narrow, _ := ComputeWithEnvironment(document, stylesheet, InteractionState{}, Environment{ViewportWidth: 639, ViewportHeight: 600}).For(logo)
+	wide, _ := ComputeWithEnvironment(document, stylesheet, InteractionState{}, Environment{ViewportWidth: 640, ViewportHeight: 600}).For(logo)
+	if narrow.Display != DisplayNone || wide.Display != DisplayBlock {
+		t.Fatalf("explicit all query display = narrow:%v wide:%v", narrow.Display, wide.Display)
+	}
+}
+
 func TestTailwindResponsiveUtilityFollowsMediaRangeViewport(t *testing.T) {
 	document := dom.NewDocument()
 	card := document.CreateElement("section", map[string]string{"class": "sm:grid-cols-2"})
