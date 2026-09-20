@@ -554,6 +554,43 @@ func TestBuildAlignmentHandlesSafeUnsafeLogicalAxesAndGridBaseline(t *testing.T)
 
 // Adapted from CSS Grid 2 intrinsic track sizing assertions. An auto row must
 // use the nested block content contribution, not a flattened one-line label.
+func TestResponsiveMinmaxGridWrapsSpanningProfileCardWithinContainer(t *testing.T) {
+	document := dom.NewDocument()
+	grid := document.CreateElement("div", map[string]string{"class": "grid"})
+	profile := document.CreateElement("article", nil)
+	achievements := document.CreateElement("article", map[string]string{"class": "wide"})
+	heading := document.CreateElement("h3", nil)
+	list := document.CreateElement("ul", nil)
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, grid},
+		[2]*dom.Node{grid, profile}, [2]*dom.Node{profile, document.CreateText("基本情報")},
+		[2]*dom.Node{grid, achievements}, [2]*dom.Node{achievements, heading},
+		[2]*dom.Node{heading, document.CreateText("実績")}, [2]*dom.Node{achievements, list},
+		[2]*dom.Node{list, document.CreateText("KOSEN Security Contest 2024 5th JPHACKS in Sendai Secure Cycle 企業賞")},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.grid { display:grid; width:864px; grid-template-columns:repeat(3,minmax(0,1fr)); gap:32px }
+article { padding:24px }
+.wide { grid-column:span 2 / span 2 }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, stylemodel.Compute(document, stylesheet), 1024)
+	gridRect := tree.Bounds[grid.ID]
+	profileRect, achievementsRect := tree.Bounds[profile.ID], tree.Bounds[achievements.ID]
+	if gridRect.Width != 864 || achievementsRect.X+achievementsRect.Width > gridRect.X+gridRect.Width+0.01 {
+		t.Fatalf("responsive profile columns overflow = grid:%#v profile:%#v achievements:%#v", gridRect, profileRect, achievementsRect)
+	}
+	if profileRect.Width >= achievementsRect.Width || profileRect.Y != achievementsRect.Y {
+		t.Fatalf("profile cards are not a one-plus-two-column row: profile=%#v achievements=%#v", profileRect, achievementsRect)
+	}
+	headingRect := tree.Bounds[heading.ID]
+	if headingRect.X < achievementsRect.X || headingRect.X >= achievementsRect.X+achievementsRect.Width {
+		t.Fatalf("achievement heading moved outside card: heading=%#v card=%#v", headingRect, achievementsRect)
+	}
+}
+
 func TestGridAutoRowContainsNestedProfileAndCardContent(t *testing.T) {
 	document := dom.NewDocument()
 	grid := document.CreateElement("main", map[string]string{"class": "grid"})

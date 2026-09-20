@@ -238,6 +238,17 @@ func (b *Browser) Page() *Page {
 	b.mu.RUnlock()
 	if page != nil && page.commitPendingImageLoad() {
 		dispatchImageResourceEvents(b, page)
+		// The asynchronous loader invalidates when it stages results. If that
+		// happens while a Gio frame is already being assembled, the wake-up can
+		// be coalesced into that frame before Page publishes the staged maps.
+		// Request one more frame after publication so decoded images never wait
+		// for an unrelated resize, hover, or input event to become visible.
+		b.mu.RLock()
+		onMutation := b.onMutation
+		b.mu.RUnlock()
+		if onMutation != nil {
+			onMutation()
+		}
 	}
 	return page
 }
@@ -1959,17 +1970,20 @@ func startRuntime(ctx context.Context, factory runtimemodel.EngineFactory, engin
 			return pageRenderSnapshot(readContext, page, nodeID)
 		},
 		RefreshImage: func(loadContext context.Context, nodeID dom.NodeID) (runtimemodel.ImageState, error) {
-			generationContext, generation := page.beginImageLoad(loadContext)
 			policy := imageViewportPolicy(page.Document, page.ComputedStyles, pageBaseURL(page), page.ViewportWidth, page.ViewportHeight)
 			budget := newImageDecodeBudgetWithImages(page.BackgroundImages)
 			node, exists := page.Document.NodeByID(nodeID)
 			if !exists {
 				return runtimemodel.ImageState{}, errors.New("image element is disconnected")
 			}
-			resource, decoded, failure := loadReplacedImageNodeWithCache(generationContext, page.imageLoader, pageBaseURL(page), node, page.ViewportWidth, 1, policy[nodeID], budget, page.imageCache)
-			if generationContext.Err() != nil || !page.commitImageResourceLoad(generation, nodeID, resource, decoded, failure) {
+			resource, decoded, failure := loadReplacedImageNodeWithCache(loadContext, page.imageLoader, pageBaseURL(page), node, page.ViewportWidth, 1, policy[nodeID], budget, page.imageCache)
+			if loadContext.Err() != nil {
 				return runtimemodel.ImageState{}, context.Canceled
 			}
+			if _, connected := page.Document.NodeByID(nodeID); !connected {
+				return runtimemodel.ImageState{}, errors.New("image element is disconnected")
+			}
+			page.commitDynamicImageResourceLoad(nodeID, resource, decoded, failure)
 			if onMutation != nil {
 				onMutation()
 			}

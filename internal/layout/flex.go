@@ -399,7 +399,7 @@ func (e *engine) collectFlexItems(container *dom.Node, axis flexAxis, availableM
 	var items []*flexLayoutItem
 	byAlgorithm := make(map[*flexItem]*flexLayoutItem)
 	for index, node := range container.Children {
-		if node.Type != dom.NodeElement && (node.Type != dom.NodeText || strings.TrimSpace(node.Text) == "") {
+		if node == nil || node.Type != dom.NodeElement && (node.Type != dom.NodeText || strings.TrimSpace(node.Text) == "") {
 			continue
 		}
 		style := e.styleFor(node)
@@ -467,7 +467,10 @@ func (e *engine) collectFlexItems(container *dom.Node, axis flexAxis, availableM
 
 func (e *engine) renderFlexPositionedChildren(container *dom.Node, containerStyle blockStyle, axis flexAxis, x, y, width, height float32, heightDefinite bool) {
 	for _, node := range container.Children {
-		if node.Type != dom.NodeElement {
+		// A JavaScript mutation can detach a child between Page snapshots. Treat
+		// the transient nil entry like a non-element instead of crashing the
+		// renderer while the next style revision is being prepared.
+		if node == nil || node.Type != dom.NodeElement {
 			continue
 		}
 		itemStyle := e.styleFor(node)
@@ -517,7 +520,10 @@ func (e *engine) flexIntrinsicSizes(node *dom.Node, style blockStyle, axis flexA
 	text := normalizeWhitespace(e.inlineText(node))
 	textWidth, textHeight, _ := measureStyledText(text, style)
 	minTextWidth := minimumTextWidth(text, style)
-	if textHeight <= 0 {
+	replacedImage := isImageElement(node, e.images)
+	if strings.TrimSpace(text) == "" {
+		textWidth, textHeight, minTextWidth = 0, 0, 0
+	} else if textHeight <= 0 {
 		textHeight = style.fontSize * 1.4
 	}
 	if isEditableTextControl(node) || isSelectControl(node) {
@@ -536,7 +542,7 @@ func (e *engine) flexIntrinsicSizes(node *dom.Node, style blockStyle, axis flexA
 		}
 		textWidth, textHeight, _ = measureStyledText(label, style)
 		minTextWidth = textWidth
-	} else if isImageElement(node, e.images) {
+	} else if replacedImage {
 		resource := e.images[node.ID]
 		textWidth, textHeight = resource.IntrinsicWidth, resource.IntrinsicHeight
 		if attribute, ok := imageDimensionAttribute(node, "width"); ok {
@@ -551,6 +557,20 @@ func (e *engine) flexIntrinsicSizes(node *dom.Node, style blockStyle, axis flexA
 	horizontalExtras := style.padding.Left + style.padding.Right + style.border.Left.Width + style.border.Right.Width
 	verticalExtras := style.padding.Top + style.padding.Bottom + style.border.Top.Width + style.border.Bottom.Width
 	intrinsicWidth, intrinsicHeight := textWidth+horizontalExtras, textHeight+verticalExtras
+	if node.Type == dom.NodeElement && (style.display == stylemodel.DisplayFlex || style.display == stylemodel.DisplayInlineFlex) && hasElementChildren(node) {
+		// A flex container contributes the max-content size of its flex items,
+		// including their padding, margins and the container gap. Measuring only
+		// flattened descendant text underestimates nested navigation rows and can
+		// make them wrap even when their ancestor has ample available width.
+		flexWidth, flexHeight, _ := e.resolveInlineFlexSize(node, style, width)
+		intrinsicWidth = max(intrinsicWidth, flexWidth)
+		intrinsicHeight = max(intrinsicHeight, flexHeight)
+	} else if node.Type == dom.NodeElement && strings.TrimSpace(text) == "" && hasElementChildren(node) {
+		// Empty wrapper spans are commonly used to stack replaced images (for
+		// example Wikipedia's wordmark and tagline). They have no flattened text
+		// contribution, but their child image widths still determine max-content.
+		intrinsicWidth = max(intrinsicWidth, e.emptyWrapperIntrinsicWidth(node, width, height, heightDefinite)+horizontalExtras)
+	}
 	if style.height.Kind == stylemodel.SizeAuto && e.intrinsicMeasureDepth < 8 && hasElementChildren(node) {
 		if measured := e.measureIntrinsicBlockHeight(node, style, width, height, heightDefinite); measured > intrinsicHeight {
 			intrinsicHeight = measured
@@ -560,6 +580,12 @@ func (e *engine) flexIntrinsicSizes(node *dom.Node, style blockStyle, axis flexA
 		intrinsicWidth = resolved
 		if style.boxSizing == stylemodel.BoxSizingContentBox {
 			intrinsicWidth += horizontalExtras
+		}
+		if replacedImage {
+			// A definite CSS width replaces the intrinsic width for the automatic
+			// minimum size. Keeping a large source bitmap width here makes a 32px
+			// logo consume hundreds of pixels after its resource finishes loading.
+			minTextWidth = max(intrinsicWidth-horizontalExtras, float32(0))
 		}
 	} else if resolved, ok := e.intrinsicKeywordSize(node, style.width, style, width, true); ok {
 		intrinsicWidth = resolved
@@ -600,9 +626,37 @@ func (e *engine) flexIntrinsicSizes(node *dom.Node, style blockStyle, axis flexA
 		}
 	}
 	if axis.horizontal {
-		return max(base, float32(0)), max(intrinsicHeight, float32(1)), max(minTextWidth+horizontalExtras, float32(0))
+		return max(base, float32(0)), max(intrinsicHeight, float32(0)), max(minTextWidth+horizontalExtras, float32(0))
 	}
-	return max(base, float32(0)), max(intrinsicWidth, float32(1)), max(textHeight+verticalExtras, float32(0))
+	return max(base, float32(0)), max(intrinsicWidth, float32(1)), max(intrinsicHeight, float32(0))
+}
+
+func (e *engine) emptyWrapperIntrinsicWidth(node *dom.Node, width, height float32, heightDefinite bool) float32 {
+	maximum, inlineLine := float32(0), float32(0)
+	flushInline := func() {
+		maximum = max(maximum, inlineLine)
+		inlineLine = 0
+	}
+	for _, child := range node.Children {
+		if child == nil || child.Type != dom.NodeElement {
+			continue
+		}
+		childStyle := e.styleFor(child)
+		if childStyle.display == stylemodel.DisplayNone || childStyle.layoutPosition == stylemodel.PositionAbsolute || childStyle.layoutPosition == stylemodel.PositionFixed {
+			continue
+		}
+		childWidth, _, _ := e.flexIntrinsicSizes(child, childStyle, flexAxis{horizontal: true}, width, width, height, heightDefinite)
+		childWidth += childStyle.margin.Left + childStyle.margin.Right
+		switch childStyle.display {
+		case stylemodel.DisplayInline, stylemodel.DisplayInlineBlock, stylemodel.DisplayInlineFlex, stylemodel.DisplayInlineGrid:
+			inlineLine += childWidth
+		default:
+			flushInline()
+			maximum = max(maximum, childWidth)
+		}
+	}
+	flushInline()
+	return maximum
 }
 
 func minimumTextWidth(value string, style blockStyle) float32 {
@@ -684,8 +738,8 @@ func (e *engine) renderFlexItem(item *flexLayoutItem, axis flexAxis, x, y, mainS
 		style.height = pixelSize(mainSize)
 	}
 	startBoxes, startDecorations := len(e.tree.Boxes), len(e.tree.Decorations)
-	savedY, savedClip := e.y, e.clip
-	e.y, e.clip = 0, nil
+	savedY, savedClip, savedClips := e.y, e.clip, e.clips
+	e.y, e.clip, e.clips = 0, nil, nil
 	outerWidth, outerHeight := crossSize, mainSize
 	if axis.horizontal {
 		outerWidth, outerHeight = mainSize, crossSize
@@ -712,8 +766,8 @@ func (e *engine) renderFlexItem(item *flexLayoutItem, axis flexAxis, x, y, mainS
 		}
 		e.addBlock(item.node, style, 0, outerWidth, outerHeight, true, nil)
 	}
-	e.y, e.clip = savedY, savedClip
-	translateFlexGeometry(e.tree, startBoxes, startDecorations, x, y, savedClip)
+	e.y, e.clip, e.clips = savedY, savedClip, savedClips
+	translateFlexGeometry(e.tree, startBoxes, startDecorations, x, y, savedClip, savedClips)
 	e.tree.Bounds[item.node.ID] = Rect{X: x, Y: y, Width: outerWidth, Height: outerHeight}
 }
 
@@ -728,6 +782,9 @@ func (e *engine) resolveInlineFlexSize(node *dom.Node, containerStyle blockStyle
 		}
 		childStyle := e.styleFor(child)
 		if childStyle.display == stylemodel.DisplayNone {
+			continue
+		}
+		if childStyle.layoutPosition == stylemodel.PositionAbsolute || childStyle.layoutPosition == stylemodel.PositionFixed {
 			continue
 		}
 		main, cross, _ := e.flexIntrinsicSizes(child, childStyle, axis, containingWidth, containingWidth, 0, false)
@@ -783,7 +840,7 @@ func pixelSize(value float32) stylemodel.SizeValue {
 	return stylemodel.SizeValue{Kind: stylemodel.SizeLength, Value: stylemodel.LengthPercentage{Pixels: max(value, float32(0))}}
 }
 
-func translateFlexGeometry(tree *Tree, boxStart, decorationStart int, x, y float32, parentClip *Rect) {
+func translateFlexGeometry(tree *Tree, boxStart, decorationStart int, x, y float32, parentClip *Rect, parentClips []ClipRegion) {
 	movedNodes := make(map[dom.NodeID]struct{})
 	for index := boxStart; index < len(tree.Boxes); index++ {
 		movedNodes[tree.Boxes[index].NodeID] = struct{}{}
@@ -818,14 +875,12 @@ func translateFlexGeometry(tree *Tree, boxStart, decorationStart int, x, y float
 		}
 		return intersectClip(parentClip, *clip)
 	}
-	translateClips := func(clips []ClipRegion) {
+	translateClips := func(clips []ClipRegion) []ClipRegion {
 		for index := range clips {
-			_, ownerMoves := movedNodes[clips[index].NodeID]
-			if clips[index].NodeID == 0 || ownerMoves {
-				clips[index].X += x
-				clips[index].Y += y
-			}
+			clips[index].X += x
+			clips[index].Y += y
 		}
+		return append(cloneClipRegions(parentClips), clips...)
 	}
 	resolvedClip := func(current *Rect, clips []ClipRegion) *Rect {
 		if len(clips) == 0 {
@@ -852,7 +907,7 @@ func translateFlexGeometry(tree *Tree, boxStart, decorationStart int, x, y float
 		for runIndex := range tree.Boxes[index].Runs {
 			tree.Boxes[index].Runs[runIndex].Baseline += y
 		}
-		translateClips(tree.Boxes[index].Clips)
+		tree.Boxes[index].Clips = translateClips(tree.Boxes[index].Clips)
 		tree.Boxes[index].Clip = resolvedClip(tree.Boxes[index].Clip, tree.Boxes[index].Clips)
 	}
 	for index := decorationStart; index < len(tree.Decorations); index++ {
@@ -860,7 +915,7 @@ func translateFlexGeometry(tree *Tree, boxStart, decorationStart int, x, y float
 		tree.Decorations[index].X += x
 		tree.Decorations[index].Y += y
 		tree.Decorations[index].Transform = translatedTransform(tree.Decorations[index].Transform, x, y)
-		translateClips(tree.Decorations[index].Clips)
+		tree.Decorations[index].Clips = translateClips(tree.Decorations[index].Clips)
 		tree.Decorations[index].Clip = resolvedClip(tree.Decorations[index].Clip, tree.Decorations[index].Clips)
 	}
 }

@@ -77,6 +77,33 @@ func TestComputeResolvesDisplayMarginAndPadding(t *testing.T) {
 	}
 }
 
+func TestTailwindResponsiveSpaceUtilityResolvesRegisteredReverseValue(t *testing.T) {
+	document := dom.NewDocument()
+	stack := document.CreateElement("div", map[string]string{"class": "sm:space-y-16"})
+	first := document.CreateElement("section", nil)
+	second := document.CreateElement("section", nil)
+	appendNode(t, document, document.Root, stack)
+	appendNode(t, document, stack, first)
+	appendNode(t, document, stack, second)
+	stylesheet, err := css.Parse(strings.NewReader(`
+@property --tw-space-y-reverse { syntax:"*"; inherits:false; initial-value:0 }
+:where(.sm\:space-y-16>:not(:last-child)) {
+  --tw-space-y-reverse:0;
+  margin-block-start:calc(calc(.25rem * 16) * var(--tw-space-y-reverse));
+  margin-block-end:calc(calc(.25rem * 16) * calc(1 - var(--tw-space-y-reverse)))
+}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	computed := ComputeWithEnvironment(document, stylesheet, InteractionState{}, Environment{ViewportWidth: 1052, ViewportHeight: 703, RootFontSize: 16})
+	firstStyle, _ := computed.For(first)
+	secondStyle, _ := computed.For(second)
+	if firstStyle.Margin.Bottom != 64 || firstStyle.Margin.Top != 0 || secondStyle.Margin.Bottom != 0 {
+		t.Fatalf("Tailwind vertical spacing = first:%#v second:%#v", firstStyle.Margin, secondStyle.Margin)
+	}
+}
+
 func TestComputeWithStateAppliesHoverToTargetAndAncestor(t *testing.T) {
 	document := dom.NewDocument()
 	button := document.CreateElement("button", map[string]string{"id": "save", "class": "action"})
@@ -520,6 +547,9 @@ func TestBrowserUAStylesheetProvidesDefaultsBelowAuthorOrigin(t *testing.T) {
 	heading := document.CreateElement("h1", nil)
 	input := document.CreateElement("input", nil)
 	hidden := document.CreateElement("section", map[string]string{"hidden": ""})
+	details := document.CreateElement("details", nil)
+	summary := document.CreateElement("summary", nil)
+	detailsContent := document.CreateElement("div", nil)
 	picture := document.CreateElement("picture", nil)
 	source := document.CreateElement("source", map[string]string{"type": "image/avif"})
 	table := document.CreateElement("table", nil)
@@ -527,6 +557,7 @@ func TestBrowserUAStylesheetProvidesDefaultsBelowAuthorOrigin(t *testing.T) {
 	cell := document.CreateElement("td", nil)
 	for _, edge := range [][2]*dom.Node{
 		{document.Root, html}, {html, body}, {body, heading}, {body, input}, {body, hidden},
+		{body, details}, {details, summary}, {details, detailsContent},
 		{body, picture}, {picture, source}, {body, table}, {table, row}, {row, cell},
 	} {
 		appendNode(t, document, edge[0], edge[1])
@@ -548,6 +579,11 @@ func TestBrowserUAStylesheetProvidesDefaultsBelowAuthorOrigin(t *testing.T) {
 	}
 	if hiddenStyle.Display != DisplayNone {
 		t.Fatalf("browser hidden display = %v, want none", hiddenStyle.Display)
+	}
+	summaryStyle, _ := browserStyles.For(summary)
+	detailsContentStyle, _ := browserStyles.For(detailsContent)
+	if summaryStyle.Display != DisplayBlock || detailsContentStyle.Display != DisplayNone {
+		t.Fatalf("closed details displays = summary:%v content:%v, want block/none", summaryStyle.Display, detailsContentStyle.Display)
 	}
 	pictureStyle, _ := browserStyles.For(picture)
 	sourceStyle, _ := browserStyles.For(source)
@@ -852,6 +888,24 @@ p { color: black; }
 	}).For(paragraph)
 	if unmatched.Color != 0x000000ff || unmatched.FontSize == 20 || unmatched.BackgroundColor == 0x0000ffff {
 		t.Fatalf("unmatched media style = %#v", unmatched)
+	}
+}
+
+func TestComputeEvaluatesExplicitAllMediaTypeWithWidth(t *testing.T) {
+	document := dom.NewDocument()
+	logo := document.CreateElement("img", map[string]string{"class": "logo"})
+	appendNode(t, document, document.Root, logo)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.logo { display: none }
+@media all and (min-width: 640px) { .logo { display: block } }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	narrow, _ := ComputeWithEnvironment(document, stylesheet, InteractionState{}, Environment{ViewportWidth: 639, ViewportHeight: 600}).For(logo)
+	wide, _ := ComputeWithEnvironment(document, stylesheet, InteractionState{}, Environment{ViewportWidth: 640, ViewportHeight: 600}).For(logo)
+	if narrow.Display != DisplayNone || wide.Display != DisplayBlock {
+		t.Fatalf("explicit all query display = narrow:%v wide:%v", narrow.Display, wide.Display)
 	}
 }
 

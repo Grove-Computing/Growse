@@ -535,6 +535,57 @@ func TestLazyImagePolicyDefersOutsideViewport(t *testing.T) {
 	}
 }
 
+func TestLazyImagePolicyPreloadsWithinFourViewports(t *testing.T) {
+	document := dom.NewDocument()
+	body := document.CreateElement("body", nil)
+	spacer := document.CreateElement("div", map[string]string{"style": "height: 1800px"})
+	nearImage := document.CreateElement("img", map[string]string{"src": "near.png", "loading": "lazy", "width": "300", "height": "200"})
+	farSpacer := document.CreateElement("div", map[string]string{"style": "height: 1800px"})
+	farImage := document.CreateElement("img", map[string]string{"src": "far.png", "loading": "lazy", "width": "300", "height": "200"})
+	for _, edge := range [][2]*dom.Node{{document.Root, body}, {body, spacer}, {body, nearImage}, {body, farSpacer}, {body, farImage}} {
+		if err := document.AppendChild(edge[0], edge[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	policy := imageViewportPolicy(document, style.Compute(document, nil), mustParseURL(t, "https://example.com/"), 800, 600)
+	if !policy[nearImage.ID] {
+		t.Fatal("lazy image within four viewports was deferred")
+	}
+	if policy[farImage.ID] {
+		t.Fatal("lazy image beyond four viewports was loaded eagerly")
+	}
+}
+
+func TestDeferredLazyImageReusesInFlightGenerationCache(t *testing.T) {
+	baseURL := mustParseURL(t, "https://example.com/")
+	document := dom.NewDocument()
+	imageNode := document.CreateElement("img", map[string]string{"src": "hero.png", "loading": "lazy", "width": "2", "height": "1"})
+	if err := document.AppendChild(document.Root, imageNode); err != nil {
+		t.Fatal(err)
+	}
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, image.NewNRGBA(image.Rect(0, 0, 2, 1))); err != nil {
+		t.Fatal(err)
+	}
+	targetURL := "https://example.com/hero.png"
+	loader := &routeLoader{responses: map[string]*network.Response{
+		targetURL: {URL: mustParseURL(t, targetURL), ContentType: "image/png", Body: encoded.Bytes()},
+	}}
+	cache := newImageResourceCache()
+	budget := newImageDecodeBudget()
+	loaded, _, failure := loadReplacedImageNodeWithCache(context.Background(), loader, baseURL, imageNode, 800, 1, true, budget, cache)
+	if failure != "" || !loaded.Loaded {
+		t.Fatalf("initial image = %#v failure=%q", loaded, failure)
+	}
+	reused, decoded, failure := loadReplacedImageNodeWithCache(context.Background(), loader, baseURL, imageNode, 800, 1, false, newImageDecodeBudget(), cache)
+	if failure != "" || !reused.Loaded || reused.Deferred || decoded == nil {
+		t.Fatalf("cached deferred image = %#v decoded=%v failure=%q", reused, decoded != nil, failure)
+	}
+	if len(loader.requested) != 1 {
+		t.Fatalf("network requests = %v, want one cached request", loader.requested)
+	}
+}
+
 type cancelAwareImageLoader struct {
 	responses map[string]*network.Response
 	blocked   string

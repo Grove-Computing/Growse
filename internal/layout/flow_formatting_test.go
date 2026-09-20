@@ -379,6 +379,51 @@ func TestMalformedCSSValuesStillProduceFiniteLayout(t *testing.T) {
 	}
 }
 
+func TestWhitespaceBetweenBlockSiblingsDoesNotCreateAnonymousLine(t *testing.T) {
+	document := dom.NewDocument()
+	container := document.CreateElement("div", map[string]string{"class": "container"})
+	first := document.CreateElement("div", map[string]string{"class": "item"})
+	second := document.CreateElement("div", map[string]string{"class": "item"})
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, container}, [2]*dom.Node{container, first},
+		[2]*dom.Node{container, document.CreateText("\n    ")}, [2]*dom.Node{container, second},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`.item { display:block; height:10px }`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, stylemodel.Compute(document, stylesheet), 400)
+	firstRect, secondRect := tree.Bounds[first.ID], tree.Bounds[second.ID]
+	if secondRect.Y != firstRect.Y+firstRect.Height {
+		t.Fatalf("whitespace created an anonymous line: first=%#v second=%#v", firstRect, secondRect)
+	}
+}
+
+func TestEmptyFirstBlockCollapsesItsVerticalMarginsOnce(t *testing.T) {
+	document := dom.NewDocument()
+	container := document.CreateElement("div", map[string]string{"class": "container"})
+	empty := document.CreateElement("div", map[string]string{"class": "empty"})
+	content := document.CreateElement("div", map[string]string{"class": "content"})
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, container},
+		[2]*dom.Node{container, empty},
+		[2]*dom.Node{empty, document.CreateText("\n")},
+		[2]*dom.Node{container, content},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.empty { display:block; margin:24px 0 }
+.content { display:block; height:10px }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, stylemodel.Compute(document, stylesheet), 400)
+	containerRect, contentRect := tree.Bounds[container.ID], tree.Bounds[content.ID]
+	if got := contentRect.Y - containerRect.Y; got != 0 {
+		t.Fatalf("self-collapsing first child margin was applied twice: offset=%v container=%#v content=%#v", got, containerRect, contentRect)
+	}
+}
+
 func hasFallbackReason(tree *Tree, reason string) bool {
 	for _, fallback := range tree.Fallbacks {
 		if fallback.Reason == reason {

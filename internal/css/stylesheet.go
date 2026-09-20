@@ -219,6 +219,10 @@ const (
 	PseudoElementNone PseudoElementKind = iota
 	PseudoElementBefore
 	PseudoElementAfter
+	// PseudoElementBackdrop is retained so valid selector lists containing the
+	// top-layer backdrop do not invalidate their ordinary-element selectors.
+	// Growse does not currently synthesize a backdrop box.
+	PseudoElementBackdrop
 )
 
 // PseudoClassKind identifies a supported pseudo-class condition.

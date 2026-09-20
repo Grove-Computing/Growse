@@ -166,6 +166,46 @@ func (cache *imageResourceCache) load(ctx context.Context, client ResourceLoader
 	}
 }
 
+// loadExisting returns an already-started resource without initiating network
+// work. A viewport generation can mark a lazy image as deferred while an older
+// generation is finishing the same URL; retaining that completed work avoids
+// replacing a decoded visible image with an empty deferred placeholder.
+func (cache *imageResourceCache) loadExisting(ctx context.Context, target *url.URL) (cachedImageResource, bool) {
+	if cache == nil || target == nil {
+		return cachedImageResource{}, false
+	}
+	key := target.String()
+	cache.mu.Lock()
+	entry := cache.entries[key]
+	if entry == nil {
+		cache.mu.Unlock()
+		return cachedImageResource{}, false
+	}
+	cache.hits++
+	if !entry.complete {
+		cache.coalesced++
+	}
+	cache.tick++
+	entry.lastUsed = cache.tick
+	ready := entry.ready
+	cache.mu.Unlock()
+	select {
+	case <-ready:
+		cache.mu.Lock()
+		reusable := cache.entries[key] == entry
+		cache.mu.Unlock()
+		if !reusable {
+			return cachedImageResource{}, false
+		}
+		return cloneCachedImageResource(entry), true
+	case <-ctx.Done():
+		cache.mu.Lock()
+		cache.canceled++
+		cache.mu.Unlock()
+		return cachedImageResource{failure: imageLoadRequestFailure, err: ctx.Err()}, true
+	}
+}
+
 func (cache *imageResourceCache) fetch(client ResourceLoader, target *url.URL, budget *imageDecodeBudget, key string, entry *cachedImageResource) {
 	response, err := client.Get(cache.ctx, target)
 	result := cachedImageResource{}

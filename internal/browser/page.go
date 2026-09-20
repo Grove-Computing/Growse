@@ -194,6 +194,21 @@ func (p *Page) commitImageResourceLoad(generation uint64, nodeID dom.NodeID, res
 	if generation != p.imageGeneration {
 		return false
 	}
+	p.commitImageResourceLoadLocked(nodeID, resource, decoded, failure)
+	return true
+}
+
+// commitDynamicImageResourceLoad merges a runtime-requested image without
+// replacing or cancelling the page-wide image generation. Dynamic scripts can
+// discover several images while the initial batch is still in flight; those
+// independent requests must not invalidate one another.
+func (p *Page) commitDynamicImageResourceLoad(nodeID dom.NodeID, resource layoutmodel.ImageResource, decoded image.Image, failure string) {
+	p.imageMu.Lock()
+	defer p.imageMu.Unlock()
+	p.commitImageResourceLoadLocked(nodeID, resource, decoded, failure)
+}
+
+func (p *Page) commitImageResourceLoadLocked(nodeID dom.NodeID, resource layoutmodel.ImageResource, decoded image.Image, failure string) {
 	previous := p.ImageResources[nodeID]
 	resources := make(map[dom.NodeID]layoutmodel.ImageResource, len(p.ImageResources)+1)
 	for currentID, current := range p.ImageResources {
@@ -233,7 +248,6 @@ func (p *Page) commitImageResourceLoad(generation uint64, nodeID dom.NodeID, res
 		}
 		p.StyleRevision++
 	}
-	return true
 }
 
 // ImageInvalidationSnapshot returns a payload-free copy suitable for the UI

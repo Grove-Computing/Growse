@@ -3,6 +3,7 @@ package ui
 import (
 	"bytes"
 	"image"
+	"image/color"
 	"testing"
 
 	"gioui.org/font"
@@ -16,6 +17,7 @@ import (
 	"gioui.org/unit"
 	"gioui.org/widget/material"
 	"github.com/Grove-Computing/Growse/internal/browser"
+	layoutengine "github.com/Grove-Computing/Growse/internal/layout"
 	paintmodel "github.com/Grove-Computing/Growse/internal/paint"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 	textfont "github.com/go-text/typesetting/font"
@@ -245,5 +247,156 @@ func TestLayoutDrawTextRasterKeepsGlyphInkOutsideTightLineBox(t *testing.T) {
 	}
 	if outsideInk == 0 {
 		t.Fatalf("glyph ink was clipped to the CSS line box: total=%d y=%d..%d", totalInk, minInkY, maxInkY)
+	}
+}
+
+func TestDocumentPaintLayerKeepsBacktrackedSiblingVisible(t *testing.T) {
+	const width, height = 240, 180
+	window, err := headless.NewWindow(width, height)
+	if err != nil {
+		t.Skipf("headless raster backend unavailable: %v", err)
+	}
+	defer window.Release()
+
+	ui := &BrowserUI{theme: material.NewTheme()}
+	page := &browser.Page{}
+	displayList := &paintmodel.DisplayList{
+		Height: 800, ScrollHeight: 800,
+		Commands: []paintmodel.Command{
+			paintmodel.DrawBox{NodeID: 1, X: 0, Y: 0, Top: 0, Width: 90, Height: 700, Color: 0x2563ebff, Opacity: 1},
+			// This sibling is later in paint order but backtracks near the top,
+			// matching a tall left card followed by a right-hand grid card.
+			paintmodel.DrawBox{NodeID: 2, X: 120, Y: 30, Top: -670, Width: 80, Height: 60, Color: 0xdc2626ff, Opacity: 1},
+		},
+	}
+	ops := new(op.Ops)
+	gtx := layout.Context{
+		Ops: ops, Constraints: layout.Exact(image.Pt(width, height)),
+		Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1},
+	}
+	material.List(ui.documentTheme(), &ui.pageList).Layout(gtx, 1, func(gtx layout.Context, _ int) layout.Dimensions {
+		return ui.layoutDocumentPaintLayer(gtx, displayList, page)
+	})
+	if err := window.Frame(ops); err != nil {
+		t.Fatal(err)
+	}
+	result := image.NewRGBA(image.Rect(0, 0, width, height))
+	if err := window.Screenshot(result); err != nil {
+		t.Fatal(err)
+	}
+	pixel := result.RGBAAt(150, 50)
+	if pixel.R < 180 || pixel.G > 80 || pixel.B > 80 {
+		t.Fatalf("backtracked right sibling pixel = %#v, want red paint", pixel)
+	}
+}
+
+func TestDocumentPaintLayerDrawsReplacedImageAtDocumentCoordinates(t *testing.T) {
+	const width, height = 240, 180
+	window, err := headless.NewWindow(width, height)
+	if err != nil {
+		t.Skipf("headless raster backend unavailable: %v", err)
+	}
+	defer window.Release()
+
+	source := image.NewNRGBA(image.Rect(0, 0, 20, 20))
+	for y := 0; y < 20; y++ {
+		for x := 0; x < 20; x++ {
+			source.SetNRGBA(x, y, color.NRGBA{R: 240, A: 255})
+		}
+	}
+	const sourceURL = "https://example.com/image.png"
+	page := &browser.Page{Images: map[string]image.Image{sourceURL: source}}
+	ui := &BrowserUI{theme: material.NewTheme()}
+	ui.imagePaintCache.prepare(page)
+	displayList := &paintmodel.DisplayList{Height: height, ScrollHeight: height, Commands: []paintmodel.Command{
+		paintmodel.DrawImage{
+			NodeID: 1, URL: sourceURL, X: 80, Y: 40, Top: -700, Width: 60, Height: 50,
+			ImageRect: layoutengine.Rect{X: 80, Y: 40, Width: 60, Height: 50},
+			ImageClip: layoutengine.Rect{X: 80, Y: 40, Width: 60, Height: 50}, Opacity: 1,
+		},
+	}}
+	ops := new(op.Ops)
+	gtx := layout.Context{Ops: ops, Constraints: layout.Exact(image.Pt(width, height)), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}}
+	material.List(ui.documentTheme(), &ui.pageList).Layout(gtx, 1, func(gtx layout.Context, _ int) layout.Dimensions {
+		return ui.layoutDocumentPaintLayer(gtx, displayList, page)
+	})
+	if err := window.Frame(ops); err != nil {
+		t.Fatal(err)
+	}
+	result := image.NewRGBA(image.Rect(0, 0, width, height))
+	if err := window.Screenshot(result); err != nil {
+		t.Fatal(err)
+	}
+	pixel := result.RGBAAt(100, 60)
+	if pixel.R < 180 || pixel.G > 80 || pixel.B > 80 {
+		t.Fatalf("replaced image pixel = %#v, want red paint", pixel)
+	}
+}
+
+func TestFailedImageAltTextIsClippedToImageBounds(t *testing.T) {
+	const width, height = 240, 120
+	window, err := headless.NewWindow(width, height)
+	if err != nil {
+		t.Skipf("headless raster backend unavailable: %v", err)
+	}
+	defer window.Release()
+
+	ui := &BrowserUI{theme: material.NewTheme()}
+	page := &browser.Page{}
+	displayList := &paintmodel.DisplayList{Height: height, ScrollHeight: height, Commands: []paintmodel.Command{
+		paintmodel.DrawBox{NodeID: 1, X: 0, Y: 0, Width: width, Height: height, Color: 0xffffffff, Opacity: 1},
+		paintmodel.DrawImage{NodeID: 2, X: 80, Y: 40, Width: 32, Height: 20, Alt: "Wikipedia wordmark that must not escape", Color: 0x000000ff, Failed: true, Opacity: 1},
+	}}
+	ops := new(op.Ops)
+	gtx := layout.Context{Ops: ops, Constraints: layout.Exact(image.Pt(width, height)), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}}
+	material.List(ui.documentTheme(), &ui.pageList).Layout(gtx, 1, func(gtx layout.Context, _ int) layout.Dimensions {
+		return ui.layoutDocumentPaintLayer(gtx, displayList, page)
+	})
+	if err := window.Frame(ops); err != nil {
+		t.Fatal(err)
+	}
+	result := image.NewRGBA(image.Rect(0, 0, width, height))
+	if err := window.Screenshot(result); err != nil {
+		t.Fatal(err)
+	}
+	for y := 40; y < 70; y++ {
+		for x := 112; x < 220; x++ {
+			pixel := result.RGBAAt(x, y)
+			if pixel.R < 245 || pixel.G < 245 || pixel.B < 245 {
+				t.Fatalf("alt text escaped image bounds at (%d,%d): %#v", x, y, pixel)
+			}
+		}
+	}
+}
+
+func TestFailedImageAltTextSizeFitsShortLogoSlot(t *testing.T) {
+	tests := []struct {
+		height float32
+		want   unit.Sp
+	}{
+		{height: 12, want: 0},
+		{height: 15.9, want: 0},
+		{height: 16, want: 8},
+		{height: 18, want: 10},
+		{height: 22, want: 14},
+		{height: 80, want: 14},
+	}
+	for _, test := range tests {
+		if got := failedImageAltTextSize(test.height); got != test.want {
+			t.Fatalf("failedImageAltTextSize(%v) = %v, want %v", test.height, got, test.want)
+		}
+	}
+}
+
+func TestContainsEmojiPresentationRecognizesSymbolsAndFlags(t *testing.T) {
+	for _, value := range []string{"📝", "🇺🇸 English", "☀️"} {
+		if !containsEmojiPresentation(value) {
+			t.Fatalf("containsEmojiPresentation(%q) = false", value)
+		}
+	}
+	for _, value := range []string{"English", "日本語", "→"} {
+		if containsEmojiPresentation(value) {
+			t.Fatalf("containsEmojiPresentation(%q) = true", value)
+		}
 	}
 }

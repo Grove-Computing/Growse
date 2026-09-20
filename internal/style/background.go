@@ -109,8 +109,20 @@ func parseBackgroundImage(value string, currentColor uint32) (BackgroundImage, b
 
 func applyBackgroundLayers(computed, parent ComputedStyle, winners map[string]winner, custom map[string]string, context LengthContext) ComputedStyle {
 	candidate, hasImages := winners["background-image"]
+	maskFallback := false
 	if !hasImages {
-		return computed
+		// Wikimedia/Codex icons expose their SVG through mask-image and use a
+		// solid background color as the tint. Until alpha-mask compositing is
+		// available, painting that SVG as a centered background preserves the
+		// silhouette; ignoring the mask paints only a solid color square.
+		candidate, hasImages = winners["mask-image"]
+		if !hasImages {
+			candidate, hasImages = winners["-webkit-mask-image"]
+		}
+		if !hasImages {
+			return computed
+		}
+		maskFallback = true
 	}
 	value, valid := winnerValue(candidate, custom)
 	if !valid {
@@ -131,7 +143,19 @@ func applyBackgroundLayers(computed, parent ComputedStyle, winners map[string]wi
 		if !valid {
 			return computed
 		}
-		layers = append(layers, BackgroundLayer{Image: image, Repeat: BackgroundRepeat{X: true, Y: true}, Origin: computed.BackgroundOrigin, Clip: computed.BackgroundClip})
+		layer := BackgroundLayer{Image: image, Repeat: BackgroundRepeat{X: true, Y: true}, Origin: computed.BackgroundOrigin, Clip: computed.BackgroundClip}
+		if maskFallback {
+			layer.Repeat = BackgroundRepeat{}
+			layer.Position = BackgroundPosition{X: LengthPercentage{Percentage: 50}, Y: LengthPercentage{Percentage: 50}}
+			layer.Size = BackgroundSize{Kind: BackgroundSizeContain}
+		}
+		layers = append(layers, layer)
+	}
+	repeatProperty, positionProperty, sizeProperty := "background-repeat", "background-position", "background-size"
+	originProperty, clipProperty := "background-origin", "background-clip"
+	if maskFallback {
+		repeatProperty, positionProperty, sizeProperty = "mask-repeat", "mask-position", "mask-size"
+		originProperty, clipProperty = "mask-origin", "mask-clip"
 	}
 	applyLayerValues := func(property string, apply func(*BackgroundLayer, string) bool) bool {
 		candidate, ok := winners[property]
@@ -153,23 +177,23 @@ func applyBackgroundLayers(computed, parent ComputedStyle, winners map[string]wi
 		}
 		return true
 	}
-	if !applyLayerValues("background-repeat", func(layer *BackgroundLayer, value string) bool {
+	if !applyLayerValues(repeatProperty, func(layer *BackgroundLayer, value string) bool {
 		parsed, valid := parseBackgroundRepeat(value)
 		layer.Repeat = parsed
 		return valid
-	}) || !applyLayerValues("background-position", func(layer *BackgroundLayer, value string) bool {
+	}) || !applyLayerValues(positionProperty, func(layer *BackgroundLayer, value string) bool {
 		parsed, valid := parseBackgroundPosition(value, context)
 		layer.Position = parsed
 		return valid
-	}) || !applyLayerValues("background-size", func(layer *BackgroundLayer, value string) bool {
+	}) || !applyLayerValues(sizeProperty, func(layer *BackgroundLayer, value string) bool {
 		parsed, valid := parseBackgroundSize(value, context)
 		layer.Size = parsed
 		return valid
-	}) || !applyLayerValues("background-origin", func(layer *BackgroundLayer, value string) bool {
+	}) || !applyLayerValues(originProperty, func(layer *BackgroundLayer, value string) bool {
 		parsed, valid := parseBackgroundBox(value)
 		layer.Origin = parsed
 		return valid
-	}) || !applyLayerValues("background-clip", func(layer *BackgroundLayer, value string) bool {
+	}) || !applyLayerValues(clipProperty, func(layer *BackgroundLayer, value string) bool {
 		parsed, valid := parseBackgroundBox(value)
 		layer.Clip = parsed
 		return valid
@@ -177,6 +201,9 @@ func applyBackgroundLayers(computed, parent ComputedStyle, winners map[string]wi
 		return computed
 	}
 	computed.BackgroundLayers = layers
+	if maskFallback {
+		computed.BackgroundColor = transparent
+	}
 	if len(layers) != 0 {
 		computed.BackgroundImage, computed.BackgroundRepeat = layers[0].Image, layers[0].Repeat
 		computed.BackgroundPos, computed.BackgroundSize = layers[0].Position, layers[0].Size

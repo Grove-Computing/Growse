@@ -25,6 +25,7 @@ func parseMediaQuery(value string) (MediaQuery, bool) {
 		return MediaQuery{}, false
 	}
 	query := MediaQuery{Type: "all"}
+	hasExplicitType := false
 	if word, rest := takeMediaWord(value); word == "not" || word == "only" {
 		if word == "not" {
 			query.Modifier = MediaModifierNot
@@ -39,10 +40,11 @@ func parseMediaQuery(value string) (MediaQuery, bool) {
 			return MediaQuery{}, false
 		}
 		query.Type = mediaType
+		hasExplicitType = true
 		value = strings.TrimSpace(rest)
 	}
 	for value != "" {
-		if len(query.Features) != 0 || query.Type != "all" || query.Modifier != MediaModifierNone {
+		if len(query.Features) != 0 || hasExplicitType || query.Modifier != MediaModifierNone {
 			word, rest := takeMediaWord(value)
 			if word != "and" {
 				return MediaQuery{}, false
