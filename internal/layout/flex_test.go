@@ -355,6 +355,37 @@ func TestRealSiteNavigationFlexWrapDistributionBaselineAndPercentage(t *testing.
 	}
 }
 
+func TestFlexAutoCrossSizeIncludesTextWrappedAfterShrink(t *testing.T) {
+	document := dom.NewDocument()
+	container := document.CreateElement("div", map[string]string{"class": "badge"})
+	label := document.CreateElement("strong", nil)
+	copy := document.CreateElement("p", nil)
+	after := document.CreateElement("div", map[string]string{"class": "after"})
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, container},
+		[2]*dom.Node{container, label}, [2]*dom.Node{label, document.CreateText("HTTP")},
+		[2]*dom.Node{container, copy}, [2]*dom.Node{copy, document.CreateText("Items marked with this clickable badge support out-of-date browsers via HTTP.")},
+		[2]*dom.Node{document.Root, after}, [2]*dom.Node{after, document.CreateText("URL")},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.badge { display:flex; width:300px; gap:14px; align-items:center; padding:14px 4px; }
+.badge strong { flex:0 0 auto; }
+.badge p { margin:0; min-width:0; font-size:16px; line-height:24px; }
+.after { height:20px; }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, stylemodel.Compute(document, stylesheet), 360)
+	containerBounds, copyBounds, afterBounds := tree.Bounds[container.ID], tree.Bounds[copy.ID], tree.Bounds[after.ID]
+	if copyBounds.Height < 48 || containerBounds.Height < 76 {
+		t.Fatalf("wrapped flex cross sizes = container:%#v copy:%#v", containerBounds, copyBounds)
+	}
+	if afterBounds.Y < containerBounds.Y+containerBounds.Height {
+		t.Fatalf("following block overlaps wrapped flex item: container:%#v after:%#v", containerBounds, afterBounds)
+	}
+}
+
 func TestBuildFlexUsesPercentageFallbackAndAspectRatio(t *testing.T) {
 	document := dom.NewDocument()
 	column := document.CreateElement("div", map[string]string{"class": "column"})
