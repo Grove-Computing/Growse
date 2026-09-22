@@ -1300,7 +1300,7 @@ func TestAddressEnterStartsNavigation(t *testing.T) {
 	ui.Layout(gtx)
 	select {
 	case got := <-navigator.navigated:
-		if want := "example.com/search"; got != want {
+		if want := "https://example.com/search"; got != want {
 			t.Fatalf("Navigate() URL = %q, want %q", got, want)
 		}
 	case <-time.After(time.Second):

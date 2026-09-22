@@ -43,6 +43,7 @@ import (
 	"github.com/Grove-Computing/Growse/internal/forms"
 	layoutengine "github.com/Grove-Computing/Growse/internal/layout"
 	"github.com/Grove-Computing/Growse/internal/network"
+	"github.com/Grove-Computing/Growse/internal/omnibox"
 	paintmodel "github.com/Grove-Computing/Growse/internal/paint"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 	stylemodel "github.com/Grove-Computing/Growse/internal/style"
@@ -926,6 +927,24 @@ func (ui *BrowserUI) reportTabOperationError(message string, err error) {
 }
 
 func (ui *BrowserUI) startNavigation(rawURL string) {
+	classification := omnibox.Classify(rawURL)
+	switch classification.Kind {
+	case omnibox.Invalid:
+		ui.status = "Omnibox エラー: " + classification.Error
+		ui.statusHasError = true
+		return
+	case omnibox.Search:
+		ui.startResolvedNavigation(omnibox.SearchURL(classification.Query).String())
+	case omnibox.Command:
+		ui.status = "Omnibox scope @" + string(classification.Scope) + " は候補を準備中です"
+		ui.statusHasError = false
+		return
+	case omnibox.URL:
+		ui.startResolvedNavigation(classification.URL.String())
+	}
+}
+
+func (ui *BrowserUI) startResolvedNavigation(rawURL string) {
 	tabID, navigator := ui.activeNavigationTarget()
 	if navigator == nil {
 		ui.status = "Navigationを利用できません"
