@@ -239,6 +239,10 @@ type activeBrowserSource interface {
 	ActiveBrowserTarget() (browser.TabID, *browser.Browser, bool)
 }
 
+type tabBrowserSource interface {
+	BrowserTarget(browser.TabID) (*browser.Browser, bool)
+}
+
 type pageInspector interface {
 	InspectPage(func(*browser.Page) bool) bool
 }
@@ -290,6 +294,14 @@ type tabNavigation struct {
 	id     uint64
 	cancel context.CancelFunc
 }
+
+type omniboxDisposition uint8
+
+const (
+	omniboxCurrentTab omniboxDisposition = iota
+	omniboxNewForegroundTab
+	omniboxNewBackgroundTab
+)
 
 // omniboxState keeps the document URL separate from the editable buffer. The
 // editor itself is tab-owned, which preserves its native selection, clipboard,
@@ -700,15 +712,14 @@ func (ui *BrowserUI) handleActions(gtx layout.Context) {
 	ui.consumeNavigationResult()
 	ui.consumeUpdateResults()
 	ui.handleTabActions(gtx)
+	ui.handleOmniboxSubmit(gtx)
 
 	for {
 		event, ok := ui.address.Update(gtx)
 		if !ok {
 			break
 		}
-		if submitted, ok := event.(widget.SubmitEvent); ok {
-			ui.startNavigation(submitted.Text)
-		}
+		_ = event
 	}
 	for ui.goButton.Clicked(gtx) {
 		ui.startNavigation(ui.address.Text())
@@ -787,6 +798,26 @@ func (ui *BrowserUI) handleActions(gtx layout.Context) {
 			state.NodeID = nodeID
 			ui.setDevToolsState(state)
 		}
+	}
+}
+
+func (ui *BrowserUI) handleOmniboxSubmit(gtx layout.Context) {
+	for {
+		event, ok := gtx.Event(key.Filter{Focus: ui.address, Name: key.NameReturn, Optional: key.ModShift | key.ModAlt})
+		if !ok {
+			return
+		}
+		keyEvent, ok := event.(key.Event)
+		if !ok || keyEvent.State != key.Press {
+			continue
+		}
+		disposition := omniboxCurrentTab
+		if keyEvent.Modifiers.Contain(key.ModAlt) {
+			disposition = omniboxNewBackgroundTab
+		} else if keyEvent.Modifiers.Contain(key.ModShift) {
+			disposition = omniboxNewForegroundTab
+		}
+		ui.startNavigationWithDisposition(ui.address.Text(), disposition)
 	}
 }
 
@@ -937,21 +968,31 @@ func (ui *BrowserUI) reportTabOperationError(message string, err error) {
 }
 
 func (ui *BrowserUI) startNavigation(rawURL string) {
+	ui.startNavigationWithDisposition(rawURL, omniboxCurrentTab)
+}
+
+func (ui *BrowserUI) startNavigationWithDisposition(rawURL string, disposition omniboxDisposition) {
 	classification := omnibox.Classify(rawURL)
+	var target string
 	switch classification.Kind {
 	case omnibox.Invalid:
 		ui.status = "Omnibox エラー: " + classification.Error
 		ui.statusHasError = true
 		return
 	case omnibox.Search:
-		ui.startResolvedNavigation(omnibox.SearchURL(classification.Query).String())
+		target = omnibox.SearchURL(classification.Query).String()
 	case omnibox.Command:
 		ui.status = "Omnibox scope @" + string(classification.Scope) + " は候補を準備中です"
 		ui.statusHasError = false
 		return
 	case omnibox.URL:
-		ui.startResolvedNavigation(classification.URL.String())
+		target = classification.URL.String()
 	}
+	if disposition == omniboxCurrentTab {
+		ui.startResolvedNavigation(target)
+		return
+	}
+	ui.startNavigationInNewTab(target, disposition == omniboxNewBackgroundTab)
 }
 
 func (ui *BrowserUI) startResolvedNavigation(rawURL string) {
@@ -962,6 +1003,46 @@ func (ui *BrowserUI) startResolvedNavigation(rawURL string) {
 		return
 	}
 	ui.startPageLoad(tabID, navigator, navigationLoadingStatus(rawURL), func(ctx context.Context) (*browser.Page, error) {
+		return navigator.Navigate(ctx, rawURL)
+	})
+}
+
+func (ui *BrowserUI) startNavigationInNewTab(rawURL string, background bool) {
+	if ui.tabs == nil {
+		ui.status = "新しい Tab を利用できません"
+		ui.statusHasError = true
+		return
+	}
+	target, err := url.Parse(rawURL)
+	if err != nil {
+		ui.status = "Omnibox エラー: URL が不正です"
+		ui.statusHasError = true
+		return
+	}
+	tab, err := ui.tabs.NewTab(target)
+	if err != nil {
+		ui.reportTabOperationError("新しい Tab を作成できません", err)
+		return
+	}
+	targets, ok := ui.tabs.(tabBrowserSource)
+	if !ok {
+		ui.status = "新しい Tab の Navigation を利用できません"
+		ui.statusHasError = true
+		return
+	}
+	navigator, ok := targets.BrowserTarget(tab.ID)
+	if !ok {
+		ui.status = "新しい Tab の Navigation 先がありません"
+		ui.statusHasError = true
+		return
+	}
+	if !background {
+		if _, err := ui.tabs.SelectTab(tab.ID); err != nil {
+			ui.reportTabOperationError("新しい Tab を選択できません", err)
+			return
+		}
+	}
+	ui.startPageLoad(tab.ID, navigator, navigationLoadingStatus(rawURL), func(ctx context.Context) (*browser.Page, error) {
 		return navigator.Navigate(ctx, rawURL)
 	})
 }
@@ -1023,7 +1104,6 @@ func (ui *BrowserUI) activeNavigationTarget() (browser.TabID, Navigator) {
 func newOmniboxEditor(value string) *widget.Editor {
 	editor := new(widget.Editor)
 	editor.SingleLine = true
-	editor.Submit = true
 	editor.SetText(value)
 	return editor
 }

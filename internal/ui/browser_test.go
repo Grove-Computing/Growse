@@ -1144,6 +1144,41 @@ func TestCancelNavigationPreservesOmniboxEditorText(t *testing.T) {
 	}
 }
 
+func TestOmniboxDispositionUsesForegroundAndBackgroundTabs(t *testing.T) {
+	loaders := make([]*controlledNavigationLoader, 0, 3)
+	created := make([]*browser.Browser, 0, 3)
+	session := browser.NewSession(func() *browser.Browser {
+		loader := &controlledNavigationLoader{started: make(chan struct{}, 1), release: make(chan struct{})}
+		close(loader.release)
+		loaders = append(loaders, loader)
+		state := browser.New(loader)
+		created = append(created, state)
+		return state
+	})
+	first, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ui := NewBrowserUIWithTabs(nil, session, nil)
+	defer ui.Close()
+
+	ui.startNavigationWithDisposition("https://foreground.example/", omniboxNewForegroundTab)
+	tabs := session.Tabs()
+	if len(tabs) != 2 || !tabs[1].Active || tabs[1].ID == first.ID {
+		t.Fatalf("Shift+Enter tabs = %+v", tabs)
+	}
+	foreground := tabs[1].ID
+
+	ui.startNavigationWithDisposition("https://background.example/", omniboxNewBackgroundTab)
+	tabs = session.Tabs()
+	if len(tabs) != 3 || !tabs[1].Active || tabs[1].ID != foreground || tabs[2].Active || !tabs[2].Loading {
+		t.Fatalf("Alt+Enter tabs = %+v", tabs)
+	}
+	if len(created) != 3 || len(loaders) != 3 {
+		t.Fatalf("created browsers/loaders = %d/%d, want 3/3", len(created), len(loaders))
+	}
+}
+
 type reloadRecordingNavigator struct {
 	stubNavigator
 	reloads  chan bool
