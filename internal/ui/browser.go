@@ -105,7 +105,8 @@ type BrowserUI struct {
 	pageList          widget.List
 	tabList           widget.List
 	viewportClick     gesture.Click
-	address           widget.Editor
+	address           *widget.Editor
+	omniboxStates     map[browser.TabID]omniboxState
 	gopher            paint.ImageOp
 	pointerTag        pointerTag
 	pointer           pointerState
@@ -290,6 +291,15 @@ type tabNavigation struct {
 	cancel context.CancelFunc
 }
 
+// omniboxState keeps the document URL separate from the editable buffer. The
+// editor itself is tab-owned, which preserves its native selection, clipboard,
+// undo/redo and IME composition state while another tab is active.
+type omniboxState struct {
+	editor       *widget.Editor
+	committedURL string
+	preview      string
+}
+
 // NewBrowserUI creates a browser toolbar and an empty viewport.
 func NewBrowserUI(navigator Navigator, invalidate func()) *BrowserUI {
 	return NewBrowserUIWithTabs(navigator, nil, invalidate)
@@ -337,6 +347,7 @@ func NewBrowserUIWithTabsAndUpdater(navigator Navigator, tabs TabController, inv
 		tabShortcutDown:   make(map[key.Name]bool),
 		devToolsStates:    make(map[browser.TabID]devToolsTabState),
 		inspectorButtons:  make(map[browser.TabID]map[dom.NodeID]*widget.Clickable),
+		omniboxStates:     make(map[browser.TabID]omniboxState),
 		layoutBuild:       layoutengine.BuildWithScroll,
 		layoutBuildImages: layoutengine.BuildWithScrollAndImages,
 		layoutBuildFonts:  layoutengine.BuildWithScrollAndResources,
@@ -349,9 +360,8 @@ func NewBrowserUIWithTabsAndUpdater(navigator Navigator, tabs TabController, inv
 	if ui.invalidate == nil {
 		ui.invalidate = func() {}
 	}
-	ui.address.SingleLine = true
-	ui.address.Submit = true
-	ui.address.SetText(defaultURL)
+	ui.address = newOmniboxEditor(defaultURL)
+	ui.omniboxStates[0] = omniboxState{editor: ui.address, committedURL: defaultURL}
 	ui.pageList.Axis = layout.Vertical
 	ui.tabList.Axis = layout.Vertical
 	ui.devToolsList.Axis = layout.Vertical
@@ -601,7 +611,7 @@ func (ui *BrowserUI) handleKeyboardShortcuts(gtx layout.Context) {
 			continue
 		}
 		ui.address.SetCaret(0, ui.address.Len())
-		gtx.Execute(key.FocusCmd{Tag: &ui.address})
+		gtx.Execute(key.FocusCmd{Tag: ui.address})
 	}
 	for {
 		event, ok := gtx.Event(key.Filter{Name: key.NameF12})
@@ -901,7 +911,7 @@ func (ui *BrowserUI) createTab(gtx layout.Context) {
 		ui.reportTabOperationError("新しいTabを選択できません", err)
 		return
 	}
-	gtx.Execute(key.FocusCmd{Tag: &ui.address})
+	gtx.Execute(key.FocusCmd{Tag: ui.address})
 }
 
 func (ui *BrowserUI) closeTab(id browser.TabID) bool {
@@ -1010,6 +1020,47 @@ func (ui *BrowserUI) activeNavigationTarget() (browser.TabID, Navigator) {
 	return 0, ui.navigator
 }
 
+func newOmniboxEditor(value string) *widget.Editor {
+	editor := new(widget.Editor)
+	editor.SingleLine = true
+	editor.Submit = true
+	editor.SetText(value)
+	return editor
+}
+
+func (ui *BrowserUI) activateOmnibox(tabID browser.TabID, committedURL string) {
+	state, ok := ui.omniboxStates[tabID]
+	if !ok {
+		state = omniboxState{editor: newOmniboxEditor(committedURL), committedURL: committedURL}
+		ui.omniboxStates[tabID] = state
+	}
+	ui.address = state.editor
+}
+
+func (ui *BrowserUI) setCommittedOmniboxURL(tabID browser.TabID, rawURL string, display bool) {
+	state, ok := ui.omniboxStates[tabID]
+	if !ok {
+		state = omniboxState{editor: newOmniboxEditor(rawURL)}
+	}
+	state.committedURL = rawURL
+	if display {
+		state.editor.SetText(rawURL)
+	}
+	ui.omniboxStates[tabID] = state
+	if ui.displayedTabID == tabID || ui.tabs == nil {
+		ui.address = state.editor
+	}
+}
+
+func (ui *BrowserUI) setOmniboxPreview(tabID browser.TabID, preview string) {
+	state, ok := ui.omniboxStates[tabID]
+	if !ok {
+		state = omniboxState{editor: newOmniboxEditor("")}
+	}
+	state.preview = preview
+	ui.omniboxStates[tabID] = state
+}
+
 func (ui *BrowserUI) syncActiveTabChrome() {
 	if ui.tabs == nil {
 		return
@@ -1032,6 +1083,11 @@ func (ui *BrowserUI) syncActiveTabChrome() {
 	}
 	ui.displayedTabID = active.ID
 	ui.navigator = navigator
+	committedURL := active.URL
+	if page := navigator.Page(); page != nil && page.URL != nil {
+		committedURL = page.URL.String()
+	}
+	ui.activateOmnibox(active.ID, committedURL)
 	ui.loading = active.Loading
 	ui.statusHasError = active.Error
 	if state, ok := ui.tabRenderStates[active.ID]; ok {
@@ -1061,9 +1117,6 @@ func (ui *BrowserUI) syncActiveTabChrome() {
 		ui.nestedScroll = make(map[dom.NodeID]layoutengine.ScrollOffset)
 	}
 	if page := navigator.Page(); page != nil {
-		if page.URL != nil {
-			ui.address.SetText(page.URL.String())
-		}
 		if _, restored := ui.tabRenderStates[active.ID]; !restored {
 			ui.pageList.Position = layout.Position{First: page.ScrollFirst, Offset: page.ScrollOffset}
 		}
@@ -1078,7 +1131,6 @@ func (ui *BrowserUI) syncActiveTabChrome() {
 			ui.pageTitle = page.URL.Hostname()
 		}
 	} else {
-		ui.address.SetText(active.URL)
 		ui.pageList.Position = layout.Position{}
 		ui.scrollRevision = 0
 		ui.pageTitle = tabDisplayTitle(active)
@@ -1106,8 +1158,28 @@ func (ui *BrowserUI) consumeNavigationResult() {
 					ui.reportTabOperationError("TabのNavigation結果を更新できません", err)
 				}
 			}
-			if result.tabID != 0 && !ui.tabIsActive(result.tabID) {
+			if result.err != nil {
+				if result.tabID != 0 && !ui.tabIsActive(result.tabID) {
+					continue
+				}
 				ui.loading = false
+				ui.status = "読み込みエラー: " + result.err.Error()
+				ui.pageStatus = ui.status
+				ui.statusHasError = true
+				return
+			}
+			if result.page == nil || result.page.URL == nil {
+				if result.tabID != 0 && !ui.tabIsActive(result.tabID) {
+					continue
+				}
+				ui.loading = false
+				ui.status = "読み込みエラー: ページ情報がありません"
+				ui.pageStatus = ui.status
+				ui.statusHasError = true
+				return
+			}
+			ui.setCommittedOmniboxURL(result.tabID, result.page.URL.String(), result.tabID == 0 || ui.tabIsActive(result.tabID))
+			if result.tabID != 0 && !ui.tabIsActive(result.tabID) {
 				continue
 			}
 			ui.loading = false
@@ -1120,20 +1192,7 @@ func (ui *BrowserUI) consumeNavigationResult() {
 			ui.nestedScrollPage = nil
 			ui.nestedScrollTags = make(map[dom.NodeID]*nestedScrollTag)
 			ui.nestedScroll = make(map[dom.NodeID]layoutengine.ScrollOffset)
-			if result.err != nil {
-				ui.status = "読み込みエラー: " + result.err.Error()
-				ui.pageStatus = ui.status
-				ui.statusHasError = true
-				return
-			}
-			if result.page == nil || result.page.URL == nil {
-				ui.status = "読み込みエラー: ページ情報がありません"
-				ui.pageStatus = ui.status
-				ui.statusHasError = true
-				return
-			}
 
-			ui.address.SetText(result.page.URL.String())
 			ui.pageList.Position = layout.Position{First: result.page.ScrollFirst, Offset: result.page.ScrollOffset}
 			ui.scrollRevision = result.page.ScrollRevision
 			ui.pageTitle = result.page.URL.Host
@@ -1771,7 +1830,7 @@ func (ui *BrowserUI) layoutAddressBar(gtx layout.Context) layout.Dimensions {
 					// editor's hit area as wide as the visible address bar instead of
 					// letting it shrink to its placeholder text.
 					gtx.Constraints.Min.X = gtx.Constraints.Max.X
-					return material.Editor(ui.theme, &ui.address, "URLを入力").Layout(gtx)
+					return material.Editor(ui.theme, ui.address, "URLを入力").Layout(gtx)
 				})
 			}),
 		)
