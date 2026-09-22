@@ -310,6 +310,8 @@ type omniboxState struct {
 	editor       *widget.Editor
 	committedURL string
 	preview      string
+	scope        omnibox.Scope
+	scopeQuery   string
 }
 
 // NewBrowserUI creates a browser toolbar and an empty viewport.
@@ -973,6 +975,7 @@ func (ui *BrowserUI) startNavigation(rawURL string) {
 
 func (ui *BrowserUI) startNavigationWithDisposition(rawURL string, disposition omniboxDisposition) {
 	classification := omnibox.Classify(rawURL)
+	tabID, _ := ui.activeNavigationTarget()
 	var target string
 	switch classification.Kind {
 	case omnibox.Invalid:
@@ -980,12 +983,22 @@ func (ui *BrowserUI) startNavigationWithDisposition(rawURL string, disposition o
 		ui.statusHasError = true
 		return
 	case omnibox.Search:
+		ui.setOmniboxScope(tabID, "", "")
 		target = omnibox.SearchURL(classification.Query).String()
 	case omnibox.Command:
-		ui.status = "Omnibox scope @" + string(classification.Scope) + " は候補を準備中です"
-		ui.statusHasError = false
-		return
+		ui.setOmniboxScope(tabID, classification.Scope, classification.Query)
+		if classification.Scope != omnibox.Web {
+			ui.reportOmniboxScope(classification.Scope, classification.Query)
+			return
+		}
+		if classification.Query == "" {
+			ui.status = "Omnibox @search: 検索語を入力してください"
+			ui.statusHasError = false
+			return
+		}
+		target = omnibox.SearchURL(classification.Query).String()
 	case omnibox.URL:
+		ui.setOmniboxScope(tabID, "", "")
 		target = classification.URL.String()
 	}
 	if disposition == omniboxCurrentTab {
@@ -993,6 +1006,34 @@ func (ui *BrowserUI) startNavigationWithDisposition(rawURL string, disposition o
 		return
 	}
 	ui.startNavigationInNewTab(target, disposition == omniboxNewBackgroundTab)
+}
+
+func (ui *BrowserUI) reportOmniboxScope(scope omnibox.Scope, query string) {
+	if scope == omnibox.Tabs {
+		matches := 0
+		for _, tab := range ui.tabSnapshots() {
+			if omniboxScopeMatches(query, tab.Title, tab.URL) {
+				matches++
+			}
+		}
+		ui.status = fmt.Sprintf("Omnibox @tabs: %d件の候補", matches)
+	} else {
+		ui.status = "Omnibox @" + string(scope) + ": local source を検索"
+	}
+	ui.statusHasError = false
+}
+
+func omniboxScopeMatches(query string, values ...string) bool {
+	query = strings.ToLower(strings.TrimSpace(query))
+	if query == "" {
+		return true
+	}
+	for _, value := range values {
+		if strings.Contains(strings.ToLower(value), query) {
+			return true
+		}
+	}
+	return false
 }
 
 func (ui *BrowserUI) startResolvedNavigation(rawURL string) {
@@ -1138,6 +1179,16 @@ func (ui *BrowserUI) setOmniboxPreview(tabID browser.TabID, preview string) {
 		state = omniboxState{editor: newOmniboxEditor("")}
 	}
 	state.preview = preview
+	ui.omniboxStates[tabID] = state
+}
+
+func (ui *BrowserUI) setOmniboxScope(tabID browser.TabID, scope omnibox.Scope, query string) {
+	state, ok := ui.omniboxStates[tabID]
+	if !ok {
+		state = omniboxState{editor: newOmniboxEditor("")}
+	}
+	state.scope = scope
+	state.scopeQuery = query
 	ui.omniboxStates[tabID] = state
 }
 
