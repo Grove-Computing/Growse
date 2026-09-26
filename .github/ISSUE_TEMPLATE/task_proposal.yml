@@ -1,0 +1,35 @@
+name: タスク提案
+description: 保守、調査、テスト、文書更新などの作業を提案する
+title: "[Task] "
+body:
+  - type: textarea
+    id: background
+    attributes:
+      label: 背景
+      description: この作業が必要な理由を記載してください。
+    validations:
+      required: true
+  - type: textarea
+    id: work
+    attributes:
+      label: 作業内容
+      description: 対象と実施する作業を記載してください。
+    validations:
+      required: true
+  - type: textarea
+    id: criteria
+    attributes:
+      label: 完了条件
+      description: 作業完了を確認できる条件を記載してください。
+      placeholder: |
+        - [ ] ...
+        - [ ] ...
+    validations:
+      required: true
+  - type: textarea
+    id: references
+    attributes:
+      label: 関連資料・Issue
+      description: 関連する文書、Issue、依存する作業があれば記載してください。
+    validations:
+      required: false
