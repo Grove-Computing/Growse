@@ -128,6 +128,7 @@ func localCandidates(input string, snapshot Snapshot, remote []string) []Candida
 			}
 		}
 	}
+	result = deduplicate(result)
 	if len(result) > MaxMergedCandidates {
 		result = result[:MaxMergedCandidates]
 	}

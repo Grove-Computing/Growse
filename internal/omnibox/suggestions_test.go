@@ -21,7 +21,7 @@ func TestPipelineLocalSourcesAndScopes(t *testing.T) {
 		{"日本語", []Source{InputSource, TabSource, BookmarkSource, HistorySource}},
 		{"@tabs 日本", []Source{TabSource}}, {"@history", []Source{HistorySource}},
 		{"@bookmarks 日本", []Source{BookmarkSource}}, {"@search 日本", []Source{InputSource}},
-		{"https://tab.example/", []Source{InputSource, TabSource}}, {"javascript:bad", nil},
+		{"https://tab.example/", []Source{TabSource}}, {"javascript:bad", nil},
 	} {
 		t.Run(tc.input, func(t *testing.T) {
 			p := NewPipeline(nil)
