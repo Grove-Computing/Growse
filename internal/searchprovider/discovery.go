@@ -39,7 +39,11 @@ func Discover(document *dom.Document, base *url.URL) []Discovery {
 				if ref, err := url.Parse(n.Attributes["href"]); err == nil && n.Attributes["href"] != "" {
 					u := base.ResolveReference(ref)
 					if validateEndpoint(u) == nil && !seen[u.String()] {
-						out = append(out, Discovery{Title: n.Attributes["title"], URL: u.String()})
+						title := n.Attributes["title"]
+						if !validText(title, 128) {
+							title = u.Hostname()
+						}
+						out = append(out, Discovery{Title: title, URL: u.String()})
 						seen[u.String()] = true
 					}
 				}

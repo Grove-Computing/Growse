@@ -3,6 +3,8 @@ package searchprovider
 
 import (
 	"errors"
+	"golang.org/x/net/idna"
+	"net"
 	"net/url"
 	"strconv"
 	"strings"
@@ -38,7 +40,7 @@ func Defaults() Settings           { return Settings{Providers: []Provider{Built
 func (s Settings) Clone() Settings { s.Providers = append([]Provider(nil), s.Providers...); return s }
 
 func (p Provider) Validate() error {
-	if p.ID == "" || len(p.ID) > 64 || strings.IndexFunc(p.ID, func(r rune) bool { return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-') }) >= 0 || !validText(p.Name, 128) || !validText(p.Keyword, 32) || strings.ContainsAny(p.Keyword, " \t\r\n@:/?#") {
+	if p.ID == "" || len(p.ID) > 64 || strings.IndexFunc(p.ID, func(r rune) bool { return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-') }) >= 0 || !validText(p.Name, 128) || !validText(p.Keyword, 32) || strings.IndexFunc(p.Keyword, unicode.IsSpace) >= 0 || strings.ContainsAny(p.Keyword, "@:/?#") {
 		return ErrInvalid
 	}
 	if err := validateTemplate(p.SearchTemplate); err != nil {
@@ -53,7 +55,7 @@ func validText(s string, limit int) bool {
 	return s != "" && utf8.ValidString(s) && utf8.RuneCountInString(s) <= limit && strings.TrimSpace(s) == s && strings.IndexFunc(s, unicode.IsControl) < 0
 }
 func validateTemplate(t string) error {
-	if len(t) > omnibox.MaxInputBytes || strings.Count(t, "{searchTerms}") != 1 {
+	if strings.Contains(t, "#") || !utf8.ValidString(t) || strings.IndexFunc(t, unicode.IsControl) >= 0 || len(t) > omnibox.MaxInputBytes || strings.Count(t, "{searchTerms}") != 1 {
 		return ErrInvalid
 	}
 	stripped := strings.ReplaceAll(t, "{searchTerms}", "")
@@ -83,6 +85,26 @@ func validateEndpoint(u *url.URL) error {
 	if u.Port() != "" {
 		port, err := strconv.Atoi(u.Port())
 		if err != nil || port < 1 || port > 65535 {
+			return ErrInvalid
+		}
+	}
+	host := u.Hostname()
+	if net.ParseIP(host) == nil {
+		ascii, err := idna.Lookup.ToASCII(host)
+		if err != nil {
+			return ErrInvalid
+		}
+		for _, label := range strings.Split(strings.TrimSuffix(ascii, "."), ".") {
+			if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+				return ErrInvalid
+			}
+			for _, r := range label {
+				if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-') {
+					return ErrInvalid
+				}
+			}
+		}
+		if len(ascii) > 253 || strings.Contains(u.Host, "[") {
 			return ErrInvalid
 		}
 	}
@@ -117,7 +139,12 @@ func (s Settings) Validate() error {
 	}
 	ids, keywords := map[string]bool{}, map[string]bool{}
 	found, builtin := false, false
-	for _, p := range s.Providers {
+	for index, p := range s.Providers {
+		for _, previous := range s.Providers[:index] {
+			if strings.EqualFold(previous.Keyword, p.Keyword) {
+				return ErrInvalid
+			}
+		}
 		if p.Validate() != nil || ids[p.ID] || keywords[strings.ToLower(p.Keyword)] {
 			return ErrInvalid
 		}

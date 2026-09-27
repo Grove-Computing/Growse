@@ -32,7 +32,7 @@ func NewTransport(client *http.Client) *Transport {
 	copy.Timeout = 2 * time.Second
 	previous := copy.CheckRedirect
 	copy.CheckRedirect = func(req *http.Request, via []*http.Request) error {
-		if len(via) > 3 || validateEndpoint(req.URL) != nil {
+		if ValidateRedirect(req.URL, len(via)) != nil {
 			return ErrResponse
 		}
 		req.Header.Del("Authorization")
@@ -77,7 +77,7 @@ func CanSuggest(input string) bool {
 	if omnibox.Classify(input).Kind != omnibox.Search {
 		return false
 	}
-	for _, word := range strings.Fields(input) {
+	for _, word := range strings.Fields(strings.ToLower(input)) {
 		if strings.ContainsAny(word, "@:/\\") || strings.HasPrefix(word, "localhost") || strings.Contains(word, ".") || net.ParseIP(strings.Trim(word, "[]")) != nil {
 			return false
 		}
@@ -128,4 +128,12 @@ func (t *Transport) Suggestions(p Provider) omnibox.RemoteFetcher {
 		}
 		return out, nil
 	}
+}
+
+// ValidateRedirect is shared by provider fetches and top-level search Navigation.
+func ValidateRedirect(target *url.URL, redirects int) error {
+	if redirects > 3 || validateEndpoint(target) != nil {
+		return ErrResponse
+	}
+	return nil
 }

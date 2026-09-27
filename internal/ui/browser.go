@@ -410,7 +410,9 @@ func NewBrowserUIWithTabsAndUpdater(navigator Navigator, tabs TabController, inv
 func (ui *BrowserUI) Layout(gtx layout.Context) layout.Dimensions {
 	ui.syncActiveTabChrome()
 	ui.readSuggestionAddressPress(gtx)
-	ui.handlePointerEvents(gtx)
+	if !ui.providerPanel.open {
+		ui.handlePointerEvents(gtx)
+	}
 	ui.handleKeyboardShortcuts(gtx)
 	ui.handleActions(gtx)
 	ui.syncActiveTabChrome()
@@ -420,14 +422,16 @@ func (ui *BrowserUI) Layout(gtx layout.Context) layout.Dimensions {
 		panelHeight = gtx.Dp(devToolsHeight)
 	}
 	geometry := calculateBrowserChromeGeometryWithDevTools(gtx.Constraints.Max, gtx.Dp(tabRailWidth), gtx.Dp(toolbarHeight), panelHeight)
-	layoutRegion(gtx, geometry.viewport, ui.layoutViewport)
+	if ui.providerPanel.open {
+		layoutRegion(gtx, geometry.viewport, ui.layoutProviderSettings)
+	} else {
+		layoutRegion(gtx, geometry.viewport, ui.layoutViewport)
+	}
 	layoutRegion(gtx, geometry.devTools, ui.layoutDevTools)
 	layoutRegion(gtx, geometry.toolbar, ui.layoutToolbar)
 	layoutRegion(gtx, geometry.tabRail, ui.layoutTabRail)
 	ui.layoutSuggestions(gtx, geometry.viewport)
-	if ui.providerPanel.open {
-		layoutRegion(gtx, geometry.viewport, ui.layoutProviderSettings)
-	}
+
 	ui.registerPointerTracker(gtx)
 	return layout.Dimensions{Size: gtx.Constraints.Max}
 }
@@ -1057,10 +1061,10 @@ func (ui *BrowserUI) startNavigationWithDisposition(rawURL string, disposition o
 		target = classification.URL.String()
 	}
 	if disposition == omniboxCurrentTab {
-		ui.startResolvedNavigation(target)
+		ui.startResolvedNavigation(target, classification.Kind != omnibox.URL)
 		return
 	}
-	ui.startNavigationInNewTab(target, disposition == omniboxNewBackgroundTab)
+	ui.startNavigationInNewTab(target, disposition == omniboxNewBackgroundTab, classification.Kind != omnibox.URL)
 }
 
 func (ui *BrowserUI) reportOmniboxScope(scope omnibox.Scope, query string) {
@@ -1091,7 +1095,7 @@ func omniboxScopeMatches(query string, values ...string) bool {
 	return false
 }
 
-func (ui *BrowserUI) startResolvedNavigation(rawURL string) {
+func (ui *BrowserUI) startResolvedNavigation(rawURL string, search ...bool) {
 	tabID, navigator := ui.activeNavigationTarget()
 	if navigator == nil {
 		ui.status = "Navigationを利用できません"
@@ -1099,11 +1103,14 @@ func (ui *BrowserUI) startResolvedNavigation(rawURL string) {
 		return
 	}
 	ui.startPageLoad(tabID, navigator, navigationLoadingStatus(rawURL), func(ctx context.Context) (*browser.Page, error) {
+		if len(search) > 0 && search[0] {
+			ctx = network.WithRedirectPolicy(ctx, rawURL, searchprovider.ValidateRedirect)
+		}
 		return navigator.Navigate(ctx, rawURL)
 	})
 }
 
-func (ui *BrowserUI) startNavigationInNewTab(rawURL string, background bool) {
+func (ui *BrowserUI) startNavigationInNewTab(rawURL string, background bool, search ...bool) {
 	if ui.tabs == nil {
 		ui.status = "新しい Tab を利用できません"
 		ui.statusHasError = true
@@ -1139,6 +1146,9 @@ func (ui *BrowserUI) startNavigationInNewTab(rawURL string, background bool) {
 		}
 	}
 	ui.startPageLoad(tab.ID, navigator, navigationLoadingStatus(rawURL), func(ctx context.Context) (*browser.Page, error) {
+		if len(search) > 0 && search[0] {
+			ctx = network.WithRedirectPolicy(ctx, rawURL, searchprovider.ValidateRedirect)
+		}
 		return navigator.Navigate(ctx, rawURL)
 	})
 }

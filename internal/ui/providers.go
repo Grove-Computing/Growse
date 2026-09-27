@@ -3,6 +3,8 @@ package ui
 import (
 	"crypto/sha256"
 	"fmt"
+	"image/color"
+
 	"gioui.org/layout"
 	"gioui.org/op/paint"
 	"gioui.org/unit"
@@ -10,7 +12,6 @@ import (
 	"gioui.org/widget/material"
 	"github.com/Grove-Computing/Growse/internal/browser"
 	"github.com/Grove-Computing/Growse/internal/searchprovider"
-	"image/color"
 )
 
 // SearchProviders returns a value snapshot of browser-owned configuration.
@@ -18,6 +19,12 @@ func (ui *BrowserUI) SearchProviders() searchprovider.Settings { return ui.provi
 func (ui *BrowserUI) SetSearchProviders(s searchprovider.Settings) error {
 	if s.Validate() != nil {
 		return searchprovider.ErrInvalid
+	}
+	// Opt-out takes effect even if persistent storage is unavailable.
+	if ui.providers.RemoteSuggestions && !s.RemoteSuggestions {
+		ui.closeSuggestionPopup()
+		ui.providers.RemoteSuggestions = false
+		ui.SetSuggestionProvider(nil, false)
 	}
 	if ui.providerStore != nil {
 		if err := ui.providerStore.Save(s); err != nil {
@@ -55,7 +62,6 @@ type providerPanel struct {
 	remote                                widget.Clickable
 	toggle, close, save, add              widget.Clickable
 	list                                  widget.List
-	selected                              string
 	id, name, keyword, search, suggestion widget.Editor
 	rows                                  map[string]*providerRow
 }
@@ -77,7 +83,6 @@ func (ui *BrowserUI) layoutProviderButton(gtx layout.Context) layout.Dimensions 
 }
 func (ui *BrowserUI) selectProvider(p searchprovider.Provider) {
 	panel := &ui.providerPanel
-	panel.selected = p.ID
 	panel.id.SetText(p.ID)
 	panel.name.SetText(p.Name)
 	panel.keyword.SetText(p.Keyword)
@@ -122,6 +127,7 @@ func (ui *BrowserUI) layoutProviderSettings(gtx layout.Context) layout.Dimension
 		panel.list.Axis = layout.Vertical
 		for _, e := range []*widget.Editor{&panel.id, &panel.name, &panel.keyword, &panel.search, &panel.suggestion} {
 			e.SingleLine = true
+			e.MaxLen = 4096
 		}
 	}
 	if panel.close.Clicked(gtx) {
@@ -164,6 +170,13 @@ func (ui *BrowserUI) layoutProviderSettings(gtx layout.Context) layout.Dimension
 			return material.Button(ui.theme, &panel.close, "閉じる").Layout(gtx)
 		},
 	}
+	activeRows := map[string]*providerRow{}
+	for _, p := range ui.providers.Providers {
+		if row := panel.rows[p.ID]; row != nil {
+			activeRows[p.ID] = row
+		}
+	}
+	panel.rows = activeRows
 	for _, p := range ui.providers.Providers {
 		row := panel.rows[p.ID]
 		if row == nil {
@@ -220,6 +233,7 @@ func (ui *BrowserUI) layoutProviderSettings(gtx layout.Context) layout.Dimension
 			})
 		}
 	}
+	activeDiscovery := map[string]*widget.Clickable{}
 	if nav := ui.activeNavigator(); nav != nil && nav.Page() != nil {
 		page := nav.Page()
 		base := page.BaseURL
@@ -232,6 +246,7 @@ func (ui *BrowserUI) layoutProviderSettings(gtx layout.Context) layout.Dimension
 				button = &widget.Clickable{}
 				ui.providerDiscoveryButtons[d.URL] = button
 			}
+			activeDiscovery[d.URL] = button
 			if button.Clicked(gtx) {
 				owner, _ := ui.activeNavigationTarget()
 				hash := fmt.Sprintf("%x", sha256.Sum256([]byte(d.URL)))[:8]
@@ -253,6 +268,7 @@ func (ui *BrowserUI) layoutProviderSettings(gtx layout.Context) layout.Dimension
 				})
 		}
 	}
+	ui.providerDiscoveryButtons = activeDiscovery
 	children = append(children, func(gtx layout.Context) layout.Dimensions {
 		return material.Button(ui.theme, &panel.add, "providerを追加").Layout(gtx)
 	})

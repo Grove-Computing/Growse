@@ -1,7 +1,9 @@
 package searchprovider
 
 import (
+	"fmt"
 	"net/url"
+	"strings"
 	"testing"
 )
 
@@ -42,6 +44,36 @@ func TestInvalidTemplates(t *testing.T) {
 		p.SearchTemplate = v
 		if p.Validate() == nil {
 			t.Errorf("accepted %s", v)
+		}
+	}
+}
+
+func TestProviderLimitsAndPathEncoding(t *testing.T) {
+	s := Defaults()
+	for i := 1; i < MaxProviders; i++ {
+		p := Provider{ID: fmt.Sprintf("p%d", i), Name: "Provider", Keyword: fmt.Sprintf("p%d", i), SearchTemplate: "https://example.com/?q={searchTerms}"}
+		if err := s.Put(p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	extra := Provider{ID: "extra", Name: "Extra", Keyword: "extra", SearchTemplate: "https://example.com/?q={searchTerms}"}
+	if s.Put(extra) == nil {
+		t.Fatal("exceeded provider limit")
+	}
+	p := Builtin()
+	p.SearchTemplate = "https://example.com/search/{searchTerms}"
+	target, err := p.SearchURL("日本語/a + %20")
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, _ := url.Parse(target)
+	if u.Path != "/search/日本語/a + %20" || !strings.Contains(u.EscapedPath(), "%2F") {
+		t.Fatal("path query not escaped once", target)
+	}
+	for _, template := range []string{"https://example.com/?q={searchTerms}#", "https://example.com:0/?q={searchTerms}", "https://example.com:65536/?q={searchTerms}", "https://example.com/?q={searchTerms}{searchTerms}"} {
+		p.SearchTemplate = template
+		if p.Validate() == nil {
+			t.Fatal(template)
 		}
 	}
 }
