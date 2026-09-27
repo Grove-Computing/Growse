@@ -19,9 +19,29 @@ func (ui *BrowserUI) SetSearchProviders(s searchprovider.Settings) error {
 	if s.Validate() != nil {
 		return searchprovider.ErrInvalid
 	}
+	if ui.providerStore != nil {
+		if err := ui.providerStore.Save(s); err != nil {
+			return err
+		}
+	}
 	ui.closeSuggestionPopup()
 	ui.providers = s.Clone()
 	ui.SetSuggestionProvider(ui.providerTransport.Suggestions(s.Default()), s.RemoteSuggestions)
+	return nil
+}
+
+// OpenSearchProfile restores validated settings before accepting UI changes.
+func (ui *BrowserUI) OpenSearchProfile(root string) error {
+	store, err := searchprovider.OpenStore(root)
+	if err != nil {
+		return err
+	}
+	s := store.Load()
+	ui.providerStore = nil
+	if err := ui.SetSearchProviders(s); err != nil {
+		return err
+	}
+	ui.providerStore = store
 	return nil
 }
 func (ui *BrowserUI) providerSearchURL(input string) (string, error) {

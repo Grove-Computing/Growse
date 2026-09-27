@@ -88,6 +88,11 @@ func runWindow(window *gioapp.Window) error {
 		window.Perform(system.ActionClose)
 	})
 	defer browserUI.Close()
+	if dataRootErr == nil {
+		if err := browserUI.OpenSearchProfile(dataRoot); err != nil {
+			log.Print("検索provider設定を初期化できませんでした")
+		}
+	}
 
 	for {
 		switch event := window.Event().(type) {

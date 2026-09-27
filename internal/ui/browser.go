@@ -118,6 +118,7 @@ type BrowserUI struct {
 	providerPanel            providerPanel
 	providerTransport        *searchprovider.Transport
 	providerImports          chan providerImportResult
+	providerStore            *searchprovider.Store
 	providerImportPending    bool
 	providerDiscoveryButtons map[string]*widget.Clickable
 
