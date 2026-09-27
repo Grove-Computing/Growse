@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"github.com/Grove-Computing/Growse/internal/searchprovider"
 	"image"
 	"image/color"
 
@@ -51,7 +52,17 @@ func (ui *BrowserUI) refreshSuggestionsFor(input string) {
 	for _, tab := range ui.tabSnapshots() {
 		snapshot.Tabs = append(snapshot.Tabs, omnibox.Candidate{Primary: tabDisplayTitle(tab), URL: tab.URL, TabID: uint64(tab.ID)})
 	}
-	ui.suggestions.Update(input, snapshot, ui.suggestionFetcher, ui.remoteSuggestions)
+	fetch := ui.suggestionFetcher
+	original := input
+	p, q, override := ui.providers.Resolve(input)
+	ui.suggestionPopup.providerKeyword = ""
+	if override {
+		input = q
+		ui.suggestionPopup.providerKeyword = p.Keyword
+		fetch = ui.providerTransport.Suggestions(p)
+	}
+	enabled := ui.remoteSuggestions && searchprovider.CanSuggest(original) && searchprovider.CanSuggest(input)
+	ui.suggestions.Update(input, snapshot, fetch, enabled)
 	ui.suggestionPopup.owner, _ = ui.activeNavigationTarget()
 	ui.suggestionPopup.open = true
 	ui.suggestionPopup.selected = -1
@@ -63,17 +74,18 @@ func (ui *BrowserUI) refreshSuggestionsFor(input string) {
 
 // suggestionPopup keeps selection/preview separate from the native editor.
 type suggestionPopup struct {
-	owner          browser.TabID
-	open           bool
-	generation     uint64
-	candidates     []omnibox.Candidate
-	selected       int
-	rows           [omnibox.MaxVisibleCandidates]widget.Clickable
-	hovered        [omnibox.MaxVisibleCandidates]bool
-	list           widget.List
-	bounds         image.Rectangle
-	addressTag     struct{}
-	addressPressed bool
+	owner           browser.TabID
+	providerKeyword string
+	open            bool
+	generation      uint64
+	candidates      []omnibox.Candidate
+	selected        int
+	rows            [omnibox.MaxVisibleCandidates]widget.Clickable
+	hovered         [omnibox.MaxVisibleCandidates]bool
+	list            widget.List
+	bounds          image.Rectangle
+	addressTag      struct{}
+	addressPressed  bool
 }
 
 func (ui *BrowserUI) syncSuggestions() {
@@ -209,6 +221,9 @@ func (ui *BrowserUI) submitSuggestion(candidate omnibox.Candidate, disposition o
 	target := candidate.URL
 	if target == "" {
 		target = candidate.Query
+		if ui.suggestionPopup.providerKeyword != "" {
+			target = ui.suggestionPopup.providerKeyword + " " + target
+		}
 	}
 	ui.startNavigationWithDisposition(target, disposition)
 }

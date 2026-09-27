@@ -21,6 +21,7 @@ func (ui *BrowserUI) SetSearchProviders(s searchprovider.Settings) error {
 	}
 	ui.closeSuggestionPopup()
 	ui.providers = s.Clone()
+	ui.SetSuggestionProvider(ui.providerTransport.Suggestions(s.Default()), s.RemoteSuggestions)
 	return nil
 }
 func (ui *BrowserUI) providerSearchURL(input string) (string, error) {
@@ -31,6 +32,7 @@ func (ui *BrowserUI) providerSearchURL(input string) (string, error) {
 // providerPanel is internal chrome; web content cannot access these editors.
 type providerPanel struct {
 	open                                  bool
+	remote                                widget.Clickable
 	toggle, close, save, add              widget.Clickable
 	list                                  widget.List
 	selected                              string
@@ -118,7 +120,25 @@ func (ui *BrowserUI) layoutProviderSettings(gtx layout.Context) layout.Dimension
 			ui.changeProviderSettings(s)
 		}
 	}
+	if panel.remote.Clicked(gtx) {
+		s := ui.SearchProviders()
+		s.RemoteSuggestions = !s.RemoteSuggestions
+		ui.changeProviderSettings(s)
+	}
+	remoteLabel := "外部候補を有効にする (opt-in)"
+	if ui.providers.RemoteSuggestions {
+		remoteLabel = "外部候補を今すぐ無効にする"
+	}
+	destination := ui.providers.Default().SuggestionTemplate
+	if destination == "" {
+		destination = "候補endpointなし"
+	}
 	children := []layout.Widget{
+		material.Body1(ui.theme, "外部候補の送信先: "+destination).Layout,
+		material.Body1(ui.theme, "有効にすると入力した検索語を選択providerへ送信します。URL・command・credential・localhostは送信しません。keyword切替時はそのproviderへ送信します。ここでいつでも無効にできます。").Layout,
+		func(gtx layout.Context) layout.Dimensions {
+			return material.Button(ui.theme, &panel.remote, remoteLabel).Layout(gtx)
+		},
 		material.H6(ui.theme, "検索provider設定").Layout,
 		func(gtx layout.Context) layout.Dimensions {
 			return material.Button(ui.theme, &panel.close, "閉じる").Layout(gtx)
