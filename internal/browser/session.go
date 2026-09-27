@@ -173,6 +173,21 @@ func (s *Session) NewTab(initialURL *url.URL) (TabSnapshot, error) {
 	return snapshotTab(tab, len(s.tabs)-1, state == TabActive), nil
 }
 
+// BrowserTarget returns the isolated navigator for a live tab without
+// selecting it. Browser chrome uses this for background-tab navigation.
+func (s *Session) BrowserTarget(id TabID) (*Browser, bool) {
+	if s == nil {
+		return nil, false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	tab, ok := s.tabByIDLocked(id)
+	if !ok || tab.browser == nil || tab.state == TabClosing || tab.state == TabClosed {
+		return nil, false
+	}
+	return tab.browser, true
+}
+
 // SetTabTitle stores a validated document title for browser chrome.
 func (s *Session) SetTabTitle(id TabID, title string) (TabSnapshot, error) {
 	if s == nil {

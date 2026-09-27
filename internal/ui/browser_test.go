@@ -26,6 +26,7 @@ import (
 	"github.com/Grove-Computing/Growse/internal/forms"
 	layoutengine "github.com/Grove-Computing/Growse/internal/layout"
 	"github.com/Grove-Computing/Growse/internal/network"
+	"github.com/Grove-Computing/Growse/internal/omnibox"
 	paintmodel "github.com/Grove-Computing/Growse/internal/paint"
 	"github.com/Grove-Computing/Growse/internal/style"
 	"github.com/Grove-Computing/Growse/internal/updater"
@@ -1080,6 +1081,138 @@ func (navigator *recordingNavigator) Navigate(_ context.Context, rawURL string) 
 	return navigator.page, navigator.err
 }
 
+func TestTabSelectionPreservesIndependentOmniboxEditingAndPreviewState(t *testing.T) {
+	created := []*browser.Browser{browser.New(nil), browser.New(nil)}
+	next := 0
+	session := browser.NewSession(func() *browser.Browser {
+		state := created[next]
+		next++
+		return state
+	})
+	first, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ui := NewBrowserUIWithTabs(nil, session, nil)
+	ui.syncActiveTabChrome()
+	firstEditor := ui.address
+	ui.address.SetText("first draft")
+	ui.setOmniboxPreview(first.ID, "first preview")
+	ui.setCommittedOmniboxURL(first.ID, "https://first.example/committed", false)
+	if got := ui.address.Text(); got != "first draft" {
+		t.Fatalf("background committed URL overwrote editing text: %q", got)
+	}
+
+	if _, err := session.SelectTab(second.ID); err != nil {
+		t.Fatal(err)
+	}
+	ui.syncActiveTabChrome()
+	if ui.address == firstEditor {
+		t.Fatal("second tab reused first tab omnibox editor")
+	}
+	ui.address.SetText("second draft")
+	ui.setOmniboxPreview(second.ID, "second preview")
+
+	if _, err := session.SelectTab(first.ID); err != nil {
+		t.Fatal(err)
+	}
+	ui.syncActiveTabChrome()
+	if ui.address != firstEditor || ui.address.Text() != "first draft" {
+		t.Fatalf("first omnibox editing state = editor %p text %q", ui.address, ui.address.Text())
+	}
+	if state := ui.omniboxStates[first.ID]; state.preview != "first preview" || state.committedURL != "https://first.example/committed" {
+		t.Fatalf("first omnibox state = %+v", state)
+	}
+	if state := ui.omniboxStates[second.ID]; state.preview != "second preview" || state.editor.Text() != "second draft" {
+		t.Fatalf("second omnibox state = %+v", state)
+	}
+}
+
+func TestCancelNavigationPreservesOmniboxEditorText(t *testing.T) {
+	ui := NewBrowserUI(nil, nil)
+	ui.address.SetText("unsubmitted draft")
+	ui.navigations[0] = tabNavigation{id: 1, cancel: func() {}}
+
+	if !ui.cancelTabNavigation(0) {
+		t.Fatal("cancelTabNavigation did not cancel the active operation")
+	}
+	if got := ui.address.Text(); got != "unsubmitted draft" {
+		t.Fatalf("cancellation overwrote omnibox text: %q", got)
+	}
+}
+
+func TestOmniboxDispositionUsesForegroundAndBackgroundTabs(t *testing.T) {
+	loaders := make([]*controlledNavigationLoader, 0, 3)
+	created := make([]*browser.Browser, 0, 3)
+	session := browser.NewSession(func() *browser.Browser {
+		loader := &controlledNavigationLoader{started: make(chan struct{}, 1), release: make(chan struct{})}
+		close(loader.release)
+		loaders = append(loaders, loader)
+		state := browser.New(loader)
+		created = append(created, state)
+		return state
+	})
+	first, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ui := NewBrowserUIWithTabs(nil, session, nil)
+	defer ui.Close()
+
+	ui.startNavigationWithDisposition("https://foreground.example/", omniboxNewForegroundTab)
+	tabs := session.Tabs()
+	if len(tabs) != 2 || !tabs[1].Active || tabs[1].ID == first.ID {
+		t.Fatalf("Shift+Enter tabs = %+v", tabs)
+	}
+	foreground := tabs[1].ID
+
+	ui.startNavigationWithDisposition("https://background.example/", omniboxNewBackgroundTab)
+	tabs = session.Tabs()
+	if len(tabs) != 3 || !tabs[1].Active || tabs[1].ID != foreground || tabs[2].Active || !tabs[2].Loading {
+		t.Fatalf("Alt+Enter tabs = %+v", tabs)
+	}
+	if len(created) != 3 || len(loaders) != 3 {
+		t.Fatalf("created browsers/loaders = %d/%d, want 3/3", len(created), len(loaders))
+	}
+}
+
+func TestOmniboxCommandsPersistScopeWithoutTreatingEmbeddedAtAsCommand(t *testing.T) {
+	created := []*browser.Browser{browser.New(nil), browser.New(nil)}
+	next := 0
+	session := browser.NewSession(func() *browser.Browser {
+		state := created[next]
+		next++
+		return state
+	})
+	first, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.NewTab(nil); err != nil {
+		t.Fatal(err)
+	}
+	ui := NewBrowserUIWithTabs(nil, session, nil)
+	ui.syncActiveTabChrome()
+
+	ui.startNavigation("@tabs")
+	state := ui.omniboxStates[first.ID]
+	if state.scope != omnibox.Tabs || state.scopeQuery != "" || ui.status != "Omnibox @tabs: 2件の候補" {
+		t.Fatalf("empty @tabs command = state %+v status %q", state, ui.status)
+	}
+	ui.startNavigation("@history recent")
+	state = ui.omniboxStates[first.ID]
+	if state.scope != omnibox.History || state.scopeQuery != "recent" {
+		t.Fatalf("@history command = %+v", state)
+	}
+	if got := omnibox.Classify("find @tabs documentation"); got.Kind != omnibox.Search {
+		t.Fatalf("embedded @tabs classification = %+v", got)
+	}
+}
+
 type reloadRecordingNavigator struct {
 	stubNavigator
 	reloads  chan bool
@@ -1293,14 +1426,14 @@ func TestAddressEnterStartsNavigation(t *testing.T) {
 	}
 	ui.Layout(gtx)
 	router.Frame(gtx.Ops)
-	gtx.Execute(key.FocusCmd{Tag: &ui.address})
+	gtx.Execute(key.FocusCmd{Tag: ui.address})
 	router.Queue(key.Event{Name: key.NameReturn, State: key.Press})
 
 	gtx.Reset()
 	ui.Layout(gtx)
 	select {
 	case got := <-navigator.navigated:
-		if want := "example.com/search"; got != want {
+		if want := "https://example.com/search"; got != want {
 			t.Fatalf("Navigate() URL = %q, want %q", got, want)
 		}
 	case <-time.After(time.Second):
