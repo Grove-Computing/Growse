@@ -35,7 +35,7 @@ func OpenStore(root string) (*Store, error) {
 	return &Store{path: path, mu: value.(*sync.Mutex)}, nil
 }
 func readSettings(path string) (Settings, bool) {
-	f, err := os.Open(path)
+	f, err := os.Open(path) // #nosec G304 -- path is the fixed settings filename in the browser-owned OS profile, never page input.
 	if err != nil {
 		return Settings{}, false
 	}
@@ -128,7 +128,7 @@ func (s *Store) Save(settings Settings) error {
 	}
 	// Rename is the commit point. Directory sync is best effort on platforms
 	// that do not support fsync on a directory.
-	if directory, err := os.Open(filepath.Dir(s.path)); err == nil {
+	if directory, err := os.Open(filepath.Dir(s.path)); err == nil { // #nosec G304 -- fixed browser-owned profile directory, opened only to sync its rename.
 		_ = directory.Sync()
 		_ = directory.Close()
 	}
