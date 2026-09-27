@@ -15,7 +15,7 @@ const MaxSettingsBytes = 64 * 1024
 var ErrStorage = errors.New("検索設定を保存できません")
 var stores sync.Map
 
-// Store serializes writers by profile. An OS directory lock also excludes
+// Store serializes writers by profile. An OS file lock also excludes
 // other processes, and times out rather than blocking the browser forever.
 type Store struct {
 	path string
@@ -104,19 +104,27 @@ func (s *Store) Save(settings Settings) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	lock := s.path + ".lock"
+
+	lock, err := os.OpenFile(s.path+".lock", os.O_CREATE|os.O_RDWR, 0600) // #nosec G304 -- fixed lock filename under the browser-owned OS profile.
+	if err != nil {
+		return ErrStorage
+	}
+	defer lock.Close()
 	deadline := time.Now().Add(2 * time.Second)
 	for {
-		err := os.Mkdir(lock, 0700)
-		if err == nil {
+		locked, err := tryWriterLock(lock)
+		if err != nil {
+			return ErrStorage
+		}
+		if locked {
 			break
 		}
-		if !errors.Is(err, os.ErrExist) || time.Now().After(deadline) {
+		if time.Now().After(deadline) {
 			return ErrStorage
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	defer os.Remove(lock)
+	defer releaseWriterLock(lock)
 	if previous, ok := readSettings(s.path); ok {
 		backup, err := encodeSettings(previous)
 		if err != nil || atomicSettings(s.path+".bak", backup) != nil {

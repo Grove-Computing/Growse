@@ -76,3 +76,29 @@ func TestConcurrentSettingsWritersAndFailure(t *testing.T) {
 		}
 	}
 }
+
+func TestWriterLockReleasedWhenOwnerCloses(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "writer.lock")
+	owner, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contender, err := os.OpenFile(path, os.O_RDWR, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer contender.Close()
+	if locked, err := tryWriterLock(owner); err != nil || !locked {
+		t.Fatal(locked, err)
+	}
+	if locked, err := tryWriterLock(contender); err != nil || locked {
+		t.Fatal("concurrent process descriptor acquired writer lock", locked, err)
+	}
+	if err := owner.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if locked, err := tryWriterLock(contender); err != nil || !locked {
+		t.Fatal("orphaned writer lock after owner close", locked, err)
+	}
+	releaseWriterLock(contender)
+}
