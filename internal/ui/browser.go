@@ -109,13 +109,17 @@ type BrowserUI struct {
 	address           *widget.Editor
 	omniboxStates     map[browser.TabID]omniboxState
 
-	suggestions        *omnibox.Pipeline
-	suggestionPopup    suggestionPopup
-	suggestionSnapshot omnibox.Snapshot
-	suggestionFetcher  omnibox.RemoteFetcher
-	remoteSuggestions  bool
-	providers          searchprovider.Settings
-	providerPanel      providerPanel
+	suggestions              *omnibox.Pipeline
+	suggestionPopup          suggestionPopup
+	suggestionSnapshot       omnibox.Snapshot
+	suggestionFetcher        omnibox.RemoteFetcher
+	remoteSuggestions        bool
+	providers                searchprovider.Settings
+	providerPanel            providerPanel
+	providerTransport        *searchprovider.Transport
+	providerImports          chan providerImportResult
+	providerImportPending    bool
+	providerDiscoveryButtons map[string]*widget.Clickable
 
 	gopher            paint.ImageOp
 	pointerTag        pointerTag
@@ -386,6 +390,9 @@ func NewBrowserUIWithTabsAndUpdater(navigator Navigator, tabs TabController, inv
 		ui.invalidate = func() {}
 	}
 	ui.providers = searchprovider.Defaults()
+	ui.providerTransport = searchprovider.NewTransport(nil)
+	ui.providerImports = make(chan providerImportResult, 1)
+	ui.providerDiscoveryButtons = map[string]*widget.Clickable{}
 	ui.suggestions = omnibox.NewPipeline(ui.invalidate)
 	ui.address = newOmniboxEditor(defaultURL)
 	ui.omniboxStates[0] = omniboxState{editor: ui.address, committedURL: defaultURL, observedText: defaultURL}

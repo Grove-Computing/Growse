@@ -1,11 +1,14 @@
 package ui
 
 import (
+	"crypto/sha256"
+	"fmt"
 	"gioui.org/layout"
 	"gioui.org/op/paint"
 	"gioui.org/unit"
 	"gioui.org/widget"
 	"gioui.org/widget/material"
+	"github.com/Grove-Computing/Growse/internal/browser"
 	"github.com/Grove-Computing/Growse/internal/searchprovider"
 	"image/color"
 )
@@ -34,6 +37,13 @@ type providerPanel struct {
 	id, name, keyword, search, suggestion widget.Editor
 	rows                                  map[string]*providerRow
 }
+type providerImportResult struct {
+	provider searchprovider.Provider
+	err      error
+	owner    browser.TabID
+	page     *browser.Page
+}
+
 type providerRow struct{ edit, choose, remove, disable widget.Clickable }
 
 func (ui *BrowserUI) layoutProviderButton(gtx layout.Context) layout.Dimensions {
@@ -63,6 +73,27 @@ func (ui *BrowserUI) changeProviderSettings(s searchprovider.Settings) {
 }
 func (ui *BrowserUI) layoutProviderSettings(gtx layout.Context) layout.Dimensions {
 	panel := &ui.providerPanel
+	select {
+	case result := <-ui.providerImports:
+		ui.providerImportPending = false
+		owner, _ := ui.activeNavigationTarget()
+		nav := ui.activeNavigator()
+		if owner == result.owner && nav != nil && nav.Page() == result.page {
+			if result.err != nil {
+				ui.status = result.err.Error()
+				ui.statusHasError = true
+			} else {
+				s := ui.SearchProviders()
+				if err := s.Put(result.provider); err != nil {
+					ui.status = err.Error()
+					ui.statusHasError = true
+				} else {
+					ui.changeProviderSettings(s)
+				}
+			}
+		}
+	default:
+	}
 	paint.Fill(gtx.Ops, color.NRGBA{R: 244, G: 247, B: 251, A: 255})
 	if panel.rows == nil {
 		panel.rows = map[string]*providerRow{}
@@ -147,6 +178,39 @@ func (ui *BrowserUI) layoutProviderSettings(gtx layout.Context) layout.Dimension
 			children = append(children, func(gtx layout.Context) layout.Dimensions {
 				return material.Button(ui.theme, &row.remove, "削除").Layout(gtx)
 			})
+		}
+	}
+	if nav := ui.activeNavigator(); nav != nil && nav.Page() != nil {
+		page := nav.Page()
+		base := page.BaseURL
+		if base == nil {
+			base = page.URL
+		}
+		for _, d := range searchprovider.Discover(page.Document, base) {
+			button := ui.providerDiscoveryButtons[d.URL]
+			if button == nil {
+				button = &widget.Clickable{}
+				ui.providerDiscoveryButtons[d.URL] = button
+			}
+			if button.Clicked(gtx) {
+				owner, _ := ui.activeNavigationTarget()
+				hash := fmt.Sprintf("%x", sha256.Sum256([]byte(d.URL)))[:8]
+				if !ui.providerImportPending {
+					ui.providerImportPending = true
+					go func() {
+						p, err := ui.providerTransport.ImportDescription(ui.updateContext, d, "site-"+hash, "site"+hash, true)
+						select {
+						case ui.providerImports <- providerImportResult{p, err, owner, page}:
+							ui.invalidate()
+						case <-ui.updateContext.Done():
+						}
+					}()
+				}
+			}
+			children = append(children, material.Body1(ui.theme, "検出したOpenSearch: "+d.Title+" — "+d.URL).Layout,
+				func(gtx layout.Context) layout.Dimensions {
+					return material.Button(ui.theme, button, "この送信先を確認して取得・登録").Layout(gtx)
+				})
 		}
 	}
 	children = append(children, func(gtx layout.Context) layout.Dimensions {
