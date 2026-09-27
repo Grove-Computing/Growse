@@ -316,6 +316,7 @@ const (
 type omniboxState struct {
 	editor       *widget.Editor
 	committedURL string
+	observedText string
 	preview      string
 	scope        omnibox.Scope
 	scopeQuery   string
@@ -383,7 +384,7 @@ func NewBrowserUIWithTabsAndUpdater(navigator Navigator, tabs TabController, inv
 	}
 	ui.suggestions = omnibox.NewPipeline(ui.invalidate)
 	ui.address = newOmniboxEditor(defaultURL)
-	ui.omniboxStates[0] = omniboxState{editor: ui.address, committedURL: defaultURL}
+	ui.omniboxStates[0] = omniboxState{editor: ui.address, committedURL: defaultURL, observedText: defaultURL}
 	ui.pageList.Axis = layout.Vertical
 	ui.tabList.Axis = layout.Vertical
 	ui.devToolsList.Axis = layout.Vertical
@@ -725,6 +726,7 @@ func (ui *BrowserUI) handleActions(gtx layout.Context) {
 	ui.consumeNavigationResult()
 	ui.consumeUpdateResults()
 	ui.handleTabActions(gtx)
+	ui.syncActiveTabChrome()
 	ui.handleSuggestionKeys(gtx)
 	ui.handleOmniboxSubmit(gtx)
 
@@ -734,7 +736,7 @@ func (ui *BrowserUI) handleActions(gtx layout.Context) {
 			break
 		}
 		if _, changed := event.(widget.ChangeEvent); changed {
-			ui.refreshSuggestions()
+			ui.handleOmniboxChange(gtx)
 		}
 	}
 	ui.handleSuggestionMouseAndFocus(gtx)
@@ -997,6 +999,7 @@ func (ui *BrowserUI) startNavigation(rawURL string) {
 }
 
 func (ui *BrowserUI) startNavigationWithDisposition(rawURL string, disposition omniboxDisposition) {
+	ui.recordOmniboxText()
 	ui.closeSuggestionPopup()
 	classification := omnibox.Classify(rawURL)
 	tabID, _ := ui.activeNavigationTarget()
@@ -1114,6 +1117,10 @@ func (ui *BrowserUI) startNavigationInNewTab(rawURL string, background bool) {
 }
 
 func (ui *BrowserUI) startPageLoad(tabID browser.TabID, navigator Navigator, status string, load func(context.Context) (*browser.Page, error)) {
+	if activeID, _ := ui.activeNavigationTarget(); activeID == tabID {
+		ui.recordOmniboxText()
+		ui.closeSuggestionPopup()
+	}
 	ui.persistHistoryScroll()
 	if navigator != nil {
 		navigator.ClearHover()
@@ -1177,7 +1184,7 @@ func newOmniboxEditor(value string) *widget.Editor {
 func (ui *BrowserUI) activateOmnibox(tabID browser.TabID, committedURL string) {
 	state, ok := ui.omniboxStates[tabID]
 	if !ok {
-		state = omniboxState{editor: newOmniboxEditor(committedURL), committedURL: committedURL}
+		state = omniboxState{editor: newOmniboxEditor(committedURL), committedURL: committedURL, observedText: committedURL}
 		ui.omniboxStates[tabID] = state
 	}
 	ui.address = state.editor
@@ -1186,10 +1193,15 @@ func (ui *BrowserUI) activateOmnibox(tabID browser.TabID, committedURL string) {
 func (ui *BrowserUI) setCommittedOmniboxURL(tabID browser.TabID, rawURL string, display bool) {
 	state, ok := ui.omniboxStates[tabID]
 	if !ok {
-		state = omniboxState{editor: newOmniboxEditor(rawURL)}
+		state = omniboxState{editor: newOmniboxEditor(rawURL), observedText: rawURL}
 	}
 	state.committedURL = rawURL
 	if display {
+		if ui.suggestionPopup.open && ui.suggestionPopup.owner == tabID {
+			ui.closeSuggestionPopup()
+			state.preview = ""
+		}
+		state.observedText = rawURL
 		state.editor.SetText(rawURL)
 	}
 	ui.omniboxStates[tabID] = state

@@ -1,6 +1,9 @@
 package ui
 
 import (
+	"image"
+	"image/color"
+
 	"gioui.org/io/event"
 	"gioui.org/io/key"
 	"gioui.org/io/pointer"
@@ -13,8 +16,6 @@ import (
 	"gioui.org/widget/material"
 	"github.com/Grove-Computing/Growse/internal/browser"
 	"github.com/Grove-Computing/Growse/internal/omnibox"
-	"image"
-	"image/color"
 )
 
 // SetSuggestionSnapshot supplies local source snapshots on the UI thread.
@@ -25,7 +26,11 @@ func (ui *BrowserUI) SetSuggestionSnapshot(snapshot omnibox.Snapshot) {
 		History:   append([]omnibox.Candidate(nil), snapshot.History...),
 		Bookmarks: append([]omnibox.Candidate(nil), snapshot.Bookmarks...),
 	}
-	ui.refreshSuggestions()
+	if ui.suggestionPopup.open {
+		ui.refreshSuggestions()
+	} else {
+		ui.suggestions.Cancel()
+	}
 }
 
 // SetSuggestionProvider cancels the previous provider before replacing it.
@@ -33,12 +38,15 @@ func (ui *BrowserUI) SetSuggestionSnapshot(snapshot omnibox.Snapshot) {
 func (ui *BrowserUI) SetSuggestionProvider(fetch omnibox.RemoteFetcher, enabled bool) {
 	ui.suggestions.Cancel()
 	ui.suggestionFetcher, ui.remoteSuggestions = fetch, enabled
-	ui.refreshSuggestions()
+	if ui.suggestionPopup.open {
+		ui.refreshSuggestions()
+	}
 }
 
 func (ui *BrowserUI) refreshSuggestions() { ui.refreshSuggestionsFor(ui.address.Text()) }
 
 func (ui *BrowserUI) refreshSuggestionsFor(input string) {
+	ui.recordOmniboxText()
 	snapshot := ui.suggestionSnapshot
 	for _, tab := range ui.tabSnapshots() {
 		snapshot.Tabs = append(snapshot.Tabs, omnibox.Candidate{Primary: tabDisplayTitle(tab), URL: tab.URL, TabID: uint64(tab.ID)})
@@ -296,4 +304,28 @@ func (ui *BrowserUI) layoutSuggestionPreview(gtx layout.Context) layout.Dimensio
 		label.MaxLines = 1
 		return label.Layout(gtx)
 	})
+}
+
+// Gio emits ChangeEvent for SetText as well as native input. Record programmatic
+// updates so they cannot reopen suggestions after navigation or popup dismissal.
+func (ui *BrowserUI) recordOmniboxText() {
+	tabID, _ := ui.activeNavigationTarget()
+	state, ok := ui.omniboxStates[tabID]
+	if !ok || state.editor != ui.address {
+		return
+	}
+	state.observedText = ui.address.Text()
+	ui.omniboxStates[tabID] = state
+}
+
+func (ui *BrowserUI) handleOmniboxChange(gtx layout.Context) {
+	tabID, _ := ui.activeNavigationTarget()
+	state, ok := ui.omniboxStates[tabID]
+	if !ok || state.editor != ui.address || state.observedText == ui.address.Text() {
+		return
+	}
+	ui.recordOmniboxText()
+	if gtx.Focused(ui.address) {
+		ui.refreshSuggestions()
+	}
 }

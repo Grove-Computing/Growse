@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"fmt"
 	"gioui.org/f32"
 	"gioui.org/io/input"
@@ -10,6 +11,7 @@ import (
 	"gioui.org/op"
 	"gioui.org/unit"
 	"image"
+	"net/url"
 	"testing"
 
 	"github.com/Grove-Computing/Growse/internal/browser"
@@ -37,6 +39,7 @@ func TestSuggestionPipelineConnectedToTabsAndLocalSnapshots(t *testing.T) {
 	}
 	ui.address.SetText("local")
 	ui.SetSuggestionSnapshot(omnibox.Snapshot{History: []omnibox.Candidate{{Primary: "local history", URL: "https://local.example/"}}})
+	ui.refreshSuggestions()
 	_, results = ui.suggestions.Results()
 	if len(results) != 2 || results[1].Source != omnibox.HistorySource {
 		t.Fatalf("history = %+v", results)
@@ -76,6 +79,7 @@ func TestSuggestionPopupKeyboardPreviewEscapeAndTabPreserveDraft(t *testing.T) {
 				history = append(history, omnibox.Candidate{Primary: "guide title", URL: fmt.Sprintf("https://example.com/%02d", i)})
 			}
 			ui.SetSuggestionSnapshot(omnibox.Snapshot{History: history})
+			ui.refreshSuggestions()
 			suggestionFrame(ui, router, gtx)
 			if len(ui.suggestionPopup.candidates) != omnibox.MaxVisibleCandidates {
 				t.Fatal("popup did not apply 12-item bound")
@@ -130,6 +134,7 @@ func TestSuggestionPopupMouseHoverAndOutsideClick(t *testing.T) {
 	ui, router, gtx := newSuggestionTestUI(t)
 	ui.address.SetText("guide")
 	ui.SetSuggestionSnapshot(omnibox.Snapshot{History: []omnibox.Candidate{{Primary: "guide title", URL: "https://example.com/"}}})
+	ui.refreshSuggestions()
 	suggestionFrame(ui, router, gtx)
 	position := f32.Pt(float32(ui.suggestionPopup.bounds.Min.X+20), float32(ui.suggestionPopup.bounds.Min.Y+70))
 	router.Queue(pointer.Event{Kind: pointer.Move, Source: pointer.Mouse, Position: position})
@@ -196,6 +201,7 @@ func TestSuggestionPopupFitsViewport(t *testing.T) {
 	defer ui.Close()
 	ui.address.SetText("guide")
 	ui.SetSuggestionSnapshot(omnibox.Snapshot{History: []omnibox.Candidate{{Primary: "guide title", URL: "https://example.com/"}}})
+	ui.refreshSuggestions()
 	for _, size := range []image.Point{image.Pt(1280, 800), image.Pt(320, 200), image.Pt(250, 100)} {
 		gtx := layout.Context{Ops: new(op.Ops), Constraints: layout.Exact(size), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}}
 		viewport := calculateBrowserChromeGeometry(size, 224, 92).viewport
@@ -210,6 +216,7 @@ func TestSuggestionEditingAfterPreviewUsesOriginalBuffer(t *testing.T) {
 	ui, router, gtx := newSuggestionTestUI(t)
 	ui.address.SetText("guide")
 	ui.SetSuggestionSnapshot(omnibox.Snapshot{History: []omnibox.Candidate{{Primary: "guide history", URL: "https://example.com/"}}})
+	ui.refreshSuggestions()
 	suggestionFrame(ui, router, gtx)
 	router.Queue(key.Event{Name: key.NameEnd, State: key.Press})
 	suggestionFrame(ui, router, gtx)
@@ -221,4 +228,72 @@ func TestSuggestionEditingAfterPreviewUsesOriginalBuffer(t *testing.T) {
 	if ui.address.Text() != "日本語" || ui.omniboxStates[0].preview != "" || ui.suggestionPopup.selected != -1 {
 		t.Fatal("new editing used or retained preview text")
 	}
+}
+
+func TestSuggestionNavigationResultDoesNotReopenPopup(t *testing.T) {
+	ui, router, gtx := newSuggestionTestUI(t)
+	ui.address.SetText("https://old.example/")
+	ui.refreshSuggestions()
+	suggestionFrame(ui, router, gtx)
+	ui.closeSuggestionPopup()
+	target, _ := url.Parse("https://1mb.club/")
+	ui.navigations[0] = tabNavigation{id: 7, cancel: func() {}}
+	ui.results <- navigationResult{id: 7, page: browser.NewPage(target)}
+	suggestionFrame(ui, router, gtx)
+	suggestionFrame(ui, router, gtx)
+	if ui.suggestionPopup.open {
+		t.Fatal("navigation completion reopened a popup over the page")
+	}
+	if ui.address.Text() != target.String() {
+		t.Fatal("committed URL was not displayed")
+	}
+	router.Queue(key.EditEvent{Range: key.Range{Start: 0, End: ui.address.Len()}, Text: "new query"})
+	suggestionFrame(ui, router, gtx)
+	if !ui.suggestionPopup.open || ui.suggestionPopup.candidates[0].Query != "new query" {
+		t.Fatal("user editing after navigation did not reopen suggestions")
+	}
+}
+
+func TestSuggestionFocusingInitialURLDoesNotOpenPopup(t *testing.T) {
+	ui, _, _ := newSuggestionTestUI(t)
+	if ui.suggestionPopup.open {
+		t.Fatal("focusing programmatically initialized URL opened suggestions")
+	}
+}
+
+func TestSuggestionSubmitDoesNotReopenFromPendingEditorChange(t *testing.T) {
+	ui, router, gtx := newSuggestionTestUI(t)
+	ui.address.SetText("https://example.com/")
+	ui.startNavigationWithDisposition(ui.address.Text(), omniboxCurrentTab)
+	suggestionFrame(ui, router, gtx)
+	if ui.suggestionPopup.open {
+		t.Fatal("pending ChangeEvent reopened suggestions after submit")
+	}
+}
+
+func TestSuggestionSourceUpdatesDoNotOpenDismissedPopup(t *testing.T) {
+	ui, router, gtx := newSuggestionTestUI(t)
+	ui.address.SetText("guide")
+	ui.refreshSuggestions()
+	suggestionFrame(ui, router, gtx)
+	ui.closeSuggestionPopup()
+	ui.SetSuggestionSnapshot(omnibox.Snapshot{History: []omnibox.Candidate{{Primary: "guide title", URL: "https://example.com/"}}})
+	ui.SetSuggestionProvider(nil, false)
+	suggestionFrame(ui, router, gtx)
+	if ui.suggestionPopup.open {
+		t.Fatal("source or provider update reopened a dismissed popup")
+	}
+}
+
+func TestSuggestionReloadClosesPopupWithoutLosingDraft(t *testing.T) {
+	ui, router, gtx := newSuggestionTestUI(t)
+	ui.address.SetText("unfinished draft")
+	ui.refreshSuggestions()
+	suggestionFrame(ui, router, gtx)
+	finished := make(chan struct{})
+	ui.startPageLoad(0, nil, "reload", func(context.Context) (*browser.Page, error) { defer close(finished); return nil, nil })
+	if ui.suggestionPopup.open || ui.address.Text() != "unfinished draft" {
+		t.Fatal("page load retained popup or lost draft")
+	}
+	<-finished
 }
