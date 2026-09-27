@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 )
 
 // MatchKind is ordered from weakest to strongest. Match quality dominates all
@@ -23,7 +24,10 @@ const (
 // Match performs compatibility normalization and full Unicode case folding.
 // CJK matches use substrings; whitespace tokenization is never required.
 func Match(query, value string) MatchKind {
-	query, value = normalized(query), normalized(value)
+	return matchNormalized(normalized(query), normalized(value))
+}
+
+func matchNormalized(query, value string) MatchKind {
 	if query == "" {
 		return SubstringMatch
 	}
@@ -41,8 +45,8 @@ func Match(query, value string) MatchKind {
 		}
 		index += offset
 		best = SubstringMatch
-		previous := []rune(value[:index])
-		if len(previous) == 0 || !wordRune(previous[len(previous)-1]) {
+		previous, _ := utf8.DecodeLastRuneInString(value[:index])
+		if index == 0 || !wordRune(previous) {
 			return WordBoundaryMatch
 		}
 		offset = index + len(query)
@@ -54,10 +58,13 @@ func wordRune(r rune) bool {
 	return unicode.IsLetter(r) || unicode.IsDigit(r) || unicode.IsMark(r) || r == '_'
 }
 
-func candidateMatch(query string, c Candidate) MatchKind {
-	best := max(Match(query, c.Primary), Match(query, c.URL))
+func candidateMatchNormalized(query string, c Candidate) MatchKind {
+	best := max(matchNormalized(query, normalized(c.Primary)), matchNormalized(query, normalized(c.URL)))
+	if best == ExactMatch {
+		return best
+	}
 	if u, err := url.Parse(c.URL); err == nil && u.Hostname() != "" {
-		best = max(best, Match(query, u.Hostname()))
+		best = max(best, matchNormalized(query, normalized(u.Hostname())))
 	}
 	return best
 }
@@ -89,8 +96,12 @@ func candidateLess(a, b Candidate) bool {
 	if a.Score != b.Score {
 		return a.Score > b.Score
 	}
-	if candidateKey(a) != candidateKey(b) {
-		return candidateKey(a) < candidateKey(b)
+	return candidateTieLess(a, b, candidateKey(a), candidateKey(b))
+}
+
+func candidateTieLess(a, b Candidate, aKey, bKey string) bool {
+	if aKey != bKey {
+		return aKey < bKey
 	}
 	if a.Source != b.Source {
 		return a.Source < b.Source
@@ -113,26 +124,47 @@ func candidateLess(a, b Candidate) bool {
 	return a.VisitCount > b.VisitCount
 }
 
-func rankCandidates(query string, candidates []Candidate, now time.Time) []Candidate {
-	for i := range candidates {
-		match := candidateMatch(query, candidates[i])
-		if candidates[i].Source == InputSource {
-			match = ExactMatch
-		}
-		if candidates[i].Source == RemoteSource {
-			match = max(match, SubstringMatch)
-		}
-		candidates[i].Score = candidateScore(match, candidates[i], now)
+type rankedCandidate struct {
+	candidate Candidate
+	key       string
+}
+
+func rankedLess(a, b rankedCandidate) bool {
+	if a.candidate.Score != b.candidate.Score {
+		return a.candidate.Score > b.candidate.Score
 	}
-	sort.Slice(candidates, func(i, j int) bool { return candidateLess(candidates[i], candidates[j]) })
-	bounded := make([]Candidate, 0, min(len(candidates), MaxMergedCandidates))
-	counts := make(map[Source]int)
-	for _, c := range candidates {
-		if counts[c.Source] >= MaxSourceCandidates {
-			continue
+	return candidateTieLess(a.candidate, b.candidate, a.key, b.key)
+}
+
+type rankingAccumulator map[Source][]rankedCandidate
+
+func (r rankingAccumulator) add(c Candidate) {
+	// Keep only the best 50 per source. URL identities are cached for admitted
+	// entries; candidates below the score floor need no normalization or sort.
+	group := r[c.Source]
+	if len(group) == MaxSourceCandidates && c.Score < group[len(group)-1].candidate.Score {
+		return
+	}
+	ranked := rankedCandidate{candidate: c, key: candidateKey(c)}
+	index := sort.Search(len(group), func(i int) bool { return rankedLess(ranked, group[i]) })
+	if index >= MaxSourceCandidates {
+		return
+	}
+	group = append(group, rankedCandidate{})
+	copy(group[index+1:], group[index:])
+	group[index] = ranked
+	if len(group) > MaxSourceCandidates {
+		group = group[:MaxSourceCandidates]
+	}
+	r[c.Source] = group
+}
+
+func (r rankingAccumulator) results() []Candidate {
+	bounded := make([]Candidate, 0, MaxMergedCandidates)
+	for _, group := range r {
+		for _, ranked := range group {
+			bounded = append(bounded, ranked.candidate)
 		}
-		counts[c.Source]++
-		bounded = append(bounded, c)
 	}
 	bounded = deduplicate(bounded)
 	sort.Slice(bounded, func(i, j int) bool { return candidateLess(bounded[i], bounded[j]) })

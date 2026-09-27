@@ -126,17 +126,56 @@ func TestPipelineRemoteSuccessFailureAndPrivacy(t *testing.T) {
 		}
 		p.Close()
 	}
+	for _, tc := range []struct {
+		input   string
+		enabled bool
+	}{
+		{"", true}, {"https://example.com/", true}, {"localhost", true}, {"127.0.0.1", true},
+		{"@search query", true}, {"user:password@host", true}, {"bad\nquery", true}, {"private query", false},
+	} {
+		t.Run(tc.input, func(t *testing.T) {
+			p := NewPipeline(nil)
+			defer p.Close()
+			called := make(chan struct{}, 1)
+			fetch := func(context.Context, string) ([]string, error) { called <- struct{}{}; return nil, nil }
+			p.Update(tc.input, Snapshot{}, fetch, tc.enabled)
+			select {
+			case <-called:
+				t.Fatal("private input sent")
+			case <-time.After(SuggestionDebounce + 20*time.Millisecond):
+			}
+		})
+	}
+}
+
+func TestPipelineDebounceAndTimeoutKeepLocalResults(t *testing.T) {
 	p := NewPipeline(nil)
 	defer p.Close()
-	called := make(chan struct{}, 1)
-	fetch := func(context.Context, string) ([]string, error) { called <- struct{}{}; return nil, nil }
-	for _, input := range []string{"", "https://example.com/", "localhost", "127.0.0.1", "@search query", "user:password@host", "bad\nquery"} {
-		p.Update(input, Snapshot{}, fetch, true)
+	started := make(chan string, 1)
+	done := make(chan struct{})
+	fetch := func(ctx context.Context, query string) ([]string, error) {
+		started <- query
+		<-ctx.Done()
+		close(done)
+		return []string{"late result"}, nil
 	}
-	p.Update("private query", Snapshot{}, fetch, false)
+	p.Update("old query", Snapshot{}, fetch, true)
+	p.Update("new query", Snapshot{}, fetch, true)
 	select {
-	case <-called:
-		t.Fatal("private input sent")
-	case <-time.After(2 * SuggestionDebounce):
+	case query := <-started:
+		if query != "new query" {
+			t.Fatal("debounce fetched obsolete query")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("request did not start")
+	}
+	select {
+	case <-done:
+	case <-time.After(SuggestionTimeout + time.Second):
+		t.Fatal("timeout did not cancel")
+	}
+	_, results := p.Results()
+	if len(results) != 1 || results[0].Query != "new query" {
+		t.Fatal("timeout changed local input action")
 	}
 }

@@ -68,8 +68,16 @@ type Snapshot struct {
 // It must honor cancellation and enforce transport/response bounds.
 type RemoteFetcher func(context.Context, string) ([]string, error)
 
+// Fold is stateless and safe to share across UI and remote generations.
+var searchFold = cases.Fold()
+
 func normalized(value string) string {
-	return cases.Fold().String(norm.NFKC.String(value))
+	for _, r := range value {
+		if r > 127 {
+			return norm.NFKC.String(searchFold.String(norm.NFKC.String(value)))
+		}
+	}
+	return strings.ToLower(value)
 }
 
 // Rank is the deterministic query engine shared by every search surface.
@@ -82,7 +90,7 @@ func Rank(input string, snapshot Snapshot, remote []string) []Candidate {
 	if classification.Kind == URL {
 		query = classification.Input
 	}
-	result := make([]Candidate, 0, MaxMergedCandidates)
+	result := make([]Candidate, 0, 1)
 	if classification.Kind == URL {
 		result = append(result, Candidate{Source: InputSource, Primary: classification.Input, Secondary: "Open URL", URL: classification.URL.String()})
 	} else if query != "" && (scope == "" || scope == Web) {
@@ -105,6 +113,12 @@ func Rank(input string, snapshot Snapshot, remote []string) []Candidate {
 			}
 		}
 	}
+	ranking := make(rankingAccumulator)
+	for _, c := range result {
+		c.Score = candidateScore(ExactMatch, c, now)
+		ranking.add(c)
+	}
+	normalizedQuery := normalized(query)
 	for _, source := range sources {
 		if scope != "" && scope != source.scope {
 			continue
@@ -113,15 +127,17 @@ func Rank(input string, snapshot Snapshot, remote []string) []Candidate {
 			if len(entry.URL) > MaxInputBytes || len(entry.Primary) > MaxInputBytes || (Classify(entry.URL).Kind != URL && !(source.kind == TabSource && entry.URL == "" && entry.TabID != 0)) {
 				continue
 			}
-			if candidateMatch(query, entry) == NoMatch {
+			match := candidateMatchNormalized(normalizedQuery, entry)
+			if match == NoMatch {
 				continue
 			}
 			entry.Source = source.kind
+			entry.Score = candidateScore(match, entry, now)
 			entry.Secondary = entry.URL
 			if entry.Primary == "" {
 				entry.Primary = entry.URL
 			}
-			result = append(result, entry)
+			ranking.add(entry)
 		}
 	}
 	if scope == "" || scope == Web {
@@ -130,14 +146,16 @@ func Rank(input string, snapshot Snapshot, remote []string) []Candidate {
 			if len(term) > MaxQueryBytes || Classify(term).Kind != Search {
 				continue
 			}
-			result = append(result, Candidate{Source: RemoteSource, Primary: term, Secondary: "Search suggestion", Query: term})
+			c := Candidate{Source: RemoteSource, Primary: term, Secondary: "Search suggestion", Query: term}
+			c.Score = candidateScore(max(candidateMatchNormalized(normalizedQuery, c), SubstringMatch), c, now)
+			ranking.add(c)
 			count++
 			if count == MaxSourceCandidates {
 				break
 			}
 		}
 	}
-	return rankCandidates(query, result, now)
+	return ranking.results()
 }
 
 // Pipeline publishes local results synchronously and remote results only for the
@@ -166,8 +184,6 @@ func (p *Pipeline) Update(input string, snapshot Snapshot, fetch RemoteFetcher, 
 	p.generation++
 	generation := p.generation
 	p.candidates = Rank(input, snapshot, nil)
-	// Own the snapshot used by a later remote completion.
-	snapshot = Snapshot{Tabs: append([]Candidate(nil), snapshot.Tabs...), History: append([]Candidate(nil), snapshot.History...), Bookmarks: append([]Candidate(nil), snapshot.Bookmarks...), Now: snapshot.Now}
 	ctx, cancel := context.WithCancel(context.Background())
 	p.cancel = cancel
 	p.mu.Unlock()
@@ -175,6 +191,8 @@ func (p *Pipeline) Update(input string, snapshot Snapshot, fetch RemoteFetcher, 
 	if !enabled || fetch == nil || classification.Kind != Search {
 		return generation
 	}
+	// Only a remote completion needs to retain its own snapshot.
+	snapshot = Snapshot{Tabs: append([]Candidate(nil), snapshot.Tabs...), History: append([]Candidate(nil), snapshot.History...), Bookmarks: append([]Candidate(nil), snapshot.Bookmarks...), Now: snapshot.Now}
 	go func() {
 		timer := time.NewTimer(SuggestionDebounce)
 		defer timer.Stop()

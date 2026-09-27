@@ -205,3 +205,20 @@ func TestSuggestionPopupFitsViewport(t *testing.T) {
 		}
 	}
 }
+
+func TestSuggestionEditingAfterPreviewUsesOriginalBuffer(t *testing.T) {
+	ui, router, gtx := newSuggestionTestUI(t)
+	ui.address.SetText("guide")
+	ui.SetSuggestionSnapshot(omnibox.Snapshot{History: []omnibox.Candidate{{Primary: "guide history", URL: "https://example.com/"}}})
+	suggestionFrame(ui, router, gtx)
+	router.Queue(key.Event{Name: key.NameEnd, State: key.Press})
+	suggestionFrame(ui, router, gtx)
+	if ui.omniboxStates[0].preview != "https://example.com/" {
+		t.Fatal("history preview missing")
+	}
+	router.Queue(key.EditEvent{Range: key.Range{Start: 0, End: 5}, Text: "日本語"})
+	suggestionFrame(ui, router, gtx)
+	if ui.address.Text() != "日本語" || ui.omniboxStates[0].preview != "" || ui.suggestionPopup.selected != -1 {
+		t.Fatal("new editing used or retained preview text")
+	}
+}
