@@ -46,6 +46,7 @@ import (
 	"github.com/Grove-Computing/Growse/internal/omnibox"
 	paintmodel "github.com/Grove-Computing/Growse/internal/paint"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
+	"github.com/Grove-Computing/Growse/internal/searchprovider"
 	stylemodel "github.com/Grove-Computing/Growse/internal/style"
 	"github.com/Grove-Computing/Growse/internal/updater"
 )
@@ -113,6 +114,8 @@ type BrowserUI struct {
 	suggestionSnapshot omnibox.Snapshot
 	suggestionFetcher  omnibox.RemoteFetcher
 	remoteSuggestions  bool
+	providers          searchprovider.Settings
+	providerPanel      providerPanel
 
 	gopher            paint.ImageOp
 	pointerTag        pointerTag
@@ -382,6 +385,7 @@ func NewBrowserUIWithTabsAndUpdater(navigator Navigator, tabs TabController, inv
 	if ui.invalidate == nil {
 		ui.invalidate = func() {}
 	}
+	ui.providers = searchprovider.Defaults()
 	ui.suggestions = omnibox.NewPipeline(ui.invalidate)
 	ui.address = newOmniboxEditor(defaultURL)
 	ui.omniboxStates[0] = omniboxState{editor: ui.address, committedURL: defaultURL, observedText: defaultURL}
@@ -413,6 +417,9 @@ func (ui *BrowserUI) Layout(gtx layout.Context) layout.Dimensions {
 	layoutRegion(gtx, geometry.toolbar, ui.layoutToolbar)
 	layoutRegion(gtx, geometry.tabRail, ui.layoutTabRail)
 	ui.layoutSuggestions(gtx, geometry.viewport)
+	if ui.providerPanel.open {
+		layoutRegion(gtx, geometry.viewport, ui.layoutProviderSettings)
+	}
 	ui.registerPointerTracker(gtx)
 	return layout.Dimensions{Size: gtx.Constraints.Max}
 }
@@ -1011,7 +1018,13 @@ func (ui *BrowserUI) startNavigationWithDisposition(rawURL string, disposition o
 		return
 	case omnibox.Search:
 		ui.setOmniboxScope(tabID, "", "")
-		target = omnibox.SearchURL(classification.Query).String()
+		var err error
+		target, err = ui.providerSearchURL(classification.Query)
+		if err != nil {
+			ui.status = err.Error()
+			ui.statusHasError = true
+			return
+		}
 	case omnibox.Command:
 		ui.setOmniboxScope(tabID, classification.Scope, classification.Query)
 		if classification.Scope != omnibox.Web {
@@ -1024,7 +1037,13 @@ func (ui *BrowserUI) startNavigationWithDisposition(rawURL string, disposition o
 			ui.statusHasError = false
 			return
 		}
-		target = omnibox.SearchURL(classification.Query).String()
+		var err error
+		target, err = ui.providerSearchURL(classification.Query)
+		if err != nil {
+			ui.status = err.Error()
+			ui.statusHasError = true
+			return
+		}
 	case omnibox.URL:
 		ui.setOmniboxScope(tabID, "", "")
 		target = classification.URL.String()
@@ -1451,6 +1470,7 @@ func (ui *BrowserUI) layoutToolbar(gtx layout.Context) layout.Dimensions {
 					layout.Rigid(ui.layoutEngineButton),
 					layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
 					layout.Rigid(ui.layoutDevToolsButton),
+					layout.Rigid(ui.layoutProviderButton),
 					layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
 					layout.Flexed(1, ui.layoutAddressBar),
 					layout.Rigid(layout.Spacer{Width: unit.Dp(4)}.Layout),
