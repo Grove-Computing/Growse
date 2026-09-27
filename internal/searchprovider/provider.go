@@ -4,6 +4,7 @@ package searchprovider
 import (
 	"errors"
 	"net/url"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -60,7 +61,7 @@ func validateTemplate(t string) error {
 		return ErrInvalid
 	}
 	u, err := url.Parse(strings.ReplaceAll(t, "{searchTerms}", "growse"))
-	if err != nil || validateEndpoint(u) != nil || strings.Contains(u.Host, "growse") && strings.Contains(strings.Split(t, "/")[2], "{searchTerms}") {
+	if err != nil || validateEndpoint(u) != nil {
 		return ErrInvalid
 	}
 	// Queries may appear in a path or query value, never in authority or parameter names.
@@ -77,6 +78,15 @@ func validateTemplate(t string) error {
 }
 func validateEndpoint(u *url.URL) error {
 	if u == nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.Fragment != "" || u.Opaque != "" || strings.IndexFunc(u.String(), unicode.IsControl) >= 0 {
+		return ErrInvalid
+	}
+	if u.Port() != "" {
+		port, err := strconv.Atoi(u.Port())
+		if err != nil || port < 1 || port > 65535 {
+			return ErrInvalid
+		}
+	}
+	if strings.HasSuffix(u.Host, ":") || strings.ContainsAny(u.Host, "{}%") {
 		return ErrInvalid
 	}
 	if omnibox.Classify(u.String()).Kind != omnibox.URL {
