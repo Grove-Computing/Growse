@@ -58,7 +58,11 @@ type Candidate struct {
 
 // Snapshot is shared by the omnibox and future search surfaces. Persistence is
 // owned by the source, not by the pipeline; no query or page text is retained.
-type Snapshot struct{ Tabs, History, Bookmarks []Candidate }
+type Snapshot struct {
+	Tabs, History, Bookmarks []Candidate
+	// Now fixes the recency clock for every consumer of this snapshot.
+	Now time.Time
+}
 
 // RemoteFetcher is provided by the provider layer after endpoint validation.
 // It must honor cancellation and enforce transport/response bounds.
@@ -68,7 +72,8 @@ func normalized(value string) string {
 	return cases.Fold().String(norm.NFKC.String(value))
 }
 
-func localCandidates(input string, snapshot Snapshot, remote []string) []Candidate {
+// Rank is the deterministic query engine shared by every search surface.
+func Rank(input string, snapshot Snapshot, remote []string) []Candidate {
 	classification := Classify(input)
 	if classification.Kind == Invalid && strings.TrimSpace(input) != "" {
 		return nil
@@ -90,17 +95,25 @@ func localCandidates(input string, snapshot Snapshot, remote []string) []Candida
 	}{
 		{TabSource, Tabs, snapshot.Tabs}, {BookmarkSource, Bookmarks, snapshot.Bookmarks}, {HistorySource, History, snapshot.History},
 	}
-	needle := normalized(query)
+	now := snapshot.Now
+	if now.IsZero() {
+		for _, source := range sources {
+			for _, c := range source.entries {
+				if c.LastVisited.After(now) {
+					now = c.LastVisited
+				}
+			}
+		}
+	}
 	for _, source := range sources {
 		if scope != "" && scope != source.scope {
 			continue
 		}
-		count := 0
 		for _, entry := range source.entries {
 			if len(entry.URL) > MaxInputBytes || len(entry.Primary) > MaxInputBytes || (Classify(entry.URL).Kind != URL && !(source.kind == TabSource && entry.URL == "" && entry.TabID != 0)) {
 				continue
 			}
-			if needle != "" && !strings.Contains(normalized(entry.Primary), needle) && !strings.Contains(normalized(entry.URL), needle) {
+			if candidateMatch(query, entry) == NoMatch {
 				continue
 			}
 			entry.Source = source.kind
@@ -109,10 +122,6 @@ func localCandidates(input string, snapshot Snapshot, remote []string) []Candida
 				entry.Primary = entry.URL
 			}
 			result = append(result, entry)
-			count++
-			if count == MaxSourceCandidates {
-				break
-			}
 		}
 	}
 	if scope == "" || scope == Web {
@@ -128,11 +137,7 @@ func localCandidates(input string, snapshot Snapshot, remote []string) []Candida
 			}
 		}
 	}
-	result = deduplicate(result)
-	if len(result) > MaxMergedCandidates {
-		result = result[:MaxMergedCandidates]
-	}
-	return result
+	return rankCandidates(query, result, now)
 }
 
 // Pipeline publishes local results synchronously and remote results only for the
@@ -160,9 +165,9 @@ func (p *Pipeline) Update(input string, snapshot Snapshot, fetch RemoteFetcher, 
 	}
 	p.generation++
 	generation := p.generation
-	p.candidates = localCandidates(input, snapshot, nil)
+	p.candidates = Rank(input, snapshot, nil)
 	// Own the snapshot used by a later remote completion.
-	snapshot = Snapshot{append([]Candidate(nil), snapshot.Tabs...), append([]Candidate(nil), snapshot.History...), append([]Candidate(nil), snapshot.Bookmarks...)}
+	snapshot = Snapshot{Tabs: append([]Candidate(nil), snapshot.Tabs...), History: append([]Candidate(nil), snapshot.History...), Bookmarks: append([]Candidate(nil), snapshot.Bookmarks...), Now: snapshot.Now}
 	ctx, cancel := context.WithCancel(context.Background())
 	p.cancel = cancel
 	p.mu.Unlock()
@@ -187,7 +192,7 @@ func (p *Pipeline) Update(input string, snapshot Snapshot, fetch RemoteFetcher, 
 		if len(terms) > MaxSourceCandidates {
 			terms = terms[:MaxSourceCandidates]
 		}
-		candidates := localCandidates(input, snapshot, terms)
+		candidates := Rank(input, snapshot, terms)
 		p.mu.Lock()
 		if p.closed || generation != p.generation || ctx.Err() != nil {
 			p.mu.Unlock()

@@ -90,16 +90,7 @@ func preferredCandidate(a, b Candidate) bool {
 	if sourcePriority(a) != sourcePriority(b) {
 		return sourcePriority(a) > sourcePriority(b)
 	}
-	if a.Score != b.Score {
-		return a.Score > b.Score
-	}
-	if a.URL != b.URL {
-		return a.URL < b.URL
-	}
-	if a.Primary != b.Primary {
-		return a.Primary < b.Primary
-	}
-	return a.TabID < b.TabID
+	return candidateLess(a, b)
 }
 
 func deduplicate(candidates []Candidate) []Candidate {

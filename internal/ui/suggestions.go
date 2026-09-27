@@ -6,6 +6,7 @@ import "github.com/Grove-Computing/Growse/internal/omnibox"
 // History and bookmark persistence are owned by their respective data sources.
 func (ui *BrowserUI) SetSuggestionSnapshot(snapshot omnibox.Snapshot) {
 	ui.suggestionSnapshot = omnibox.Snapshot{
+		Now:       snapshot.Now,
 		History:   append([]omnibox.Candidate(nil), snapshot.History...),
 		Bookmarks: append([]omnibox.Candidate(nil), snapshot.Bookmarks...),
 	}
