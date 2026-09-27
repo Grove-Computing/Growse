@@ -78,71 +78,75 @@ type BrowserUI struct {
 	displayedTabID   browser.TabID
 	tabRenderStates  map[browser.TabID]tabRenderState
 
-	backButton        widget.Clickable
-	forwardButton     widget.Clickable
-	reloadButton      widget.Clickable
-	goButton          widget.Clickable
-	updateButton      widget.Clickable
-	engineButton      widget.Clickable
-	devToolsButton    widget.Clickable
-	devToolsClose     widget.Clickable
-	devToolsClear     widget.Clickable
-	devToolsConsole   widget.Clickable
-	devToolsInspector widget.Clickable
-	devToolsNetwork   widget.Clickable
-	devToolsRuntime   widget.Clickable
-	devToolsFilter    widget.Clickable
-	newTabButton      widget.Clickable
-	tabRowButtons     map[browser.TabID]*widget.Clickable
-	tabCloseButtons   map[browser.TabID]*widget.Clickable
-	tabShortcutDown   map[key.Name]bool
-	devToolsStates    map[browser.TabID]devToolsTabState
-	inspectorButtons  map[browser.TabID]map[dom.NodeID]*widget.Clickable
-	devToolsList      widget.List
-	inspectorList     widget.List
-	networkList       widget.List
-	runtimeList       widget.List
-	pageList          widget.List
-	tabList           widget.List
-	viewportClick     gesture.Click
-	address           *widget.Editor
-	omniboxStates     map[browser.TabID]omniboxState
-	gopher            paint.ImageOp
-	pointerTag        pointerTag
-	pointer           pointerState
-	nestedScrollPage  *browser.Page
-	nestedScrollTags  map[dom.NodeID]*nestedScrollTag
-	nestedScroll      map[dom.NodeID]layoutengine.ScrollOffset
-	backIcon          *widget.Icon
-	forwardIcon       *widget.Icon
-	reloadIcon        *widget.Icon
-	pageTitle         string
-	status            string
-	pageStatus        string
-	statusHasError    bool
-	inputEditors      map[dom.NodeID]*widget.Editor
-	inputFocused      map[dom.NodeID]bool
-	inputCommitted    map[dom.NodeID]string
-	selectButtons     map[dom.NodeID]*widget.Clickable
-	checkableButtons  map[dom.NodeID]*widget.Clickable
-	formButtons       map[dom.NodeID]*widget.Clickable
-	formPointerClicks map[dom.NodeID]int
-	layoutBuild       func(*dom.Document, stylemodel.Map, float32, float32, float32, float32) *layoutengine.Tree
-	layoutBuildImages func(*dom.Document, stylemodel.Map, map[dom.NodeID]layoutengine.ImageResource, float32, float32, float32, float32) *layoutengine.Tree
-	layoutBuildFonts  func(*dom.Document, stylemodel.Map, map[dom.NodeID]layoutengine.ImageResource, *layoutengine.FontSet, float32, float32, float32, float32) *layoutengine.Tree
-	layoutCache       documentLayoutCache
-	imagePaintCache   pageImagePaintCache
-	fontPage          *browser.Page
-	fontRevision      uint64
-	scrollRevision    uint64
-	updater           ApplicationUpdater
-	updateResults     chan applicationUpdateResult
-	updateContext     context.Context
-	cancelUpdate      context.CancelFunc
-	updateRelease     updater.Release
-	updateAvailable   bool
-	updating          bool
-	onUpdateApplied   func()
+	backButton         widget.Clickable
+	forwardButton      widget.Clickable
+	reloadButton       widget.Clickable
+	goButton           widget.Clickable
+	updateButton       widget.Clickable
+	engineButton       widget.Clickable
+	devToolsButton     widget.Clickable
+	devToolsClose      widget.Clickable
+	devToolsClear      widget.Clickable
+	devToolsConsole    widget.Clickable
+	devToolsInspector  widget.Clickable
+	devToolsNetwork    widget.Clickable
+	devToolsRuntime    widget.Clickable
+	devToolsFilter     widget.Clickable
+	newTabButton       widget.Clickable
+	tabRowButtons      map[browser.TabID]*widget.Clickable
+	tabCloseButtons    map[browser.TabID]*widget.Clickable
+	tabShortcutDown    map[key.Name]bool
+	devToolsStates     map[browser.TabID]devToolsTabState
+	inspectorButtons   map[browser.TabID]map[dom.NodeID]*widget.Clickable
+	devToolsList       widget.List
+	inspectorList      widget.List
+	networkList        widget.List
+	runtimeList        widget.List
+	pageList           widget.List
+	tabList            widget.List
+	viewportClick      gesture.Click
+	address            *widget.Editor
+	omniboxStates      map[browser.TabID]omniboxState
+	suggestions        *omnibox.Pipeline
+	suggestionSnapshot omnibox.Snapshot
+	suggestionFetcher  omnibox.RemoteFetcher
+	remoteSuggestions  bool
+	gopher             paint.ImageOp
+	pointerTag         pointerTag
+	pointer            pointerState
+	nestedScrollPage   *browser.Page
+	nestedScrollTags   map[dom.NodeID]*nestedScrollTag
+	nestedScroll       map[dom.NodeID]layoutengine.ScrollOffset
+	backIcon           *widget.Icon
+	forwardIcon        *widget.Icon
+	reloadIcon         *widget.Icon
+	pageTitle          string
+	status             string
+	pageStatus         string
+	statusHasError     bool
+	inputEditors       map[dom.NodeID]*widget.Editor
+	inputFocused       map[dom.NodeID]bool
+	inputCommitted     map[dom.NodeID]string
+	selectButtons      map[dom.NodeID]*widget.Clickable
+	checkableButtons   map[dom.NodeID]*widget.Clickable
+	formButtons        map[dom.NodeID]*widget.Clickable
+	formPointerClicks  map[dom.NodeID]int
+	layoutBuild        func(*dom.Document, stylemodel.Map, float32, float32, float32, float32) *layoutengine.Tree
+	layoutBuildImages  func(*dom.Document, stylemodel.Map, map[dom.NodeID]layoutengine.ImageResource, float32, float32, float32, float32) *layoutengine.Tree
+	layoutBuildFonts   func(*dom.Document, stylemodel.Map, map[dom.NodeID]layoutengine.ImageResource, *layoutengine.FontSet, float32, float32, float32, float32) *layoutengine.Tree
+	layoutCache        documentLayoutCache
+	imagePaintCache    pageImagePaintCache
+	fontPage           *browser.Page
+	fontRevision       uint64
+	scrollRevision     uint64
+	updater            ApplicationUpdater
+	updateResults      chan applicationUpdateResult
+	updateContext      context.Context
+	cancelUpdate       context.CancelFunc
+	updateRelease      updater.Release
+	updateAvailable    bool
+	updating           bool
+	onUpdateApplied    func()
 }
 
 type documentLayoutCache struct {
@@ -374,6 +378,7 @@ func NewBrowserUIWithTabsAndUpdater(navigator Navigator, tabs TabController, inv
 	if ui.invalidate == nil {
 		ui.invalidate = func() {}
 	}
+	ui.suggestions = omnibox.NewPipeline(ui.invalidate)
 	ui.address = newOmniboxEditor(defaultURL)
 	ui.omniboxStates[0] = omniboxState{editor: ui.address, committedURL: defaultURL}
 	ui.pageList.Axis = layout.Vertical
@@ -387,6 +392,7 @@ func NewBrowserUIWithTabsAndUpdater(navigator Navigator, tabs TabController, inv
 
 // Layout draws the vertical tab rail, browser toolbar, and page viewport.
 func (ui *BrowserUI) Layout(gtx layout.Context) layout.Dimensions {
+	ui.syncActiveTabChrome()
 	ui.handlePointerEvents(gtx)
 	ui.handleKeyboardShortcuts(gtx)
 	ui.handleActions(gtx)
@@ -721,7 +727,9 @@ func (ui *BrowserUI) handleActions(gtx layout.Context) {
 		if !ok {
 			break
 		}
-		_ = event
+		if _, changed := event.(widget.ChangeEvent); changed {
+			ui.refreshSuggestions()
+		}
 	}
 	for ui.goButton.Clicked(gtx) {
 		ui.startNavigation(ui.address.Text())
@@ -948,11 +956,13 @@ func (ui *BrowserUI) createTab(gtx layout.Context) {
 }
 
 func (ui *BrowserUI) closeTab(id browser.TabID) bool {
+	ui.suggestions.Cancel()
 	ui.cancelTabNavigation(id)
 	if _, err := ui.tabs.CloseTab(id); err != nil {
 		ui.reportTabOperationError("Tabを終了できません", err)
 		return false
 	}
+	delete(ui.omniboxStates, id)
 	delete(ui.tabRenderStates, id)
 	delete(ui.devToolsStates, id)
 	delete(ui.inspectorButtons, id)
@@ -1212,6 +1222,7 @@ func (ui *BrowserUI) syncActiveTabChrome() {
 			nestedScrollPage: ui.nestedScrollPage, nestedScrollTags: ui.nestedScrollTags, nestedScroll: ui.nestedScroll,
 		}
 	}
+	ui.suggestions.Cancel()
 	ui.displayedTabID = active.ID
 	ui.navigator = navigator
 	committedURL := active.URL
@@ -1363,6 +1374,7 @@ func (ui *BrowserUI) tabIsActive(id browser.TabID) bool {
 
 // Close cancels an in-flight navigation when the window closes.
 func (ui *BrowserUI) Close() {
+	ui.suggestions.Close()
 	ui.cancelUpdate()
 	if ui.navigator != nil {
 		ui.navigator.ClearHover()
