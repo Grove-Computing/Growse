@@ -107,6 +107,13 @@ type BrowserUI struct {
 	viewportClick     gesture.Click
 	address           *widget.Editor
 	omniboxStates     map[browser.TabID]omniboxState
+
+	suggestions        *omnibox.Pipeline
+	suggestionPopup    suggestionPopup
+	suggestionSnapshot omnibox.Snapshot
+	suggestionFetcher  omnibox.RemoteFetcher
+	remoteSuggestions  bool
+
 	gopher            paint.ImageOp
 	pointerTag        pointerTag
 	pointer           pointerState
@@ -309,6 +316,7 @@ const (
 type omniboxState struct {
 	editor       *widget.Editor
 	committedURL string
+	observedText string
 	preview      string
 	scope        omnibox.Scope
 	scopeQuery   string
@@ -374,8 +382,9 @@ func NewBrowserUIWithTabsAndUpdater(navigator Navigator, tabs TabController, inv
 	if ui.invalidate == nil {
 		ui.invalidate = func() {}
 	}
+	ui.suggestions = omnibox.NewPipeline(ui.invalidate)
 	ui.address = newOmniboxEditor(defaultURL)
-	ui.omniboxStates[0] = omniboxState{editor: ui.address, committedURL: defaultURL}
+	ui.omniboxStates[0] = omniboxState{editor: ui.address, committedURL: defaultURL, observedText: defaultURL}
 	ui.pageList.Axis = layout.Vertical
 	ui.tabList.Axis = layout.Vertical
 	ui.devToolsList.Axis = layout.Vertical
@@ -387,6 +396,8 @@ func NewBrowserUIWithTabsAndUpdater(navigator Navigator, tabs TabController, inv
 
 // Layout draws the vertical tab rail, browser toolbar, and page viewport.
 func (ui *BrowserUI) Layout(gtx layout.Context) layout.Dimensions {
+	ui.syncActiveTabChrome()
+	ui.readSuggestionAddressPress(gtx)
 	ui.handlePointerEvents(gtx)
 	ui.handleKeyboardShortcuts(gtx)
 	ui.handleActions(gtx)
@@ -401,6 +412,7 @@ func (ui *BrowserUI) Layout(gtx layout.Context) layout.Dimensions {
 	layoutRegion(gtx, geometry.devTools, ui.layoutDevTools)
 	layoutRegion(gtx, geometry.toolbar, ui.layoutToolbar)
 	layoutRegion(gtx, geometry.tabRail, ui.layoutTabRail)
+	ui.layoutSuggestions(gtx, geometry.viewport)
 	ui.registerPointerTracker(gtx)
 	return layout.Dimensions{Size: gtx.Constraints.Max}
 }
@@ -714,6 +726,8 @@ func (ui *BrowserUI) handleActions(gtx layout.Context) {
 	ui.consumeNavigationResult()
 	ui.consumeUpdateResults()
 	ui.handleTabActions(gtx)
+	ui.syncActiveTabChrome()
+	ui.handleSuggestionKeys(gtx)
 	ui.handleOmniboxSubmit(gtx)
 
 	for {
@@ -721,8 +735,11 @@ func (ui *BrowserUI) handleActions(gtx layout.Context) {
 		if !ok {
 			break
 		}
-		_ = event
+		if _, changed := event.(widget.ChangeEvent); changed {
+			ui.handleOmniboxChange(gtx)
+		}
 	}
+	ui.handleSuggestionMouseAndFocus(gtx)
 	for ui.goButton.Clicked(gtx) {
 		ui.startNavigation(ui.address.Text())
 	}
@@ -805,7 +822,7 @@ func (ui *BrowserUI) handleActions(gtx layout.Context) {
 
 func (ui *BrowserUI) handleOmniboxSubmit(gtx layout.Context) {
 	for {
-		event, ok := gtx.Event(key.Filter{Focus: ui.address, Name: key.NameReturn, Optional: key.ModShift | key.ModAlt})
+		event, ok := gtx.Event(key.Filter{Focus: ui.address, Name: key.NameReturn, Optional: key.ModShift | key.ModAlt}, key.Filter{Focus: ui.address, Name: key.NameEnter, Optional: key.ModShift | key.ModAlt})
 		if !ok {
 			return
 		}
@@ -819,7 +836,13 @@ func (ui *BrowserUI) handleOmniboxSubmit(gtx layout.Context) {
 		} else if keyEvent.Modifiers.Contain(key.ModShift) {
 			disposition = omniboxNewForegroundTab
 		}
-		ui.startNavigationWithDisposition(ui.address.Text(), disposition)
+		popup := &ui.suggestionPopup
+		if keyEvent.Modifiers == 0 && popup.open && popup.selected >= 0 && popup.selected < len(popup.candidates) {
+			ui.submitSuggestion(popup.candidates[popup.selected], disposition)
+		} else {
+			ui.closeSuggestionPopup()
+			ui.startNavigationWithDisposition(ui.address.Text(), disposition)
+		}
 	}
 }
 
@@ -948,11 +971,13 @@ func (ui *BrowserUI) createTab(gtx layout.Context) {
 }
 
 func (ui *BrowserUI) closeTab(id browser.TabID) bool {
+	ui.closeSuggestionPopup()
 	ui.cancelTabNavigation(id)
 	if _, err := ui.tabs.CloseTab(id); err != nil {
 		ui.reportTabOperationError("Tabを終了できません", err)
 		return false
 	}
+	delete(ui.omniboxStates, id)
 	delete(ui.tabRenderStates, id)
 	delete(ui.devToolsStates, id)
 	delete(ui.inspectorButtons, id)
@@ -974,6 +999,8 @@ func (ui *BrowserUI) startNavigation(rawURL string) {
 }
 
 func (ui *BrowserUI) startNavigationWithDisposition(rawURL string, disposition omniboxDisposition) {
+	ui.recordOmniboxText()
+	ui.closeSuggestionPopup()
 	classification := omnibox.Classify(rawURL)
 	tabID, _ := ui.activeNavigationTarget()
 	var target string
@@ -988,6 +1015,7 @@ func (ui *BrowserUI) startNavigationWithDisposition(rawURL string, disposition o
 	case omnibox.Command:
 		ui.setOmniboxScope(tabID, classification.Scope, classification.Query)
 		if classification.Scope != omnibox.Web {
+			ui.refreshSuggestionsFor(classification.Input)
 			ui.reportOmniboxScope(classification.Scope, classification.Query)
 			return
 		}
@@ -1089,6 +1117,10 @@ func (ui *BrowserUI) startNavigationInNewTab(rawURL string, background bool) {
 }
 
 func (ui *BrowserUI) startPageLoad(tabID browser.TabID, navigator Navigator, status string, load func(context.Context) (*browser.Page, error)) {
+	if activeID, _ := ui.activeNavigationTarget(); activeID == tabID {
+		ui.recordOmniboxText()
+		ui.closeSuggestionPopup()
+	}
 	ui.persistHistoryScroll()
 	if navigator != nil {
 		navigator.ClearHover()
@@ -1152,7 +1184,7 @@ func newOmniboxEditor(value string) *widget.Editor {
 func (ui *BrowserUI) activateOmnibox(tabID browser.TabID, committedURL string) {
 	state, ok := ui.omniboxStates[tabID]
 	if !ok {
-		state = omniboxState{editor: newOmniboxEditor(committedURL), committedURL: committedURL}
+		state = omniboxState{editor: newOmniboxEditor(committedURL), committedURL: committedURL, observedText: committedURL}
 		ui.omniboxStates[tabID] = state
 	}
 	ui.address = state.editor
@@ -1161,10 +1193,15 @@ func (ui *BrowserUI) activateOmnibox(tabID browser.TabID, committedURL string) {
 func (ui *BrowserUI) setCommittedOmniboxURL(tabID browser.TabID, rawURL string, display bool) {
 	state, ok := ui.omniboxStates[tabID]
 	if !ok {
-		state = omniboxState{editor: newOmniboxEditor(rawURL)}
+		state = omniboxState{editor: newOmniboxEditor(rawURL), observedText: rawURL}
 	}
 	state.committedURL = rawURL
 	if display {
+		if ui.suggestionPopup.open && ui.suggestionPopup.owner == tabID {
+			ui.closeSuggestionPopup()
+			state.preview = ""
+		}
+		state.observedText = rawURL
 		state.editor.SetText(rawURL)
 	}
 	ui.omniboxStates[tabID] = state
@@ -1212,6 +1249,7 @@ func (ui *BrowserUI) syncActiveTabChrome() {
 			nestedScrollPage: ui.nestedScrollPage, nestedScrollTags: ui.nestedScrollTags, nestedScroll: ui.nestedScroll,
 		}
 	}
+	ui.closeSuggestionPopup()
 	ui.displayedTabID = active.ID
 	ui.navigator = navigator
 	committedURL := active.URL
@@ -1363,6 +1401,7 @@ func (ui *BrowserUI) tabIsActive(id browser.TabID) bool {
 
 // Close cancels an in-flight navigation when the window closes.
 func (ui *BrowserUI) Close() {
+	ui.suggestions.Close()
 	ui.cancelUpdate()
 	if ui.navigator != nil {
 		ui.navigator.ClearHover()
@@ -1933,6 +1972,7 @@ func (ui *BrowserUI) layoutToolbarButton(gtx layout.Context, button *widget.Clic
 }
 
 func (ui *BrowserUI) layoutAddressBar(gtx layout.Context) layout.Dimensions {
+	defer ui.registerSuggestionAddress(gtx)
 	// Match the Gopher button's row height so the URL field and icon share one
 	// visual center line even when the icon grows.
 	height := gtx.Dp(addressBarHeight)
@@ -1961,7 +2001,10 @@ func (ui *BrowserUI) layoutAddressBar(gtx layout.Context) layout.Dimensions {
 					// editor's hit area as wide as the visible address bar instead of
 					// letting it shrink to its placeholder text.
 					gtx.Constraints.Min.X = gtx.Constraints.Max.X
-					return material.Editor(ui.theme, ui.address, "URLを入力").Layout(gtx)
+					return layout.Stack{}.Layout(gtx,
+						layout.Stacked(material.Editor(ui.theme, ui.address, "URLを入力").Layout),
+						layout.Stacked(ui.layoutSuggestionPreview),
+					)
 				})
 			}),
 		)
