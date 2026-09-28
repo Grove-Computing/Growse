@@ -2890,3 +2890,60 @@ func TestActiveFindMatchScrollsNearestContainerMinimally(t *testing.T) {
 		t.Fatal("active find scroll remained pending")
 	}
 }
+
+func TestFindSnapshotRebuildsAfterDOMRevisionAndDropsStaleNodes(t *testing.T) {
+	document := dom.NewDocument()
+	body := document.CreateElement("body", nil)
+	oldText := document.CreateText("target")
+	for _, edge := range [][2]*dom.Node{{document.Root, body}, {body, oldText}} {
+		if err := document.AppendChild(edge[0], edge[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	page := &browser.Page{Document: document, ComputedStyles: style.Compute(document, nil), StyleRevision: 1}
+	ui := NewBrowserUI(&stubNavigator{page: page}, nil)
+	state := ui.ensureFindState()
+	state.open = true
+	state.editor.SetText("target")
+	state.searching = true
+	state.pendingSearch = true
+	ui.runFindSearch(state)
+	if len(state.result.Matches) != 1 || state.result.Matches[0].NodeID != oldText.ID {
+		t.Fatalf("initial matches = %#v", state.result.Matches)
+	}
+
+	if !document.SetTextContent(body.ID, "target and target") {
+		t.Fatal("SetTextContent() failed")
+	}
+	page.ComputedStyles = style.Compute(document, nil)
+	page.StyleRevision++
+	staleList := &paintmodel.DisplayList{Commands: []paintmodel.Command{
+		paintmodel.DrawText{
+			NodeID: oldText.ID, Text: "target", Width: 60, Height: 20, FontSize: 16,
+			Runs: []paintmodel.TextRun{{NodeID: oldText.ID, Text: "target", Width: 60, FontSize: 16}},
+		},
+	}}
+	if geometry := ui.findHighlightGeometry(staleList, page); len(geometry) != 0 {
+		t.Fatalf("removed DOM node produced stale geometry: %#v", geometry)
+	}
+
+	ui.refreshFindSnapshot(page, &layoutengine.Tree{Revision: page.StyleRevision}, 800, 600)
+	newText := body.Children[0]
+	if len(state.result.Matches) != 2 {
+		t.Fatalf("rebuilt matches = %#v, want 2", state.result.Matches)
+	}
+	for _, match := range state.result.Matches {
+		if match.NodeID != newText.ID || match.NodeID == oldText.ID {
+			t.Fatalf("rebuilt match retained stale node: %#v", match)
+		}
+	}
+	if state.searchPage != page || state.searchRevision != page.StyleRevision {
+		t.Fatalf("find revision = page:%p revision:%d", state.searchPage, state.searchRevision)
+	}
+
+	state.scrollPending = false
+	ui.refreshFindSnapshot(page, &layoutengine.Tree{Revision: page.StyleRevision}, 640, 480)
+	if !state.scrollPending || state.viewportWidth != 640 || state.viewportHeight != 480 {
+		t.Fatalf("viewport rebuild = pending:%t size:%vx%v", state.scrollPending, state.viewportWidth, state.viewportHeight)
+	}
+}

@@ -192,19 +192,23 @@ type browserChromeGeometry struct {
 }
 
 type findTabState struct {
-	open          bool
-	editor        *widget.Editor
-	options       findpage.Options
-	result        findpage.Result
-	current       int
-	searching     bool
-	pendingSearch bool
-	scrollPending bool
-	previous      widget.Clickable
-	next          widget.Clickable
-	caseToggle    widget.Clickable
-	wordToggle    widget.Clickable
-	close         widget.Clickable
+	open           bool
+	editor         *widget.Editor
+	options        findpage.Options
+	result         findpage.Result
+	current        int
+	searching      bool
+	pendingSearch  bool
+	scrollPending  bool
+	searchPage     *browser.Page
+	searchRevision uint64
+	viewportWidth  float32
+	viewportHeight float32
+	previous       widget.Clickable
+	next           widget.Clickable
+	caseToggle     widget.Clickable
+	wordToggle     widget.Clickable
+	close          widget.Clickable
 }
 
 func newFindTabState() *findTabState {
@@ -905,6 +909,8 @@ func (ui *BrowserUI) runFindSearch(state *findTabState) {
 		if page := navigator.Page(); page != nil {
 			document = page.Document
 			styles = page.ComputedStyles
+			state.searchPage = page
+			state.searchRevision = page.StyleRevision
 		}
 	}
 	previous := findpage.Match{}
@@ -925,6 +931,27 @@ func (ui *BrowserUI) runFindSearch(state *findTabState) {
 	state.searching = false
 	state.pendingSearch = false
 	state.scrollPending = len(state.result.Matches) > 0
+}
+
+func (ui *BrowserUI) refreshFindSnapshot(page *browser.Page, tree *layoutengine.Tree, viewportWidth, viewportHeight float32) {
+	state := ui.activeFindState()
+	if state == nil || !state.open {
+		return
+	}
+	viewportChanged := state.viewportWidth != viewportWidth || state.viewportHeight != viewportHeight
+	searchChanged := state.searchPage != page || state.searchRevision != page.StyleRevision
+	if searchChanged && state.editor.Text() != "" {
+		state.searching = true
+		state.pendingSearch = true
+		ui.runFindSearch(state)
+	}
+	if searchChanged || viewportChanged || tree != nil && tree.Revision != state.searchRevision {
+		state.scrollPending = len(state.result.Matches) > 0
+	}
+	state.searchPage = page
+	state.searchRevision = page.StyleRevision
+	state.viewportWidth = viewportWidth
+	state.viewportHeight = viewportHeight
 }
 
 type findHighlightGeometry struct {
@@ -2646,6 +2673,7 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 			page.RecordRenderEvent(browser.RenderDisplayListReuse)
 		}
 	}
+	ui.refreshFindSnapshot(page, tree, viewportWidth, viewportHeight)
 	documentPosition := ui.pageList.Position
 	nestedScrollConsumed := ui.handleNestedScrollEvents(gtx, page, tree, displayList)
 	ui.scrollActiveFindMatch(gtx, page, tree, displayList)
