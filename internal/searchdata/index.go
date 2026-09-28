@@ -29,13 +29,14 @@ func normalizeText(value string) string {
 func rebuildIndex(data profileData) *localIndex {
 	index := &localIndex{entries: make([]indexedEntry, 0, len(data.History)+len(data.Bookmarks))}
 	for _, entry := range data.History {
+		_, key, _ := canonicalURL(entry.URL)
 		host := ""
 		if parsed, err := url.Parse(entry.URL); err == nil {
 			host = parsed.Hostname()
 		}
 		index.entries = append(index.entries, indexedEntry{
 			source: omnibox.HistorySource,
-			text:   normalizeText(entry.URL + "\x00" + host + "\x00" + entry.Title),
+			text:   normalizeText(entry.URL + "\x00" + key + "\x00" + host + "\x00" + entry.Title),
 			value: omnibox.Candidate{
 				Primary: entry.Title, URL: entry.URL, LastVisited: entry.LastVisited,
 				VisitCount: entry.VisitCount, TypedCount: entry.TypedCount,
@@ -43,13 +44,14 @@ func rebuildIndex(data profileData) *localIndex {
 		})
 	}
 	for _, entry := range data.Bookmarks {
+		_, key, _ := canonicalURL(entry.URL)
 		host := ""
 		if parsed, err := url.Parse(entry.URL); err == nil {
 			host = parsed.Hostname()
 		}
 		index.entries = append(index.entries, indexedEntry{
 			source: omnibox.BookmarkSource,
-			text:   normalizeText(entry.URL + "\x00" + host + "\x00" + entry.Title),
+			text:   normalizeText(entry.URL + "\x00" + key + "\x00" + host + "\x00" + entry.Title),
 			value:  omnibox.Candidate{Primary: entry.Title, URL: entry.URL, LastVisited: entry.UpdatedAt},
 		})
 	}
@@ -118,16 +120,21 @@ func (s *Store) SuggestionSnapshot(ctx context.Context, query string) omnibox.Sn
 // generations after query changes or lifecycle cancellation.
 type LocalPipeline struct {
 	mu         sync.Mutex
-	store      *Store
+	search     func(context.Context, string) omnibox.Snapshot
 	notify     func()
 	generation uint64
+	resultGen  uint64
 	cancel     context.CancelFunc
 	closed     bool
 	result     omnibox.Snapshot
 }
 
 func NewLocalPipeline(store *Store, notify func()) *LocalPipeline {
-	return &LocalPipeline{store: store, notify: notify}
+	search := func(context.Context, string) omnibox.Snapshot { return omnibox.Snapshot{} }
+	if store != nil {
+		search = store.SuggestionSnapshot
+	}
+	return &LocalPipeline{search: search, notify: notify}
 }
 
 func (p *LocalPipeline) Update(query string) uint64 {
@@ -144,16 +151,19 @@ func (p *LocalPipeline) Update(query string) uint64 {
 	generation := p.generation
 	ctx, cancel := context.WithCancel(context.Background())
 	p.cancel = cancel
-	store := p.store
+	search := p.search
+	p.result = omnibox.Snapshot{}
+	p.resultGen = 0
 	p.mu.Unlock()
 	go func() {
-		result := store.SuggestionSnapshot(ctx, query)
+		result := search(ctx, query)
 		p.mu.Lock()
 		if p.closed || generation != p.generation || ctx.Err() != nil {
 			p.mu.Unlock()
 			return
 		}
 		p.result = result
+		p.resultGen = generation
 		p.mu.Unlock()
 		if p.notify != nil {
 			p.notify()
@@ -168,7 +178,7 @@ func (p *LocalPipeline) Results() (uint64, omnibox.Snapshot) {
 	result := p.result
 	result.History = append([]omnibox.Candidate(nil), result.History...)
 	result.Bookmarks = append([]omnibox.Candidate(nil), result.Bookmarks...)
-	return p.generation, result
+	return p.resultGen, result
 }
 
 func (p *LocalPipeline) Cancel() {
@@ -180,6 +190,7 @@ func (p *LocalPipeline) Cancel() {
 	}
 	p.generation++
 	p.result = omnibox.Snapshot{}
+	p.resultGen = 0
 }
 
 func (p *LocalPipeline) Close() {
@@ -192,4 +203,5 @@ func (p *LocalPipeline) Close() {
 	p.closed = true
 	p.generation++
 	p.result = omnibox.Snapshot{}
+	p.resultGen = 0
 }

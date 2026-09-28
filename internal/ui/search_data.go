@@ -9,7 +9,14 @@ import (
 
 // SetSearchDataStore connects profile history and bookmarks to browser chrome.
 func (ui *BrowserUI) SetSearchDataStore(store *searchdata.Store) {
+	if ui.localSuggestions != nil {
+		ui.localSuggestions.Close()
+	}
 	ui.searchData = store
+	ui.localSuggestions = searchdata.NewLocalPipeline(store, ui.invalidate)
+	if ui.suggestionPopup.open {
+		ui.refreshSuggestions()
+	}
 }
 
 func (ui *BrowserUI) toggleActiveBookmark() {
@@ -34,6 +41,9 @@ func (ui *BrowserUI) toggleActiveBookmark() {
 		}
 		ui.status = "Bookmarkを削除しました"
 		ui.statusHasError = false
+		if ui.suggestionPopup.open {
+			ui.refreshSuggestions()
+		}
 		return
 	}
 	title := ui.pageTitle
@@ -47,6 +57,9 @@ func (ui *BrowserUI) toggleActiveBookmark() {
 	}
 	ui.status = "Bookmarkへ追加しました"
 	ui.statusHasError = false
+	if ui.suggestionPopup.open {
+		ui.refreshSuggestions()
+	}
 }
 
 func (ui *BrowserUI) layoutBookmarkButton(gtx layout.Context) layout.Dimensions {

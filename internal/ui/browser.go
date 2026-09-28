@@ -124,6 +124,7 @@ type BrowserUI struct {
 	providerImportPending    bool
 	providerDiscoveryButtons map[string]*widget.Clickable
 	searchData               *searchdata.Store
+	localSuggestions         *searchdata.LocalPipeline
 
 	gopher            paint.ImageOp
 	pointerTag        pointerTag
@@ -1459,6 +1460,9 @@ func (ui *BrowserUI) tabIsActive(id browser.TabID) bool {
 // Close cancels an in-flight navigation when the window closes.
 func (ui *BrowserUI) Close() {
 	ui.suggestions.Close()
+	if ui.localSuggestions != nil {
+		ui.localSuggestions.Close()
+	}
 	ui.cancelUpdate()
 	if ui.navigator != nil {
 		ui.navigator.ClearHover()
