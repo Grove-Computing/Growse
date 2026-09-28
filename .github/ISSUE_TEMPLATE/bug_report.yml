@@ -1,0 +1,71 @@
+name: バグ報告
+description: Growseの不具合や予期しない動作を報告する
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        報告前に既存Issueを確認してください。脆弱性は公開Issueに書かず、[非公開の脆弱性報告](https://github.com/Grove-Computing/Growse/security/advisories/new)を利用してください。
+  - type: textarea
+    id: summary
+    attributes:
+      label: 不具合の概要
+      description: 何が起きたかを簡潔に記載してください。
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 再現手順
+      description: 再現できる最小の手順やページがあれば記載してください。公開できない認証情報や個人情報は含めないでください。
+      placeholder: |
+        1. Growseを起動する
+        2. ...
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期待する動作
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: 実際の動作
+    validations:
+      required: true
+  - type: dropdown
+    id: engine
+    attributes:
+      label: 使用したエンジン
+      options:
+        - JavaScript
+        - Go
+        - 両方
+        - 該当なし・不明
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Growseのバージョン
+      placeholder: "例: v0.20.0、mainのコミットSHA"
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: 実行環境
+      description: OS、アーキテクチャ、インストール方法など。
+      placeholder: "例: Ubuntu 24.04 / amd64 / Release版"
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: 補足資料
+      description: ログ、スクリーンショット、対象URLなど。秘密情報は除いてください。
+    validations:
+      required: false
