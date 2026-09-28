@@ -233,9 +233,7 @@ func (b *Browser) SetOnMutation(callback func()) {
 // Page returns the currently active page, or nil before the first successful
 // navigation.
 func (b *Browser) Page() *Page {
-	b.mu.RLock()
-	page := b.page
-	b.mu.RUnlock()
+	page := b.currentPage()
 	if page != nil && page.commitPendingImageLoad() {
 		dispatchImageResourceEvents(b, page)
 		// The asynchronous loader invalidates when it stages results. If that
@@ -250,6 +248,19 @@ func (b *Browser) Page() *Page {
 			onMutation()
 		}
 	}
+	return page
+}
+
+// currentPage returns the active page without publishing staged resources or
+// invoking mutation callbacks. Session snapshots use it while holding their
+// own lock so a resource completion cannot re-enter the Session.
+func (b *Browser) currentPage() *Page {
+	if b == nil {
+		return nil
+	}
+	b.mu.RLock()
+	page := b.page
+	b.mu.RUnlock()
 	return page
 }
 

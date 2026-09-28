@@ -684,6 +684,82 @@ func TestReselectedTabReceivesOnlyCurrentFrameTimestamp(t *testing.T) {
 	}
 }
 
+func TestSessionSnapshotsDoNotPublishPendingImagesWhileLocked(t *testing.T) {
+	state := New(nil)
+	session := NewSession(func() *Browser { return state })
+	tab, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+
+	page := &Page{URL: mustParseURL(t, "https://images.example/results"), Document: dom.NewDocument(), Events: events.NewDispatcher()}
+	state.mu.Lock()
+	state.page = page
+	state.mu.Unlock()
+
+	invalidated := make(chan struct{}, 2)
+	session.SetOnActiveMutation(func() { invalidated <- struct{}{} })
+	stage := func(generation uint64) {
+		page.imageMu.Lock()
+		page.imageGeneration = generation
+		page.pendingImageLoad = &pendingImageLoad{generation: generation}
+		page.imageMu.Unlock()
+	}
+	pending := func() bool {
+		page.imageMu.Lock()
+		defer page.imageMu.Unlock()
+		return page.pendingImageLoad != nil
+	}
+	await := func(name string, run func()) {
+		t.Helper()
+		done := make(chan struct{})
+		go func() {
+			run()
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatalf("%s deadlocked while the Session lock was held", name)
+		}
+		if !pending() {
+			t.Fatalf("%s published the pending image load", name)
+		}
+		select {
+		case <-invalidated:
+			t.Fatalf("%s invoked the mutation callback", name)
+		default:
+		}
+	}
+
+	stage(1)
+	await("ActiveTab", func() {
+		if _, ok := session.ActiveTab(); !ok {
+			t.Error("active tab missing")
+		}
+	})
+
+	stage(2)
+	await("FinishTabNavigation", func() {
+		if _, err := session.FinishTabNavigation(tab.ID, false); err != nil {
+			t.Error(err)
+		}
+	})
+
+	if got := state.Page(); got != page {
+		t.Fatalf("Page() = %p, want %p", got, page)
+	}
+	if pending() {
+		t.Fatal("Page did not publish the pending image load")
+	}
+	select {
+	case <-invalidated:
+	case <-time.After(time.Second):
+		t.Fatal("Page did not notify the active tab after publishing images")
+	}
+}
+
 func TestBackgroundMutationMarksTabWithoutInvalidatingActiveViewport(t *testing.T) {
 	browsers := []*Browser{New(nil), New(nil)}
 	next := 0

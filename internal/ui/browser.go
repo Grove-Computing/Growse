@@ -46,6 +46,7 @@ import (
 	"github.com/Grove-Computing/Growse/internal/omnibox"
 	paintmodel "github.com/Grove-Computing/Growse/internal/paint"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
+	"github.com/Grove-Computing/Growse/internal/searchprovider"
 	stylemodel "github.com/Grove-Computing/Growse/internal/style"
 	"github.com/Grove-Computing/Growse/internal/updater"
 )
@@ -108,11 +109,18 @@ type BrowserUI struct {
 	address           *widget.Editor
 	omniboxStates     map[browser.TabID]omniboxState
 
-	suggestions        *omnibox.Pipeline
-	suggestionPopup    suggestionPopup
-	suggestionSnapshot omnibox.Snapshot
-	suggestionFetcher  omnibox.RemoteFetcher
-	remoteSuggestions  bool
+	suggestions              *omnibox.Pipeline
+	suggestionPopup          suggestionPopup
+	suggestionSnapshot       omnibox.Snapshot
+	suggestionFetcher        omnibox.RemoteFetcher
+	remoteSuggestions        bool
+	providers                searchprovider.Settings
+	providerPanel            providerPanel
+	providerTransport        *searchprovider.Transport
+	providerImports          chan providerImportResult
+	providerStore            *searchprovider.Store
+	providerImportPending    bool
+	providerDiscoveryButtons map[string]*widget.Clickable
 
 	gopher            paint.ImageOp
 	pointerTag        pointerTag
@@ -382,6 +390,10 @@ func NewBrowserUIWithTabsAndUpdater(navigator Navigator, tabs TabController, inv
 	if ui.invalidate == nil {
 		ui.invalidate = func() {}
 	}
+	ui.providers = searchprovider.Defaults()
+	ui.providerTransport = searchprovider.NewTransport(nil)
+	ui.providerImports = make(chan providerImportResult, 1)
+	ui.providerDiscoveryButtons = map[string]*widget.Clickable{}
 	ui.suggestions = omnibox.NewPipeline(ui.invalidate)
 	ui.address = newOmniboxEditor(defaultURL)
 	ui.omniboxStates[0] = omniboxState{editor: ui.address, committedURL: defaultURL, observedText: defaultURL}
@@ -398,7 +410,9 @@ func NewBrowserUIWithTabsAndUpdater(navigator Navigator, tabs TabController, inv
 func (ui *BrowserUI) Layout(gtx layout.Context) layout.Dimensions {
 	ui.syncActiveTabChrome()
 	ui.readSuggestionAddressPress(gtx)
-	ui.handlePointerEvents(gtx)
+	if !ui.providerPanel.open {
+		ui.handlePointerEvents(gtx)
+	}
 	ui.handleKeyboardShortcuts(gtx)
 	ui.handleActions(gtx)
 	ui.syncActiveTabChrome()
@@ -408,11 +422,16 @@ func (ui *BrowserUI) Layout(gtx layout.Context) layout.Dimensions {
 		panelHeight = gtx.Dp(devToolsHeight)
 	}
 	geometry := calculateBrowserChromeGeometryWithDevTools(gtx.Constraints.Max, gtx.Dp(tabRailWidth), gtx.Dp(toolbarHeight), panelHeight)
-	layoutRegion(gtx, geometry.viewport, ui.layoutViewport)
+	if ui.providerPanel.open {
+		layoutRegion(gtx, geometry.viewport, ui.layoutProviderSettings)
+	} else {
+		layoutRegion(gtx, geometry.viewport, ui.layoutViewport)
+	}
 	layoutRegion(gtx, geometry.devTools, ui.layoutDevTools)
 	layoutRegion(gtx, geometry.toolbar, ui.layoutToolbar)
 	layoutRegion(gtx, geometry.tabRail, ui.layoutTabRail)
 	ui.layoutSuggestions(gtx, geometry.viewport)
+
 	ui.registerPointerTracker(gtx)
 	return layout.Dimensions{Size: gtx.Constraints.Max}
 }
@@ -1011,7 +1030,13 @@ func (ui *BrowserUI) startNavigationWithDisposition(rawURL string, disposition o
 		return
 	case omnibox.Search:
 		ui.setOmniboxScope(tabID, "", "")
-		target = omnibox.SearchURL(classification.Query).String()
+		var err error
+		target, err = ui.providerSearchURL(classification.Query)
+		if err != nil {
+			ui.status = err.Error()
+			ui.statusHasError = true
+			return
+		}
 	case omnibox.Command:
 		ui.setOmniboxScope(tabID, classification.Scope, classification.Query)
 		if classification.Scope != omnibox.Web {
@@ -1024,16 +1049,22 @@ func (ui *BrowserUI) startNavigationWithDisposition(rawURL string, disposition o
 			ui.statusHasError = false
 			return
 		}
-		target = omnibox.SearchURL(classification.Query).String()
+		var err error
+		target, err = ui.providerSearchURL(classification.Query)
+		if err != nil {
+			ui.status = err.Error()
+			ui.statusHasError = true
+			return
+		}
 	case omnibox.URL:
 		ui.setOmniboxScope(tabID, "", "")
 		target = classification.URL.String()
 	}
 	if disposition == omniboxCurrentTab {
-		ui.startResolvedNavigation(target)
+		ui.startResolvedNavigation(target, classification.Kind != omnibox.URL)
 		return
 	}
-	ui.startNavigationInNewTab(target, disposition == omniboxNewBackgroundTab)
+	ui.startNavigationInNewTab(target, disposition == omniboxNewBackgroundTab, classification.Kind != omnibox.URL)
 }
 
 func (ui *BrowserUI) reportOmniboxScope(scope omnibox.Scope, query string) {
@@ -1064,7 +1095,7 @@ func omniboxScopeMatches(query string, values ...string) bool {
 	return false
 }
 
-func (ui *BrowserUI) startResolvedNavigation(rawURL string) {
+func (ui *BrowserUI) startResolvedNavigation(rawURL string, search ...bool) {
 	tabID, navigator := ui.activeNavigationTarget()
 	if navigator == nil {
 		ui.status = "Navigationを利用できません"
@@ -1072,11 +1103,14 @@ func (ui *BrowserUI) startResolvedNavigation(rawURL string) {
 		return
 	}
 	ui.startPageLoad(tabID, navigator, navigationLoadingStatus(rawURL), func(ctx context.Context) (*browser.Page, error) {
+		if len(search) > 0 && search[0] {
+			ctx = network.WithRedirectPolicy(ctx, rawURL, searchprovider.ValidateRedirect)
+		}
 		return navigator.Navigate(ctx, rawURL)
 	})
 }
 
-func (ui *BrowserUI) startNavigationInNewTab(rawURL string, background bool) {
+func (ui *BrowserUI) startNavigationInNewTab(rawURL string, background bool, search ...bool) {
 	if ui.tabs == nil {
 		ui.status = "新しい Tab を利用できません"
 		ui.statusHasError = true
@@ -1112,6 +1146,9 @@ func (ui *BrowserUI) startNavigationInNewTab(rawURL string, background bool) {
 		}
 	}
 	ui.startPageLoad(tab.ID, navigator, navigationLoadingStatus(rawURL), func(ctx context.Context) (*browser.Page, error) {
+		if len(search) > 0 && search[0] {
+			ctx = network.WithRedirectPolicy(ctx, rawURL, searchprovider.ValidateRedirect)
+		}
 		return navigator.Navigate(ctx, rawURL)
 	})
 }
@@ -1451,6 +1488,7 @@ func (ui *BrowserUI) layoutToolbar(gtx layout.Context) layout.Dimensions {
 					layout.Rigid(ui.layoutEngineButton),
 					layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
 					layout.Rigid(ui.layoutDevToolsButton),
+					layout.Rigid(ui.layoutProviderButton),
 					layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
 					layout.Flexed(1, ui.layoutAddressBar),
 					layout.Rigid(layout.Spacer{Width: unit.Dp(4)}.Layout),
@@ -2679,6 +2717,9 @@ func (ui *BrowserUI) updateLinkPreview(page *browser.Page, nodeID dom.NodeID) {
 		return
 	}
 	if linkURL, ok := page.LinkURL(nodeID); ok {
+		if resolved, err := searchprovider.ResolveResultURL(linkURL); err == nil {
+			linkURL = resolved
+		}
 		ui.status = network.RedactedURL(linkURL)
 		return
 	}
@@ -2717,6 +2758,12 @@ func (ui *BrowserUI) dispatchPaintedClick(page *browser.Page, hit paintedDisplay
 	}
 	linkURL, target, ok := page.LinkDestination(nodeID)
 	if !ok {
+		return
+	}
+	linkURL, err := searchprovider.ResolveResultURL(linkURL)
+	if err != nil {
+		ui.status = "検索結果リンクを開けません"
+		ui.statusHasError = true
 		return
 	}
 	if target == "_blank" {

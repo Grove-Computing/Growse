@@ -285,6 +285,12 @@ func (c *Client) Do(ctx context.Context, requestData *Request) (result *Response
 		request.Header.Set("User-Agent", "Growse/0.1")
 	}
 
+	scopedPolicy := requestRedirectPolicy(ctx, requestData.URL)
+	if scopedPolicy != nil {
+		if err := scopedPolicy(requestData.URL, 0); err != nil {
+			return nil, classifyRequestError(err)
+		}
+	}
 	operationClient := *c.httpClient
 	jar := operationClient.Jar
 	operationClient.Jar = nil
@@ -297,6 +303,11 @@ func (c *Client) Do(ctx context.Context, requestData *Request) (result *Response
 	cacheRequest.Header = request.Header.Clone()
 	if cached, ok := c.cache.MatchFresh(&cacheRequest); ok {
 		result, resultErr = prepareCachedResponse(cached, requestData)
+		if scopedPolicy != nil && result != nil {
+			if err := scopedPolicy(result.URL, 0); err != nil {
+				return nil, classifyRequestError(err)
+			}
+		}
 		if result != nil {
 			result.CacheStatus = "hit"
 		}
@@ -311,6 +322,11 @@ func (c *Client) Do(ctx context.Context, requestData *Request) (result *Response
 	}
 	redirectPolicy := operationClient.CheckRedirect
 	operationClient.CheckRedirect = func(redirect *http.Request, via []*http.Request) error {
+		if scopedPolicy != nil {
+			if err := scopedPolicy(redirect.URL, len(via)); err != nil {
+				return err
+			}
+		}
 		if err := validateCORSResponse(redirect.Response, requestData); err != nil {
 			return err
 		}

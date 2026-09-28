@@ -1681,6 +1681,33 @@ func TestLinkHoverShowsResolvedURLAndRestoresPageStatus(t *testing.T) {
 	}
 }
 
+func TestDuckDuckGoResultClickNavigatesDirectlyWithoutIntermediatePage(t *testing.T) {
+	document := dom.NewDocument()
+	anchor := document.CreateElement("a", map[string]string{"href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fja.wikipedia.org%2Fwiki%2F%25E3%2583%25A1%25E3%2582%25BF%25E6%25A7%258B%25E6%2596%2587%25E5%25A4%2589%25E6%2595%25B0&rut=ignored"})
+	if err := document.AppendChild(document.Root, anchor); err != nil {
+		t.Fatal(err)
+	}
+	pageURL, _ := url.Parse("https://html.duckduckgo.com/html/?q=hoge")
+	page := &browser.Page{URL: pageURL, Document: document, Events: events.NewDispatcher()}
+	navigator := &recordingNavigator{stubNavigator: stubNavigator{page: page}, navigated: make(chan string, 1)}
+	ui := NewBrowserUI(navigator, nil)
+	defer ui.Close()
+
+	ui.updateLinkPreview(page, anchor.ID)
+	if got, want := ui.status, "https://ja.wikipedia.org/wiki/%E3%83%A1%E3%82%BF%E6%A7%8B%E6%96%87%E5%A4%89%E6%95%B0"; got != want {
+		t.Fatalf("result preview = %q, want %q", got, want)
+	}
+	ui.dispatchPaintedClick(page, paintedDisplayHit{NodeID: anchor.ID})
+	select {
+	case got := <-navigator.navigated:
+		if want := "https://ja.wikipedia.org/wiki/%E3%83%A1%E3%82%BF%E6%A7%8B%E6%96%87%E5%A4%89%E6%95%B0"; got != want {
+			t.Fatalf("result navigation = %q, want %q", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("result click did not navigate")
+	}
+}
+
 func TestLinkPreviewRedactsCredentialsAndIgnoresInvalidURL(t *testing.T) {
 	document := dom.NewDocument()
 	secret := document.CreateElement("a", map[string]string{"href": "https://alice:secret@example.com/private"})

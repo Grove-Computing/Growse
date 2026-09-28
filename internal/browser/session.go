@@ -240,7 +240,7 @@ func (s *Session) FinishTabNavigation(id TabID, failed bool) (TabSnapshot, error
 		tab.loading = false
 		runtimeFailed := false
 		if tab.browser != nil {
-			if page := tab.browser.Page(); page != nil {
+			if page := tab.browser.currentPage(); page != nil {
 				runtimeFailed = page.RuntimeError != ""
 			}
 		}
@@ -254,7 +254,7 @@ func (s *Session) FinishTabNavigation(id TabID, failed bool) (TabSnapshot, error
 			tab.status = "取得完了"
 		}
 		if tab.browser != nil {
-			if page := tab.browser.Page(); page != nil && page.Document != nil {
+			if page := tab.browser.currentPage(); page != nil && page.Document != nil {
 				if title := page.Document.Title(); utf8.ValidString(title) && len(title) <= s.policy.MaxTitleBytes {
 					tab.title = title
 				}
@@ -571,7 +571,7 @@ func snapshotTab(tab *Tab, position int, active bool) TabSnapshot {
 	if tab.initialURL != nil {
 		snapshot.URL = displayTabURL(tab.initialURL)
 	} else if tab.browser != nil {
-		page := tab.browser.Page()
+		page := tab.browser.currentPage()
 		if page != nil && page.URL != nil {
 			snapshot.URL = displayTabURL(page.URL)
 		}

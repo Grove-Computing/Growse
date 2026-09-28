@@ -88,7 +88,7 @@ func Classify(raw string) Result {
 // SearchURL produces the built-in DuckDuckGo request. Provider selection is
 // intentionally outside this package so it can be replaced by profile state.
 func SearchURL(query string) *url.URL {
-	return &url.URL{Scheme: "https", Host: "duckduckgo.com", Path: "/", RawQuery: url.Values{"q": {query}}.Encode()}
+	return &url.URL{Scheme: "https", Host: "html.duckduckgo.com", Path: "/html/", RawQuery: url.Values{"q": {query}}.Encode()}
 }
 
 func invalid(result Result, message string) Result {
