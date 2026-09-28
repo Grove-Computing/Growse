@@ -25,6 +25,7 @@ import (
 	"gioui.org/io/event"
 	"gioui.org/io/key"
 	"gioui.org/io/pointer"
+	"gioui.org/io/semantic"
 	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/op/clip"
@@ -40,6 +41,7 @@ import (
 	"github.com/Grove-Computing/Growse/internal/browser"
 	devtoolsmodel "github.com/Grove-Computing/Growse/internal/devtools"
 	"github.com/Grove-Computing/Growse/internal/dom"
+	"github.com/Grove-Computing/Growse/internal/findpage"
 	"github.com/Grove-Computing/Growse/internal/forms"
 	layoutengine "github.com/Grove-Computing/Growse/internal/layout"
 	"github.com/Grove-Computing/Growse/internal/network"
@@ -111,6 +113,7 @@ type BrowserUI struct {
 	viewportClick     gesture.Click
 	address           *widget.Editor
 	omniboxStates     map[browser.TabID]omniboxState
+	findStates        map[browser.TabID]*findTabState
 
 	suggestions              *omnibox.Pipeline
 	suggestionPopup          suggestionPopup
@@ -186,6 +189,56 @@ type browserChromeGeometry struct {
 	toolbar  image.Rectangle
 	viewport image.Rectangle
 	devTools image.Rectangle
+}
+
+type findTabState struct {
+	open          bool
+	editor        *widget.Editor
+	options       findpage.Options
+	result        findpage.Result
+	current       int
+	searching     bool
+	pendingSearch bool
+	previous      widget.Clickable
+	next          widget.Clickable
+	caseToggle    widget.Clickable
+	wordToggle    widget.Clickable
+	close         widget.Clickable
+}
+
+func newFindTabState() *findTabState {
+	editor := new(widget.Editor)
+	editor.SingleLine = true
+	editor.Submit = true
+	return &findTabState{editor: editor}
+}
+
+func (state *findTabState) statusLabel() string {
+	if state == nil || state.editor.Text() == "" {
+		return "検索語を入力"
+	}
+	if state.searching {
+		return "検索中…"
+	}
+	if state.result.Limit != findpage.LimitNone {
+		return fmt.Sprintf("%d件 · 上限超過", len(state.result.Matches))
+	}
+	if len(state.result.Matches) == 0 {
+		return "0 / 0"
+	}
+	return fmt.Sprintf("%d / %d", state.current+1, len(state.result.Matches))
+}
+
+func (state *findTabState) move(delta int) {
+	count := len(state.result.Matches)
+	if count == 0 {
+		state.current = 0
+		return
+	}
+	state.current = (state.current + delta) % count
+	if state.current < 0 {
+		state.current += count
+	}
 }
 
 type devToolsPanel string
@@ -393,6 +446,7 @@ func NewBrowserUIWithTabsAndUpdater(navigator Navigator, tabs TabController, inv
 		devToolsStates:    make(map[browser.TabID]devToolsTabState),
 		inspectorButtons:  make(map[browser.TabID]map[dom.NodeID]*widget.Clickable),
 		omniboxStates:     make(map[browser.TabID]omniboxState),
+		findStates:        make(map[browser.TabID]*findTabState),
 		layoutBuild:       layoutengine.BuildWithScroll,
 		layoutBuildImages: layoutengine.BuildWithScrollAndImages,
 		layoutBuildFonts:  layoutengine.BuildWithScrollAndResources,
@@ -451,6 +505,7 @@ func (ui *BrowserUI) Layout(gtx layout.Context) layout.Dimensions {
 	layoutRegion(gtx, geometry.toolbar, ui.layoutToolbar)
 	layoutRegion(gtx, geometry.tabRail, ui.layoutTabRail)
 	ui.layoutSuggestions(gtx, geometry.viewport)
+	ui.layoutFindOverlay(gtx, geometry.viewport)
 
 	ui.registerPointerTracker(gtx)
 	return layout.Dimensions{Size: gtx.Constraints.Max}
@@ -666,6 +721,7 @@ func tabStateColor(tab browser.TabSnapshot) color.NRGBA {
 
 func (ui *BrowserUI) handleKeyboardShortcuts(gtx layout.Context) {
 	ui.handleTabKeyboardShortcuts(gtx)
+	ui.handleFindKeyboardShortcuts(gtx)
 	for {
 		event, ok := gtx.Event(key.Filter{Name: "L", Required: key.ModShortcut})
 		if !ok {
@@ -716,6 +772,231 @@ func (ui *BrowserUI) handleKeyboardShortcuts(gtx layout.Context) {
 		}
 		ui.startPageLoad(tabID, navigator, "ページを再読み込み中", navigator.Reload)
 	}
+}
+
+func (ui *BrowserUI) activeFindState() *findTabState {
+	id, _ := ui.activeNavigationTarget()
+	return ui.findStates[id]
+}
+
+func (ui *BrowserUI) ensureFindState() *findTabState {
+	id, _ := ui.activeNavigationTarget()
+	state := ui.findStates[id]
+	if state == nil {
+		state = newFindTabState()
+		ui.findStates[id] = state
+	}
+	return state
+}
+
+func (ui *BrowserUI) handleFindKeyboardShortcuts(gtx layout.Context) {
+	for {
+		event, ok := gtx.Event(key.Filter{Name: "F", Required: key.ModShortcut})
+		if !ok {
+			break
+		}
+		keyEvent, ok := event.(key.Event)
+		if !ok || keyEvent.State != key.Press {
+			continue
+		}
+		state := ui.ensureFindState()
+		state.open = true
+		state.editor.SetCaret(0, state.editor.Len())
+		ui.closeSuggestionPopup()
+		gtx.Execute(key.FocusCmd{Tag: state.editor})
+	}
+	state := ui.activeFindState()
+	if state == nil || !state.open {
+		return
+	}
+	for {
+		event, ok := gtx.Event(key.Filter{Name: key.NameF3, Optional: key.ModShift})
+		if !ok {
+			break
+		}
+		keyEvent, ok := event.(key.Event)
+		if !ok || keyEvent.State != key.Press {
+			continue
+		}
+		ui.runFindSearch(state)
+		if keyEvent.Modifiers.Contain(key.ModShift) {
+			state.move(-1)
+		} else {
+			state.move(1)
+		}
+	}
+	for {
+		event, ok := gtx.Event(key.Filter{Focus: state.editor, Name: key.NameEscape})
+		if !ok {
+			break
+		}
+		keyEvent, ok := event.(key.Event)
+		if ok && keyEvent.State == key.Press {
+			state.open = false
+		}
+	}
+}
+
+func (ui *BrowserUI) handleFindActions(gtx layout.Context) {
+	state := ui.activeFindState()
+	if state == nil || !state.open {
+		return
+	}
+	if state.pendingSearch {
+		ui.runFindSearch(state)
+	}
+	for {
+		event, ok := state.editor.Update(gtx)
+		if !ok {
+			break
+		}
+		switch event.(type) {
+		case widget.ChangeEvent:
+			state.searching = true
+			state.pendingSearch = true
+			ui.invalidate()
+		case widget.SubmitEvent:
+			ui.runFindSearch(state)
+			state.move(1)
+		}
+	}
+	for state.previous.Clicked(gtx) {
+		ui.runFindSearch(state)
+		state.move(-1)
+	}
+	for state.next.Clicked(gtx) {
+		ui.runFindSearch(state)
+		state.move(1)
+	}
+	for state.caseToggle.Clicked(gtx) {
+		state.options.CaseSensitive = !state.options.CaseSensitive
+		state.searching = true
+		state.pendingSearch = true
+		ui.invalidate()
+	}
+	for state.wordToggle.Clicked(gtx) {
+		state.options.WholeWord = !state.options.WholeWord
+		state.searching = true
+		state.pendingSearch = true
+		ui.invalidate()
+	}
+	for state.close.Clicked(gtx) {
+		state.open = false
+	}
+}
+
+func (ui *BrowserUI) runFindSearch(state *findTabState) {
+	if state == nil || !state.open || !state.pendingSearch && !state.searching {
+		return
+	}
+	query := state.editor.Text()
+	if query == "" {
+		state.result = findpage.Result{}
+		state.current = 0
+		state.searching = false
+		state.pendingSearch = false
+		return
+	}
+	var document *dom.Document
+	var styles stylemodel.Map
+	if navigator := ui.activeNavigator(); navigator != nil {
+		if page := navigator.Page(); page != nil {
+			document = page.Document
+			styles = page.ComputedStyles
+		}
+	}
+	previous := findpage.Match{}
+	hasPrevious := state.current >= 0 && state.current < len(state.result.Matches)
+	if hasPrevious {
+		previous = state.result.Matches[state.current]
+	}
+	state.result = findpage.Search(document, styles, query, state.options, findpage.Limits{})
+	state.current = 0
+	if hasPrevious {
+		for index, match := range state.result.Matches {
+			if match == previous {
+				state.current = index
+				break
+			}
+		}
+	}
+	state.searching = false
+	state.pendingSearch = false
+}
+
+func (ui *BrowserUI) layoutFindOverlay(gtx layout.Context, viewport image.Rectangle) {
+	state := ui.activeFindState()
+	if state == nil || !state.open || viewport.Empty() {
+		return
+	}
+	width := min(gtx.Dp(unit.Dp(560)), max(viewport.Dx()-gtx.Dp(unit.Dp(24)), 0))
+	height := min(gtx.Dp(unit.Dp(54)), viewport.Dy())
+	if width <= 0 || height <= 0 {
+		return
+	}
+	region := image.Rect(viewport.Max.X-width-gtx.Dp(unit.Dp(12)), viewport.Min.Y+gtx.Dp(unit.Dp(8)), viewport.Max.X-gtx.Dp(unit.Dp(12)), viewport.Min.Y+gtx.Dp(unit.Dp(8))+height)
+	layoutRegion(gtx, region, func(gtx layout.Context) layout.Dimensions {
+		return widget.Border{
+			Color:        color.NRGBA{R: 203, G: 213, B: 225, A: 255},
+			CornerRadius: unit.Dp(10),
+			Width:        unit.Dp(1),
+		}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+			paint.FillShape(gtx.Ops, color.NRGBA{R: 255, G: 255, B: 255, A: 255}, clip.UniformRRect(image.Rectangle{Max: gtx.Constraints.Min}, gtx.Dp(unit.Dp(10))).Op(gtx.Ops))
+			return layout.Inset{Top: unit.Dp(5), Right: unit.Dp(6), Bottom: unit.Dp(5), Left: unit.Dp(10)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+					layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+						editor := material.Editor(ui.theme, state.editor, "ページ内を検索")
+						editor.TextSize = unit.Sp(14)
+						return editor.Layout(gtx)
+					}),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						gtx.Constraints.Min.X = gtx.Dp(unit.Dp(92))
+						label := material.Caption(ui.theme, state.statusLabel())
+						label.Color = color.NRGBA{R: 71, G: 85, B: 105, A: 255}
+						return layout.Center.Layout(gtx, label.Layout)
+					}),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return ui.layoutFindButton(gtx, &state.previous, "↑", false, "前の一致")
+					}),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return ui.layoutFindButton(gtx, &state.next, "↓", false, "次の一致")
+					}),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return ui.layoutFindButton(gtx, &state.caseToggle, "Aa", state.options.CaseSensitive, "大文字と小文字を区別")
+					}),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return ui.layoutFindButton(gtx, &state.wordToggle, "単語", state.options.WholeWord, "単語単位")
+					}),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return ui.layoutFindButton(gtx, &state.close, "×", false, "閉じる")
+					}),
+				)
+			})
+		})
+	})
+}
+
+func (ui *BrowserUI) layoutFindButton(gtx layout.Context, button *widget.Clickable, labelText string, active bool, description string) layout.Dimensions {
+	width := gtx.Dp(unit.Dp(42))
+	if labelText == "単語" {
+		width = gtx.Dp(unit.Dp(52))
+	}
+	gtx.Constraints = layout.Exact(image.Pt(width, gtx.Dp(unit.Dp(40))))
+	return button.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		background := color.NRGBA{A: 0}
+		foreground := color.NRGBA{R: 51, G: 65, B: 85, A: 255}
+		if active {
+			background = color.NRGBA{R: 219, G: 234, B: 254, A: 255}
+			foreground = color.NRGBA{R: 29, G: 78, B: 216, A: 255}
+		}
+		if background.A != 0 {
+			paint.FillShape(gtx.Ops, background, clip.UniformRRect(image.Rectangle{Max: gtx.Constraints.Min}, gtx.Dp(unit.Dp(7))).Op(gtx.Ops))
+		}
+		label := material.Body2(ui.theme, labelText)
+		label.Color = foreground
+		semantic.DescriptionOp(description).Add(gtx.Ops)
+		return layout.Center.Layout(gtx, label.Layout)
+	})
 }
 
 func (ui *BrowserUI) handleTabKeyboardShortcuts(gtx layout.Context) {
@@ -778,6 +1059,7 @@ func (ui *BrowserUI) handleActions(gtx layout.Context) {
 	ui.syncActiveTabChrome()
 	ui.handleSuggestionKeys(gtx)
 	ui.handleOmniboxSubmit(gtx)
+	ui.handleFindActions(gtx)
 
 	for {
 		event, ok := ui.address.Update(gtx)
@@ -1031,6 +1313,7 @@ func (ui *BrowserUI) closeTab(id browser.TabID) bool {
 		return false
 	}
 	delete(ui.omniboxStates, id)
+	delete(ui.findStates, id)
 	delete(ui.tabRenderStates, id)
 	delete(ui.devToolsStates, id)
 	delete(ui.inspectorButtons, id)

@@ -23,6 +23,7 @@ import (
 	"github.com/Grove-Computing/Growse/internal/css"
 	"github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/events"
+	"github.com/Grove-Computing/Growse/internal/findpage"
 	"github.com/Grove-Computing/Growse/internal/forms"
 	layoutengine "github.com/Grove-Computing/Growse/internal/layout"
 	"github.com/Grove-Computing/Growse/internal/network"
@@ -2719,4 +2720,84 @@ func testDocument(t *testing.T) *dom.Document {
 		t.Fatal(err)
 	}
 	return document
+}
+
+func TestFindBarShortcutSearchStatusAndWrap(t *testing.T) {
+	document := dom.NewDocument()
+	body := document.CreateElement("body", nil)
+	textNode := document.CreateText("Alpha alpha")
+	if err := document.AppendChild(document.Root, body); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(body, textNode); err != nil {
+		t.Fatal(err)
+	}
+	navigator := &stubNavigator{page: &browser.Page{
+		Document: document, ComputedStyles: style.Compute(document, nil), StyleRevision: 1,
+	}}
+	ui := NewBrowserUI(navigator, nil)
+	router := new(input.Router)
+	gtx := layout.Context{
+		Ops:         new(op.Ops),
+		Source:      router.Source(),
+		Constraints: layout.Exact(image.Pt(1000, 700)),
+		Metric:      unit.Metric{PxPerDp: 1, PxPerSp: 1},
+	}
+
+	ui.Layout(gtx)
+	router.Frame(gtx.Ops)
+	router.Queue(key.Event{Name: "F", Modifiers: key.ModShortcut, State: key.Press})
+	gtx.Reset()
+	ui.Layout(gtx)
+	state := ui.activeFindState()
+	if state == nil || !state.open || !gtx.Focused(state.editor) {
+		t.Fatalf("Ctrl/Command+F state = %#v focused=%t", state, state != nil && gtx.Focused(state.editor))
+	}
+
+	router.Frame(gtx.Ops)
+	router.Queue(key.EditEvent{Range: key.Range{Start: 0, End: 0}, Text: "alpha"})
+	gtx.Reset()
+	ui.Layout(gtx)
+	if !state.searching || state.statusLabel() != "検索中…" {
+		t.Fatalf("pending status = %q searching=%t", state.statusLabel(), state.searching)
+	}
+
+	router.Frame(gtx.Ops)
+	gtx.Reset()
+	ui.Layout(gtx)
+	if got := state.statusLabel(); got != "1 / 2" {
+		t.Fatalf("completed status = %q, want 1 / 2", got)
+	}
+	state.move(1)
+	if got := state.statusLabel(); got != "2 / 2" {
+		t.Fatalf("next status = %q, want 2 / 2", got)
+	}
+	state.move(1)
+	if got := state.statusLabel(); got != "1 / 2" {
+		t.Fatalf("wrapped next status = %q, want 1 / 2", got)
+	}
+	state.move(-1)
+	if got := state.statusLabel(); got != "2 / 2" {
+		t.Fatalf("wrapped previous status = %q, want 2 / 2", got)
+	}
+}
+
+func TestFindBarDistinguishesEmptyZeroAndLimitStates(t *testing.T) {
+	state := newFindTabState()
+	if got := state.statusLabel(); got != "検索語を入力" {
+		t.Fatalf("empty status = %q", got)
+	}
+	state.editor.SetText("missing")
+	if got := state.statusLabel(); got != "0 / 0" {
+		t.Fatalf("zero status = %q", got)
+	}
+	state.searching = true
+	if got := state.statusLabel(); got != "検索中…" {
+		t.Fatalf("searching status = %q", got)
+	}
+	state.searching = false
+	state.result = findpage.Result{Matches: []findpage.Match{{NodeID: 1}}, Limit: findpage.LimitTextBytes}
+	if got := state.statusLabel(); got != "1件 · 上限超過" {
+		t.Fatalf("limit status = %q", got)
+	}
 }
