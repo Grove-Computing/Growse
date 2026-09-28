@@ -14,6 +14,7 @@ import (
 	"github.com/Grove-Computing/Growse/internal/network"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 	"github.com/Grove-Computing/Growse/internal/runtime/isolated"
+	"github.com/Grove-Computing/Growse/internal/searchdata"
 	"github.com/Grove-Computing/Growse/internal/serviceworker"
 	storagecore "github.com/Grove-Computing/Growse/internal/storage"
 	"github.com/Grove-Computing/Growse/internal/ui"
@@ -56,6 +57,14 @@ func runWindow(window *gioapp.Window) error {
 	} else {
 		log.Printf("Browser profile data directoryを解決できませんでした: %v", dataRootErr)
 	}
+	searchData := searchdata.NewMemoryStore()
+	if dataRootErr == nil {
+		if persistent, persistentErr := searchdata.OpenStore(dataRoot); persistentErr == nil {
+			searchData = persistent
+		} else {
+			log.Printf("検索data profileを初期化できませんでした: %v", persistentErr)
+		}
+	}
 	defer serviceWorkerManager.Close()
 	networkClient := network.NewClient()
 	if cacheRoot, err := network.DefaultCacheRoot(); err == nil {
@@ -77,6 +86,14 @@ func runWindow(window *gioapp.Window) error {
 		if err := configureDesktopBrowser(state); err != nil {
 			log.Printf("既定Runtime Engineを設定できませんでした: %v", err)
 		}
+		state.SetNavigationObserver(func(record browser.NavigationRecord) {
+			if err := searchData.RecordNavigation(searchdata.Navigation{
+				URL: record.URL, Title: record.Title, Typed: record.Typed, TopLevel: true, Success: true,
+			}); err != nil {
+				log.Print("閲覧履歴を保存できませんでした")
+			}
+			window.Invalidate()
+		})
 		return state
 	})
 	session.SetOnActiveMutation(window.Invalidate)

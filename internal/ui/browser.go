@@ -1105,6 +1105,8 @@ func (ui *BrowserUI) startResolvedNavigation(rawURL string, search ...bool) {
 	ui.startPageLoad(tabID, navigator, navigationLoadingStatus(rawURL), func(ctx context.Context) (*browser.Page, error) {
 		if len(search) > 0 && search[0] {
 			ctx = network.WithRedirectPolicy(ctx, rawURL, searchprovider.ValidateRedirect)
+		} else {
+			ctx = browser.WithTypedNavigation(ctx)
 		}
 		return navigator.Navigate(ctx, rawURL)
 	})
@@ -1148,6 +1150,8 @@ func (ui *BrowserUI) startNavigationInNewTab(rawURL string, background bool, sea
 	ui.startPageLoad(tab.ID, navigator, navigationLoadingStatus(rawURL), func(ctx context.Context) (*browser.Page, error) {
 		if len(search) > 0 && search[0] {
 			ctx = network.WithRedirectPolicy(ctx, rawURL, searchprovider.ValidateRedirect)
+		} else {
+			ctx = browser.WithTypedNavigation(ctx)
 		}
 		return navigator.Navigate(ctx, rawURL)
 	})

@@ -1614,3 +1614,21 @@ func mustParseURL(t *testing.T, rawURL string) *url.URL {
 	}
 	return parsed
 }
+
+func TestNavigationObserverReportsOnlyHistoryPush(t *testing.T) {
+	target := mustParseURL(t, "https://example.com/final")
+	browser := New(stubLoader{response: &network.Response{
+		URL: target, StatusCode: http.StatusOK, ContentType: "text/html", Body: []byte("<title>Final title</title>"),
+	}})
+	var records []NavigationRecord
+	browser.SetNavigationObserver(func(record NavigationRecord) { records = append(records, record) })
+	if _, err := browser.Navigate(WithTypedNavigation(context.Background()), "https://example.com/start"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := browser.Reload(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 || records[0].URL != target.String() || records[0].Title != "Final title" || !records[0].Typed {
+		t.Fatalf("navigation records = %#v", records)
+	}
+}
