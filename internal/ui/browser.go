@@ -199,6 +199,7 @@ type findTabState struct {
 	current       int
 	searching     bool
 	pendingSearch bool
+	scrollPending bool
 	previous      widget.Clickable
 	next          widget.Clickable
 	caseToggle    widget.Clickable
@@ -239,6 +240,7 @@ func (state *findTabState) move(delta int) {
 	if state.current < 0 {
 		state.current += count
 	}
+	state.scrollPending = true
 }
 
 type devToolsPanel string
@@ -922,6 +924,111 @@ func (ui *BrowserUI) runFindSearch(state *findTabState) {
 	}
 	state.searching = false
 	state.pendingSearch = false
+	state.scrollPending = len(state.result.Matches) > 0
+}
+
+type findHighlightGeometry struct {
+	commandIndex  int
+	matchIndex    int
+	x, y          float32
+	width, height float32
+	clip          *layoutengine.Rect
+	clips         []layoutengine.ClipRegion
+	transform     stylemodel.Matrix
+	originX       float32
+	originY       float32
+}
+
+func (ui *BrowserUI) findHighlightGeometry(displayList *paintmodel.DisplayList, page *browser.Page) []findHighlightGeometry {
+	state := ui.activeFindState()
+	if state == nil || !state.open || len(state.result.Matches) == 0 || displayList == nil || page == nil || page.Document == nil {
+		return nil
+	}
+	matches := make(map[dom.NodeID][]int)
+	for index, match := range state.result.Matches {
+		matches[match.NodeID] = append(matches[match.NodeID], index)
+	}
+	sourceOffsets := make(map[dom.NodeID]int)
+	result := make([]findHighlightGeometry, 0, len(state.result.Matches))
+	for commandIndex, source := range displayList.Commands {
+		command, ok := source.(paintmodel.DrawText)
+		if !ok {
+			continue
+		}
+		runs := command.Runs
+		if len(runs) == 0 {
+			runs = []paintmodel.TextRun{{
+				NodeID: command.NodeID, Text: command.Text, Width: command.Width,
+				FontSize: command.FontSize, Bold: command.Bold, FontFamilies: command.FontFamilies,
+				FontStyle: command.FontStyle, FontStretch: command.FontStretch,
+				LetterSpacing: command.LetterSpacing, WordSpacing: command.WordSpacing,
+				WritingMode: command.WritingMode, Direction: command.Direction,
+			}}
+		}
+		runX := float32(0)
+		for _, run := range runs {
+			nodeMatches := matches[run.NodeID]
+			if len(nodeMatches) == 0 || run.Text == "" || run.Atomic {
+				runX += run.Width
+				continue
+			}
+			node, exists := page.Document.NodeByID(run.NodeID)
+			if !exists || node.Type != dom.NodeText {
+				runX += run.Width
+				continue
+			}
+			runStart := locateRenderedText(node.Text, sourceOffsets[run.NodeID], run.Text)
+			if runStart < 0 {
+				runX += run.Width
+				continue
+			}
+			runEnd := runStart + len(run.Text)
+			sourceOffsets[run.NodeID] = runEnd
+			layoutRun := layoutengine.TextRun{
+				NodeID: run.NodeID, Text: run.Text, Width: run.Width, FontSize: run.FontSize, Bold: run.Bold,
+				FontFamilies: append([]string(nil), run.FontFamilies...), FontStyle: run.FontStyle, FontStretch: run.FontStretch,
+				LetterSpacing: run.LetterSpacing, WordSpacing: run.WordSpacing, WritingMode: run.WritingMode, Direction: run.Direction,
+			}
+			for _, matchIndex := range nodeMatches {
+				match := state.result.Matches[matchIndex]
+				start, end := max(match.Start, runStart), min(match.End, runEnd)
+				if start >= end {
+					continue
+				}
+				prefix := layoutengine.MeasureTextRun(run.Text[:start-runStart], layoutRun, page.WebFonts)
+				advance := layoutengine.MeasureTextRun(run.Text[:end-runStart], layoutRun, page.WebFonts) - prefix
+				if advance <= 0 {
+					advance = run.Width * float32(end-start) / float32(max(runEnd-runStart, 1))
+				}
+				geometry := findHighlightGeometry{
+					commandIndex: commandIndex, matchIndex: matchIndex,
+					x: command.X + runX + prefix, y: command.Y,
+					width: advance, height: command.Height,
+					clip: command.Clip, clips: command.Clips, transform: command.Transform,
+					originX: command.X, originY: command.Y,
+				}
+				if command.WritingMode != stylemodel.WritingModeHorizontalTB {
+					geometry.x = command.X + run.OffsetX
+					geometry.y = command.Y + run.OffsetY + prefix
+					geometry.width = max(run.CrossSize, command.Width)
+					geometry.height = advance
+				}
+				result = append(result, geometry)
+			}
+			runX += run.Width
+		}
+	}
+	return result
+}
+
+func locateRenderedText(source string, offset int, rendered string) int {
+	if offset < 0 || offset > len(source) {
+		return -1
+	}
+	if relative := strings.Index(source[offset:], rendered); relative >= 0 {
+		return offset + relative
+	}
+	return -1
 }
 
 func (ui *BrowserUI) layoutFindOverlay(gtx layout.Context, viewport image.Rectangle) {
@@ -2541,6 +2648,7 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 	}
 	documentPosition := ui.pageList.Position
 	nestedScrollConsumed := ui.handleNestedScrollEvents(gtx, page, tree, displayList)
+	ui.scrollActiveFindMatch(gtx, page, tree, displayList)
 	dirtySnapshot := page.RenderInvalidationSnapshot()
 	page.RecordCompositorSnapshot(len(dirtySnapshot.StyleNodes), len(displayList.Layers), len(displayList.DamageRegions))
 	paint.Fill(gtx.Ops, rgba(displayList.Background))
@@ -2578,18 +2686,136 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 	return dimensions
 }
 
+func (ui *BrowserUI) scrollActiveFindMatch(gtx layout.Context, page *browser.Page, tree *layoutengine.Tree, displayList *paintmodel.DisplayList) {
+	state := ui.activeFindState()
+	if state == nil || !state.open || !state.scrollPending || state.current < 0 || state.current >= len(state.result.Matches) {
+		return
+	}
+	defer func() { state.scrollPending = false }()
+	activeBounds := func() (layoutengine.Rect, bool) {
+		var result layoutengine.Rect
+		found := false
+		for _, geometry := range ui.findHighlightGeometry(displayList, page) {
+			if geometry.matchIndex != state.current {
+				continue
+			}
+			current := layoutengine.Rect{X: geometry.x, Y: geometry.y, Width: geometry.width, Height: geometry.height}
+			if !found {
+				result, found = current, true
+				continue
+			}
+			minimumX, minimumY := min(result.X, current.X), min(result.Y, current.Y)
+			maximumX := max(result.X+result.Width, current.X+current.Width)
+			maximumY := max(result.Y+result.Height, current.Y+current.Height)
+			result = layoutengine.Rect{X: minimumX, Y: minimumY, Width: maximumX - minimumX, Height: maximumY - minimumY}
+		}
+		return result, found
+	}
+	bounds, found := activeBounds()
+	if !found {
+		return
+	}
+	match := state.result.Matches[state.current]
+	for ancestor := tree.Parents[match.NodeID]; ancestor != 0; ancestor = tree.Parents[ancestor] {
+		container, exists := tree.ScrollContainers[ancestor]
+		if !exists || isDocumentBody(page, ancestor) {
+			continue
+		}
+		targetX, targetY := container.Offset.X, container.Offset.Y
+		margin := float32(6)
+		if bounds.X < container.Viewport.X+margin {
+			targetX += bounds.X - container.Viewport.X - margin
+		} else if bounds.X+bounds.Width > container.Viewport.X+container.Viewport.Width-margin {
+			targetX += bounds.X + bounds.Width - container.Viewport.X - container.Viewport.Width + margin
+		}
+		if bounds.Y < container.Viewport.Y+margin {
+			targetY += bounds.Y - container.Viewport.Y - margin
+		} else if bounds.Y+bounds.Height > container.Viewport.Y+container.Viewport.Height-margin {
+			targetY += bounds.Y + bounds.Height - container.Viewport.Y - container.Viewport.Height + margin
+		}
+		if len(layoutengine.ApplyScrollContainerOffset(tree, page.ComputedStyles, ancestor, targetX, targetY)) == 0 {
+			continue
+		}
+		container = tree.ScrollContainers[ancestor]
+		ui.nestedScroll[ancestor] = container.Offset
+		if ui.layoutCache.baseTree != nil {
+			layoutengine.ApplyScrollContainerOffset(ui.layoutCache.baseTree, page.ComputedStyles, ancestor, container.Offset.X, container.Offset.Y)
+		}
+		paintmodel.ApplyAnimatedLayout(displayList, tree)
+		if updated, ok := activeBounds(); ok {
+			bounds = updated
+		}
+	}
+	ui.layoutCache.tree = layoutengine.Clone(tree)
+	ui.layoutCache.displayList = displayList
+
+	pixelsPerDP := gtx.Metric.PxPerDp
+	if pixelsPerDP <= 0 {
+		pixelsPerDP = 1
+	}
+	currentScroll := max(float32(ui.pageList.Position.Offset)/pixelsPerDP, float32(0))
+	visibleTop := currentScroll + 70
+	visibleBottom := currentScroll + float32(gtx.Constraints.Max.Y)/pixelsPerDP - 12
+	targetScroll := currentScroll
+	if bounds.Y < visibleTop {
+		targetScroll = max(bounds.Y-70, float32(0))
+	} else if bounds.Y+bounds.Height > visibleBottom {
+		targetScroll = max(bounds.Y+bounds.Height-float32(gtx.Constraints.Max.Y)/pixelsPerDP+12, float32(0))
+	}
+	if targetScroll != currentScroll {
+		ui.pageList.Position.First = 0
+		ui.pageList.Position.Offset = int(math.Round(float64(targetScroll * pixelsPerDP)))
+	}
+}
+
 func (ui *BrowserUI) layoutDocumentPaintLayer(gtx layout.Context, displayList *paintmodel.DisplayList, page *browser.Page) layout.Dimensions {
-	children := make([]layout.StackChild, 0, len(displayList.Commands)+1)
+	highlightsByCommand := make(map[int][]findHighlightGeometry)
+	for _, geometry := range ui.findHighlightGeometry(displayList, page) {
+		highlightsByCommand[geometry.commandIndex] = append(highlightsByCommand[geometry.commandIndex], geometry)
+	}
+	children := make([]layout.StackChild, 0, len(displayList.Commands)+len(highlightsByCommand)+1)
 	children = append(children, layout.Stacked(func(gtx layout.Context) layout.Dimensions {
 		return layout.Spacer{Height: unit.Dp(max(displayList.ScrollHeight, displayList.Height))}.Layout(gtx)
 	}))
-	for _, source := range displayList.Commands {
+	for index, source := range displayList.Commands {
+		for _, sourceGeometry := range highlightsByCommand[index] {
+			geometry := sourceGeometry
+			children = append(children, layout.Stacked(func(gtx layout.Context) layout.Dimensions {
+				return ui.layoutFindHighlight(gtx, geometry)
+			}))
+		}
 		command := source
 		children = append(children, layout.Stacked(func(gtx layout.Context) layout.Dimensions {
 			return ui.layoutAbsolutePaintCommand(gtx, command, page)
 		}))
 	}
 	return layout.Stack{Alignment: layout.NW}.Layout(gtx, children...)
+}
+
+func (ui *BrowserUI) layoutFindHighlight(gtx layout.Context, geometry findHighlightGeometry) layout.Dimensions {
+	left := unit.Dp(max(geometry.x, float32(0)))
+	viewportWidth := float32(gtx.Constraints.Max.X) / gtx.Metric.PxPerDp
+	right := unit.Dp(max(viewportWidth-geometry.x-geometry.width, float32(0)))
+	return layoutPaintCommand(gtx, geometry.y, geometry.height, layout.Inset{Left: left, Right: right}, func(gtx layout.Context) layout.Dimensions {
+		if geometry.transform != (stylemodel.Matrix{}) && geometry.transform != stylemodel.IdentityMatrix() {
+			defer pushCSSMatrix(gtx, geometry.transform, geometry.x, geometry.y).Pop()
+		}
+		if geometry.clip != nil {
+			defer commandClip(gtx, geometry.clip, geometry.x, geometry.y).Push(gtx.Ops).Pop()
+		}
+		for _, region := range geometry.clips {
+			defer commandRoundedClip(gtx, region, geometry.x, geometry.y).Push(gtx.Ops).Pop()
+		}
+		width := max(gtx.Dp(unit.Dp(geometry.width)), 1)
+		height := max(gtx.Dp(unit.Dp(geometry.height)), 1)
+		gtx.Constraints = layout.Exact(image.Pt(width, height))
+		fill := color.NRGBA{R: 253, G: 224, B: 71, A: 150}
+		if state := ui.activeFindState(); state != nil && geometry.matchIndex == state.current {
+			fill = color.NRGBA{R: 251, G: 146, B: 60, A: 210}
+		}
+		paint.FillShape(gtx.Ops, fill, clip.UniformRRect(image.Rectangle{Max: gtx.Constraints.Min}, gtx.Dp(unit.Dp(2))).Op(gtx.Ops))
+		return layout.Dimensions{Size: gtx.Constraints.Min}
+	})
 }
 
 func (ui *BrowserUI) layoutAbsolutePaintCommand(gtx layout.Context, source paintmodel.Command, page *browser.Page) layout.Dimensions {

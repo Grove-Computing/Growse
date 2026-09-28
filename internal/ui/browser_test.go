@@ -2801,3 +2801,92 @@ func TestFindBarDistinguishesEmptyZeroAndLimitStates(t *testing.T) {
 		t.Fatalf("limit status = %q", got)
 	}
 }
+
+func TestFindHighlightGeometryUsesTextRunsWithoutChangingDOM(t *testing.T) {
+	document := dom.NewDocument()
+	body := document.CreateElement("body", nil)
+	textNode := document.CreateText("prefix target suffix")
+	for _, edge := range [][2]*dom.Node{{document.Root, body}, {body, textNode}} {
+		if err := document.AppendChild(edge[0], edge[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	page := &browser.Page{Document: document}
+	ui := NewBrowserUI(&stubNavigator{page: page}, nil)
+	state := ui.ensureFindState()
+	state.open = true
+	state.result = findpage.Result{Matches: []findpage.Match{{NodeID: textNode.ID, Start: 7, End: 13}}}
+	list := &paintmodel.DisplayList{Commands: []paintmodel.Command{
+		paintmodel.DrawText{
+			NodeID: textNode.ID, Text: textNode.Text, X: 20, Y: 40, Width: 190, Height: 24, FontSize: 16,
+			Runs: []paintmodel.TextRun{{NodeID: textNode.ID, Text: textNode.Text, Width: 190, FontSize: 16}},
+		},
+	}}
+
+	geometry := ui.findHighlightGeometry(list, page)
+	if len(geometry) != 1 || geometry[0].commandIndex != 0 || geometry[0].matchIndex != 0 ||
+		geometry[0].x <= 20 || geometry[0].width <= 0 || geometry[0].height != 24 {
+		t.Fatalf("highlight geometry = %#v", geometry)
+	}
+	if textNode.Text != "prefix target suffix" || len(textNode.Children) != 0 {
+		t.Fatalf("find highlight changed DOM text node: %#v", textNode)
+	}
+}
+
+func TestActiveFindMatchScrollsNearestContainerMinimally(t *testing.T) {
+	document := dom.NewDocument()
+	containerNode := document.CreateElement("section", nil)
+	textNode := document.CreateText("target")
+	for _, edge := range [][2]*dom.Node{{document.Root, containerNode}, {containerNode, textNode}} {
+		if err := document.AppendChild(edge[0], edge[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	computed := style.Map{containerNode.ID: {OverflowY: style.OverflowAuto}}
+	tree := &layoutengine.Tree{
+		Width: 300, Height: 200, ViewportHeight: 200, ScrollWidth: 300, ScrollHeight: 200,
+		Boxes: []layoutengine.Box{{
+			NodeID: textNode.ID, Text: "target", X: 0, Y: 120, Width: 60, Height: 20, FontSize: 16,
+			Runs: []layoutengine.TextRun{{NodeID: textNode.ID, Text: "target", Width: 60, FontSize: 16}},
+		}},
+		Parents: map[dom.NodeID]dom.NodeID{textNode.ID: containerNode.ID},
+		Bounds: map[dom.NodeID]layoutengine.Rect{
+			containerNode.ID: {Width: 100, Height: 50},
+			textNode.ID:      {Y: 120, Width: 60, Height: 20},
+		},
+		ScrollContainers: map[dom.NodeID]layoutengine.ScrollContainer{
+			containerNode.ID: {
+				NodeID: containerNode.ID, Viewport: layoutengine.Rect{Width: 100, Height: 50},
+				ScrollWidth: 100, ScrollHeight: 200, OverflowY: style.OverflowAuto,
+			},
+		},
+		ScrollOffsets:     map[dom.NodeID]layoutengine.ScrollOffset{},
+		StickyConstraints: map[dom.NodeID]layoutengine.StickyConstraint{},
+	}
+	page := &browser.Page{Document: document, ComputedStyles: computed}
+	ui := NewBrowserUI(&stubNavigator{page: page}, nil)
+	ui.layoutCache.baseTree = layoutengine.Clone(tree)
+	state := ui.ensureFindState()
+	state.open = true
+	state.scrollPending = true
+	state.result = findpage.Result{Matches: []findpage.Match{{NodeID: textNode.ID, Start: 0, End: 6}}}
+	displayList := paintmodel.Build(tree)
+	gtx := layout.Context{
+		Ops: new(op.Ops), Constraints: layout.Exact(image.Pt(300, 200)),
+		Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1},
+	}
+
+	ui.scrollActiveFindMatch(gtx, page, tree, displayList)
+
+	offset := ui.nestedScroll[containerNode.ID]
+	if offset.Y != 96 {
+		t.Fatalf("nested find scroll = %#v, want Y=96", offset)
+	}
+	geometry := ui.findHighlightGeometry(displayList, page)
+	if len(geometry) != 1 || geometry[0].y != 24 {
+		t.Fatalf("scrolled highlight geometry = %#v, want Y=24", geometry)
+	}
+	if state.scrollPending {
+		t.Fatal("active find scroll remained pending")
+	}
+}

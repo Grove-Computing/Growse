@@ -2505,3 +2505,10 @@ func findElement(node *dom.Node, tag string) *dom.Node {
 func normalizeWhitespace(value string) string {
 	return strings.Join(strings.Fields(value), " ")
 }
+
+// MeasureTextRun returns the inline advance of text with an existing laid-out
+// run's typography. Browser-owned overlays use it to align with glyphs without
+// changing the document or rebuilding line boxes.
+func MeasureTextRun(text string, run TextRun, fonts *FontSet) float32 {
+	return measureTextRun(text, run, fonts)
+}
