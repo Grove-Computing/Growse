@@ -2717,6 +2717,9 @@ func (ui *BrowserUI) updateLinkPreview(page *browser.Page, nodeID dom.NodeID) {
 		return
 	}
 	if linkURL, ok := page.LinkURL(nodeID); ok {
+		if resolved, err := searchprovider.ResolveResultURL(linkURL); err == nil {
+			linkURL = resolved
+		}
 		ui.status = network.RedactedURL(linkURL)
 		return
 	}
@@ -2755,6 +2758,12 @@ func (ui *BrowserUI) dispatchPaintedClick(page *browser.Page, hit paintedDisplay
 	}
 	linkURL, target, ok := page.LinkDestination(nodeID)
 	if !ok {
+		return
+	}
+	linkURL, err := searchprovider.ResolveResultURL(linkURL)
+	if err != nil {
+		ui.status = "検索結果リンクを開けません"
+		ui.statusHasError = true
 		return
 	}
 	if target == "_blank" {

@@ -1,6 +1,6 @@
 # Search Provider (v0.21.0)
 
-toolbarの「検索設定」からproviderを管理する。初期設定はDuckDuckGoで、外部候補は無効。DuckDuckGoの検索先には、JavaScriptの実行成否にかかわらず結果本文を描画できる公開の静的HTML endpointを使用する。
+toolbarの「検索設定」からproviderを管理する。初期設定はDuckDuckGoで、外部候補は無効。DuckDuckGoの検索先には、JavaScriptの実行成否にかかわらず結果本文を描画できる公開の静的HTML endpointを使用する。結果リンクのHTTPS中継URLは`uddg`を一度だけ復号・検証し、中継のscript pageを読み込まず実サイトへ直接移動する。
 
 - custom providerには一意なID、表示名、keyword、検索URLを指定して「保存」する。任意で候補URLも指定できる。
 - 「既定にする」で通常検索の送信先を変更する。`ddg 検索語`など、keywordと空白を入力するとその検索だけ送信先を切り替える。既定設定は変わらない。

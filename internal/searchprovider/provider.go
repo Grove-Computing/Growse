@@ -39,6 +39,30 @@ func Builtin() Provider {
 	// leave an otherwise successful navigation with an empty document viewport.
 	return Provider{ID: "duckduckgo", Name: "DuckDuckGo", Keyword: "ddg", SearchTemplate: "https://html.duckduckgo.com/html/?q={searchTerms}", SuggestionTemplate: "https://duckduckgo.com/ac/?q={searchTerms}&type=list"}
 }
+
+// ResolveResultURL unwraps DuckDuckGo's HTTPS result redirect without loading
+// its script-only intermediate document. Other links are returned unchanged.
+func ResolveResultURL(link *url.URL) (*url.URL, error) {
+	if link == nil {
+		return nil, ErrInvalid
+	}
+	result := *link
+	port := result.Port()
+	if result.Scheme != "https" || !strings.EqualFold(result.Hostname(), "duckduckgo.com") || port != "" && port != "443" || result.User != nil || result.Path != "/l/" {
+		return &result, nil
+	}
+	values, err := url.ParseQuery(result.RawQuery)
+	destinations := values["uddg"]
+	if err != nil || len(destinations) != 1 || destinations[0] == "" {
+		return nil, ErrInvalid
+	}
+	classification := omnibox.Classify(destinations[0])
+	if classification.Kind != omnibox.URL || classification.URL == nil {
+		return nil, ErrInvalid
+	}
+	return classification.URL, nil
+}
+
 func Defaults() Settings           { return Settings{Providers: []Provider{Builtin()}, DefaultID: "duckduckgo"} }
 func (s Settings) Clone() Settings { s.Providers = append([]Provider(nil), s.Providers...); return s }
 

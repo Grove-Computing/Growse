@@ -7,6 +7,35 @@ import (
 	"testing"
 )
 
+func TestResolveDuckDuckGoResultURL(t *testing.T) {
+	redirect, err := url.Parse("https://duckduckgo.com/l/?uddg=https%3A%2F%2Fja.wikipedia.org%2Fwiki%2F%25E3%2583%25A1%25E3%2582%25BF%25E6%25A7%258B%25E6%2596%2587%25E5%25A4%2589%25E6%2595%25B0&rut=ignored")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := ResolveResultURL(redirect)
+	if err != nil || resolved.String() != "https://ja.wikipedia.org/wiki/%E3%83%A1%E3%82%BF%E6%A7%8B%E6%96%87%E5%A4%89%E6%95%B0" {
+		t.Fatalf("resolved result = %v, %v", resolved, err)
+	}
+
+	direct, _ := url.Parse("https://example.com/page")
+	resolved, err = ResolveResultURL(direct)
+	if err != nil || resolved.String() != direct.String() || resolved == direct {
+		t.Fatalf("direct result = %v, %v", resolved, err)
+	}
+
+	for _, raw := range []string{
+		"https://duckduckgo.com/l/",
+		"https://duckduckgo.com/l/?uddg=javascript%3Aalert%281%29",
+		"https://duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com&uddg=https%3A%2F%2Fevil.example",
+		"https://duckduckgo.com/l/?uddg=https%3A%2F%2Falice%3Asecret%40example.com",
+	} {
+		link, _ := url.Parse(raw)
+		if resolved, err := ResolveResultURL(link); err == nil || resolved != nil {
+			t.Fatalf("invalid redirect %q resolved to %v, %v", raw, resolved, err)
+		}
+	}
+}
+
 func TestProviderManagementAndKeyword(t *testing.T) {
 	s := Defaults()
 	p := Provider{ID: "custom", Name: "Custom", Keyword: "c", SearchTemplate: "https://example.com/search?q={searchTerms}"}
