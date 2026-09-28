@@ -25,7 +25,7 @@ func TestProviderSearchSelection(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := ui.providerSearchURL("ddg gopher")
-	if err != nil || got != "https://duckduckgo.com/?q=gopher" {
+	if err != nil || got != "https://html.duckduckgo.com/html/?q=gopher" {
 		t.Fatal(got, err)
 	}
 	got, err = ui.providerSearchURL("gopher")
