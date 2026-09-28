@@ -58,7 +58,8 @@ var gopherPNG []byte
 const (
 	defaultURL         = "http://localhost:6053"
 	tabRailWidth       = unit.Dp(224)
-	toolbarHeight      = unit.Dp(92)
+	toolbarHeight      = unit.Dp(124)
+	bookmarkBarHeight  = unit.Dp(28)
 	controlHeight      = unit.Dp(44)
 	addressBarHeight   = unit.Dp(48)
 	gopherButtonWidth  = unit.Dp(72)
@@ -165,6 +166,8 @@ type BrowserUI struct {
 
 	bookmarkIcon       *widget.Icon
 	bookmarkBorderIcon *widget.Icon
+	bookmarkBarList    widget.List
+	bookmarkBarButtons map[string]*widget.Clickable
 }
 
 type documentLayoutCache struct {
@@ -396,6 +399,7 @@ func NewBrowserUIWithTabsAndUpdater(navigator Navigator, tabs TabController, inv
 
 		bookmarkIcon:       mustIcon(widget.NewIcon(icons.ToggleStar)),
 		bookmarkBorderIcon: mustIcon(widget.NewIcon(icons.ToggleStarBorder)),
+		bookmarkBarButtons: make(map[string]*widget.Clickable),
 	}
 	if ui.invalidate == nil {
 		ui.invalidate = func() {}
@@ -408,6 +412,7 @@ func NewBrowserUIWithTabsAndUpdater(navigator Navigator, tabs TabController, inv
 	ui.address = newOmniboxEditor(defaultURL)
 	ui.omniboxStates[0] = omniboxState{editor: ui.address, committedURL: defaultURL, observedText: defaultURL}
 	ui.pageList.Axis = layout.Vertical
+	ui.bookmarkBarList.Axis = layout.Horizontal
 	ui.tabList.Axis = layout.Vertical
 	ui.devToolsList.Axis = layout.Vertical
 	ui.inspectorList.Axis = layout.Vertical
@@ -779,6 +784,7 @@ func (ui *BrowserUI) handleActions(gtx layout.Context) {
 		}
 	}
 	ui.handleSuggestionMouseAndFocus(gtx)
+	ui.handleBookmarkBarActions(gtx)
 	for ui.goButton.Clicked(gtx) {
 		ui.startNavigation(ui.address.Text())
 	}
@@ -1525,6 +1531,8 @@ func (ui *BrowserUI) layoutToolbar(gtx layout.Context) layout.Dimensions {
 					layout.Rigid(ui.layoutGopherButton),
 				)
 			}),
+			layout.Rigid(layout.Spacer{Height: unit.Dp(2)}.Layout),
+			layout.Rigid(ui.layoutBookmarkBar),
 			layout.Rigid(layout.Spacer{Height: unit.Dp(2)}.Layout),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				label := material.Caption(ui.theme, ui.status)
