@@ -1611,6 +1611,56 @@ func TestWheelScrollTargetsNestedOverflowContainerBeforeDocument(t *testing.T) {
 	}
 }
 
+func TestWheelScrollUsesDocumentElementInsteadOfBody(t *testing.T) {
+	document := dom.NewDocument()
+	html := document.CreateElement("html", nil)
+	body := document.CreateElement("body", nil)
+	content := document.CreateElement("div", map[string]string{"class": "content"})
+	for _, edge := range [][2]*dom.Node{{document.Root, html}, {html, body}, {body, content}} {
+		if err := document.AppendChild(edge[0], edge[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stylesheet, err := css.Parse(strings.NewReader(`
+html { width:500px; height:300px; overflow-y:auto }
+body { width:500px; height:320px; overflow-y:auto }
+.content { height:900px }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := &browser.Page{Document: document, Stylesheet: stylesheet, ComputedStyles: style.Compute(document, stylesheet), StyleRevision: 1}
+	ui := NewBrowserUI(&stubNavigator{page: page}, nil)
+	router := new(input.Router)
+	gtx := layout.Context{
+		Ops: new(op.Ops), Source: router.Source(), Constraints: layout.Exact(image.Pt(800, 600)),
+		Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1},
+	}
+
+	ui.Layout(gtx)
+	if _, exists := ui.layoutCache.tree.ScrollContainers[html.ID]; !exists {
+		t.Fatal("document element was not registered as a scroll container")
+	}
+	if _, exists := ui.layoutCache.tree.ScrollContainers[body.ID]; !exists {
+		t.Fatal("body fixture did not reproduce the competing scroll container")
+	}
+	router.Frame(gtx.Ops)
+	router.Queue(pointer.Event{
+		Kind: pointer.Scroll, Source: pointer.Mouse,
+		Position: f32.Pt(float32(tabRailWidth)+80, float32(toolbarHeight)+70),
+		Scroll:   f32.Pt(0, 48),
+	})
+	gtx.Reset()
+	ui.Layout(gtx)
+
+	if _, intercepted := ui.nestedScroll[body.ID]; intercepted {
+		t.Fatalf("body intercepted document wheel input: %#v", ui.nestedScroll[body.ID])
+	}
+	if offset := ui.nestedScroll[html.ID]; offset.Y != 48 || offset.X != 0 {
+		t.Fatalf("document element wheel offset = %#v, want Y=48", offset)
+	}
+}
+
 func TestPointerMoveAppliesAndClearsHoverStyle(t *testing.T) {
 	document := dom.NewDocument()
 	button := document.CreateElement("button", map[string]string{"id": "save"})

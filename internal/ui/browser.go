@@ -2277,7 +2277,7 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 	if nestedScrollConsumed {
 		ui.pageList.Position = documentPosition
 	}
-	ui.registerNestedScrollTargets(gtx, tree, displayList)
+	ui.registerNestedScrollTargets(gtx, page, tree, displayList)
 	pass := pointer.PassOp{}.Push(gtx.Ops)
 	ui.viewportClick.Add(gtx.Ops)
 	pass.Pop()
@@ -2388,6 +2388,9 @@ func (ui *BrowserUI) handleNestedScrollEvents(gtx layout.Context, page *browser.
 	}
 	dirty := false
 	for nodeID, container := range tree.ScrollContainers {
+		if isDocumentBody(page, nodeID) {
+			continue
+		}
 		tag := ui.nestedScrollTags[nodeID]
 		if tag == nil {
 			tag = &nestedScrollTag{nodeID: nodeID}
@@ -2446,7 +2449,7 @@ func userScrollableOverflow(value stylemodel.Overflow) bool {
 	return value == stylemodel.OverflowAuto || value == stylemodel.OverflowScroll
 }
 
-func (ui *BrowserUI) registerNestedScrollTargets(gtx layout.Context, tree *layoutengine.Tree, displayList *paintmodel.DisplayList) {
+func (ui *BrowserUI) registerNestedScrollTargets(gtx layout.Context, page *browser.Page, tree *layoutengine.Tree, displayList *paintmodel.DisplayList) {
 	if tree == nil || displayList == nil || len(tree.ScrollContainers) == 0 {
 		return
 	}
@@ -2461,6 +2464,9 @@ func (ui *BrowserUI) registerNestedScrollTargets(gtx layout.Context, tree *layou
 	}
 	targets := make([]target, 0, len(tree.ScrollContainers))
 	for nodeID, container := range tree.ScrollContainers {
+		if isDocumentBody(page, nodeID) {
+			continue
+		}
 		maxX := max(container.ScrollWidth-container.Viewport.Width, float32(0))
 		maxY := max(container.ScrollHeight-container.Viewport.Height, float32(0))
 		if !userScrollableOverflow(container.OverflowX) || maxX == 0 {
@@ -2505,6 +2511,14 @@ func (ui *BrowserUI) registerNestedScrollTargets(gtx layout.Context, tree *layou
 		event.Op(gtx.Ops, tag)
 		area.Pop()
 	}
+}
+
+func isDocumentBody(page *browser.Page, nodeID dom.NodeID) bool {
+	if page == nil || page.Document == nil {
+		return false
+	}
+	node, exists := page.Document.NodeByID(nodeID)
+	return exists && node.Type == dom.NodeElement && node.TagName == "body"
 }
 
 func nestedScrollTransform(tree *layoutengine.Tree, nodeID dom.NodeID) stylemodel.Matrix {
