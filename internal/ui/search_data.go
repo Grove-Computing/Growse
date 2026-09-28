@@ -1,6 +1,9 @@
 package ui
 
 import (
+	"image"
+	"image/color"
+
 	"gioui.org/layout"
 	"gioui.org/unit"
 	"gioui.org/widget/material"
@@ -63,17 +66,22 @@ func (ui *BrowserUI) toggleActiveBookmark() {
 }
 
 func (ui *BrowserUI) layoutBookmarkButton(gtx layout.Context) layout.Dimensions {
-	label := "☆"
+	icon := ui.bookmarkBorderIcon
+	description := "Bookmarkへ追加"
 	if ui.searchData != nil {
 		if navigator := ui.activeNavigator(); navigator != nil && navigator.Page() != nil && navigator.Page().URL != nil {
 			if _, exists := ui.searchData.Bookmark(navigator.Page().URL.String()); exists {
-				label = "★"
+				icon = ui.bookmarkIcon
+				description = "Bookmarkから削除"
 			}
 		}
 	}
-	gtx.Constraints.Min.Y = gtx.Dp(controlHeight)
-	gtx.Constraints.Max.Y = gtx.Dp(controlHeight)
-	button := material.Button(ui.theme, &ui.bookmarkButton, label)
-	button.CornerRadius = unit.Dp(10)
+	size := gtx.Dp(unit.Dp(40))
+	gtx.Constraints = layout.Exact(image.Pt(size, size))
+	button := material.IconButton(ui.theme, &ui.bookmarkButton, icon, description)
+	button.Background = color.NRGBA{}
+	button.Color = color.NRGBA{R: 52, G: 64, B: 84, A: 255}
+	button.Size = unit.Dp(22)
+	button.Inset = layout.UniformInset(unit.Dp(9))
 	return button.Layout(gtx)
 }

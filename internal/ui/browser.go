@@ -162,6 +162,9 @@ type BrowserUI struct {
 	updateAvailable   bool
 	updating          bool
 	onUpdateApplied   func()
+
+	bookmarkIcon       *widget.Icon
+	bookmarkBorderIcon *widget.Icon
 }
 
 type documentLayoutCache struct {
@@ -390,6 +393,9 @@ func NewBrowserUIWithTabsAndUpdater(navigator Navigator, tabs TabController, inv
 		updateContext:     updateContext,
 		cancelUpdate:      cancelUpdate,
 		onUpdateApplied:   onUpdateApplied,
+
+		bookmarkIcon:       mustIcon(widget.NewIcon(icons.ToggleStar)),
+		bookmarkBorderIcon: mustIcon(widget.NewIcon(icons.ToggleStarBorder)),
 	}
 	if ui.invalidate == nil {
 		ui.invalidate = func() {}
@@ -1514,8 +1520,6 @@ func (ui *BrowserUI) layoutToolbar(gtx layout.Context) layout.Dimensions {
 					layout.Rigid(ui.layoutDevToolsButton),
 					layout.Rigid(ui.layoutProviderButton),
 					layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
-					layout.Rigid(ui.layoutBookmarkButton),
-					layout.Rigid(layout.Spacer{Width: unit.Dp(4)}.Layout),
 					layout.Flexed(1, ui.layoutAddressBar),
 					layout.Rigid(layout.Spacer{Width: unit.Dp(4)}.Layout),
 					layout.Rigid(ui.layoutGopherButton),
@@ -2060,7 +2064,7 @@ func (ui *BrowserUI) layoutAddressBar(gtx layout.Context) layout.Dimensions {
 				return layout.Dimensions{Size: gtx.Constraints.Min}
 			}),
 			layout.Stacked(func(gtx layout.Context) layout.Dimensions {
-				return layout.UniformInset(unit.Dp(10)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				return layout.Inset{Top: unit.Dp(10), Right: unit.Dp(48), Bottom: unit.Dp(10), Left: unit.Dp(10)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 					// Stack children receive a zero minimum width by default. Keep the
 					// editor's hit area as wide as the visible address bar instead of
 					// letting it shrink to its placeholder text.
@@ -2069,6 +2073,12 @@ func (ui *BrowserUI) layoutAddressBar(gtx layout.Context) layout.Dimensions {
 						layout.Stacked(material.Editor(ui.theme, ui.address, "URLを入力").Layout),
 						layout.Stacked(ui.layoutSuggestionPreview),
 					)
+				})
+			}),
+			layout.Stacked(func(gtx layout.Context) layout.Dimensions {
+				gtx.Constraints.Min.X = gtx.Constraints.Max.X
+				return layout.E.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					return layout.Inset{Right: unit.Dp(4)}.Layout(gtx, ui.layoutBookmarkButton)
 				})
 			}),
 		)
