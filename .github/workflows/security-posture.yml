@@ -31,7 +31,7 @@ jobs:
           -fmt sarif -out gosec.sarif
           ./internal/animation ./internal/browser ./internal/css ./internal/dom
           ./internal/events ./internal/forms ./internal/html ./internal/layout
-          ./internal/network ./internal/paint ./internal/searchprovider ./internal/securityscan ./internal/storage
+          ./internal/network ./internal/paint ./internal/searchdata ./internal/searchprovider ./internal/securityscan ./internal/storage
           ./internal/style ./internal/supplychain ./internal/updater ./internal/webapi/...
       - uses: github/codeql-action/upload-sarif@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8
         with:
