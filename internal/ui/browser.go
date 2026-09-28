@@ -850,6 +850,21 @@ func (ui *BrowserUI) handleFindKeyboardShortcuts(gtx layout.Context) {
 		}
 	}
 	for {
+		event, ok := gtx.Event(
+			key.Filter{Focus: state.editor, Name: key.NameReturn, Required: key.ModShift},
+			key.Filter{Focus: state.editor, Name: key.NameEnter, Required: key.ModShift},
+		)
+		if !ok {
+			break
+		}
+		keyEvent, ok := event.(key.Event)
+		if !ok || keyEvent.State != key.Press {
+			continue
+		}
+		ui.runFindSearch(state)
+		state.move(-1)
+	}
+	for {
 		event, ok := gtx.Event(key.Filter{Focus: state.editor, Name: key.NameEscape})
 		if !ok {
 			break
@@ -1073,6 +1088,40 @@ type findHighlightGeometry struct {
 	originY       float32
 }
 
+type findHighlightTextSegment struct {
+	nodeID dom.NodeID
+	start  int
+}
+
+type findHighlightTextSource struct {
+	text     string
+	segments []findHighlightTextSegment
+}
+
+func collectFindHighlightText(node *dom.Node, source *findHighlightTextSource) {
+	if node == nil {
+		return
+	}
+	if node.Type == dom.NodeText {
+		start := len(source.text)
+		source.text += node.Text
+		source.segments = append(source.segments, findHighlightTextSegment{
+			nodeID: node.ID,
+			start:  start,
+		})
+		return
+	}
+	for _, child := range node.Children {
+		collectFindHighlightText(child, source)
+	}
+}
+
+func findHighlightSource(node *dom.Node) findHighlightTextSource {
+	var source findHighlightTextSource
+	collectFindHighlightText(node, &source)
+	return source
+}
+
 func (ui *BrowserUI) findHighlightGeometry(displayList *paintmodel.DisplayList, page *browser.Page) []findHighlightGeometry {
 	state := ui.activeFindState()
 	if state == nil || !state.open || len(state.result.Matches) == 0 || displayList == nil || page == nil || page.Document == nil {
@@ -1083,6 +1132,7 @@ func (ui *BrowserUI) findHighlightGeometry(displayList *paintmodel.DisplayList, 
 		matches[match.NodeID] = append(matches[match.NodeID], index)
 	}
 	sourceOffsets := make(map[dom.NodeID]int)
+	textSources := make(map[dom.NodeID]findHighlightTextSource)
 	result := make([]findHighlightGeometry, 0, len(state.result.Matches))
 	for commandIndex, source := range displayList.Commands {
 		command, ok := source.(paintmodel.DrawText)
@@ -1101,17 +1151,32 @@ func (ui *BrowserUI) findHighlightGeometry(displayList *paintmodel.DisplayList, 
 		}
 		runX := float32(0)
 		for _, run := range runs {
-			nodeMatches := matches[run.NodeID]
-			if len(nodeMatches) == 0 || run.Text == "" || run.Atomic {
+			if run.Text == "" || run.Atomic {
 				runX += run.Width
 				continue
 			}
 			node, exists := page.Document.NodeByID(run.NodeID)
-			if !exists || node.Type != dom.NodeText {
+			if !exists {
 				runX += run.Width
 				continue
 			}
-			runStart := locateRenderedText(node.Text, sourceOffsets[run.NodeID], run.Text)
+			textSource, cached := textSources[run.NodeID]
+			if !cached {
+				textSource = findHighlightSource(node)
+				textSources[run.NodeID] = textSource
+			}
+			hasMatches := false
+			for _, segment := range textSource.segments {
+				if len(matches[segment.nodeID]) > 0 {
+					hasMatches = true
+					break
+				}
+			}
+			if !hasMatches {
+				runX += run.Width
+				continue
+			}
+			runStart := locateRenderedText(textSource.text, sourceOffsets[run.NodeID], run.Text)
 			if runStart < 0 {
 				runX += run.Width
 				continue
@@ -1123,31 +1188,35 @@ func (ui *BrowserUI) findHighlightGeometry(displayList *paintmodel.DisplayList, 
 				FontFamilies: append([]string(nil), run.FontFamilies...), FontStyle: run.FontStyle, FontStretch: run.FontStretch,
 				LetterSpacing: run.LetterSpacing, WordSpacing: run.WordSpacing, WritingMode: run.WritingMode, Direction: run.Direction,
 			}
-			for _, matchIndex := range nodeMatches {
-				match := state.result.Matches[matchIndex]
-				start, end := max(match.Start, runStart), min(match.End, runEnd)
-				if start >= end {
-					continue
+			for _, segment := range textSource.segments {
+				for _, matchIndex := range matches[segment.nodeID] {
+					match := state.result.Matches[matchIndex]
+					matchStart := segment.start + match.Start
+					matchEnd := segment.start + match.End
+					start, end := max(matchStart, runStart), min(matchEnd, runEnd)
+					if start >= end {
+						continue
+					}
+					prefix := layoutengine.MeasureTextRun(run.Text[:start-runStart], layoutRun, page.WebFonts)
+					advance := layoutengine.MeasureTextRun(run.Text[:end-runStart], layoutRun, page.WebFonts) - prefix
+					if advance <= 0 {
+						advance = run.Width * float32(end-start) / float32(max(runEnd-runStart, 1))
+					}
+					geometry := findHighlightGeometry{
+						commandIndex: commandIndex, matchIndex: matchIndex,
+						x: command.X + runX + prefix, y: command.Y,
+						width: advance, height: command.Height,
+						clip: command.Clip, clips: command.Clips, transform: command.Transform,
+						originX: command.X, originY: command.Y,
+					}
+					if command.WritingMode != stylemodel.WritingModeHorizontalTB {
+						geometry.x = command.X + run.OffsetX
+						geometry.y = command.Y + run.OffsetY + prefix
+						geometry.width = max(run.CrossSize, command.Width)
+						geometry.height = advance
+					}
+					result = append(result, geometry)
 				}
-				prefix := layoutengine.MeasureTextRun(run.Text[:start-runStart], layoutRun, page.WebFonts)
-				advance := layoutengine.MeasureTextRun(run.Text[:end-runStart], layoutRun, page.WebFonts) - prefix
-				if advance <= 0 {
-					advance = run.Width * float32(end-start) / float32(max(runEnd-runStart, 1))
-				}
-				geometry := findHighlightGeometry{
-					commandIndex: commandIndex, matchIndex: matchIndex,
-					x: command.X + runX + prefix, y: command.Y,
-					width: advance, height: command.Height,
-					clip: command.Clip, clips: command.Clips, transform: command.Transform,
-					originX: command.X, originY: command.Y,
-				}
-				if command.WritingMode != stylemodel.WritingModeHorizontalTB {
-					geometry.x = command.X + run.OffsetX
-					geometry.y = command.Y + run.OffsetY + prefix
-					geometry.width = max(run.CrossSize, command.Width)
-					geometry.height = advance
-				}
-				result = append(result, geometry)
 			}
 			runX += run.Width
 		}

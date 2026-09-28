@@ -2780,6 +2780,14 @@ func TestFindBarShortcutSearchStatusAndWrap(t *testing.T) {
 	if got := state.statusLabel(); got != "2 / 2" {
 		t.Fatalf("wrapped previous status = %q, want 2 / 2", got)
 	}
+
+	router.Frame(gtx.Ops)
+	router.Queue(key.Event{Name: key.NameReturn, Modifiers: key.ModShift, State: key.Press})
+	gtx.Reset()
+	ui.Layout(gtx)
+	if got := state.statusLabel(); got != "1 / 2" {
+		t.Fatalf("Shift+Enter status = %q, want 1 / 2", got)
+	}
 }
 
 func TestFindBarDistinguishesEmptyZeroAndLimitStates(t *testing.T) {
@@ -2830,6 +2838,35 @@ func TestFindHighlightGeometryUsesTextRunsWithoutChangingDOM(t *testing.T) {
 	}
 	if textNode.Text != "prefix target suffix" || len(textNode.Children) != 0 {
 		t.Fatalf("find highlight changed DOM text node: %#v", textNode)
+	}
+}
+
+func TestFindHighlightGeometryMapsTextNodeMatchToPaintElement(t *testing.T) {
+	document := dom.NewDocument()
+	body := document.CreateElement("body", nil)
+	paragraph := document.CreateElement("p", nil)
+	textNode := document.CreateText("prefix target suffix")
+	for _, edge := range [][2]*dom.Node{{document.Root, body}, {body, paragraph}, {paragraph, textNode}} {
+		if err := document.AppendChild(edge[0], edge[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	page := &browser.Page{Document: document}
+	ui := NewBrowserUI(&stubNavigator{page: page}, nil)
+	state := ui.ensureFindState()
+	state.open = true
+	state.result = findpage.Result{Matches: []findpage.Match{{NodeID: textNode.ID, Start: 7, End: 13}}}
+	list := &paintmodel.DisplayList{Commands: []paintmodel.Command{
+		paintmodel.DrawText{
+			NodeID: paragraph.ID, Text: textNode.Text, X: 20, Y: 40, Width: 190, Height: 24, FontSize: 16,
+			Runs: []paintmodel.TextRun{{NodeID: paragraph.ID, Text: textNode.Text, Width: 190, FontSize: 16}},
+		},
+	}}
+
+	geometry := ui.findHighlightGeometry(list, page)
+	if len(geometry) != 1 || geometry[0].commandIndex != 0 || geometry[0].matchIndex != 0 ||
+		geometry[0].x <= 20 || geometry[0].width <= 0 || geometry[0].height != 24 {
+		t.Fatalf("element-owned highlight geometry = %#v", geometry)
 	}
 }
 
