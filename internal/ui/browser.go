@@ -58,8 +58,8 @@ var gopherPNG []byte
 const (
 	defaultURL         = "http://localhost:6053"
 	tabRailWidth       = unit.Dp(224)
-	toolbarHeight      = unit.Dp(124)
-	bookmarkBarHeight  = unit.Dp(28)
+	toolbarHeight      = unit.Dp(100)
+	bookmarkBarHeight  = unit.Dp(32)
 	controlHeight      = unit.Dp(44)
 	addressBarHeight   = unit.Dp(48)
 	gopherButtonWidth  = unit.Dp(72)
@@ -275,6 +275,11 @@ type pageInspector interface {
 type engineNavigator interface {
 	Engine() runtimemodel.Engine
 	SetEngine(context.Context, runtimemodel.Engine) (*browser.Page, error)
+}
+
+type nativeFormNavigator interface {
+	Submit(context.Context, dom.NodeID, dom.NodeID) (*browser.Page, error)
+	ActivateSubmitter(context.Context, dom.NodeID, float32, float32) (*browser.Page, error)
 }
 
 type tabNavigationStateSink interface {
@@ -1244,6 +1249,42 @@ func (ui *BrowserUI) activeNavigationTarget() (browser.TabID, Navigator) {
 	return 0, ui.navigator
 }
 
+func (ui *BrowserUI) startFormSubmission(controlID dom.NodeID) bool {
+	tabID, navigator := ui.activeNavigationTarget()
+	native, ok := navigator.(nativeFormNavigator)
+	if !ok || navigator == nil || navigator.Page() == nil || navigator.Page().Document == nil {
+		return false
+	}
+	node, exists := navigator.Page().Document.NodeByID(controlID)
+	if !exists {
+		return false
+	}
+	form := forms.FormOwner(navigator.Page().Document, node)
+	if form == nil {
+		return false
+	}
+	ui.startPageLoad(tabID, navigator, "フォームを送信中", func(ctx context.Context) (*browser.Page, error) {
+		return native.Submit(ctx, form.ID, 0)
+	})
+	return true
+}
+
+func (ui *BrowserUI) startSubmitterActivation(nodeID dom.NodeID, x, y float32) bool {
+	tabID, navigator := ui.activeNavigationTarget()
+	native, ok := navigator.(nativeFormNavigator)
+	if !ok || navigator == nil || navigator.Page() == nil || navigator.Page().Document == nil {
+		return false
+	}
+	node, exists := navigator.Page().Document.NodeByID(nodeID)
+	if !exists || !forms.IsSubmitButton(node) || forms.FormOwner(navigator.Page().Document, node) == nil {
+		return false
+	}
+	ui.startPageLoad(tabID, navigator, "フォームを送信中", func(ctx context.Context) (*browser.Page, error) {
+		return native.ActivateSubmitter(ctx, nodeID, x, y)
+	})
+	return true
+}
+
 func newOmniboxEditor(value string) *widget.Editor {
 	editor := new(widget.Editor)
 	editor.SingleLine = true
@@ -1533,13 +1574,6 @@ func (ui *BrowserUI) layoutToolbar(gtx layout.Context) layout.Dimensions {
 			}),
 			layout.Rigid(layout.Spacer{Height: unit.Dp(2)}.Layout),
 			layout.Rigid(ui.layoutBookmarkBar),
-			layout.Rigid(layout.Spacer{Height: unit.Dp(2)}.Layout),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				label := material.Caption(ui.theme, ui.status)
-				label.Color = color.NRGBA{R: 72, G: 84, B: 102, A: 255}
-				label.MaxLines = 1
-				return label.Layout(gtx)
-			}),
 		)
 	})
 }
@@ -2791,6 +2825,10 @@ func (ui *BrowserUI) dispatchPaintedClick(page *browser.Page, hit paintedDisplay
 	nodeID := hit.NodeID
 	if _, handledByButton := ui.formButtons[nodeID]; handledByButton {
 		ui.navigator.UpdateFocus(focusableNodeID(page.Document, nodeID))
+		if ui.startSubmitterActivation(nodeID, hit.DocumentX, hit.DocumentY) {
+			ui.formPointerClicks[nodeID]++
+			return
+		}
 		if ui.navigator.DispatchClick(nodeID, hit.DocumentX, hit.DocumentY) {
 			ui.formPointerClicks[nodeID]++
 		}
@@ -3587,7 +3625,7 @@ func (ui *BrowserUI) layoutDrawInput(gtx layout.Context, command paintmodel.Draw
 			}
 			if _, submitted := event.(widget.SubmitEvent); submitted {
 				ui.commitInput(command.NodeID, editor.Text())
-				if ui.navigator != nil {
+				if !ui.startFormSubmission(command.NodeID) && ui.navigator != nil {
 					ui.navigator.SubmitForm(command.NodeID)
 				}
 			}
@@ -3769,7 +3807,9 @@ func (ui *BrowserUI) layoutDrawButton(gtx layout.Context, command paintmodel.Dra
 			}
 			if ui.navigator != nil {
 				ui.navigator.UpdateFocus(command.NodeID)
-				ui.navigator.DispatchClick(command.NodeID, command.X, command.Y)
+				if !ui.startSubmitterActivation(command.NodeID, command.X, command.Y) {
+					ui.navigator.DispatchClick(command.NodeID, command.X, command.Y)
+				}
 			}
 		}
 		gtx.Constraints.Min.Y = gtx.Dp(unit.Dp(command.Height))

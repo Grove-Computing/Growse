@@ -17,3 +17,15 @@ func TestResolveResourceURLsUsesStylesheetBase(t *testing.T) {
 		t.Fatalf("background URL = %q, want %q", got, want)
 	}
 }
+
+func TestResolveResourceURLsHandlesBackgroundShorthand(t *testing.T) {
+	stylesheet, err := Parse(strings.NewReader(`.logo { background: transparent url('//cdn.example/logo.svg') no-repeat center; }`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, _ := url.Parse("https://search.example/assets/main.css")
+	ResolveResourceURLs(stylesheet, base)
+	if got, want := stylesheet.Rules[0].Declarations[0].Value.Raw, `transparent url("https://cdn.example/logo.svg") no-repeat center`; got != want {
+		t.Fatalf("background shorthand = %q, want %q", got, want)
+	}
+}

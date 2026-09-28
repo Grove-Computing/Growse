@@ -125,6 +125,20 @@ type stubNavigator struct {
 	err  error
 }
 
+type nativeStubNavigator struct {
+	*stubNavigator
+	activated chan dom.NodeID
+}
+
+func (navigator *nativeStubNavigator) Submit(context.Context, dom.NodeID, dom.NodeID) (*browser.Page, error) {
+	return navigator.page, navigator.err
+}
+
+func (navigator *nativeStubNavigator) ActivateSubmitter(_ context.Context, nodeID dom.NodeID, _, _ float32) (*browser.Page, error) {
+	navigator.activated <- nodeID
+	return navigator.page, navigator.err
+}
+
 type scrollRecordingNavigator struct {
 	stubNavigator
 	updates [][2]int
@@ -373,7 +387,7 @@ func TestToolbarHasFixedHeight(t *testing.T) {
 	}
 
 	dims := ui.layoutToolbar(gtx)
-	if got, want := dims.Size.Y, 124; got != want {
+	if got, want := dims.Size.Y, 100; got != want {
 		t.Fatalf("toolbar height = %d, want %d", got, want)
 	}
 }
@@ -1986,6 +2000,37 @@ func TestPaintedFormButtonClickUsesDisplayListHitGeometry(t *testing.T) {
 
 	if clicked != 1 || page.FocusTarget != button.ID {
 		t.Fatalf("painted form click = clicks:%d focus:%d", clicked, page.FocusTarget)
+	}
+	if pending := ui.formPointerClicks[button.ID]; pending != 1 {
+		t.Fatalf("native duplicate suppression = %d, want 1", pending)
+	}
+}
+
+func TestPaintedSubmitButtonStartsNativeSubmission(t *testing.T) {
+	document := dom.NewDocument()
+	form := document.CreateElement("form", map[string]string{"action": "/search"})
+	button := document.CreateElement("button", nil)
+	if err := document.AppendChild(document.Root, form); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(form, button); err != nil {
+		t.Fatal(err)
+	}
+	page := &browser.Page{Document: document, ComputedStyles: style.Compute(document, nil), Events: events.NewDispatcher()}
+	navigator := &nativeStubNavigator{stubNavigator: &stubNavigator{page: page}, activated: make(chan dom.NodeID, 1)}
+	ui := NewBrowserUI(navigator, nil)
+	defer ui.Close()
+	ui.formButtons[button.ID] = new(widget.Clickable)
+
+	ui.dispatchPaintedClick(page, paintedDisplayHit{NodeID: button.ID, DocumentX: 240, DocumentY: 180})
+
+	select {
+	case activated := <-navigator.activated:
+		if activated != button.ID {
+			t.Fatalf("activated submitter = %d, want %d", activated, button.ID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("native form submission did not start")
 	}
 	if pending := ui.formPointerClicks[button.ID]; pending != 1 {
 		t.Fatalf("native duplicate suppression = %d, want 1", pending)

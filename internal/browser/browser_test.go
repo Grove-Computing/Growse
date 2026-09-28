@@ -1632,3 +1632,37 @@ func TestNavigationObserverReportsOnlyHistoryPush(t *testing.T) {
 		t.Fatalf("navigation records = %#v", records)
 	}
 }
+
+func TestActivateSubmitterDispatchesClickAndNavigates(t *testing.T) {
+	document := dom.NewDocument()
+	form := document.CreateElement("form", map[string]string{"action": "/search", "method": "get"})
+	query := document.CreateElement("input", map[string]string{"name": "q", "value": "hoge"})
+	submit := document.CreateElement("button", map[string]string{"name": "source", "value": "button"})
+	for _, edge := range [][2]*dom.Node{{document.Root, form}, {form, query}, {form, submit}} {
+		if err := document.AppendChild(edge[0], edge[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	baseURL := mustParseURL(t, "https://example.com/form")
+	targetURL := mustParseURL(t, "https://example.com/search?q=hoge&source=button")
+	loader := &routeLoader{responses: map[string]*network.Response{
+		targetURL.String(): {URL: targetURL, StatusCode: 200, ContentType: "text/html", Body: []byte(`<!doctype html><title>Results</title>`)},
+	}}
+	dispatcher := events.NewDispatcher()
+	clicks, submits := 0, 0
+	dispatcher.AddEventListener(submit.ID, events.Click, func(events.Event) { clicks++ })
+	dispatcher.AddEventListener(form.ID, events.Submit, func(events.Event) { submits++ })
+	browser := New(loader)
+	browser.SetPage(&Page{URL: baseURL, Document: document, ComputedStyles: style.Compute(document, nil), Events: dispatcher})
+
+	page, err := browser.ActivateSubmitter(context.Background(), submit.ID, 12, 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := page.URL.String(), targetURL.String(); got != want {
+		t.Fatalf("page URL = %q, want %q", got, want)
+	}
+	if clicks != 1 || submits != 1 {
+		t.Fatalf("event counts click=%d submit=%d, want 1 each", clicks, submits)
+	}
+}

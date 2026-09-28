@@ -513,6 +513,37 @@ func (b *Browser) DispatchClick(nodeID dom.NodeID, x, y float32) bool {
 	return clickHandled || submitHandled || labelHandled
 }
 
+// ActivateSubmitter dispatches a button click and performs its default form
+// submission when script does not cancel the click.
+func (b *Browser) ActivateSubmitter(ctx context.Context, nodeID dom.NodeID, x, y float32) (*Page, error) {
+	b.mu.RLock()
+	page := b.page
+	if page == nil || page.Document == nil {
+		b.mu.RUnlock()
+		return nil, errors.New("no active page for form submission")
+	}
+	node, ok := page.Document.NodeByID(nodeID)
+	if !ok || !page.Document.IsConnected(node) || forms.Disabled(node) || !isSubmitButton(node) {
+		b.mu.RUnlock()
+		return nil, errors.New("submitter was not found")
+	}
+	form := forms.FormOwner(page.Document, node)
+	if form == nil {
+		b.mu.RUnlock()
+		return nil, errors.New("form was not found")
+	}
+	formID := form.ID
+	b.mu.RUnlock()
+
+	clickEvent := events.Cancelable(events.Click, nodeID)
+	clickEvent.X, clickEvent.Y = x, y
+	b.dispatchPageEvent(page, clickEvent)
+	if clickEvent.DefaultPrevented() {
+		return nil, ErrSubmissionPrevented
+	}
+	return b.Submit(ctx, formID, nodeID)
+}
+
 // SetInputValue はユーザー入力をアクティブページの編集可能なText Controlへ反映する。
 func (b *Browser) SetInputValue(nodeID dom.NodeID, value string) bool {
 	b.mu.Lock()

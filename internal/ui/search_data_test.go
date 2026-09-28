@@ -60,11 +60,11 @@ func TestBookmarkBarListsProfileEntries(t *testing.T) {
 
 	gtx := layout.Context{
 		Ops:         new(op.Ops),
-		Constraints: layout.Exact(image.Pt(640, 28)),
+		Constraints: layout.Exact(image.Pt(640, 32)),
 		Metric:      unit.Metric{PxPerDp: 1, PxPerSp: 1},
 	}
 	dims := ui.layoutBookmarkBar(gtx)
-	if got, want := dims.Size.Y, 28; got != want {
+	if got, want := dims.Size.Y, 32; got != want {
 		t.Fatalf("bookmark bar height = %d, want %d", got, want)
 	}
 	if got, want := len(ui.bookmarkBarButtons), 2; got != want {
