@@ -104,6 +104,7 @@ func runWindow(window *gioapp.Window) error {
 	browserUI := ui.NewBrowserUIWithTabsAndUpdater(nil, session, window.Invalidate, updater.New(), func() {
 		window.Perform(system.ActionClose)
 	})
+	browserUI.SetSearchDataStore(searchData)
 	defer browserUI.Close()
 	if dataRootErr == nil {
 		if err := browserUI.OpenSearchProfile(dataRoot); err != nil {

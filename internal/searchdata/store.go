@@ -88,6 +88,17 @@ func validateProfile(data profileData) error {
 		}
 		seen[key] = struct{}{}
 	}
+	seen = make(map[string]struct{}, len(data.Bookmarks))
+	for _, entry := range data.Bookmarks {
+		_, key, err := canonicalURL(entry.URL)
+		if err != nil || !validBookmark(entry) {
+			return ErrInvalid
+		}
+		if _, duplicate := seen[key]; duplicate {
+			return ErrInvalid
+		}
+		seen[key] = struct{}{}
+	}
 	return nil
 }
 

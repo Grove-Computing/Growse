@@ -46,6 +46,7 @@ import (
 	"github.com/Grove-Computing/Growse/internal/omnibox"
 	paintmodel "github.com/Grove-Computing/Growse/internal/paint"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
+	"github.com/Grove-Computing/Growse/internal/searchdata"
 	"github.com/Grove-Computing/Growse/internal/searchprovider"
 	stylemodel "github.com/Grove-Computing/Growse/internal/style"
 	"github.com/Grove-Computing/Growse/internal/updater"
@@ -83,6 +84,7 @@ type BrowserUI struct {
 	forwardButton     widget.Clickable
 	reloadButton      widget.Clickable
 	goButton          widget.Clickable
+	bookmarkButton    widget.Clickable
 	updateButton      widget.Clickable
 	engineButton      widget.Clickable
 	devToolsButton    widget.Clickable
@@ -121,6 +123,7 @@ type BrowserUI struct {
 	providerStore            *searchprovider.Store
 	providerImportPending    bool
 	providerDiscoveryButtons map[string]*widget.Clickable
+	searchData               *searchdata.Store
 
 	gopher            paint.ImageOp
 	pointerTag        pointerTag
@@ -659,6 +662,16 @@ func (ui *BrowserUI) handleKeyboardShortcuts(gtx layout.Context) {
 		gtx.Execute(key.FocusCmd{Tag: ui.address})
 	}
 	for {
+		event, ok := gtx.Event(key.Filter{Name: "D", Required: key.ModShortcut})
+		if !ok {
+			break
+		}
+		keyEvent, ok := event.(key.Event)
+		if ok && keyEvent.State == key.Press {
+			ui.toggleActiveBookmark()
+		}
+	}
+	for {
 		event, ok := gtx.Event(key.Filter{Name: key.NameF12})
 		if !ok {
 			break
@@ -761,6 +774,9 @@ func (ui *BrowserUI) handleActions(gtx layout.Context) {
 	ui.handleSuggestionMouseAndFocus(gtx)
 	for ui.goButton.Clicked(gtx) {
 		ui.startNavigation(ui.address.Text())
+	}
+	for ui.bookmarkButton.Clicked(gtx) {
+		ui.toggleActiveBookmark()
 	}
 	for ui.backButton.Clicked(gtx) {
 		if tabID, navigator := ui.activeNavigationTarget(); navigator != nil && navigator.CanBack() {
@@ -1494,6 +1510,8 @@ func (ui *BrowserUI) layoutToolbar(gtx layout.Context) layout.Dimensions {
 					layout.Rigid(ui.layoutDevToolsButton),
 					layout.Rigid(ui.layoutProviderButton),
 					layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
+					layout.Rigid(ui.layoutBookmarkButton),
+					layout.Rigid(layout.Spacer{Width: unit.Dp(4)}.Layout),
 					layout.Flexed(1, ui.layoutAddressBar),
 					layout.Rigid(layout.Spacer{Width: unit.Dp(4)}.Layout),
 					layout.Rigid(ui.layoutGopherButton),
