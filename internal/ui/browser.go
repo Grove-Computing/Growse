@@ -114,6 +114,7 @@ type BrowserUI struct {
 	address           *widget.Editor
 	omniboxStates     map[browser.TabID]omniboxState
 	findStates        map[browser.TabID]*findTabState
+	findFocusPending  bool
 
 	suggestions              *omnibox.Pipeline
 	suggestionPopup          suggestionPopup
@@ -192,23 +193,28 @@ type browserChromeGeometry struct {
 }
 
 type findTabState struct {
-	open           bool
-	editor         *widget.Editor
-	options        findpage.Options
-	result         findpage.Result
-	current        int
-	searching      bool
-	pendingSearch  bool
-	scrollPending  bool
-	searchPage     *browser.Page
-	searchRevision uint64
-	viewportWidth  float32
-	viewportHeight float32
-	previous       widget.Clickable
-	next           widget.Clickable
-	caseToggle     widget.Clickable
-	wordToggle     widget.Clickable
-	close          widget.Clickable
+	open              bool
+	editor            *widget.Editor
+	options           findpage.Options
+	result            findpage.Result
+	current           int
+	searching         bool
+	pendingSearch     bool
+	scrollPending     bool
+	searchPage        *browser.Page
+	searchRevision    uint64
+	viewportWidth     float32
+	viewportHeight    float32
+	startPage         *browser.Page
+	startPagePosition layout.Position
+	startNestedScroll map[dom.NodeID]layoutengine.ScrollOffset
+	startPageFocus    dom.NodeID
+	restoreFocus      event.Tag
+	previous          widget.Clickable
+	next              widget.Clickable
+	caseToggle        widget.Clickable
+	wordToggle        widget.Clickable
+	close             widget.Clickable
 }
 
 func newFindTabState() *findTabState {
@@ -806,14 +812,26 @@ func (ui *BrowserUI) handleFindKeyboardShortcuts(gtx layout.Context) {
 			continue
 		}
 		state := ui.ensureFindState()
-		state.open = true
+		if !state.open {
+			ui.captureFindStart(gtx, state)
+			state.open = true
+			if state.editor.Text() != "" {
+				state.searching = true
+				state.pendingSearch = true
+			}
+		}
 		state.editor.SetCaret(0, state.editor.Len())
 		ui.closeSuggestionPopup()
 		gtx.Execute(key.FocusCmd{Tag: state.editor})
 	}
 	state := ui.activeFindState()
 	if state == nil || !state.open {
+		ui.findFocusPending = false
 		return
+	}
+	if ui.findFocusPending {
+		ui.findFocusPending = false
+		gtx.Execute(key.FocusCmd{Tag: state.editor})
 	}
 	for {
 		event, ok := gtx.Event(key.Filter{Name: key.NameF3, Optional: key.ModShift})
@@ -838,7 +856,7 @@ func (ui *BrowserUI) handleFindKeyboardShortcuts(gtx layout.Context) {
 		}
 		keyEvent, ok := event.(key.Event)
 		if ok && keyEvent.State == key.Press {
-			state.open = false
+			ui.closeFindBar(gtx, state, true)
 		}
 	}
 }
@@ -887,8 +905,97 @@ func (ui *BrowserUI) handleFindActions(gtx layout.Context) {
 		ui.invalidate()
 	}
 	for state.close.Clicked(gtx) {
-		state.open = false
+		ui.closeFindBar(gtx, state, true)
 	}
+}
+
+func (ui *BrowserUI) captureFindStart(gtx layout.Context, state *findTabState) {
+	if state == nil {
+		return
+	}
+	state.startPagePosition = ui.pageList.Position
+	state.startNestedScroll = cloneFindScrollOffsets(ui.nestedScroll)
+	state.restoreFocus = ui.focusedChromeTag(gtx)
+	if navigator := ui.activeNavigator(); navigator != nil {
+		state.startPage = navigator.Page()
+		if state.startPage != nil {
+			state.startPageFocus = state.startPage.FocusTarget
+		}
+	}
+}
+
+func (ui *BrowserUI) focusedChromeTag(gtx layout.Context) event.Tag {
+	if ui.address != nil && gtx.Focused(ui.address) {
+		return ui.address
+	}
+	for _, editor := range ui.inputEditors {
+		if gtx.Focused(editor) {
+			return editor
+		}
+	}
+	for _, button := range ui.selectButtons {
+		if gtx.Focused(button) {
+			return button
+		}
+	}
+	for _, button := range ui.checkableButtons {
+		if gtx.Focused(button) {
+			return button
+		}
+	}
+	for _, button := range ui.formButtons {
+		if gtx.Focused(button) {
+			return button
+		}
+	}
+	return nil
+}
+
+func cloneFindScrollOffsets(source map[dom.NodeID]layoutengine.ScrollOffset) map[dom.NodeID]layoutengine.ScrollOffset {
+	result := make(map[dom.NodeID]layoutengine.ScrollOffset, len(source))
+	for nodeID, offset := range source {
+		result[nodeID] = offset
+	}
+	return result
+}
+
+func (ui *BrowserUI) closeFindBar(gtx layout.Context, state *findTabState, restore bool) {
+	if state == nil {
+		return
+	}
+	if restore {
+		currentPage := (*browser.Page)(nil)
+		if navigator := ui.activeNavigator(); navigator != nil {
+			currentPage = navigator.Page()
+		}
+		if currentPage == state.startPage {
+			ui.pageList.Position = state.startPagePosition
+			ui.nestedScroll = cloneFindScrollOffsets(state.startNestedScroll)
+			ui.layoutCache = documentLayoutCache{}
+			if ui.navigator != nil && state.startPageFocus != 0 {
+				ui.navigator.UpdateFocus(state.startPageFocus)
+			}
+		}
+		if state.restoreFocus != nil {
+			gtx.Execute(key.FocusCmd{Tag: state.restoreFocus})
+		} else {
+			gtx.Execute(key.FocusCmd{})
+		}
+	}
+	state.open = false
+	state.searching = false
+	state.pendingSearch = false
+	state.scrollPending = false
+	state.result = findpage.Result{}
+	state.searchPage = nil
+	state.searchRevision = 0
+	state.viewportWidth = 0
+	state.viewportHeight = 0
+	state.startPage = nil
+	state.startNestedScroll = nil
+	state.startPageFocus = 0
+	state.restoreFocus = nil
+	ui.invalidate()
 }
 
 func (ui *BrowserUI) runFindSearch(state *findTabState) {
@@ -1780,6 +1887,7 @@ func (ui *BrowserUI) syncActiveTabChrome() {
 	ui.closeSuggestionPopup()
 	ui.displayedTabID = active.ID
 	ui.navigator = navigator
+	ui.findFocusPending = ui.findStates[active.ID] != nil && ui.findStates[active.ID].open
 	committedURL := active.URL
 	if page := navigator.Page(); page != nil && page.URL != nil {
 		committedURL = page.URL.String()
@@ -1940,6 +2048,7 @@ func (ui *BrowserUI) Close() {
 	for tabID := range ui.navigations {
 		ui.cancelTabNavigation(tabID)
 	}
+	clear(ui.findStates)
 }
 
 func (ui *BrowserUI) layoutToolbar(gtx layout.Context) layout.Dimensions {

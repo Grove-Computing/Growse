@@ -2947,3 +2947,116 @@ func TestFindSnapshotRebuildsAfterDOMRevisionAndDropsStaleNodes(t *testing.T) {
 		t.Fatalf("viewport rebuild = pending:%t size:%vx%v", state.scrollPending, state.viewportWidth, state.viewportHeight)
 	}
 }
+
+func TestFindStateIsIsolatedPerTab(t *testing.T) {
+	created := []*browser.Browser{browser.New(nil), browser.New(nil)}
+	next := 0
+	session := browser.NewSession(func() *browser.Browser {
+		result := created[next]
+		next++
+		return result
+	})
+	first, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.SelectTab(first.ID); err != nil {
+		t.Fatal(err)
+	}
+	ui := NewBrowserUIWithTabs(nil, session, nil)
+	ui.syncActiveTabChrome()
+	firstState := ui.ensureFindState()
+	firstState.open = true
+	firstState.editor.SetText("first")
+	firstState.options.CaseSensitive = true
+	firstState.current = 3
+
+	if _, err := session.SelectTab(second.ID); err != nil {
+		t.Fatal(err)
+	}
+	ui.syncActiveTabChrome()
+	secondState := ui.ensureFindState()
+	secondState.open = true
+	secondState.editor.SetText("second")
+	secondState.options.WholeWord = true
+	secondState.current = 1
+
+	if _, err := session.SelectTab(first.ID); err != nil {
+		t.Fatal(err)
+	}
+	ui.syncActiveTabChrome()
+	if got := ui.activeFindState(); got != firstState || got.editor.Text() != "first" ||
+		!got.options.CaseSensitive || got.options.WholeWord || got.current != 3 {
+		t.Fatalf("restored first find state = %#v", got)
+	}
+	if secondState.editor.Text() != "second" || !secondState.options.WholeWord || secondState.current != 1 {
+		t.Fatalf("second find state was overwritten = %#v", secondState)
+	}
+}
+
+func TestFindEscapeRestoresStartingScrollAndFocus(t *testing.T) {
+	ui := NewBrowserUI(&stubNavigator{}, nil)
+	ui.pageList.Position = layout.Position{First: 0, Offset: 84}
+	ui.nestedScroll = map[dom.NodeID]layoutengine.ScrollOffset{7: {X: 2, Y: 31}}
+	router := new(input.Router)
+	gtx := layout.Context{
+		Ops: new(op.Ops), Source: router.Source(), Constraints: layout.Exact(image.Pt(1000, 700)),
+		Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1},
+	}
+
+	ui.Layout(gtx)
+	gtx.Execute(key.FocusCmd{Tag: ui.address})
+	router.Frame(gtx.Ops)
+	gtx.Reset()
+	ui.Layout(gtx)
+	router.Frame(gtx.Ops)
+	router.Queue(key.Event{Name: "F", Modifiers: key.ModShortcut, State: key.Press})
+	gtx.Reset()
+	ui.Layout(gtx)
+	state := ui.activeFindState()
+	if state == nil || !state.open {
+		t.Fatalf("find state after shortcut = %#v", state)
+	}
+
+	ui.pageList.Position = layout.Position{First: 0, Offset: 260}
+	ui.nestedScroll = map[dom.NodeID]layoutengine.ScrollOffset{7: {Y: 99}}
+	state.result = findpage.Result{Matches: []findpage.Match{{NodeID: 9}}}
+	router.Frame(gtx.Ops)
+	router.Queue(key.Event{Name: key.NameEscape, State: key.Press})
+	gtx.Reset()
+	ui.Layout(gtx)
+
+	if state.open || len(state.result.Matches) != 0 {
+		t.Fatalf("closed find state retained active resources: %#v", state)
+	}
+	if ui.pageList.Position.Offset != 84 || ui.nestedScroll[7] != (layoutengine.ScrollOffset{X: 2, Y: 31}) {
+		t.Fatalf("restored scroll = document:%#v nested:%#v", ui.pageList.Position, ui.nestedScroll)
+	}
+	router.Frame(gtx.Ops)
+	gtx.Reset()
+	ui.Layout(gtx)
+	if !gtx.Focused(ui.address) {
+		t.Fatal("Escape did not restore the starting omnibox focus")
+	}
+}
+
+func TestClosingTabReleasesFindState(t *testing.T) {
+	session := browser.NewSession()
+	tab, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ui := NewBrowserUIWithTabs(nil, session, nil)
+	ui.syncActiveTabChrome()
+	ui.ensureFindState().open = true
+	if !ui.closeTab(tab.ID) {
+		t.Fatal("closeTab() = false")
+	}
+	if _, exists := ui.findStates[tab.ID]; exists {
+		t.Fatal("closed tab retained Find in Page state")
+	}
+}
