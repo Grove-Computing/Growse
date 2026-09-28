@@ -3060,3 +3060,21 @@ func TestClosingTabReleasesFindState(t *testing.T) {
 		t.Fatal("closed tab retained Find in Page state")
 	}
 }
+
+func TestFindViewportOcclusionAccountsForFixedAndStickyContent(t *testing.T) {
+	target := layoutengine.Rect{X: 40, Y: 260, Width: 60, Height: 20}
+	tree := &layoutengine.Tree{Bounds: map[dom.NodeID]layoutengine.Rect{
+		1: {X: 0, Y: 100, Width: 180, Height: 96},
+		2: {X: 20, Y: 450, Width: 140, Height: 50},
+		3: {X: 220, Y: 100, Width: 60, Height: 120},
+	}}
+	page := &browser.Page{ComputedStyles: style.Map{
+		1: {Position: style.PositionFixed},
+		2: {Position: style.PositionSticky},
+		3: {Position: style.PositionFixed},
+	}}
+	top, bottom := findViewportOcclusion(tree, page, target, 100, 400)
+	if top != 102 || bottom != 56 {
+		t.Fatalf("find viewport occlusion = top %.0f bottom %.0f, want 102/56", top, bottom)
+	}
+}

@@ -2891,18 +2891,44 @@ func (ui *BrowserUI) scrollActiveFindMatch(gtx layout.Context, page *browser.Pag
 		pixelsPerDP = 1
 	}
 	currentScroll := max(float32(ui.pageList.Position.Offset)/pixelsPerDP, float32(0))
-	visibleTop := currentScroll + 70
-	visibleBottom := currentScroll + float32(gtx.Constraints.Max.Y)/pixelsPerDP - 12
+	viewportHeight := float32(gtx.Constraints.Max.Y) / pixelsPerDP
+	topInset, bottomInset := findViewportOcclusion(tree, page, bounds, currentScroll, viewportHeight)
+	visibleTop := currentScroll + topInset
+	visibleBottom := currentScroll + viewportHeight - bottomInset
 	targetScroll := currentScroll
 	if bounds.Y < visibleTop {
-		targetScroll = max(bounds.Y-70, float32(0))
+		targetScroll = max(bounds.Y-topInset, float32(0))
 	} else if bounds.Y+bounds.Height > visibleBottom {
-		targetScroll = max(bounds.Y+bounds.Height-float32(gtx.Constraints.Max.Y)/pixelsPerDP+12, float32(0))
+		targetScroll = max(bounds.Y+bounds.Height-viewportHeight+bottomInset, float32(0))
 	}
 	if targetScroll != currentScroll {
 		ui.pageList.Position.First = 0
 		ui.pageList.Position.Offset = int(math.Round(float64(targetScroll * pixelsPerDP)))
 	}
+}
+
+func findViewportOcclusion(tree *layoutengine.Tree, page *browser.Page, target layoutengine.Rect, scrollY, viewportHeight float32) (float32, float32) {
+	topInset, bottomInset := float32(70), float32(12)
+	if tree == nil || page == nil || viewportHeight <= 0 {
+		return topInset, bottomInset
+	}
+	viewportBottom := scrollY + viewportHeight
+	for nodeID, computed := range page.ComputedStyles {
+		if computed.Position != stylemodel.PositionFixed && computed.Position != stylemodel.PositionSticky {
+			continue
+		}
+		bounds, exists := tree.Bounds[nodeID]
+		if !exists || bounds.Width <= 0 || bounds.Height <= 0 ||
+			bounds.X+bounds.Width <= target.X || bounds.X >= target.X+target.Width {
+			continue
+		}
+		if bounds.Y <= scrollY+viewportHeight/2 && bounds.Y+bounds.Height > scrollY {
+			topInset = max(topInset, bounds.Y+bounds.Height-scrollY+6)
+		} else if bounds.Y < viewportBottom && bounds.Y+bounds.Height >= scrollY+viewportHeight/2 {
+			bottomInset = max(bottomInset, viewportBottom-bounds.Y+6)
+		}
+	}
+	return min(topInset, viewportHeight), min(bottomInset, viewportHeight)
 }
 
 func (ui *BrowserUI) layoutDocumentPaintLayer(gtx layout.Context, displayList *paintmodel.DisplayList, page *browser.Page) layout.Dimensions {

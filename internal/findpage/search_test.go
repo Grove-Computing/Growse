@@ -72,6 +72,10 @@ func TestSearchReportsTextAndMatchLimits(t *testing.T) {
 	if matchLimited.Limit != LimitMatches || len(matchLimited.Matches) != 2 {
 		t.Fatalf("match-limited result = %#v", matchLimited)
 	}
+	exactLimit := Search(documentWithText(t, "aa"), nil, "a", Options{}, Limits{MaxMatches: 2, MaxTextBytes: 10})
+	if exactLimit.Limit != LimitNone || len(exactLimit.Matches) != 2 {
+		t.Fatalf("exact-limit result = %#v, want complete result", exactLimit)
+	}
 	textLimited := Search(document, nil, "a", Options{}, Limits{MaxMatches: 10, MaxTextBytes: 3})
 	if textLimited.Limit != LimitTextBytes || len(textLimited.Matches) != 0 {
 		t.Fatalf("text-limited result = %#v", textLimited)

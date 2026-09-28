@@ -96,11 +96,11 @@ func Search(document *dom.Document, styles stylemodel.Map, query string, options
 				startSource, startsAtBoundary := haystack.boundaries[start]
 				endSource, endsAtBoundary := haystack.boundaries[end]
 				if startsAtBoundary && endsAtBoundary && (!options.WholeWord || wholeWord(haystack.text, start, end)) {
-					result.Matches = append(result.Matches, Match{NodeID: node.ID, Start: startSource, End: endSource})
 					if len(result.Matches) >= limits.MaxMatches {
 						result.Limit = LimitMatches
 						return
 					}
+					result.Matches = append(result.Matches, Match{NodeID: node.ID, Start: startSource, End: endSource})
 				}
 				offset = start + 1
 			}
