@@ -16,8 +16,9 @@ const profileVersion = 1
 var sharedProfiles sync.Map
 
 type profileState struct {
-	mu   sync.RWMutex
-	data profileData
+	mu    sync.RWMutex
+	data  profileData
+	index *localIndex
 }
 
 // Store is a process-shared view of one browser profile.
@@ -29,7 +30,8 @@ type Store struct {
 
 // NewMemoryStore creates a non-persistent store for tests or profile fallback.
 func NewMemoryStore() *Store {
-	return &Store{state: &profileState{data: profileData{Version: profileVersion}}, now: time.Now}
+	data := profileData{Version: profileVersion}
+	return &Store{state: &profileState{data: data, index: rebuildIndex(data)}, now: time.Now}
 }
 
 // OpenStore opens the profile's local search data file.
@@ -49,7 +51,7 @@ func OpenStore(root string) (*Store, error) {
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		data = profileData{Version: profileVersion}
 	}
-	state := &profileState{data: data}
+	state := &profileState{data: data, index: rebuildIndex(data)}
 	actual, _ := sharedProfiles.LoadOrStore(path, state)
 	return &Store{path: path, state: actual.(*profileState), now: time.Now}, nil
 }
@@ -157,6 +159,7 @@ func (s *Store) update(mutate func(*profileData) error) error {
 		return err
 	}
 	s.state.data = next
+	s.state.index = rebuildIndex(next)
 	return nil
 }
 
@@ -224,4 +227,50 @@ func (s *Store) History() []HistoryEntry {
 		return entries[i].URL < entries[j].URL
 	})
 	return entries
+}
+
+// DeleteHistory removes one normalized URL from both profile data and index.
+func (s *Store) DeleteHistory(rawURL string) error {
+	_, key, err := canonicalURL(rawURL)
+	if err != nil {
+		return err
+	}
+	return s.update(func(data *profileData) error {
+		kept := data.History[:0]
+		for _, entry := range data.History {
+			_, candidateKey, _ := canonicalURL(entry.URL)
+			if candidateKey != key {
+				kept = append(kept, entry)
+			}
+		}
+		data.History = kept
+		return nil
+	})
+}
+
+// DeleteHistoryPeriod removes visits in the half-open [from, until) interval.
+// A zero boundary leaves that side open.
+func (s *Store) DeleteHistoryPeriod(from, until time.Time) error {
+	if !from.IsZero() && !until.IsZero() && !from.Before(until) {
+		return ErrInvalid
+	}
+	return s.update(func(data *profileData) error {
+		kept := data.History[:0]
+		for _, entry := range data.History {
+			inside := (from.IsZero() || !entry.LastVisited.Before(from)) && (until.IsZero() || entry.LastVisited.Before(until))
+			if !inside {
+				kept = append(kept, entry)
+			}
+		}
+		data.History = kept
+		return nil
+	})
+}
+
+// ClearHistory removes every history entry while preserving bookmarks.
+func (s *Store) ClearHistory() error {
+	return s.update(func(data *profileData) error {
+		data.History = nil
+		return nil
+	})
 }
