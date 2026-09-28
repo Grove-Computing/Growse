@@ -125,6 +125,20 @@ type stubNavigator struct {
 	err  error
 }
 
+type nativeStubNavigator struct {
+	*stubNavigator
+	activated chan dom.NodeID
+}
+
+func (navigator *nativeStubNavigator) Submit(context.Context, dom.NodeID, dom.NodeID) (*browser.Page, error) {
+	return navigator.page, navigator.err
+}
+
+func (navigator *nativeStubNavigator) ActivateSubmitter(_ context.Context, nodeID dom.NodeID, _, _ float32) (*browser.Page, error) {
+	navigator.activated <- nodeID
+	return navigator.page, navigator.err
+}
+
 type scrollRecordingNavigator struct {
 	stubNavigator
 	updates [][2]int
@@ -373,7 +387,7 @@ func TestToolbarHasFixedHeight(t *testing.T) {
 	}
 
 	dims := ui.layoutToolbar(gtx)
-	if got, want := dims.Size.Y, 92; got != want {
+	if got, want := dims.Size.Y, 100; got != want {
 		t.Fatalf("toolbar height = %d, want %d", got, want)
 	}
 }
@@ -422,7 +436,7 @@ func TestTabRailCoordinatesAreExcludedFromPageHitTesting(t *testing.T) {
 	}{
 		{name: "tab rail", position: f32.Pt(100, 200), inside: false},
 		{name: "toolbar", position: f32.Pt(244, 40), inside: false},
-		{name: "page viewport", position: f32.Pt(244, 112), want: image.Pt(20, 20), inside: true},
+		{name: "page viewport", position: f32.Pt(244, float32(toolbarHeight)+20), want: image.Pt(20, 20), inside: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -1597,6 +1611,56 @@ func TestWheelScrollTargetsNestedOverflowContainerBeforeDocument(t *testing.T) {
 	}
 }
 
+func TestWheelScrollUsesDocumentElementInsteadOfBody(t *testing.T) {
+	document := dom.NewDocument()
+	html := document.CreateElement("html", nil)
+	body := document.CreateElement("body", nil)
+	content := document.CreateElement("div", map[string]string{"class": "content"})
+	for _, edge := range [][2]*dom.Node{{document.Root, html}, {html, body}, {body, content}} {
+		if err := document.AppendChild(edge[0], edge[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stylesheet, err := css.Parse(strings.NewReader(`
+html { width:500px; height:300px; overflow-y:auto }
+body { width:500px; height:320px; overflow-y:auto }
+.content { height:900px }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := &browser.Page{Document: document, Stylesheet: stylesheet, ComputedStyles: style.Compute(document, stylesheet), StyleRevision: 1}
+	ui := NewBrowserUI(&stubNavigator{page: page}, nil)
+	router := new(input.Router)
+	gtx := layout.Context{
+		Ops: new(op.Ops), Source: router.Source(), Constraints: layout.Exact(image.Pt(800, 600)),
+		Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1},
+	}
+
+	ui.Layout(gtx)
+	if _, exists := ui.layoutCache.tree.ScrollContainers[html.ID]; !exists {
+		t.Fatal("document element was not registered as a scroll container")
+	}
+	if _, exists := ui.layoutCache.tree.ScrollContainers[body.ID]; !exists {
+		t.Fatal("body fixture did not reproduce the competing scroll container")
+	}
+	router.Frame(gtx.Ops)
+	router.Queue(pointer.Event{
+		Kind: pointer.Scroll, Source: pointer.Mouse,
+		Position: f32.Pt(float32(tabRailWidth)+80, float32(toolbarHeight)+70),
+		Scroll:   f32.Pt(0, 48),
+	})
+	gtx.Reset()
+	ui.Layout(gtx)
+
+	if _, intercepted := ui.nestedScroll[body.ID]; intercepted {
+		t.Fatalf("body intercepted document wheel input: %#v", ui.nestedScroll[body.ID])
+	}
+	if offset := ui.nestedScroll[html.ID]; offset.Y != 48 || offset.X != 0 {
+		t.Fatalf("document element wheel offset = %#v, want Y=48", offset)
+	}
+}
+
 func TestPointerMoveAppliesAndClearsHoverStyle(t *testing.T) {
 	document := dom.NewDocument()
 	button := document.CreateElement("button", map[string]string{"id": "save"})
@@ -1986,6 +2050,37 @@ func TestPaintedFormButtonClickUsesDisplayListHitGeometry(t *testing.T) {
 
 	if clicked != 1 || page.FocusTarget != button.ID {
 		t.Fatalf("painted form click = clicks:%d focus:%d", clicked, page.FocusTarget)
+	}
+	if pending := ui.formPointerClicks[button.ID]; pending != 1 {
+		t.Fatalf("native duplicate suppression = %d, want 1", pending)
+	}
+}
+
+func TestPaintedSubmitButtonStartsNativeSubmission(t *testing.T) {
+	document := dom.NewDocument()
+	form := document.CreateElement("form", map[string]string{"action": "/search"})
+	button := document.CreateElement("button", nil)
+	if err := document.AppendChild(document.Root, form); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(form, button); err != nil {
+		t.Fatal(err)
+	}
+	page := &browser.Page{Document: document, ComputedStyles: style.Compute(document, nil), Events: events.NewDispatcher()}
+	navigator := &nativeStubNavigator{stubNavigator: &stubNavigator{page: page}, activated: make(chan dom.NodeID, 1)}
+	ui := NewBrowserUI(navigator, nil)
+	defer ui.Close()
+	ui.formButtons[button.ID] = new(widget.Clickable)
+
+	ui.dispatchPaintedClick(page, paintedDisplayHit{NodeID: button.ID, DocumentX: 240, DocumentY: 180})
+
+	select {
+	case activated := <-navigator.activated:
+		if activated != button.ID {
+			t.Fatalf("activated submitter = %d, want %d", activated, button.ID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("native form submission did not start")
 	}
 	if pending := ui.formPointerClicks[button.ID]; pending != 1 {
 		t.Fatalf("native duplicate suppression = %d, want 1", pending)

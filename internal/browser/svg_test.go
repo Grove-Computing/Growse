@@ -73,6 +73,29 @@ func TestRasterizeSVGWithoutViewBoxPreservesPathGeometry(t *testing.T) {
 	}
 }
 
+func TestRasterizeSVGAppliesInheritedEvenOddFillRule(t *testing.T) {
+	decoded, _, _, err := rasterizeSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><g fill-rule="evenodd"><path fill="#de5833" d="M0 0H100V100H0Z M25 25H75V75H25Z"/></g></svg>`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	edge := color.NRGBAModel.Convert(decoded.At(10, 10)).(color.NRGBA)
+	center := color.NRGBAModel.Convert(decoded.At(50, 50)).(color.NRGBA)
+	if edge.A == 0 || center.A != 0 {
+		t.Fatalf("evenodd alpha edge=%d center=%d, want painted edge and transparent hole", edge.A, center.A)
+	}
+}
+
+func TestRasterizeSVGBoundsEvenOddWorkAndSurfaces(t *testing.T) {
+	manySubpaths := `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024"><path fill-rule="evenodd" d="` + strings.Repeat("M0 0h1v1z ", 65) + `"/></svg>`
+	if _, _, _, err := rasterizeSVG([]byte(manySubpaths)); err == nil || !strings.Contains(err.Error(), "work limit") {
+		t.Fatalf("many-subpath error = %v, want even-odd work limit", err)
+	}
+	largeSurface := `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 3000 3000"><path fill-rule="evenodd" d="M0 0h1v1z"/></svg>`
+	if _, _, _, err := rasterizeSVG([]byte(largeSurface)); err == nil || !strings.Contains(err.Error(), "surface is too large") {
+		t.Fatalf("large-surface error = %v, want even-odd surface limit", err)
+	}
+}
+
 func TestPathologicalCompoundPathRasterIsRejected(t *testing.T) {
 	canvas := image.NewRGBA(image.Rect(0, 0, 20, 10))
 	for y := 0; y < 10; y++ {

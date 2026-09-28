@@ -702,13 +702,7 @@ func isSubmitButtonControl(node *dom.Node) bool {
 func (e *engine) addSubmitButton(node *dom.Node, style blockStyle, x, width, containingHeight float32, heightDefinite bool) {
 	e.y += style.margin.Top
 	x += style.margin.Left
-	label := strings.TrimSpace(node.TextContent())
-	if node.TagName == "input" {
-		label, _ = node.Attribute("value")
-	}
-	if label == "" {
-		label = "Submit"
-	}
+	label := submitButtonLabel(node)
 	textWidth, textHeight, _ := measureStyledText(label, style)
 	naturalWidth := textWidth + style.padding.Left + style.padding.Right + style.border.Left.Width + style.border.Right.Width
 	naturalHeight := textHeight + style.padding.Top + style.padding.Bottom + style.border.Top.Width + style.border.Bottom.Width
@@ -722,16 +716,55 @@ func (e *engine) addSubmitButton(node *dom.Node, style blockStyle, x, width, con
 	usedWidth, usedHeight = applyPreferredAspectRatio(usedWidth, usedHeight, style)
 	usedWidth = constrainSize(usedWidth, style.minWidth, style.maxWidth, width, true)
 	usedHeight = constrainSize(usedHeight, style.minHeight, style.maxHeight, containingHeight, heightDefinite)
+	buttonBackground := style.background
+	if e.addControlDecoration(node, style, Rect{X: x, Y: e.y, Width: max(usedWidth, float32(1)), Height: max(usedHeight, float32(1))}) {
+		buttonBackground = 0
+	}
 	e.tree.Boxes = append(e.tree.Boxes, Box{
 		Order: e.nextOrder(), StackingID: e.stackingID, NodeID: node.ID, Tag: node.TagName,
 		Text: label, Button: true, Disabled: forms.Disabled(node),
 		Appearance: style.appearance, AccentColor: resolvedAccentColor(style), Cursor: style.cursor,
-		X: x, Y: e.y, Width: max(usedWidth, float32(1)), Height: max(usedHeight, float32(1)), Color: style.color, Background: style.background,
+		X: x, Y: e.y, Width: max(usedWidth, float32(1)), Height: max(usedHeight, float32(1)), Color: style.color, Background: buttonBackground,
 		Clip: cloneRect(e.clip), Clips: cloneClipRegions(e.clips), Opacity: e.opacity * style.opacity,
 		Transform: stylemodel.IdentityMatrix(), Hidden: style.hidden,
 	})
 	e.tree.Bounds[node.ID] = Rect{X: x, Y: e.y, Width: usedWidth, Height: usedHeight}
 	e.y += usedHeight + style.margin.Bottom
+}
+
+func submitButtonLabel(node *dom.Node) string {
+	if node == nil {
+		return "Submit"
+	}
+	if node.TagName == "input" {
+		if label, exists := node.Attribute("value"); exists {
+			return label
+		}
+		return "Submit"
+	}
+	if label := strings.TrimSpace(node.TextContent()); label != "" {
+		return label
+	}
+	return "Submit"
+}
+
+func (e *engine) addControlDecoration(node *dom.Node, style blockStyle, rect Rect) bool {
+	if style.image.Kind == stylemodel.BackgroundImageNone && len(style.backgroundLayers) == 0 &&
+		!hasVisibleBorder(style.border) && len(style.boxShadows) == 0 && style.outline.Style == stylemodel.BorderNone &&
+		len(style.filters) == 0 && len(style.backdropFilters) == 0 && style.mixBlendMode == stylemodel.BlendNormal {
+		return false
+	}
+	e.tree.Decorations = append(e.tree.Decorations, Decoration{
+		Order: e.nextOrder(), StackingID: e.stackingID, NodeID: node.ID, Rect: rect,
+		Background: style.background, Image: cloneBackgroundImage(style.image), Layers: cloneBackgroundLayers(style.backgroundLayers),
+		Repeat: style.repeat, Position: style.position, Size: style.backgroundSize,
+		Border: style.border, Padding: style.padding, Radius: resolveBorderRadii(style.radius, rect.Width, rect.Height),
+		Opacity: e.opacity * style.opacity, Clip: cloneRect(e.clip), Clips: cloneClipRegions(e.clips),
+		BoxShadows: append([]stylemodel.Shadow(nil), style.boxShadows...), Outline: style.outline, OutlineOffset: style.outlineOffset,
+		Filters: append([]stylemodel.Filter(nil), style.filters...), BackdropFilters: append([]stylemodel.Filter(nil), style.backdropFilters...),
+		BlendMode: style.mixBlendMode, Cursor: style.cursor, Transform: stylemodel.IdentityMatrix(), Hidden: style.hidden,
+	})
+	return true
 }
 
 func (e *engine) addCheckable(node *dom.Node, style blockStyle, x, width, containingHeight float32, heightDefinite bool) {
@@ -1605,10 +1638,7 @@ func (e *engine) collectInlineRunsWithOpacity(node, owner *dom.Node, opacity flo
 		return []inlineRun{{nodeID: node.ID, node: node, tag: node.TagName, style: style, atomic: true, image: true, opacity: opacity}}
 	}
 	if forms.IsSubmitButton(node) {
-		label := strings.TrimSpace(node.TextContent())
-		if node.TagName == "input" {
-			label, _ = node.Attribute("value")
-		}
+		label := submitButtonLabel(node)
 		return []inlineRun{{nodeID: node.ID, node: node, tag: node.TagName, text: label, style: style, atomic: true, opacity: opacity}}
 	}
 	if style.display == stylemodel.DisplayInlineBlock {

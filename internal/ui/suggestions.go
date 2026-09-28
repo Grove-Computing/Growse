@@ -48,7 +48,28 @@ func (ui *BrowserUI) refreshSuggestions() { ui.refreshSuggestionsFor(ui.address.
 
 func (ui *BrowserUI) refreshSuggestionsFor(input string) {
 	ui.recordOmniboxText()
-	snapshot := ui.suggestionSnapshot
+	ui.suggestionPopup.localInput = input
+	ui.suggestionPopup.localApplied = 0
+	if ui.localSuggestions != nil {
+		query := input
+		if classification := omnibox.Classify(input); classification.Kind == omnibox.Command {
+			query = classification.Query
+		}
+		ui.suggestionPopup.localGeneration = ui.localSuggestions.Update(query)
+	} else {
+		ui.suggestionPopup.localGeneration = 0
+	}
+	ui.updateSuggestionPipeline(input, ui.suggestionSnapshot)
+	ui.suggestionPopup.owner, _ = ui.activeNavigationTarget()
+	ui.suggestionPopup.open = true
+	ui.suggestionPopup.selected = -1
+	ui.suggestionPopup.list.Position = layout.Position{}
+	ui.syncSuggestions()
+	tabID, _ := ui.activeNavigationTarget()
+	ui.setOmniboxPreview(tabID, "")
+}
+
+func (ui *BrowserUI) updateSuggestionPipeline(input string, snapshot omnibox.Snapshot) {
 	for _, tab := range ui.tabSnapshots() {
 		snapshot.Tabs = append(snapshot.Tabs, omnibox.Candidate{Primary: tabDisplayTitle(tab), URL: tab.URL, TabID: uint64(tab.ID)})
 	}
@@ -63,13 +84,6 @@ func (ui *BrowserUI) refreshSuggestionsFor(input string) {
 	}
 	enabled := ui.remoteSuggestions && searchprovider.CanSuggest(original) && searchprovider.CanSuggest(input)
 	ui.suggestions.Update(input, snapshot, fetch, enabled)
-	ui.suggestionPopup.owner, _ = ui.activeNavigationTarget()
-	ui.suggestionPopup.open = true
-	ui.suggestionPopup.selected = -1
-	ui.suggestionPopup.list.Position = layout.Position{}
-	ui.syncSuggestions()
-	tabID, _ := ui.activeNavigationTarget()
-	ui.setOmniboxPreview(tabID, "")
 }
 
 // suggestionPopup keeps selection/preview separate from the native editor.
@@ -86,9 +100,13 @@ type suggestionPopup struct {
 	bounds          image.Rectangle
 	addressTag      struct{}
 	addressPressed  bool
+	localInput      string
+	localGeneration uint64
+	localApplied    uint64
 }
 
 func (ui *BrowserUI) syncSuggestions() {
+	ui.applyLocalSuggestionResults()
 	generation, candidates := ui.suggestions.Results()
 	var previous omnibox.Candidate
 	selected := ui.suggestionPopup.selected
@@ -114,6 +132,22 @@ func (ui *BrowserUI) syncSuggestions() {
 	ui.suggestionPopup.generation = generation
 }
 
+func (ui *BrowserUI) applyLocalSuggestionResults() {
+	popup := &ui.suggestionPopup
+	if !popup.open || ui.localSuggestions == nil || popup.localGeneration == 0 || popup.localApplied == popup.localGeneration {
+		return
+	}
+	generation, local := ui.localSuggestions.Results()
+	if generation != popup.localGeneration {
+		return
+	}
+	local.Now = ui.suggestionSnapshot.Now
+	local.History = append(append([]omnibox.Candidate(nil), ui.suggestionSnapshot.History...), local.History...)
+	local.Bookmarks = append(append([]omnibox.Candidate(nil), ui.suggestionSnapshot.Bookmarks...), local.Bookmarks...)
+	popup.localApplied = generation
+	ui.updateSuggestionPipeline(popup.localInput, local)
+}
+
 func sameSuggestion(a, b omnibox.Candidate) bool {
 	return a.Source == b.Source && a.TabID == b.TabID && a.URL == b.URL && a.Query == b.Query
 }
@@ -129,6 +163,9 @@ func (ui *BrowserUI) closeSuggestionPopup() {
 	ui.suggestionPopup.selected = -1
 	ui.suggestionPopup.candidates = nil
 	ui.suggestions.Cancel()
+	if ui.localSuggestions != nil {
+		ui.localSuggestions.Cancel()
+	}
 }
 
 func (ui *BrowserUI) selectSuggestion(index int) {

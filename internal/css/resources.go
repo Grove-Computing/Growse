@@ -15,22 +15,10 @@ func ResolveResourceURLs(stylesheet *Stylesheet, baseURL *url.URL) {
 	for ruleIndex := range stylesheet.Rules {
 		for declarationIndex := range stylesheet.Rules[ruleIndex].Declarations {
 			declaration := &stylesheet.Rules[ruleIndex].Declarations[declarationIndex]
-			if declaration.Property != "background-image" {
+			if declaration.Property != "background-image" && declaration.Property != "background" {
 				continue
 			}
-			resource, ok := singleURL(declaration.Value.Raw)
-			if !ok {
-				continue
-			}
-			reference, err := url.Parse(resource)
-			if err != nil {
-				continue
-			}
-			resolved := baseURL.ResolveReference(reference)
-			if resolved.Scheme != "http" && resolved.Scheme != "https" {
-				continue
-			}
-			declaration.Value = parseValue("url(" + strconv.Quote(resolved.String()) + ")")
+			declaration.Value = parseValue(resolveURLFunctions(declaration.Value.Raw, baseURL))
 		}
 	}
 	for index := range stylesheet.FontFaces {
@@ -87,16 +75,4 @@ func resolveURLFunctions(value string, baseURL *url.URL) string {
 		position = end + 1
 	}
 	return output.String()
-}
-
-func singleURL(value string) (string, bool) {
-	value = strings.TrimSpace(value)
-	if !strings.HasPrefix(strings.ToLower(value), "url(") || !strings.HasSuffix(value, ")") {
-		return "", false
-	}
-	raw := strings.TrimSpace(value[4 : len(value)-1])
-	if decoded, ok := DecodeString(raw); ok {
-		raw = decoded
-	}
-	return raw, raw != "" && !strings.ContainsAny(raw, "\x00\r\n")
 }

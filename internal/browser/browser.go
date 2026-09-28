@@ -98,6 +98,7 @@ type Browser struct {
 	fetchLimiter     *fetchapi.Limiter
 	devToolsSession  *devtools.SessionStore
 	serviceWorkers   *serviceworker.Manager
+	onNavigation     func(NavigationRecord)
 }
 
 var nextStorageSourceID atomic.Uint64
@@ -107,6 +108,25 @@ var (
 	ErrSubmissionPrevented = errors.New("form submission was prevented")
 	ErrInvalidEngine       = errors.New("invalid runtime engine")
 )
+
+// NavigationRecord reports one successfully committed top-level document.
+// Reloads, session-history traversal, same-document changes, and redirect
+// intermediates are never reported.
+type NavigationRecord struct {
+	URL   string
+	Title string
+	Typed bool
+}
+
+type navigationContextKey uint8
+
+const typedNavigationKey navigationContextKey = iota
+
+// WithTypedNavigation marks a direct address-bar URL navigation. The marker is
+// consumed only by the profile-history observer and is never exposed to pages.
+func WithTypedNavigation(ctx context.Context) context.Context {
+	return context.WithValue(ctx, typedNavigationKey, true)
+}
 
 // New creates a browser with no page loaded.
 func New(client ResourceLoader) *Browser {
@@ -172,6 +192,16 @@ func (b *Browser) SetDevToolsSession(session *devtools.SessionStore) {
 	}
 	b.mu.Lock()
 	b.devToolsSession = session
+	b.mu.Unlock()
+}
+
+// SetNavigationObserver registers the profile-history sink for committed pages.
+func (b *Browser) SetNavigationObserver(observer func(NavigationRecord)) {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	b.onNavigation = observer
 	b.mu.Unlock()
 }
 
@@ -481,6 +511,37 @@ func (b *Browser) DispatchClick(nodeID dom.NodeID, x, y float32) bool {
 		}
 	}
 	return clickHandled || submitHandled || labelHandled
+}
+
+// ActivateSubmitter dispatches a button click and performs its default form
+// submission when script does not cancel the click.
+func (b *Browser) ActivateSubmitter(ctx context.Context, nodeID dom.NodeID, x, y float32) (*Page, error) {
+	b.mu.RLock()
+	page := b.page
+	if page == nil || page.Document == nil {
+		b.mu.RUnlock()
+		return nil, errors.New("no active page for form submission")
+	}
+	node, ok := page.Document.NodeByID(nodeID)
+	if !ok || !page.Document.IsConnected(node) || forms.Disabled(node) || !isSubmitButton(node) {
+		b.mu.RUnlock()
+		return nil, errors.New("submitter was not found")
+	}
+	form := forms.FormOwner(page.Document, node)
+	if form == nil {
+		b.mu.RUnlock()
+		return nil, errors.New("form was not found")
+	}
+	formID := form.ID
+	b.mu.RUnlock()
+
+	clickEvent := events.Cancelable(events.Click, nodeID)
+	clickEvent.X, clickEvent.Y = x, y
+	b.dispatchPageEvent(page, clickEvent)
+	if clickEvent.DefaultPrevented() {
+		return nil, ErrSubmissionPrevented
+	}
+	return b.Submit(ctx, formID, nodeID)
 }
 
 // SetInputValue はユーザー入力をアクティブページの編集可能なText Controlへ反映する。
@@ -1599,9 +1660,16 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	}
 	dispatchPopState := false
 	popState := ""
+	var navigationRecord *NavigationRecord
+	var navigationObserver func(NavigationRecord)
 	switch commit {
 	case historyPush:
 		b.history.pushEntry(&historyEntry{URL: page.URL, PageID: page.HistoryID})
+		if b.onNavigation != nil && page.URL != nil {
+			record := NavigationRecord{URL: page.URL.String(), Title: document.Title(), Typed: ctx.Value(typedNavigationKey) == true}
+			navigationRecord = &record
+			navigationObserver = b.onNavigation
+		}
 	case historyTraverse:
 		previousEntry := cloneHistoryEntry(b.history.entries[historyIndex])
 		b.history.index = historyIndex
@@ -1634,6 +1702,9 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	childRuntimes := frameRuntimes(page)
 	b.mu.Unlock()
 	committed = true
+	if navigationObserver != nil && navigationRecord != nil {
+		navigationObserver(*navigationRecord)
+	}
 	if engine == runtimemodel.EngineJavaScript && (documentHasViewportImageWork(imageDocument) || len(backgroundResources) != 0) {
 		loadContext, generation := page.beginImageLoad(context.Background())
 		b.loadPageImagesAsync(loadContext, generation, page, imageResources, baseURL, imageDocument, 1280, imagePolicy, imageBudget, imageCache, backgroundResources, backgroundPreloads, true, onMutation)
