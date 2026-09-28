@@ -906,3 +906,69 @@ func appendNodes(t *testing.T, document *dom.Document, edges ...[2]*dom.Node) {
 		}
 	}
 }
+
+func TestBuildPreservesExplicitEmptySubmitValueAndCSSBackground(t *testing.T) {
+	document := dom.NewDocument()
+	form := document.CreateElement("form", map[string]string{"class": "search"})
+	button := document.CreateElement("input", map[string]string{"class": "submit", "type": "submit", "value": ""})
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, form},
+		[2]*dom.Node{form, button},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.search { position: relative; width: 590px; height: 44px; }
+.submit {
+  appearance: none;
+  position: absolute;
+  top: 0;
+  right: 2px;
+  width: 18px;
+  height: 44px;
+  padding: 0 12px;
+  border: 0;
+  background-image: url("https://example.com/search.png");
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 18px 18px;
+}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, style.Compute(document, stylesheet), 800)
+	var buttonBox *Box
+	for index := range tree.Boxes {
+		if tree.Boxes[index].NodeID == button.ID && tree.Boxes[index].Button {
+			buttonBox = &tree.Boxes[index]
+			break
+		}
+	}
+	if buttonBox == nil {
+		t.Fatal("submit button box was not built")
+	}
+	if buttonBox.Text != "" {
+		t.Fatalf("explicit empty submit value rendered as %q, want no label", buttonBox.Text)
+	}
+	var decoration *Decoration
+	for index := range tree.Decorations {
+		if tree.Decorations[index].NodeID == button.ID {
+			decoration = &tree.Decorations[index]
+			break
+		}
+	}
+	if decoration == nil {
+		t.Fatal("submit button CSS decoration was not built")
+	}
+	if decoration.Image.Kind != style.BackgroundImageURL || decoration.Image.URL != "https://example.com/search.png" {
+		t.Fatalf("submit button background = %#v", decoration.Image)
+	}
+	if decoration.Rect != tree.Bounds[button.ID] {
+		t.Fatalf("submit decoration/bounds = %#v / %#v", decoration.Rect, tree.Bounds[button.ID])
+	}
+	formBounds := tree.Bounds[form.ID]
+	wantWidth := float32(42)
+	wantX := formBounds.X + formBounds.Width - 2 - wantWidth
+	if decoration.Width != wantWidth || decoration.X != wantX {
+		t.Fatalf("submit geometry = %#v inside form %#v, want x=%v width=%v", decoration.Rect, formBounds, wantX, wantWidth)
+	}
+}
