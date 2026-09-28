@@ -2,7 +2,6 @@ package searchdata
 
 import (
 	"encoding/json"
-	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -30,11 +29,12 @@ type Store struct {
 
 // NewMemoryStore creates a non-persistent store for tests or profile fallback.
 func NewMemoryStore() *Store {
-	data := profileData{Version: profileVersion}
+	data := emptyProfile()
 	return &Store{state: &profileState{data: data, index: rebuildIndex(data)}, now: time.Now}
 }
 
-// OpenStore opens the profile's local search data file.
+// OpenStore opens the profile's local search data file. Corrupt primary data
+// recovers from the previous snapshot; if neither is valid, it starts empty.
 func OpenStore(root string) (*Store, error) {
 	absolute, err := filepath.Abs(root)
 	if err != nil || !filepath.IsAbs(absolute) {
@@ -47,19 +47,28 @@ func OpenStore(root string) (*Store, error) {
 	if current, ok := sharedProfiles.Load(path); ok {
 		return &Store{path: path, state: current.(*profileState), now: time.Now}, nil
 	}
-	data, err := readProfile(path)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		data = profileData{Version: profileVersion}
-	}
+	data := loadRecoverableProfile(path)
 	state := &profileState{data: data, index: rebuildIndex(data)}
 	actual, _ := sharedProfiles.LoadOrStore(path, state)
 	return &Store{path: path, state: actual.(*profileState), now: time.Now}, nil
 }
 
+func emptyProfile() profileData { return profileData{Version: profileVersion} }
+
+func loadRecoverableProfile(path string) profileData {
+	if data, err := readProfile(path); err == nil {
+		return data
+	}
+	if data, err := readProfile(path + ".bak"); err == nil {
+		return data
+	}
+	return emptyProfile()
+}
+
 func readProfile(path string) (profileData, error) {
 	file, err := os.Open(path) // #nosec G304 -- fixed filename below the browser-owned profile root.
 	if err != nil {
-		return profileData{Version: profileVersion}, err
+		return profileData{}, err
 	}
 	defer file.Close()
 	body, err := io.ReadAll(io.LimitReader(file, MaxProfileBytes+1))
@@ -115,9 +124,6 @@ func writeProfile(path string, data profileData) error {
 	if err != nil || len(body) > MaxProfileBytes {
 		return ErrLimit
 	}
-	if path == "" {
-		return nil
-	}
 	temporary, err := os.CreateTemp(filepath.Dir(path), ".search-data-*.tmp")
 	if err != nil {
 		return ErrStorage
@@ -153,21 +159,63 @@ func writeProfile(path string, data profileData) error {
 	return nil
 }
 
+func acquireWriter(path string) (*os.File, error) {
+	lock, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0o600) // #nosec G304 -- fixed filename below browser profile.
+	if err != nil {
+		return nil, ErrStorage
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		locked, err := tryWriterLock(lock)
+		if err != nil {
+			_ = lock.Close()
+			return nil, ErrStorage
+		}
+		if locked {
+			return lock, nil
+		}
+		if time.Now().After(deadline) {
+			_ = lock.Close()
+			return nil, ErrStorage
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func (s *Store) update(mutate func(*profileData) error) error {
 	if s == nil || s.state == nil {
 		return ErrStorage
 	}
 	s.state.mu.Lock()
 	defer s.state.mu.Unlock()
-	next := cloneProfile(s.state.data)
+	base := cloneProfile(s.state.data)
+	var lock *os.File
+	if s.path != "" {
+		var err error
+		lock, err = acquireWriter(s.path)
+		if err != nil {
+			return err
+		}
+		defer func() {
+			releaseWriterLock(lock)
+			_ = lock.Close()
+		}()
+		base = loadRecoverableProfile(s.path)
+	}
+	next := cloneProfile(base)
 	if err := mutate(&next); err != nil {
 		return err
 	}
 	if err := validateProfile(next); err != nil {
 		return err
 	}
-	if err := writeProfile(s.path, next); err != nil {
-		return err
+	if s.path != "" {
+		if err := writeProfile(s.path+".bak", base); err != nil {
+			return err
+		}
+		if err := writeProfile(s.path, next); err != nil {
+			return err
+		}
 	}
 	s.state.data = next
 	s.state.index = rebuildIndex(next)
