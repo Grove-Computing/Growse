@@ -35,6 +35,7 @@ func (runtime *Runtime) installScheduler(vm *goja.Runtime) error {
 		if !ok {
 			panic(vm.NewTypeError("animation frame callback must be a function"))
 		}
+		var id schedulerapi.FrameID
 		id, err := runtime.schedulerAPI.RequestAnimationFrame(func(timestamp schedulerapi.Timestamp) {
 			if _, callbackErr := callback(goja.Undefined(), vm.ToValue(float64(time.Duration(timestamp))/float64(time.Millisecond))); callbackErr != nil {
 				runtime.recordError(fmt.Sprintf("JavaScript animation frame callback: %v", callbackErr))
@@ -63,12 +64,12 @@ func (runtime *Runtime) scheduleTimer(vm *goja.Runtime, call goja.FunctionCall, 
 		panic(vm.NewTypeError(err.Error()))
 	}
 	arguments := append([]goja.Value(nil), call.Arguments[2:]...)
+	var id schedulerapi.TimerID
 	invoke := func() {
 		if _, callbackErr := callback(goja.Undefined(), arguments...); callbackErr != nil {
 			runtime.recordError(fmt.Sprintf("JavaScript timer callback: %v", callbackErr))
 		}
 	}
-	var id schedulerapi.TimerID
 	if repeat {
 		id, err = runtime.schedulerAPI.SetInterval(delay, invoke)
 	} else {

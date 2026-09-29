@@ -1532,6 +1532,37 @@ func TestSubmitHonorsValidationPreventDefaultAndNoValidate(t *testing.T) {
 	}
 }
 
+func TestSubmitUsesCapturedFormDataWhenSubmitHandlerReplacesForm(t *testing.T) {
+	document := dom.NewDocument()
+	form := document.CreateElement("form", map[string]string{"action": "/result"})
+	input := document.CreateElement("input", map[string]string{"name": "q", "value": "golang"})
+	if err := document.AppendChild(document.Root, form); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(form, input); err != nil {
+		t.Fatal(err)
+	}
+	baseURL := mustParseURL(t, "https://example.com/search")
+	targetURL := mustParseURL(t, "https://example.com/result?q=golang")
+	loader := &routeLoader{responses: map[string]*network.Response{
+		targetURL.String(): {URL: targetURL, StatusCode: 200, ContentType: "text/html", Body: []byte(`<!doctype html><title>Result</title>`)},
+	}}
+	page := &Page{URL: baseURL, Document: document, ComputedStyles: style.Compute(document, nil), Events: events.NewDispatcher()}
+	page.Events.AddEventListener(form.ID, events.Submit, func(events.Event) {
+		_, _ = document.Remove(form.ID)
+	})
+	browserState := New(loader)
+	browserState.SetPage(page)
+
+	submitted, err := browserState.Submit(context.Background(), form.ID, 0)
+	if err != nil {
+		t.Fatalf("Submit() error = %v", err)
+	}
+	if submitted.URL.String() != targetURL.String() || len(loader.requested) != 1 {
+		t.Fatalf("submitted URL = %s requests=%v", submitted.URL, loader.requested)
+	}
+}
+
 func TestNewPageCopiesURL(t *testing.T) {
 	pageURL := mustParseURL(t, "https://example.com/original")
 	page := NewPage(pageURL)

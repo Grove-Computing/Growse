@@ -333,7 +333,7 @@ func (d *Document) RemoveAttribute(id NodeID, name string) bool {
 	return true
 }
 
-// SetTextContent は指定したノードの子を1つのテキストノードへ置き換える。
+// SetTextContent replaces a node's children while keeping removed nodes alive for existing DOM handles.
 func (d *Document) SetTextContent(id NodeID, value string) bool {
 	if d == nil {
 		return false
@@ -343,12 +343,14 @@ func (d *Document) SetTextContent(id NodeID, value string) bool {
 		return false
 	}
 	for _, child := range node.Children {
-		d.removeSubtree(child)
+		child.Parent = nil
 	}
 	node.Children = nil
-	text := d.CreateText(value)
-	text.Parent = node
-	node.Children = append(node.Children, text)
+	if value != "" {
+		text := d.CreateText(value)
+		text.Parent = node
+		node.Children = append(node.Children, text)
+	}
 	d.rebuildIDIndex()
 	return true
 }

@@ -13,6 +13,7 @@ import (
 
 	"github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/events"
+	"github.com/Grove-Computing/Growse/internal/forms"
 	"github.com/Grove-Computing/Growse/internal/network"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 	"github.com/Grove-Computing/Growse/internal/runtime/javascript"
@@ -28,6 +29,10 @@ const (
 
 type pageEventRuntime interface {
 	DispatchPageEvent(func() bool) bool
+}
+
+type domEventRuntime interface {
+	DispatchDOMEvent(events.Event) bool
 }
 
 type animationFrameRuntime interface {
@@ -56,17 +61,19 @@ type workerState struct {
 	peer    *peer
 	sandbox sandboxStatusResponse
 
-	commandMu sync.Mutex
-	mu        sync.Mutex
-	runtime   runtimemodel.Runtime
-	document  *dom.Document
-	events    *events.Dispatcher
-	local     *storagecore.Area
-	session   *storagecore.Area
-	cancel    context.CancelFunc
-	unsub     []func()
-	loaded    bool
-	started   bool
+	commandMu                sync.Mutex
+	mu                       sync.Mutex
+	runtime                  runtimemodel.Runtime
+	document                 *dom.Document
+	events                   *events.Dispatcher
+	local                    *storagecore.Area
+	session                  *storagecore.Area
+	cancel                   context.CancelFunc
+	unsub                    []func()
+	loaded                   bool
+	started                  bool
+	captureEventMutations    bool
+	eventMutationWasNotified bool
 }
 
 func init() {
@@ -199,6 +206,11 @@ func (state *workerState) load(ctx context.Context, payload json.RawMessage) (an
 		Media:        request.Media,
 		LocalStorage: local, SessionStorage: session, StorageSource: request.StorageSource,
 		OnMutation: func() {
+			state.mu.Lock()
+			if state.captureEventMutations {
+				state.eventMutationWasNotified = true
+			}
+			state.mu.Unlock()
 			_ = state.peer.event("dom.mutation", mutationEvent{Document: document.Snapshot()})
 		},
 		ConsoleRecord: func(level, message string) {
@@ -344,8 +356,22 @@ func (state *workerState) dispatchEvent(_ context.Context, payload json.RawMessa
 	if runtime == nil || document == nil || dispatcher == nil {
 		return nil, errors.New("runtime worker is unavailable")
 	}
-	if err := document.ApplySnapshot(request.Document); err != nil {
+	if err := document.ApplySnapshotPreservingDetached(request.Document); err != nil {
 		return nil, err
+	}
+	if request.Type == events.Input {
+		if target, ok := document.NodeByID(request.Target); ok && forms.IsEditableTextControl(target) {
+			forms.SetCurrentValue(target, request.Value)
+		}
+		state.mu.Lock()
+		state.captureEventMutations = true
+		state.eventMutationWasNotified = false
+		state.mu.Unlock()
+		defer func() {
+			state.mu.Lock()
+			state.captureEventMutations = false
+			state.mu.Unlock()
+		}()
 	}
 	event := events.Event{Type: request.Type, Target: request.Target, X: request.X, Y: request.Y, Value: request.Value}
 	if request.Cancelable {
@@ -353,12 +379,21 @@ func (state *workerState) dispatchEvent(_ context.Context, payload json.RawMessa
 		event.X, event.Y, event.Value = request.X, request.Y, request.Value
 	}
 	handled := false
-	if queued, ok := runtime.(pageEventRuntime); ok {
+	if queued, ok := runtime.(domEventRuntime); ok {
+		handled = queued.DispatchDOMEvent(event)
+	} else if queued, ok := runtime.(pageEventRuntime); ok {
 		handled = queued.DispatchPageEvent(func() bool { return dispatcher.DispatchTree(document, event) })
 	} else {
 		handled = dispatcher.DispatchTree(document, event)
 	}
-	return eventResponse{Handled: handled, DefaultPrevented: event.DefaultPrevented()}, nil
+	state.mu.Lock()
+	mutationWasNotified := state.eventMutationWasNotified
+	state.mu.Unlock()
+	response := eventResponse{Handled: handled, DefaultPrevented: event.DefaultPrevented(), MutationWasNotified: mutationWasNotified}
+	if request.Type == events.Input {
+		response.Document = document.Snapshot()
+	}
+	return response, nil
 }
 
 func (state *workerState) runFrame(_ context.Context, payload json.RawMessage) (any, error) {
@@ -369,13 +404,8 @@ func (state *workerState) runFrame(_ context.Context, payload json.RawMessage) (
 		return nil, err
 	}
 	state.mu.Lock()
-	runtime, document := state.runtime, state.document
+	runtime := state.runtime
 	state.mu.Unlock()
-	if document != nil {
-		if err := document.ApplySnapshot(request.Document); err != nil {
-			return nil, err
-		}
-	}
 	frame, ok := runtime.(animationFrameRuntime)
 	return boolResponse{Value: ok && frame.RunAnimationFrame(frameTime(request))}, nil
 }

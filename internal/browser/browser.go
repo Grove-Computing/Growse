@@ -560,16 +560,15 @@ func (b *Browser) SetInputValue(nodeID dom.NodeID, value string) bool {
 	}
 	changed := forms.SetCurrentValue(node, value)
 	if changed {
-		recomputePageStyles(page, b.currentTime())
 		page.RecordDOMMutation(nodeID)
 	}
 	dispatcher := page.Events
 	b.mu.Unlock()
-	if changed && onMutation != nil {
-		onMutation()
-	}
 	if changed && dispatcher != nil {
 		b.dispatchPageEvent(page, events.Event{Type: events.Input, Target: nodeID, Value: value})
+	}
+	if changed && onMutation != nil {
+		onMutation()
 	}
 	return changed
 }
@@ -1216,6 +1215,8 @@ func (b *Browser) Submit(ctx context.Context, formID, submitterID dom.NodeID) (*
 		b.mu.RUnlock()
 		return nil, errors.New("invalid form submission configuration")
 	}
+	entries := forms.CollectEntries(page.Document, form, submitter)
+	baseURL := cloneURL(pageBaseURL(page))
 	firstInvalid, invalid := forms.FirstInvalidControl(page.Document, form)
 	dispatcher := page.Events
 	b.mu.RUnlock()
@@ -1241,12 +1242,72 @@ func (b *Browser) Submit(ctx context.Context, formID, submitterID dom.NodeID) (*
 	}
 	switch config.Method {
 	case "get":
-		return b.SubmitGET(ctx, formID, submitterID)
+		target, err := resolveFormAction(baseURL, config.Action)
+		if err != nil {
+			return nil, err
+		}
+		encoded, err := forms.EncodeURLEncodedLimited(entries)
+		if err != nil {
+			return nil, err
+		}
+		target.RawQuery = encoded
+		target.Fragment = ""
+		return b.loadForm(ctx, target, historyPush, -1)
 	case "post":
-		return b.SubmitPOST(ctx, formID, submitterID)
+		return b.submitPOSTResolved(ctx, page, baseURL, config, entries)
 	default:
 		return nil, fmt.Errorf("unsupported form method %q", config.Method)
 	}
+}
+
+func (b *Browser) submitPOSTResolved(ctx context.Context, page *Page, baseURL *url.URL, config forms.SubmissionConfig, entries []forms.Entry) (*Page, error) {
+	if config.Enctype != forms.URLEncoded || config.Target != "_self" {
+		return nil, errors.New("unsupported POST form configuration")
+	}
+	target, err := resolveFormAction(baseURL, config.Action)
+	if err != nil {
+		return nil, err
+	}
+	target.Fragment = ""
+	encoded, err := forms.EncodeURLEncodedLimited(entries)
+	if err != nil {
+		return nil, err
+	}
+
+	b.mu.Lock()
+	if b.page != page {
+		b.mu.Unlock()
+		return nil, errors.New("form page is no longer active")
+	}
+	client := b.client
+	_, supportsRequests := client.(requestLoader)
+	if !supportsRequests {
+		b.mu.Unlock()
+		return nil, errors.New("network client does not support POST")
+	}
+	b.navigationID++
+	page.cancelImageLoads()
+	navigationID := b.navigationID
+	engineFactory := b.engineFactory
+	engine := runtimemodel.NormalizeEngine(b.engine)
+	storageManager := b.storage
+	serviceWorkers := b.serviceWorkers
+	onMutation := b.onMutation
+	reducedMotion := b.reducedMotion
+	b.mu.Unlock()
+
+	pageStore := b.newDevToolsPageStore()
+	intercepted := serviceWorkerLoader{ResourceLoader: client, manager: serviceWorkers}
+	response, err := intercepted.Do(ctx, &network.Request{
+		Method: http.MethodPost, URL: target, Body: []byte(encoded),
+		Header: http.Header{"Content-Type": []string{forms.URLEncoded}}, SiteURL: cloneURL(page.URL),
+		Kind: network.RequestForm, Observer: pageStore.ObserveNetwork,
+	})
+	if err != nil {
+		pageStore.Close()
+		return nil, fmt.Errorf("submit form to %s: %w", network.RedactedURL(target), err)
+	}
+	return b.finishLoad(ctx, target, response, historyPush, -1, navigationID, intercepted, intercepted, engineFactory, engine, storageManager, onMutation, reducedMotion, pageStore)
 }
 
 func resolveFormAction(baseURL *url.URL, action string) (*url.URL, error) {

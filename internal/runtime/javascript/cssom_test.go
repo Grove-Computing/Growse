@@ -71,3 +71,40 @@ func TestCSSOMGeometryAndMediaQueriesUseBrowserSnapshots(t *testing.T) {
 		}
 	}
 }
+
+func TestCSSOMReturnsEmptyValuesForDisconnectedElement(t *testing.T) {
+	document, err := htmlparser.Parse(strings.NewReader(`<main id="target">content</main>`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var messages []string
+	readRenderCalled := false
+	runtime := New()
+	t.Cleanup(func() { _ = runtime.Stop() })
+	environment := runtimemodel.Environment{
+		Document: document, Events: events.NewDispatcher(),
+		ReadRender: func(context.Context, dom.NodeID) (runtimemodel.RenderSnapshot, error) {
+			readRenderCalled = true
+			return runtimemodel.RenderSnapshot{}, nil
+		},
+		ConsoleRecord: func(_, value string) { messages = append(messages, value) },
+	}
+	source := `
+		const target = document.getElementById("target");
+		target.remove();
+		const style = getComputedStyle(target);
+		const rect = target.getBoundingClientRect();
+		console.log([style.length, style.display, rect.width, target.clientWidth].join("|"));`
+	if err := runtime.Load(context.Background(), []runtimemodel.Script{javaScript(source)}, environment); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(messages, []string{"0||0|0"}) {
+		t.Fatalf("CSSOM messages = %#v", messages)
+	}
+	if readRenderCalled {
+		t.Fatal("disconnected element requested a browser render snapshot")
+	}
+}

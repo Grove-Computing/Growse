@@ -343,6 +343,68 @@ const browserGlobalsSource = `
   Object.defineProperties(TextDecoder.prototype, { encoding: { get: function () { return "utf-8"; } }, fatal: { get: function () { return this._fatal; } }, ignoreBOM: { get: function () { return this._ignoreBOM; } } });
   TextDecoder.prototype.decode = function (input, options) { if (options && options.stream) throw new TypeError("streaming decode is unsupported"); let output = decodeText(input, this._fatal); if (!this._ignoreBOM && output.charCodeAt(0) === 0xFEFF) output = output.slice(1); return output; };
 
+  function localeName(value) { return value == null || value === "" ? "en-US" : String(Array.isArray(value) ? value[0] : value); }
+  function Locale(value) {
+    if (!(this instanceof Locale)) throw new TypeError("Intl.Locale constructor requires new");
+    this.baseName = localeName(value); this.language = this.baseName.split("-")[0].toLowerCase();
+    const parts = this.baseName.split("-"); this.script = parts.find(function (part) { return /^[A-Z][a-z]{3}$/.test(part); });
+    this.region = parts.find(function (part) { return /^[A-Z]{2}$/.test(part); });
+  }
+  Locale.prototype.maximize = function () { return this; };
+  Locale.prototype.minimize = function () { return this; };
+  Locale.prototype.toString = function () { return this.baseName; };
+  Locale.prototype.getTextInfo = function () { return this.textInfo; };
+  Object.defineProperty(Locale.prototype, "textInfo", { get: function () {
+    return { direction: /^(ar|arc|ckb|dv|fa|he|ku|ps|sd|ug|ur|yi)$/.test(this.language) ? "rtl" : "ltr" };
+  } });
+
+  function NumberFormat(locales, options) { this.locale = localeName(locales); this.options = options == null ? {} : Object(options); }
+  NumberFormat.supportedLocalesOf = function (locales) { return Array.isArray(locales) ? locales.map(String) : [localeName(locales)]; };
+  NumberFormat.prototype.format = function (value) {
+    const number = Number(value); if (!isFinite(number)) return String(number);
+    let result = String(number);
+    if (this.options.maximumFractionDigits !== undefined) result = number.toFixed(Math.max(0, Math.min(20, Number(this.options.maximumFractionDigits))));
+    return result;
+  };
+  NumberFormat.prototype.formatToParts = function (value) { return [{ type: "integer", value: this.format(value) }]; };
+  NumberFormat.prototype.resolvedOptions = function () { return { locale: this.locale, numberingSystem: "latn", style: this.options.style || "decimal" }; };
+
+  function DateTimeFormat(locales, options) { this.locale = localeName(locales); this.options = options == null ? {} : Object(options); }
+  DateTimeFormat.supportedLocalesOf = NumberFormat.supportedLocalesOf;
+  DateTimeFormat.prototype.format = function (value) {
+    const date = value === undefined ? new Date() : new Date(value);
+    if (isNaN(date.getTime())) throw new RangeError("Invalid time value");
+    return date.getUTCFullYear() + "-" + String(date.getUTCMonth() + 1).padStart(2, "0") + "-" + String(date.getUTCDate()).padStart(2, "0");
+  };
+  DateTimeFormat.prototype.formatToParts = function (value) { return [{ type: "literal", value: this.format(value) }]; };
+  DateTimeFormat.prototype.resolvedOptions = function () { return { locale: this.locale, calendar: "gregory", numberingSystem: "latn", timeZone: "UTC" }; };
+
+  function Collator(locales, options) { this.locale = localeName(locales); this.options = options == null ? {} : Object(options); }
+  Collator.supportedLocalesOf = NumberFormat.supportedLocalesOf;
+  Collator.prototype.compare = function (left, right) { left = String(left); right = String(right); return left < right ? -1 : left > right ? 1 : 0; };
+  Collator.prototype.resolvedOptions = function () { return { locale: this.locale, usage: this.options.usage || "sort", sensitivity: this.options.sensitivity || "variant" }; };
+
+  function PluralRules(locales, options) { this.locale = localeName(locales); this.options = options == null ? {} : Object(options); }
+  PluralRules.supportedLocalesOf = NumberFormat.supportedLocalesOf;
+  PluralRules.prototype.select = function (value) { return Number(value) === 1 ? "one" : "other"; };
+  PluralRules.prototype.resolvedOptions = function () { return { locale: this.locale, type: this.options.type || "cardinal", pluralCategories: ["one", "other"] }; };
+
+  function ListFormat(locales, options) { this.locale = localeName(locales); this.options = options == null ? {} : Object(options); }
+  ListFormat.supportedLocalesOf = NumberFormat.supportedLocalesOf;
+  ListFormat.prototype.format = function (values) {
+    const list = Array.from(values, String); if (list.length < 2) return list.join("");
+    if (list.length === 2) return list[0] + " and " + list[1];
+    return list.slice(0, -1).join(", ") + ", and " + list[list.length - 1];
+  };
+  ListFormat.prototype.formatToParts = function (values) { return [{ type: "element", value: this.format(values) }]; };
+  ListFormat.prototype.resolvedOptions = function () { return { locale: this.locale, style: this.options.style || "long", type: this.options.type || "conjunction" }; };
+
+  global.Intl = {
+    Locale: Locale, NumberFormat: NumberFormat, DateTimeFormat: DateTimeFormat,
+    Collator: Collator, PluralRules: PluralRules, ListFormat: ListFormat,
+    getCanonicalLocales: function (locales) { return NumberFormat.supportedLocalesOf(locales); }
+  };
+
   global.URL = URL; global.URLSearchParams = URLSearchParams; global.TextEncoder = TextEncoder; global.TextDecoder = TextDecoder;
   global.atob = function (value) { return decodeBase64(String(value)); };
   global.btoa = function (value) { return encodeBase64(String(value)); };

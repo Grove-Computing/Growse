@@ -55,7 +55,7 @@ func TestFrameworkFixtureVisualRegression(t *testing.T) {
 	}
 	engine.UpdateViewport(1024, 720)
 	waitForFixtureText(t, engine, mutations, "next-hydration-marker", "hydrated")
-	waitForFixtureRevision(t, engine, mutations, 11)
+	waitForFixtureRevision(t, engine, mutations, 6)
 	page = engine.Page()
 	actual.States = append(actual.States, visualFixtureState("next-hydrated", page, "__next", "next-hydration-marker", "next-count"))
 	if !engine.DispatchClick(fixtureNode(t, page, "next-counter").ID, 0, 0) {

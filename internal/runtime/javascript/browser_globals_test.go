@@ -31,7 +31,9 @@ func TestBrowserGlobalsSupportHydrationFixtureOperations(t *testing.T) {
 			params.toString(), params.size, Array.from(params).length, URL.canParse("/ok", url), URL.canParse("/no-base"),
 			Array.from(encoded).join(","), new TextDecoder().decode(encoded), into.read, into.written, Array.from(target).join(","),
 			btoa("\x00\xff"), atob("AP8=").charCodeAt(1), typeof performance.now(), performance.now() >= 0,
-			sameRandom, random.some(function (value) { return value !== 0; }), typeof process, typeof require
+			sameRandom, random.some(function (value) { return value !== 0; }), typeof process, typeof require,
+			new Intl.Locale("en-US").getTextInfo().direction, Intl.DateTimeFormat.supportedLocalesOf(["en-US"]).length,
+			new Intl.Collator("en-US").compare("a", "b"), new Intl.PluralRules("en-US").select(2), new Intl.ListFormat("en-US").format(["a", "b"])
 		].join("|"));`
 	environment := runtimemodel.Environment{BaseURL: pageURL, ConsoleRecord: func(_, value string) { message = value }}
 	if err := runtime.Load(context.Background(), []runtimemodel.Script{javaScript(source)}, environment); err != nil {
@@ -40,7 +42,7 @@ func TestBrowserGlobalsSupportHydrationFixtureOperations(t *testing.T) {
 	if err := runtime.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	want := "https://app.example.test|/next|?a=3&space=a+b|#top|3|1|x=2&empty=|2|2|true|false|65,226,156,147|A✓|2|3|195,169,120,0|AP8=|255|number|true|true|true|undefined|undefined"
+	want := "https://app.example.test|/next|?a=3&space=a+b|#top|3|1|x=2&empty=|2|2|true|false|65,226,156,147|A✓|2|3|195,169,120,0|AP8=|255|number|true|true|true|undefined|undefined|ltr|1|-1|other|a and b"
 	if message != want {
 		t.Fatalf("browser globals = %q, want %q", message, want)
 	}

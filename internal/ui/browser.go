@@ -1185,7 +1185,7 @@ func (ui *BrowserUI) findHighlightGeometry(displayList *paintmodel.DisplayList, 
 				continue
 			}
 			node, exists := page.Document.NodeByID(run.NodeID)
-			if !exists {
+			if !exists || !page.Document.IsConnected(node) {
 				runX += run.Width
 				continue
 			}

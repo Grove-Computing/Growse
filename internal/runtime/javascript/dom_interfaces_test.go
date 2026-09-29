@@ -23,13 +23,19 @@ func TestDOMInterfacesKeepStableWrappersAndPrototypeChains(t *testing.T) {
 		var script = document.createElement("script");
 		var link = document.createElement("link");
 		var image = document.createElement("img");
+		var iframe = document.createElement("iframe");
 		var template = document.createElement("template");
+		var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+		var path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+		var anchor = document.createElement("a");
 		var text = document.createTextNode("text");
 		console.log([
 			document instanceof Document,
 			document instanceof Node,
 			document instanceof EventTarget,
+			document.defaultView === window,
 			action === same,
+			action.ownerDocument === document,
 			action instanceof HTMLElement,
 			action instanceof Element,
 			action instanceof Node,
@@ -39,10 +45,18 @@ func TestDOMInterfacesKeepStableWrappersAndPrototypeChains(t *testing.T) {
 			script instanceof HTMLScriptElement,
 			link instanceof HTMLLinkElement,
 			image instanceof HTMLImageElement,
+			iframe instanceof HTMLIFrameElement,
 			template instanceof HTMLTemplateElement,
+			svg instanceof SVGElement,
+			svg instanceof Element,
+			path instanceof SVGElement,
+			anchor instanceof HTMLElement,
+			!(anchor instanceof SVGElement),
 			text instanceof Node,
 			!(text instanceof Element),
-			Object.prototype.toString.call(image)
+			Object.prototype.toString.call(image),
+			typeof Object.getOwnPropertyDescriptor(Node.prototype, "firstChild").get,
+			typeof Node.prototype.hasChildNodes
 		].join("|"));`
 	environment := runtimemodel.Environment{
 		Document: document,
@@ -56,9 +70,66 @@ func TestDOMInterfacesKeepStableWrappersAndPrototypeChains(t *testing.T) {
 	if err := runtime.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	want := "true|true|true|true|true|true|true|true|true|action|true|true|true|true|true|true|[object HTMLImageElement]"
+	want := "true|true|true|true|true|true|true|true|true|true|true|action|true|true|true|true|true|true|true|true|true|true|true|true|[object HTMLImageElement]|function|function"
 	if message != want {
 		t.Fatalf("DOM interface result = %q, want %q", message, want)
+	}
+}
+
+func TestDOMParserCreatesQueryableHTMLDocument(t *testing.T) {
+	document, err := htmlparser.Parse(strings.NewReader(`<html><body></body></html>`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var message string
+	runtime := New()
+	t.Cleanup(func() { _ = runtime.Stop() })
+	source := `
+		var parsed = new DOMParser().parseFromString("&lt;b&gt;safe&lt;/b&gt;<p class='item'>hello</p>", "text/html");
+		console.log([
+			parsed instanceof Document,
+			parsed.documentElement.textContent,
+			parsed.body.querySelectorAll("*").length,
+			parsed.body.hasChildNodes()
+		].join("|"));`
+	environment := runtimemodel.Environment{Document: document, ConsoleRecord: func(_, value string) { message = value }}
+	if err := runtime.Load(context.Background(), []runtimemodel.Script{javaScript(source)}, environment); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if want := "true|<b>safe</b>hello|1|true"; message != want {
+		t.Fatalf("DOMParser result = %q, want %q", message, want)
+	}
+}
+
+func TestDocumentImplementationCreatesHTMLDocument(t *testing.T) {
+	document, err := htmlparser.Parse(strings.NewReader(`<html><body></body></html>`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var message string
+	runtime := New()
+	t.Cleanup(func() { _ = runtime.Stop() })
+	source := `
+		var parsed = document.implementation.createHTMLDocument("Detached title");
+		parsed.body.innerHTML = "<main class='result'>ready</main>";
+		console.log([
+			parsed instanceof Document,
+			parsed.head.querySelector("title").textContent,
+			parsed.querySelector(".result").textContent,
+			typeof parsed.createElement
+		].join("|"));`
+	environment := runtimemodel.Environment{Document: document, ConsoleRecord: func(_, value string) { message = value }}
+	if err := runtime.Load(context.Background(), []runtimemodel.Script{javaScript(source)}, environment); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if want := "true|Detached title|ready|function"; message != want {
+		t.Fatalf("createHTMLDocument result = %q, want %q", message, want)
 	}
 }
 

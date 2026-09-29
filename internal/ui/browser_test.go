@@ -1752,7 +1752,7 @@ func TestDuckDuckGoResultClickNavigatesDirectlyWithoutIntermediatePage(t *testin
 	if err := document.AppendChild(document.Root, anchor); err != nil {
 		t.Fatal(err)
 	}
-	pageURL, _ := url.Parse("https://html.duckduckgo.com/html/?q=hoge")
+	pageURL, _ := url.Parse("https://duckduckgo.com/?q=hoge&ia=web")
 	page := &browser.Page{URL: pageURL, Document: document, Events: events.NewDispatcher()}
 	navigator := &recordingNavigator{stubNavigator: stubNavigator{page: page}, navigated: make(chan string, 1)}
 	ui := NewBrowserUI(navigator, nil)

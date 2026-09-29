@@ -55,9 +55,19 @@ func NewDocumentFromSnapshot(snapshot DocumentSnapshot) (*Document, error) {
 	return document, nil
 }
 
-// ApplySnapshot updates a live document in place. Existing nodes with matching
-// IDs and types are reused so runtime-side Element handles remain valid.
+// ApplySnapshot updates a live document in place. Existing connected nodes with
+// matching IDs and types are reused.
 func (d *Document) ApplySnapshot(snapshot DocumentSnapshot) error {
+	return d.applySnapshot(snapshot, false)
+}
+
+// ApplySnapshotPreservingDetached updates the connected tree while retaining
+// detached nodes referenced by a long-lived JavaScript runtime.
+func (d *Document) ApplySnapshotPreservingDetached(snapshot DocumentSnapshot) error {
+	return d.applySnapshot(snapshot, true)
+}
+
+func (d *Document) applySnapshot(snapshot DocumentSnapshot, preserveDetached bool) error {
 	if d == nil {
 		return errors.New("apply DOM snapshot to nil document")
 	}
@@ -106,14 +116,43 @@ func (d *Document) ApplySnapshot(snapshot DocumentSnapshot) error {
 			maximum = id
 		}
 	}
-	for id, old := range previous {
-		if _, retained := nodes[id]; !retained {
-			old.Parent = nil
-			old.Children = nil
-		}
-	}
 	if err := linkSnapshot(snapshot.Root, nodes, nil); err != nil {
 		return err
+	}
+	if preserveDetached {
+		for id, old := range previous {
+			if _, connected := nodes[id]; connected {
+				continue
+			}
+			children := old.Children[:0]
+			for _, child := range old.Children {
+				if _, connected := flat[child.ID]; !connected {
+					children = append(children, child)
+				}
+			}
+			old.Parent = nil
+			old.Children = children
+			old.document = d
+			nodes[id] = old
+			if id > maximum {
+				maximum = id
+			}
+		}
+		for id, old := range previous {
+			if _, connected := flat[id]; connected {
+				continue
+			}
+			for _, child := range old.Children {
+				child.Parent = old
+			}
+		}
+	} else {
+		for id, old := range previous {
+			if _, retained := nodes[id]; !retained {
+				old.Parent = nil
+				old.Children = nil
+			}
+		}
 	}
 	d.Root = nodes[snapshot.Root.ID]
 	d.nodes = nodes

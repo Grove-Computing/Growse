@@ -30,7 +30,7 @@ const (
 	workerEnvironmentKey = "GROWSE_RUNTIME_WORKER"
 	workerStopTimeout    = time.Second
 	maxWorkerStderrBytes = 64 << 10
-	defaultTaskTimeout   = 5 * time.Second
+	defaultTaskTimeout   = 30 * time.Second
 	maxSessionWorkers    = 32
 )
 
@@ -262,6 +262,11 @@ func (r *Runtime) DispatchDOMEvent(event events.Event) bool {
 	var response eventResponse
 	if err := r.callTask(context.Background(), "runtime.event", request, &response); err != nil {
 		return false
+	}
+	if response.Document.Root.ID != 0 && environment.Document.ApplySnapshot(response.Document) == nil {
+		if !response.MutationWasNotified && environment.OnMutation != nil {
+			environment.OnMutation()
+		}
 	}
 	if response.DefaultPrevented {
 		event.PreventDefault()

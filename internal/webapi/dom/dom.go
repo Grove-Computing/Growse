@@ -727,6 +727,68 @@ func (element *Element) QuerySelectorAll(selector string) []*Element {
 	)
 }
 
+// GetElementsByTagName returns matching element descendants.
+func (element *Element) GetElementsByTagName(tagName string) []*Element {
+	tagName = strings.ToLower(strings.TrimSpace(tagName))
+	node, ok := element.node()
+	if !ok || tagName == "" {
+		return nil
+	}
+	return (&API{document: element.document, events: element.events, onMutation: element.onMutation}).elements(
+		matchingElementDescendants(node, func(candidate *dommodel.Node) bool {
+			return tagName == "*" || candidate.TagName == tagName
+		}),
+	)
+}
+
+// GetElementsByClassName returns descendants containing every requested class token.
+func (element *Element) GetElementsByClassName(classNames string) []*Element {
+	classes := strings.Fields(classNames)
+	node, ok := element.node()
+	if !ok || len(classes) == 0 {
+		return nil
+	}
+	return (&API{document: element.document, events: element.events, onMutation: element.onMutation}).elements(
+		matchingElementDescendants(node, func(candidate *dommodel.Node) bool {
+			value, _ := candidate.Attribute("class")
+			present := make(map[string]bool)
+			for _, className := range strings.Fields(value) {
+				present[className] = true
+			}
+			for _, className := range classes {
+				if !present[className] {
+					return false
+				}
+			}
+			return true
+		}),
+	)
+}
+
+func matchingElementDescendants(root *dommodel.Node, matches func(*dommodel.Node) bool) []*dommodel.Node {
+	result := make([]*dommodel.Node, 0)
+	var walk func(*dommodel.Node)
+	walk = func(parent *dommodel.Node) {
+		if parent == nil || len(result) >= maxDOMCollectionResults || parent.Type == dommodel.NodeElement && parent.TagName == "template" {
+			return
+		}
+		for _, child := range parent.Children {
+			if child.Type == dommodel.NodeDocumentFragment {
+				continue
+			}
+			if child.Type == dommodel.NodeElement && matches(child) {
+				result = append(result, child)
+				if len(result) >= maxDOMCollectionResults {
+					return
+				}
+			}
+			walk(child)
+		}
+	}
+	walk(root)
+	return result
+}
+
 // AddClass は重複を避けてクラスを追加する。
 func (element *Element) AddClass(className string) bool {
 	if !validClassName(className) {
@@ -1308,11 +1370,11 @@ func (element *Element) SetText(value string) bool {
 		}
 		node.Text = value
 	} else {
-		removed := 0
-		for _, child := range node.Children {
-			removed += countSubtreeNodes(child)
+		additionalNodes := 0
+		if value != "" {
+			additionalNodes = 1
 		}
-		if element.document.OwnedNodeCount()-removed+1 > maxDOMOwnedNodes || !element.document.SetTextContent(element.id, value) {
+		if element.document.OwnedNodeCount()+additionalNodes > maxDOMOwnedNodes || !element.document.SetTextContent(element.id, value) {
 			return false
 		}
 	}

@@ -25,8 +25,20 @@ func pageRenderSnapshot(ctx context.Context, page *Page, nodeID dom.NodeID) (run
 	if !ok || !styled || !page.Document.IsConnected(node) {
 		return runtimemodel.RenderSnapshot{}, fmt.Errorf("render target is disconnected")
 	}
+	page.styleMu.Lock()
+	defer page.styleMu.Unlock()
 	revision := page.StyleRevision
-	tree := layoutengine.BuildWithScrollAtRevision(page.Document, page.ComputedStyles, page.ViewportWidth, page.ViewportHeight, 0, 0, revision)
+	page.cssomMu.Lock()
+	defer page.cssomMu.Unlock()
+	tree := page.cssomLayout
+	if tree == nil || page.cssomRevision != revision || page.cssomViewportWidth != page.ViewportWidth || page.cssomViewportHeight != page.ViewportHeight {
+		tree = layoutengine.BuildWithScrollAtRevision(page.Document, page.ComputedStyles, page.ViewportWidth, page.ViewportHeight, 0, 0, revision)
+		page.cssomLayout = tree
+		page.cssomRevision = revision
+		page.cssomViewportWidth = page.ViewportWidth
+		page.cssomViewportHeight = page.ViewportHeight
+		page.RecordRenderEvent(RenderLayoutBuild)
+	}
 	rect, laidOut := tree.Bounds[nodeID]
 	if !laidOut {
 		rect = layoutengine.Rect{}

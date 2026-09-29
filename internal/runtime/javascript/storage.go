@@ -33,10 +33,20 @@ func (runtime *Runtime) installStorage(vm *goja.Runtime) error {
 }
 
 func (runtime *Runtime) installWindowEventTarget(vm *goja.Runtime) error {
-	return vm.Set("addEventListener", func(call goja.FunctionCall) goja.Value {
+	if err := vm.Set("addEventListener", func(call goja.FunctionCall) goja.Value {
 		runtime.addWindowEventListener(vm, call.Argument(0).String(), call.Argument(1))
 		return goja.Undefined()
-	})
+	}); err != nil {
+		return err
+	}
+	if err := vm.Set("removeEventListener", func(call goja.FunctionCall) goja.Value {
+		runtime.removeWindowEventListener(call.Argument(0).String(), call.Argument(1))
+		return goja.Undefined()
+	}); err != nil {
+		return err
+	}
+	runtime.installLifecycleEventHandlerProperties(vm, vm.GlobalObject(), false, "load")
+	return nil
 }
 
 func (runtime *Runtime) storageValue(vm *goja.Runtime, storage *storageapi.Storage) goja.Value {
@@ -87,9 +97,6 @@ func (runtime *Runtime) addWindowEventListener(vm *goja.Runtime, eventType strin
 		panic(vm.NewTypeError("window event listener must be a function"))
 	}
 	eventType = strings.ToLower(strings.TrimSpace(eventType))
-	if eventType != "storage" && eventType != "popstate" && eventType != "hashchange" && eventType != "load" && eventType != "message" {
-		panic(vm.NewTypeError("window event type is unsupported"))
-	}
 	runtime.mu.Lock()
 	for _, listener := range runtime.windowListeners {
 		if listener.eventType == eventType && listener.function.SameAs(value) {
@@ -127,6 +134,19 @@ func (runtime *Runtime) addWindowEventListener(vm *goja.Runtime, eventType strin
 				runtime.recordError(fmt.Sprintf("JavaScript hashchange event handler: %v", err))
 			}
 		})
+	}
+}
+
+func (runtime *Runtime) removeWindowEventListener(eventType string, value goja.Value) {
+	eventType = strings.ToLower(strings.TrimSpace(eventType))
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	for index, listener := range runtime.windowListeners {
+		if listener.eventType == eventType && listener.function.SameAs(value) {
+			runtime.windowListeners = append(runtime.windowListeners[:index], runtime.windowListeners[index+1:]...)
+			runtime.listenerCount--
+			return
+		}
 	}
 }
 

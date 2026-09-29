@@ -29,7 +29,7 @@ const (
 	maxCallStackSize          = 1_000
 	callbackQueueSize         = 64
 	maxMicrotaskQueue         = 4_096
-	defaultModuleTimeout      = 5 * time.Second
+	defaultModuleTimeout      = 20 * time.Second
 	maxPageScripts            = 256
 	maxPageScriptBytes        = 32 << 20
 	maxDynamicInsertDepth     = 32
@@ -79,44 +79,47 @@ type Runtime struct {
 	maxMicrotasks     int
 	moduleTimeout     time.Duration
 
-	elements               map[*goja.Object]*domapi.Element
-	elementByID            map[uint64]*goja.Object
-	listeners              []listenerRecord
-	listenerCount          int
-	maxListeners           int
-	dynamicScripts         map[uint64]struct{}
-	modulePreloads         map[uint64]struct{}
-	moduleRegistry         *moduleRegistry
-	moduleEvaluations      map[string]*moduleEvaluation
-	stylesheetStates       map[uint64]string
-	preloadStates          map[uint64]string
-	imageStates            map[uint64]string
-	currentScript          *goja.Object
-	scriptCount            int
-	scriptBytes            int
-	dynamicInsertDepth     int
-	resourcePrepareCounts  map[uint64]int
-	resourceFailures       map[string]int
-	jsEventObjects         map[uint64]*goja.Object
-	nextJSEventID          uint64
-	activeElementID        uint64
-	media                  runtimemodel.MediaEnvironment
-	mediaQueries           []*mediaQueryRecord
-	mutationObservers      []*mutationObserverRecord
-	resizeObservers        []*resizeObserverRecord
-	intersectionObservers  []*intersectionObserverRecord
-	mutationSnapshot       dommodel.DocumentSnapshot
-	pendingMutationRecords int
-	observerCount          int
-	frameObserversDirty    atomic.Bool
-	maxObservers           int
-	maxObserverRecords     int
-	maxObserverCallbacks   int
-	maxObserverLoops       int
-	mutationCount          int
-	forcedReadCount        int
-	maxMutationsPerTask    int
-	maxForcedReadsPerTask  int
+	elements                  map[*goja.Object]*domapi.Element
+	elementByID               map[uint64]*goja.Object
+	svgElements               map[uint64]struct{}
+	listeners                 []listenerRecord
+	listenerCount             int
+	maxListeners              int
+	dynamicScripts            map[uint64]struct{}
+	modulePreloads            map[uint64]struct{}
+	moduleRegistry            *moduleRegistry
+	moduleEvaluations         map[string]*moduleEvaluation
+	stylesheetStates          map[uint64]string
+	preloadStates             map[uint64]string
+	imageStates               map[uint64]string
+	currentScript             *goja.Object
+	scriptCount               int
+	scriptBytes               int
+	dynamicInsertDepth        int
+	resourcePrepareCounts     map[uint64]int
+	resourceFailures          map[string]int
+	jsEventObjects            map[uint64]*goja.Object
+	nextJSEventID             uint64
+	activeElementID           uint64
+	media                     runtimemodel.MediaEnvironment
+	mediaQueries              []*mediaQueryRecord
+	mutationObservers         []*mutationObserverRecord
+	resizeObservers           []*resizeObserverRecord
+	intersectionObservers     []*intersectionObserverRecord
+	mutationSnapshot          dommodel.DocumentSnapshot
+	pendingMutationRecords    int
+	observerCount             int
+	frameObserversDirty       atomic.Bool
+	maxObservers              int
+	maxObserverRecords        int
+	maxObserverCallbacks      int
+	maxObserverLoops          int
+	mutationCount             int
+	mutationSnapshotDirty     bool
+	mutationNotificationDirty bool
+	forcedReadCount           int
+	maxMutationsPerTask       int
+	maxForcedReadsPerTask     int
 
 	loaded    bool
 	started   bool
@@ -225,6 +228,7 @@ func (runtime *Runtime) Load(ctx context.Context, scripts []runtimemodel.Script,
 	runtime.wasmAPI = newWasmAPI(runtimeContext, runtime.responseValues)
 	runtime.elements = make(map[*goja.Object]*domapi.Element)
 	runtime.elementByID = make(map[uint64]*goja.Object)
+	runtime.svgElements = make(map[uint64]struct{})
 	runtime.abortSignals = make(map[*goja.Object]*fetchapi.AbortSignal)
 	runtime.listeners = nil
 	runtime.dynamicScripts = make(map[uint64]struct{})
@@ -339,7 +343,7 @@ func (runtime *Runtime) Start(ctx context.Context) error {
 	runtime.mu.Unlock()
 
 	blocking, deferred, asynchronous := orderClassicScripts(scripts)
-	if err := runtime.evaluateScripts(ctx, blocking); err != nil {
+	if err := runtime.evaluateScripts(ctx, interleaveReadyAsyncScripts(blocking, asynchronous)); err != nil {
 		return fmt.Errorf("execute JavaScript scripts: %w", err)
 	}
 	if err := runtime.runSync(ctx, func(vm *goja.Runtime) error {
@@ -355,9 +359,6 @@ func (runtime *Runtime) Start(ctx context.Context) error {
 		runtime.dispatchLifecycleEvent(vm, "DOMContentLoaded", true)
 		return nil
 	}); err != nil {
-		return fmt.Errorf("execute JavaScript scripts: %w", err)
-	}
-	if err := runtime.evaluateScripts(ctx, asynchronous); err != nil {
 		return fmt.Errorf("execute JavaScript scripts: %w", err)
 	}
 	err := runtime.runSync(ctx, func(vm *goja.Runtime) error {
@@ -436,6 +437,7 @@ func (runtime *Runtime) Stop() error {
 	runtime.structuredClone = nil
 	runtime.elements = nil
 	runtime.elementByID = nil
+	runtime.svgElements = nil
 	runtime.abortSignals = nil
 	runtime.listeners = nil
 	runtime.dynamicScripts = nil
@@ -510,6 +512,43 @@ func orderClassicScripts(scripts []runtimemodel.Script) (blocking, deferred, asy
 	return blocking, deferred, asynchronous
 }
 
+func interleaveReadyAsyncScripts(blocking, asynchronous []runtimemodel.Script) []runtimemodel.Script {
+	result := make([]runtimemodel.Script, 0, len(blocking)+len(asynchronous))
+	pending := append([]runtimemodel.Script(nil), asynchronous...)
+	for _, script := range blocking {
+		for {
+			selected := -1
+			for index := range pending {
+				if pending[index].DocumentOrder >= script.DocumentOrder {
+					continue
+				}
+				if selected < 0 || asyncScriptLess(pending[index], pending[selected]) {
+					selected = index
+				}
+			}
+			if selected < 0 {
+				break
+			}
+			result = append(result, pending[selected])
+			pending = append(pending[:selected], pending[selected+1:]...)
+		}
+		result = append(result, script)
+	}
+	sort.SliceStable(pending, func(left, right int) bool { return asyncScriptLess(pending[left], pending[right]) })
+	return append(result, pending...)
+}
+
+func asyncScriptLess(left, right runtimemodel.Script) bool {
+	leftFetched, rightFetched := left.FetchOrder > 0, right.FetchOrder > 0
+	if leftFetched != rightFetched {
+		return leftFetched
+	}
+	if leftFetched && left.FetchOrder != right.FetchOrder {
+		return left.FetchOrder < right.FetchOrder
+	}
+	return left.DocumentOrder < right.DocumentOrder
+}
+
 func (runtime *Runtime) evaluateScripts(ctx context.Context, scripts []runtimemodel.Script) error {
 	for index, script := range scripts {
 		name := fmt.Sprintf("inline-script-%03d.js", index)
@@ -527,9 +566,17 @@ func (runtime *Runtime) evaluateScripts(ctx context.Context, scripts []runtimemo
 		}
 		var containedErr error
 		if err := runtime.runSync(ctx, func(vm *goja.Runtime) error {
-			runtime.setCurrentScript(vm, runtime.initialScriptElement(script.DocumentOrder))
+			element := runtime.initialScriptElement(script.DocumentOrder)
+			runtime.setCurrentScript(vm, element)
 			defer runtime.setCurrentScript(vm, nil)
 			_, containedErr = vm.RunScript(name, script.Source)
+			if !script.Inline && element != nil && runtime.environment.Document != nil && runtime.environment.Events != nil {
+				eventType := events.Load
+				if containedErr != nil {
+					eventType = events.Error
+				}
+				runtime.environment.Events.DispatchTree(runtime.environment.Document, events.Event{Type: eventType, Target: element.ID()})
+			}
 			return nil
 		}); err != nil {
 			return err
@@ -596,7 +643,14 @@ func (runtime *Runtime) evaluateModuleScript(ctx context.Context, name string, s
 			return goja.Undefined()
 		})
 		reject := vm.ToValue(func(call goja.FunctionCall) goja.Value {
-			settled <- errors.New(call.Argument(0).String())
+			reason := call.Argument(0)
+			message := reason.String()
+			if object, ok := reason.(*goja.Object); ok {
+				if stack := object.Get("stack"); !goja.IsUndefined(stack) && !goja.IsNull(stack) && stack.String() != "" {
+					message = stack.String()
+				}
+			}
+			settled <- errors.New(message)
 			return goja.Undefined()
 		})
 		_, scriptErr = then(promiseObject, resolve, reject)
@@ -725,6 +779,25 @@ func (runtime *Runtime) DispatchPageEvent(callback func() bool) bool {
 	return result
 }
 
+// DispatchDOMEvent applies browser-owned control state and dispatches its event
+// in one Runtime task so queued page work cannot restore stale state between them.
+func (runtime *Runtime) DispatchDOMEvent(event events.Event) bool {
+	result := false
+	err := runtime.runSync(context.Background(), func(*goja.Runtime) error {
+		if runtime.domAPI == nil || runtime.environment.Document == nil || runtime.environment.Events == nil {
+			return nil
+		}
+		if event.Type == events.Input {
+			if target := runtime.domAPI.NodeByID(event.Target); target != nil {
+				target.SetValue(event.Value)
+			}
+		}
+		result = runtime.environment.Events.DispatchTree(runtime.environment.Document, event)
+		return nil
+	})
+	return err == nil && result
+}
+
 func (runtime *Runtime) run(ctx context.Context, vm *goja.Runtime, queue <-chan task, done chan<- struct{}) {
 	defer close(done)
 	for {
@@ -748,8 +821,10 @@ func (runtime *Runtime) run(ctx context.Context, vm *goja.Runtime, queue <-chan 
 			err := executeTask(vm, queued.run)
 			if ctx.Err() == nil {
 				runtime.drainMicrotasks(vm)
+				runtime.captureDOMMutationDiff()
 				runtime.deliverMutationObservers(vm)
 				runtime.drainMicrotasks(vm)
+				runtime.flushDOMMutation()
 			}
 			runtime.executing.Store(false)
 			queued.result <- err
