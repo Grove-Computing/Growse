@@ -5,6 +5,7 @@ import (
 	"image/color"
 	"strings"
 
+	"gioui.org/io/semantic"
 	"gioui.org/layout"
 	"gioui.org/op/clip"
 	"gioui.org/op/paint"
@@ -25,6 +26,7 @@ type homeSettingsPanel struct {
 	add, save, close widget.Clickable
 	rows             [homeconfig.MaxShortcuts]homeShortcutRow
 	backgrounds      [5]widget.Clickable
+	list             widget.List
 	errorMessage     string
 }
 
@@ -157,15 +159,19 @@ func shortcutLetter(title string) string {
 }
 
 func (ui *BrowserUI) layoutHomeShortcuts(gtx layout.Context) layout.Dimensions {
+	columns := 5
+	if gtx.Constraints.Max.X < gtx.Dp(unit.Dp(520)) {
+		columns = 2
+	}
+	return ui.layoutHomeShortcutsWithColumns(gtx, columns)
+}
+
+func (ui *BrowserUI) layoutHomeShortcutsWithColumns(gtx layout.Context, columns int) layout.Dimensions {
 	count := len(ui.homeSettings.Shortcuts)
 	if count == 0 {
 		label := material.Body2(ui.theme, "ショートカットはまだありません")
 		label.Color = color.NRGBA{R: 100, G: 116, B: 139, A: 255}
 		return label.Layout(gtx)
-	}
-	columns := 5
-	if gtx.Constraints.Max.X < gtx.Dp(unit.Dp(520)) {
-		columns = 2
 	}
 	rows := (count + columns - 1) / columns
 	children := make([]layout.FlexChild, 0, rows*2)
@@ -179,6 +185,8 @@ func (ui *BrowserUI) layoutHomeShortcuts(gtx layout.Context) layout.Dimensions {
 				items = append(items,
 					layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 						return ui.homeShortcuts[index].Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+							semantic.ClassOp(semantic.Button).Add(gtx.Ops)
+							semantic.DescriptionOp("ショートカット: " + ui.homeSettings.Shortcuts[index].Title).Add(gtx.Ops)
 							gtx.Constraints.Min.X = gtx.Constraints.Max.X
 							return layout.Flex{Axis: layout.Vertical, Alignment: layout.Middle}.Layout(gtx,
 								layout.Rigid(func(gtx layout.Context) layout.Dimensions {
@@ -214,72 +222,121 @@ func clipCircle(gtx layout.Context, size int) clip.Op {
 	return clip.Ellipse(image.Rect(0, 0, size, size)).Op(gtx.Ops)
 }
 
+func (ui *BrowserUI) layoutHomePresetButton(gtx layout.Context, button *widget.Clickable, preset homeconfig.BackgroundPreset, selected bool) layout.Dimensions {
+	return button.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		semantic.ClassOp(semantic.RadioButton).Add(gtx.Ops)
+		semantic.DescriptionOp("ホーム背景: " + preset.Name).Add(gtx.Ops)
+		semantic.SelectedOp(selected).Add(gtx.Ops)
+		background := color.NRGBA{R: 226, G: 232, B: 240, A: 255}
+		foreground := color.NRGBA{R: 30, G: 41, B: 59, A: 255}
+		if selected {
+			background = color.NRGBA{R: 37, G: 99, B: 235, A: 255}
+			foreground = color.NRGBA{R: 255, G: 255, B: 255, A: 255}
+		}
+		minWidth := gtx.Dp(unit.Dp(80))
+		if minWidth > gtx.Constraints.Max.X {
+			minWidth = gtx.Constraints.Max.X
+		}
+		gtx.Constraints.Min.X = max(gtx.Constraints.Min.X, minWidth)
+		gtx.Constraints.Min.Y = gtx.Dp(unit.Dp(40))
+		return layout.Inset{Top: unit.Dp(8), Right: unit.Dp(12), Bottom: unit.Dp(8), Left: unit.Dp(12)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+			paint.FillShape(gtx.Ops, background, clip.UniformRRect(image.Rectangle{Max: gtx.Constraints.Min}, gtx.Dp(unit.Dp(8))).Op(gtx.Ops))
+			label := material.Body2(ui.theme, preset.Name)
+			label.Color = foreground
+			return label.Layout(gtx)
+		})
+	})
+}
+
 func (ui *BrowserUI) layoutHomeSettings(gtx layout.Context) layout.Dimensions {
 	paint.Fill(gtx.Ops, color.NRGBA{R: 238, G: 243, B: 248, A: 255})
 	panel := &ui.homePanel
-	return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-		if gtx.Constraints.Max.X > gtx.Dp(unit.Dp(720)) {
-			gtx.Constraints.Max.X = gtx.Dp(unit.Dp(720))
-		}
-		children := []layout.FlexChild{
-			layout.Rigid(material.H5(ui.theme, "ホームのショートカット").Layout),
-			layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				items := make([]layout.FlexChild, 0, len(homeconfig.BackgroundPresets())*2)
-				for index, preset := range homeconfig.BackgroundPresets() {
-					index, preset := index, preset
-					label := preset.Name
-					if preset.ID == ui.homeSettings.Background {
-						label += " ✓"
-					}
-					items = append(items, layout.Rigid(material.Button(ui.theme, &panel.backgrounds[index], label).Layout), layout.Rigid(layout.Spacer{Width: unit.Dp(6)}.Layout))
+	panel.list.Axis = layout.Vertical
+	return material.List(ui.theme, &panel.list).Layout(gtx, 1, func(gtx layout.Context, _ int) layout.Dimensions {
+		gtx.Constraints.Min.X = gtx.Constraints.Max.X
+		return layout.Inset{Top: unit.Dp(24), Right: unit.Dp(16), Bottom: unit.Dp(24), Left: unit.Dp(16)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+			return layout.N.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				if gtx.Constraints.Max.X > gtx.Dp(unit.Dp(720)) {
+					gtx.Constraints.Max.X = gtx.Dp(unit.Dp(720))
 				}
-				return layout.Flex{}.Layout(gtx, items...)
-			}),
-			layout.Rigid(layout.Spacer{Height: unit.Dp(12)}.Layout),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return material.Editor(ui.theme, &panel.title, "タイトル").Layout(gtx)
-			}),
-			layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return material.Editor(ui.theme, &panel.rawURL, "https://example.com/").Layout(gtx)
-			}),
-			layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layout.Flex{}.Layout(gtx,
-					layout.Rigid(material.Button(ui.theme, &panel.save, "保存").Layout),
-					layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
-					layout.Rigid(material.Button(ui.theme, &panel.add, "新規入力").Layout),
-					layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
-					layout.Rigid(material.Button(ui.theme, &panel.close, "完了").Layout),
-				)
-			}),
-		}
-		if panel.errorMessage != "" {
-			children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				label := material.Body2(ui.theme, panel.errorMessage)
-				label.Color = color.NRGBA{R: 185, G: 28, B: 28, A: 255}
-				return label.Layout(gtx)
-			}))
-		}
-		for index, shortcut := range ui.homeSettings.Shortcuts {
-			index, shortcut := index, shortcut
-			children = append(children,
-				layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
-				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					row := &panel.rows[index]
-					return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
-						layout.Flexed(1, material.Body1(ui.theme, shortcut.Title+" · "+shortcut.URL).Layout),
-						layout.Rigid(material.Button(ui.theme, &row.edit, "編集").Layout),
-						layout.Rigid(material.Button(ui.theme, &row.up, "↑").Layout),
-						layout.Rigid(material.Button(ui.theme, &row.down, "↓").Layout),
-						layout.Rigid(material.Button(ui.theme, &row.remove, "削除").Layout),
+				children := []layout.FlexChild{
+					layout.Rigid(material.H5(ui.theme, "ホームのショートカット").Layout),
+					layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						presets := homeconfig.BackgroundPresets()
+						if gtx.Constraints.Max.X < gtx.Dp(unit.Dp(520)) {
+							items := make([]layout.FlexChild, 0, len(presets)*2)
+							for index, preset := range presets {
+								index, preset := index, preset
+								items = append(items,
+									layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+										gtx.Constraints.Min.X = gtx.Constraints.Max.X
+										return ui.layoutHomePresetButton(gtx, &panel.backgrounds[index], preset, preset.ID == ui.homeSettings.Background)
+									}),
+									layout.Rigid(layout.Spacer{Height: unit.Dp(6)}.Layout),
+								)
+							}
+							return layout.Flex{Axis: layout.Vertical}.Layout(gtx, items...)
+						}
+						items := make([]layout.FlexChild, 0, len(presets)*2)
+						for index, preset := range presets {
+							index, preset := index, preset
+							items = append(items,
+								layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+									return ui.layoutHomePresetButton(gtx, &panel.backgrounds[index], preset, preset.ID == ui.homeSettings.Background)
+								}),
+								layout.Rigid(layout.Spacer{Width: unit.Dp(6)}.Layout),
+							)
+						}
+						return layout.Flex{}.Layout(gtx, items...)
+					}),
+					layout.Rigid(layout.Spacer{Height: unit.Dp(12)}.Layout),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						semantic.DescriptionOp("shortcutのタイトル").Add(gtx.Ops)
+						return material.Editor(ui.theme, &panel.title, "タイトル").Layout(gtx)
+					}),
+					layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						semantic.DescriptionOp("shortcutのURL").Add(gtx.Ops)
+						return material.Editor(ui.theme, &panel.rawURL, "https://example.com/").Layout(gtx)
+					}),
+					layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return layout.Flex{}.Layout(gtx,
+							layout.Rigid(material.Button(ui.theme, &panel.save, "保存").Layout),
+							layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
+							layout.Rigid(material.Button(ui.theme, &panel.add, "新規入力").Layout),
+							layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
+							layout.Rigid(material.Button(ui.theme, &panel.close, "完了").Layout),
+						)
+					}),
+				}
+				if panel.errorMessage != "" {
+					children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						semantic.DescriptionOp("設定エラー: " + panel.errorMessage).Add(gtx.Ops)
+						label := material.Body2(ui.theme, panel.errorMessage)
+						label.Color = color.NRGBA{R: 185, G: 28, B: 28, A: 255}
+						return label.Layout(gtx)
+					}))
+				}
+				for index, shortcut := range ui.homeSettings.Shortcuts {
+					index, shortcut := index, shortcut
+					children = append(children,
+						layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
+						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+							row := &panel.rows[index]
+							return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+								layout.Flexed(1, material.Body1(ui.theme, shortcut.Title+" · "+shortcut.URL).Layout),
+								layout.Rigid(material.Button(ui.theme, &row.edit, "編集").Layout),
+								layout.Rigid(material.Button(ui.theme, &row.up, "↑").Layout),
+								layout.Rigid(material.Button(ui.theme, &row.down, "↓").Layout),
+								layout.Rigid(material.Button(ui.theme, &row.remove, "削除").Layout),
+							)
+						}),
 					)
-				}),
-			)
-		}
-		return layout.Inset{Top: unit.Dp(24), Right: unit.Dp(24), Bottom: unit.Dp(24), Left: unit.Dp(24)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-			return layout.Flex{Axis: layout.Vertical}.Layout(gtx, children...)
+				}
+				return layout.Flex{Axis: layout.Vertical}.Layout(gtx, children...)
+			})
 		})
 	})
 }

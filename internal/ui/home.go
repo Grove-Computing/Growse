@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"gioui.org/io/key"
+	"gioui.org/io/semantic"
 	"gioui.org/layout"
 	"gioui.org/op/clip"
 	"gioui.org/op/paint"
@@ -47,6 +48,7 @@ type homeTabState struct {
 	selected         int
 	rows             [omnibox.MaxVisibleCandidates]widget.Clickable
 	list             widget.List
+	page             widget.List
 	views            []homeView
 	viewIndex        int
 	browserPosition  int
@@ -67,6 +69,7 @@ func newHomeTabState(visible bool) *homeTabState {
 		state.browserPosition = 0
 	}
 	state.list.Axis = layout.Vertical
+	state.page.Axis = layout.Vertical
 	return state
 }
 
@@ -350,6 +353,48 @@ func (ui *BrowserUI) submitHomeCandidate(state *homeTabState, candidate omnibox.
 	state.editor.SetText(query)
 }
 
+type homeLayoutMetrics struct {
+	cardWidth, horizontalInset, verticalInset unit.Dp
+	logoWidth, logoHeight                     unit.Dp
+	candidateHeight                           unit.Dp
+	shortcutColumns                           int
+}
+
+func searchHomeLayoutMetrics(narrow bool) homeLayoutMetrics {
+	if narrow {
+		return homeLayoutMetrics{
+			cardWidth: 496, horizontalInset: 16, verticalInset: 24,
+			logoWidth: 64, logoHeight: 52, candidateHeight: 144, shortcutColumns: 2,
+		}
+	}
+	return homeLayoutMetrics{
+		cardWidth: 620, horizontalInset: 48, verticalInset: 40,
+		logoWidth: 88, logoHeight: 72, candidateHeight: 192, shortcutColumns: 5,
+	}
+}
+
+func homeSearchBorder(focused bool) (color.NRGBA, unit.Dp) {
+	if focused {
+		return color.NRGBA{R: 37, G: 99, B: 235, A: 255}, unit.Dp(2)
+	}
+	return color.NRGBA{R: 148, G: 163, B: 184, A: 255}, unit.Dp(1)
+}
+
+func (ui *BrowserUI) layoutHomeSearchEditor(gtx layout.Context, state *homeTabState) layout.Dimensions {
+	height := gtx.Dp(unit.Dp(48))
+	gtx.Constraints.Min.X = gtx.Constraints.Max.X
+	gtx.Constraints.Min.Y = height
+	gtx.Constraints.Max.Y = height
+	defer clip.Rect{Max: gtx.Constraints.Min}.Push(gtx.Ops).Pop()
+	semantic.ClassOp(semantic.Editor).Add(gtx.Ops)
+	semantic.DescriptionOp("ホーム検索。検索語またはURLを入力").Add(gtx.Ops)
+	borderColor, borderWidth := homeSearchBorder(gtx.Focused(state.editor))
+	return widget.Border{Color: borderColor, CornerRadius: unit.Dp(14), Width: borderWidth}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		return layout.Inset{Top: unit.Dp(10), Right: unit.Dp(14), Bottom: unit.Dp(10), Left: unit.Dp(14)}.Layout(gtx,
+			material.Editor(ui.theme, state.editor, "検索語またはURLを入力").Layout)
+	})
+}
+
 func (ui *BrowserUI) layoutHome(gtx layout.Context) layout.Dimensions {
 	if ui.homePanel.open {
 		return ui.layoutHomeSettings(gtx)
@@ -364,77 +409,90 @@ func (ui *BrowserUI) layoutHome(gtx layout.Context) layout.Dimensions {
 	} else {
 		ui.syncHomeSuggestions(state)
 	}
-	return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-		maxWidth := gtx.Dp(unit.Dp(620))
-		if gtx.Constraints.Max.X > maxWidth {
-			gtx.Constraints.Max.X = maxWidth
-		}
-		return widget.Border{
-			Color: color.NRGBA{R: 211, G: 218, B: 228, A: 255}, CornerRadius: unit.Dp(20), Width: unit.Dp(1),
-		}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-			return layout.Stack{Alignment: layout.Center}.Layout(gtx,
-				layout.Expanded(func(gtx layout.Context) layout.Dimensions {
-					paint.FillShape(gtx.Ops, surface,
-						clip.UniformRRect(image.Rectangle{Max: gtx.Constraints.Min}, gtx.Dp(unit.Dp(20))).Op(gtx.Ops))
-					return layout.Dimensions{Size: gtx.Constraints.Min}
-				}),
-				layout.Stacked(func(gtx layout.Context) layout.Dimensions {
-					return layout.Inset{Top: unit.Dp(40), Right: unit.Dp(48), Bottom: unit.Dp(40), Left: unit.Dp(48)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-						dims := layout.Flex{Axis: layout.Vertical, Alignment: layout.Middle}.Layout(gtx,
-							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-								gtx.Constraints = layout.Exact(image.Pt(gtx.Dp(88), gtx.Dp(72)))
-								return widget.Image{Src: ui.gopher, Fit: widget.Contain, Position: layout.Center}.Layout(gtx)
-							}),
-							layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
-							layout.Rigid(material.H3(ui.theme, "Growse").Layout),
-							layout.Rigid(layout.Spacer{Height: unit.Dp(22)}.Layout),
-							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-								return widget.Border{Color: color.NRGBA{R: 148, G: 163, B: 184, A: 255}, CornerRadius: unit.Dp(14), Width: unit.Dp(1)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-									return layout.Inset{Top: unit.Dp(10), Right: unit.Dp(14), Bottom: unit.Dp(10), Left: unit.Dp(14)}.Layout(gtx,
-										material.Editor(ui.theme, state.editor, "検索語またはURLを入力").Layout)
-								})
-							}),
-							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-								return ui.layoutHomeCandidates(gtx, state)
-							}),
-							layout.Rigid(layout.Spacer{Height: unit.Dp(12)}.Layout),
-							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-								button := material.Button(ui.theme, &state.search, ui.homeSearchLabel())
-								button.CornerRadius = unit.Dp(12)
-								return button.Layout(gtx)
-							}),
-							layout.Rigid(layout.Spacer{Height: unit.Dp(18)}.Layout),
-							layout.Rigid(ui.layoutHomeShortcuts),
-							layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
-							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-								button := material.Button(ui.theme, &ui.homeCustomize, "ショートカットを編集")
-								button.Background = color.NRGBA{R: 71, G: 85, B: 105, A: 255}
-								button.CornerRadius = unit.Dp(10)
-								return button.Layout(gtx)
-							}),
-							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-								if state.errorMessage == "" {
-									return layout.Dimensions{}
+	metrics := searchHomeLayoutMetrics(gtx.Constraints.Max.X < gtx.Dp(unit.Dp(600)))
+	state.page.Axis = layout.Vertical
+	return material.List(ui.theme, &state.page).Layout(gtx, 1, func(gtx layout.Context, _ int) layout.Dimensions {
+		gtx.Constraints.Min.X = gtx.Constraints.Max.X
+		return layout.Inset{Top: unit.Dp(24), Right: unit.Dp(8), Bottom: unit.Dp(24), Left: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+			return layout.N.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				maxWidth := gtx.Dp(metrics.cardWidth)
+				if gtx.Constraints.Max.X > maxWidth {
+					gtx.Constraints.Max.X = maxWidth
+				}
+				return widget.Border{
+					Color: color.NRGBA{R: 211, G: 218, B: 228, A: 255}, CornerRadius: unit.Dp(20), Width: unit.Dp(1),
+				}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					return layout.Stack{Alignment: layout.Center}.Layout(gtx,
+						layout.Expanded(func(gtx layout.Context) layout.Dimensions {
+							paint.FillShape(gtx.Ops, surface,
+								clip.UniformRRect(image.Rectangle{Max: gtx.Constraints.Min}, gtx.Dp(unit.Dp(20))).Op(gtx.Ops))
+							return layout.Dimensions{Size: gtx.Constraints.Min}
+						}),
+						layout.Stacked(func(gtx layout.Context) layout.Dimensions {
+							return layout.Inset{
+								Top: metrics.verticalInset, Right: metrics.horizontalInset,
+								Bottom: metrics.verticalInset, Left: metrics.horizontalInset,
+							}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+								dims := layout.Flex{Axis: layout.Vertical, Alignment: layout.Middle}.Layout(gtx,
+									layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+										gtx.Constraints = layout.Exact(image.Pt(gtx.Dp(metrics.logoWidth), gtx.Dp(metrics.logoHeight)))
+										semantic.DescriptionOp("Growseロゴ").Add(gtx.Ops)
+										return widget.Image{Src: ui.gopher, Fit: widget.Contain, Position: layout.Center}.Layout(gtx)
+									}),
+									layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
+									layout.Rigid(material.H3(ui.theme, "Growse").Layout),
+									layout.Rigid(layout.Spacer{Height: unit.Dp(22)}.Layout),
+									layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+										return ui.layoutHomeSearchEditor(gtx, state)
+									}),
+									layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+										return ui.layoutHomeCandidatesWithHeight(gtx, state, metrics.candidateHeight)
+									}),
+									layout.Rigid(layout.Spacer{Height: unit.Dp(12)}.Layout),
+									layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+										button := material.Button(ui.theme, &state.search, ui.homeSearchLabel())
+										button.CornerRadius = unit.Dp(12)
+										return button.Layout(gtx)
+									}),
+									layout.Rigid(layout.Spacer{Height: unit.Dp(18)}.Layout),
+									layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+										return ui.layoutHomeShortcutsWithColumns(gtx, metrics.shortcutColumns)
+									}),
+									layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
+									layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+										button := material.Button(ui.theme, &ui.homeCustomize, "ショートカットを編集")
+										button.Background = color.NRGBA{R: 71, G: 85, B: 105, A: 255}
+										button.CornerRadius = unit.Dp(10)
+										return button.Layout(gtx)
+									}),
+									layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+										if state.errorMessage == "" {
+											return layout.Dimensions{}
+										}
+										return layout.Inset{Top: unit.Dp(10)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+											gtx.Constraints.Min.X = gtx.Constraints.Max.X
+											gtx.Constraints.Min.Y = gtx.Dp(unit.Dp(24))
+											defer clip.Rect{Max: gtx.Constraints.Min}.Push(gtx.Ops).Pop()
+											semantic.DescriptionOp("入力エラー: " + state.errorMessage).Add(gtx.Ops)
+											label := material.Body2(ui.theme, state.errorMessage)
+											label.Color = color.NRGBA{R: 185, G: 28, B: 28, A: 255}
+											return label.Layout(gtx)
+										})
+									}),
+								)
+								if state.focusPending {
+									state.focusPending = false
+									gtx.Execute(key.FocusCmd{Tag: state.editor})
 								}
-								return layout.Inset{Top: unit.Dp(10)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-									label := material.Body2(ui.theme, state.errorMessage)
-									label.Color = color.NRGBA{R: 185, G: 28, B: 28, A: 255}
-									return label.Layout(gtx)
-								})
-							}),
-						)
-						if state.focusPending {
-							state.focusPending = false
-							gtx.Execute(key.FocusCmd{Tag: state.editor})
-						}
-						return dims
-					})
-				}),
-			)
+								return dims
+							})
+						}),
+					)
+				})
+			})
 		})
 	})
 }
-
 func (ui *BrowserUI) setHomeVisible(tabID browser.TabID, visible bool) {
 	state := ui.homeState(tabID)
 	ui.activateHomeView(tabID, state, visible)
@@ -554,16 +612,19 @@ func (ui *BrowserUI) homeSearchLabel() string {
 	return provider + " で検索"
 }
 
-func (ui *BrowserUI) layoutHomeCandidates(gtx layout.Context, state *homeTabState) layout.Dimensions {
+func (ui *BrowserUI) layoutHomeCandidatesWithHeight(gtx layout.Context, state *homeTabState, maxHeight unit.Dp) layout.Dimensions {
 	if len(state.candidates) == 0 || state.editor.Text() == "" {
 		return layout.Dimensions{}
 	}
-	height := min(gtx.Dp(unit.Dp(48))*len(state.candidates), gtx.Dp(unit.Dp(192)))
+	height := min(gtx.Dp(unit.Dp(48))*len(state.candidates), gtx.Dp(maxHeight))
 	gtx.Constraints.Min.Y = height
 	gtx.Constraints.Max.Y = height
 	return material.List(ui.theme, &state.list).Layout(gtx, len(state.candidates), func(gtx layout.Context, index int) layout.Dimensions {
 		candidate := state.candidates[index]
 		return state.rows[index].Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+			semantic.ClassOp(semantic.Button).Add(gtx.Ops)
+			semantic.DescriptionOp(candidate.Source.Label() + ": " + candidate.Primary).Add(gtx.Ops)
+			semantic.SelectedOp(index == state.selected).Add(gtx.Ops)
 			gtx.Constraints.Min.X = gtx.Constraints.Max.X
 			background := color.NRGBA{R: 248, G: 250, B: 252, A: 255}
 			if index == state.selected {

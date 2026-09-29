@@ -8,10 +8,12 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"gioui.org/io/input"
 	"gioui.org/io/key"
+	"gioui.org/io/semantic"
 	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/unit"
@@ -467,5 +469,81 @@ func TestFailedNavigationRestoresHomeViewAndQuery(t *testing.T) {
 	ui.consumeNavigationResult()
 	if !ui.homeVisible() || state.editor.Text() != "keep failed query" {
 		t.Fatalf("failed navigation state = visible %v query %q", ui.homeVisible(), state.editor.Text())
+	}
+}
+
+func flattenSemanticNodes(nodes []input.SemanticNode) []input.SemanticNode {
+	// Router.AppendSemantics already returns every node in tree order while also
+	// retaining child links for assistive-technology consumers.
+	return nodes
+}
+
+func TestHomeAccessibleNamesRolesStatesAndErrors(t *testing.T) {
+	ui := NewBrowserUI(nil, nil)
+	_, _ = ui.homeSettings.Add("Docs", "https://docs.example/")
+	state := ui.homeState(0)
+	state.editor.SetText("guide")
+	ui.SetSuggestionSnapshot(omnibox.Snapshot{History: []omnibox.Candidate{{Primary: "Guide history", URL: "https://history.example/"}}})
+	ui.refreshHomeSuggestions(state)
+	state.selected = min(1, len(state.candidates)-1)
+	state.errorMessage = "検索できません"
+	router := new(input.Router)
+	gtx := layout.Context{Ops: new(op.Ops), Source: router.Source(), Constraints: layout.Exact(image.Pt(1056, 700)), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}}
+	ui.layoutHome(gtx)
+	router.Frame(gtx.Ops)
+	nodes := flattenSemanticNodes(router.AppendSemantics(nil))
+
+	var editor, candidate, shortcut, errorNode bool
+	for _, node := range nodes {
+		switch {
+		case node.Desc.Class == semantic.Editor && strings.Contains(node.Desc.Description, "ホーム検索"):
+			editor = true
+		case node.Desc.Class == semantic.Button && strings.Contains(node.Desc.Description, "History: Guide history") && node.Desc.Selected:
+			candidate = true
+		case node.Desc.Class == semantic.Button && strings.Contains(node.Desc.Description, "ショートカット: Docs"):
+			shortcut = true
+		case strings.Contains(node.Desc.Description, "入力エラー: 検索できません"):
+			errorNode = true
+		}
+	}
+	if !editor || !candidate || !shortcut || !errorNode {
+		t.Fatalf("semantic states editor=%v candidate=%v shortcut=%v error=%v nodes=%+v", editor, candidate, shortcut, errorNode, nodes)
+	}
+}
+
+func TestHomeBackgroundPresetExposesRadioSelection(t *testing.T) {
+	ui := NewBrowserUI(nil, nil)
+	ui.homePanel.open = true
+	ui.homeSettings.Background = homeconfig.BackgroundDusk
+	router := new(input.Router)
+	gtx := layout.Context{Ops: new(op.Ops), Source: router.Source(), Constraints: layout.Exact(image.Pt(720, 700)), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}}
+	ui.layoutHomeSettings(gtx)
+	router.Frame(gtx.Ops)
+	selected := 0
+	for _, node := range flattenSemanticNodes(router.AppendSemantics(nil)) {
+		if node.Desc.Class == semantic.RadioButton && strings.HasPrefix(node.Desc.Description, "ホーム背景:") && node.Desc.Selected {
+			selected++
+		}
+	}
+	if selected != 1 {
+		t.Fatalf("selected background radio count = %d", selected)
+	}
+}
+
+func TestHomeSearchFocusIndicatorAndKeyboardTabOrder(t *testing.T) {
+	unfocusedColor, unfocusedWidth := homeSearchBorder(false)
+	focusedColor, focusedWidth := homeSearchBorder(true)
+	if focusedColor == unfocusedColor || focusedWidth <= unfocusedWidth {
+		t.Fatalf("focus indicator = color %#v/%#v width %v/%v", unfocusedColor, focusedColor, unfocusedWidth, focusedWidth)
+	}
+	ui, router, gtx, state := newHomeInputTestUI(t)
+	router.Queue(key.Event{Name: key.NameTab, State: key.Press})
+	gtx.Reset()
+	ui.Layout(*gtx)
+	router.Frame(gtx.Ops)
+	gtx.Reset()
+	ui.Layout(*gtx)
+	if !gtx.Focused(&state.search) {
+		t.Fatal("Tab did not move focus from home search to search action")
 	}
 }
