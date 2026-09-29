@@ -116,6 +116,7 @@ type BrowserUI struct {
 	address           *widget.Editor
 	omniboxStates     map[browser.TabID]omniboxState
 	homeTabs          map[browser.TabID]*homeTabState
+	homeRollbacks     map[browser.TabID]homeHistorySnapshot
 	homeSettings      homeconfig.Settings
 	homeStore         *homeconfig.Store
 	homePanel         homeSettingsPanel
@@ -397,8 +398,9 @@ type applicationUpdateResult struct {
 }
 
 type tabNavigation struct {
-	id     uint64
-	cancel context.CancelFunc
+	id         uint64
+	cancel     context.CancelFunc
+	homeBefore *homeHistorySnapshot
 }
 
 type omniboxDisposition uint8
@@ -471,6 +473,7 @@ func NewBrowserUIWithTabsAndUpdater(navigator Navigator, tabs TabController, inv
 		inspectorButtons:  make(map[browser.TabID]map[dom.NodeID]*widget.Clickable),
 		omniboxStates:     make(map[browser.TabID]omniboxState),
 		homeTabs:          make(map[browser.TabID]*homeTabState),
+		homeRollbacks:     make(map[browser.TabID]homeHistorySnapshot),
 		homeSettings:      homeconfig.Defaults(),
 		homePanel:         newHomeSettingsPanel(),
 		findStates:        make(map[browser.TabID]*findTabState),
@@ -1410,13 +1413,17 @@ func (ui *BrowserUI) handleActions(gtx layout.Context) {
 		ui.toggleActiveBookmark()
 	}
 	for ui.backButton.Clicked(gtx) {
-		if tabID, navigator := ui.activeNavigationTarget(); navigator != nil && navigator.CanBack() {
-			ui.startPageLoad(tabID, navigator, "前のページを読み込み中", navigator.Back)
+		if !ui.traverseHomeHistory(-1) {
+			if tabID, navigator := ui.activeNavigationTarget(); navigator != nil && navigator.CanBack() {
+				ui.startPageLoad(tabID, navigator, "前のページを読み込み中", navigator.Back)
+			}
 		}
 	}
 	for ui.forwardButton.Clicked(gtx) {
-		if tabID, navigator := ui.activeNavigationTarget(); navigator != nil && navigator.CanForward() {
-			ui.startPageLoad(tabID, navigator, "次のページを読み込み中", navigator.Forward)
+		if !ui.traverseHomeHistory(1) {
+			if tabID, navigator := ui.activeNavigationTarget(); navigator != nil && navigator.CanForward() {
+				ui.startPageLoad(tabID, navigator, "次のページを読み込み中", navigator.Forward)
+			}
 		}
 	}
 	for ui.reloadButton.Clicked(gtx) {
@@ -1651,6 +1658,7 @@ func (ui *BrowserUI) closeTab(id browser.TabID) bool {
 		state.closeSuggestions()
 	}
 	delete(ui.homeTabs, id)
+	delete(ui.homeRollbacks, id)
 	delete(ui.findStates, id)
 	delete(ui.tabRenderStates, id)
 	delete(ui.devToolsStates, id)
@@ -1716,7 +1724,6 @@ func (ui *BrowserUI) startNavigationWithDisposition(rawURL string, disposition o
 		target = classification.URL.String()
 	}
 	if disposition == omniboxCurrentTab {
-		ui.setHomeVisible(tabID, false)
 		ui.startResolvedNavigation(target, classification.Kind != omnibox.URL)
 		return
 	}
@@ -1758,6 +1765,8 @@ func (ui *BrowserUI) startResolvedNavigation(rawURL string, search ...bool) {
 		ui.statusHasError = true
 		return
 	}
+	ui.cancelNavigationForHome(tabID)
+	ui.beginHomeNavigation(tabID)
 	ui.startPageLoad(tabID, navigator, navigationLoadingStatus(rawURL), func(ctx context.Context) (*browser.Page, error) {
 		if len(search) > 0 && search[0] {
 			ctx = network.WithRedirectPolicy(ctx, rawURL, searchprovider.ValidateRedirect)
@@ -1828,7 +1837,13 @@ func (ui *BrowserUI) startPageLoad(tabID browser.TabID, navigator Navigator, sta
 	ctx, cancel := context.WithCancel(context.Background())
 	ui.nextNavigationID++
 	navigationID := ui.nextNavigationID
-	ui.navigations[tabID] = tabNavigation{id: navigationID, cancel: cancel}
+	navigation := tabNavigation{id: navigationID, cancel: cancel}
+	if before, ok := ui.homeRollbacks[tabID]; ok {
+		copy := before
+		navigation.homeBefore = &copy
+		delete(ui.homeRollbacks, tabID)
+	}
+	ui.navigations[tabID] = navigation
 	if sink, ok := ui.tabs.(tabNavigationStateSink); ok && tabID != 0 {
 		if _, err := sink.BeginTabNavigation(tabID); err != nil {
 			cancel()
@@ -1976,6 +1991,9 @@ func (ui *BrowserUI) syncActiveTabChrome() {
 		return
 	}
 	if ui.displayedTabID != 0 {
+		if state := ui.homeTabs[ui.displayedTabID]; state != nil {
+			state.cancelSuggestions()
+		}
 		ui.tabRenderStates[ui.displayedTabID] = tabRenderState{
 			layoutCache: ui.layoutCache, scrollRevision: ui.scrollRevision, pagePosition: ui.pageList.Position,
 			inputEditors: ui.inputEditors, inputFocused: ui.inputFocused, inputCommitted: ui.inputCommitted,
@@ -1992,6 +2010,9 @@ func (ui *BrowserUI) syncActiveTabChrome() {
 		committedURL = page.URL.String()
 	}
 	ui.activateOmnibox(active.ID, committedURL)
+	if state := ui.homeTabs[active.ID]; state != nil && state.visible {
+		ui.showBlankOmnibox(active.ID)
+	}
 	ui.loading = active.Loading
 	ui.statusHasError = active.Error
 	if state, ok := ui.tabRenderStates[active.ID]; ok {
@@ -2057,6 +2078,9 @@ func (ui *BrowserUI) consumeNavigationResult() {
 				continue
 			}
 			delete(ui.navigations, result.tabID)
+			if (result.err != nil || result.page == nil || result.page.URL == nil) && navigation.homeBefore != nil {
+				ui.restoreHomeHistory(result.tabID, *navigation.homeBefore)
+			}
 			if sink, ok := ui.tabs.(tabNavigationStateSink); ok && result.tabID != 0 {
 				if _, err := sink.FinishTabNavigation(result.tabID, result.err != nil); err != nil {
 					ui.reportTabOperationError("TabのNavigation結果を更新できません", err)
@@ -2174,8 +2198,9 @@ func (ui *BrowserUI) layoutToolbar(gtx layout.Context) layout.Dimensions {
 
 	return layout.Inset{Top: unit.Dp(8), Right: unit.Dp(8), Bottom: unit.Dp(6), Left: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		navigator := ui.activeNavigator()
-		canBack := navigator != nil && navigator.CanBack()
-		canForward := navigator != nil && navigator.CanForward()
+		tabID, _ := ui.activeNavigationTarget()
+		canBack := ui.canTraverseHomeHistory(tabID, -1) || navigator != nil && navigator.CanBack()
+		canForward := ui.canTraverseHomeHistory(tabID, 1) || navigator != nil && navigator.CanForward()
 		canReload := navigator != nil && navigator.Page() != nil
 		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {

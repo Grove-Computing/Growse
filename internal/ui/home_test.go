@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"errors"
 	"image"
 	"image/color"
 	"net/url"
@@ -378,5 +379,93 @@ func TestBundledHomeBackgroundPresetsAreOpaqueAndDistinct(t *testing.T) {
 	}
 	if len(seen) != len(homeconfig.BackgroundPresets()) {
 		t.Fatalf("background colors are not distinct: %#v", seen)
+	}
+}
+
+func TestHomeBackForwardRestoresInternalViewWithoutNetworkTraversal(t *testing.T) {
+	target, _ := url.Parse("https://example.test/page")
+	navigator := &stubNavigator{}
+	ui := NewBrowserUI(navigator, nil)
+	state := ui.homeState(0)
+	ui.beginHomeNavigation(0)
+	navigator.page = browser.NewPage(target)
+	ui.setCommittedOmniboxURL(0, target.String(), true)
+	delete(ui.homeRollbacks, 0)
+	if state.visible || state.viewIndex != 1 {
+		t.Fatalf("page view state = %+v", state)
+	}
+
+	if !ui.traverseHomeHistory(-1) || !state.visible || ui.address.Text() != "" {
+		t.Fatalf("back to home = visible %v address %q", state.visible, ui.address.Text())
+	}
+	if !ui.traverseHomeHistory(1) || state.visible || ui.address.Text() != target.String() {
+		t.Fatalf("forward to page = visible %v address %q", state.visible, ui.address.Text())
+	}
+}
+
+func TestHomeActionBackRestoresExistingPage(t *testing.T) {
+	target, _ := url.Parse("https://existing.example/")
+	navigator := &stubNavigator{page: browser.NewPage(target)}
+	ui := NewBrowserUI(navigator, nil)
+	ui.setCommittedOmniboxURL(0, target.String(), true)
+	ui.showHome()
+	if !ui.homeVisible() || !ui.canTraverseHomeHistory(0, -1) {
+		t.Fatal("Home action did not append internal history view")
+	}
+	if !ui.traverseHomeHistory(-1) || ui.homeVisible() || ui.address.Text() != target.String() {
+		t.Fatalf("back restored visible=%v address=%q", ui.homeVisible(), ui.address.Text())
+	}
+}
+
+func TestHomeStateAndSelectionAreTabOwnedAndRequestsCancelOnSwitch(t *testing.T) {
+	session := browser.NewSession()
+	first, _ := session.NewTab(nil)
+	second, _ := session.NewTab(nil)
+	ui := NewBrowserUIWithTabs(nil, session, nil)
+	defer ui.Close()
+	ui.syncActiveTabChrome()
+	ui.SetSuggestionSnapshot(omnibox.Snapshot{History: []omnibox.Candidate{
+		{Primary: "guide one", URL: "https://one.example/"},
+		{Primary: "guide two", URL: "https://two.example/"},
+	}})
+	firstState := ui.homeState(first.ID)
+	firstState.editor.SetText("guide")
+	ui.refreshHomeSuggestions(firstState)
+	firstState.selected = 1
+
+	if _, err := session.SelectTab(second.ID); err != nil {
+		t.Fatal(err)
+	}
+	ui.syncActiveTabChrome()
+	if len(firstState.candidates) != 0 || !firstState.needsRefresh {
+		t.Fatalf("switched state retained request results: %+v", firstState.candidates)
+	}
+	secondState := ui.homeState(second.ID)
+	secondState.editor.SetText("other")
+	if _, err := session.SelectTab(first.ID); err != nil {
+		t.Fatal(err)
+	}
+	ui.syncActiveTabChrome()
+	gtx := layout.Context{Ops: new(op.Ops), Constraints: layout.Exact(image.Pt(1000, 760)), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}}
+	ui.layoutHome(gtx)
+	if firstState.editor.Text() != "guide" || firstState.selected != 1 {
+		t.Fatalf("restored first state = query %q selected %d", firstState.editor.Text(), firstState.selected)
+	}
+	if secondState.editor.Text() != "other" {
+		t.Fatalf("second query changed to %q", secondState.editor.Text())
+	}
+}
+
+func TestFailedNavigationRestoresHomeViewAndQuery(t *testing.T) {
+	ui := NewBrowserUI(&stubNavigator{}, nil)
+	state := ui.homeState(0)
+	state.editor.SetText("keep failed query")
+	ui.beginHomeNavigation(0)
+	before := ui.homeRollbacks[0]
+	ui.navigations[0] = tabNavigation{id: 7, cancel: func() {}, homeBefore: &before}
+	ui.results <- navigationResult{id: 7, tabID: 0, err: errors.New("failed")}
+	ui.consumeNavigationResult()
+	if !ui.homeVisible() || state.editor.Text() != "keep failed query" {
+		t.Fatalf("failed navigation state = visible %v query %q", ui.homeVisible(), state.editor.Text())
 	}
 }

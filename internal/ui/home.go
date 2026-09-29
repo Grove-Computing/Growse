@@ -18,30 +18,54 @@ import (
 	"github.com/Grove-Computing/Growse/internal/searchdata"
 )
 
-type homeTabState struct {
+type homeView struct {
+	home         bool
+	pagePosition int
+}
+
+type homeHistorySnapshot struct {
+	views           []homeView
+	viewIndex       int
+	browserPosition int
 	visible         bool
-	editor          *widget.Editor
-	search          widget.Clickable
-	focusPending    bool
-	errorMessage    string
-	pipeline        *omnibox.Pipeline
-	local           *searchdata.LocalPipeline
-	generation      uint64
-	localGeneration uint64
-	localApplied    uint64
-	input           string
-	providerKeyword string
-	candidates      []omnibox.Candidate
-	selected        int
-	rows            [omnibox.MaxVisibleCandidates]widget.Clickable
-	list            widget.List
+}
+
+type homeTabState struct {
+	visible          bool
+	editor           *widget.Editor
+	search           widget.Clickable
+	focusPending     bool
+	errorMessage     string
+	pipeline         *omnibox.Pipeline
+	local            *searchdata.LocalPipeline
+	generation       uint64
+	localGeneration  uint64
+	localApplied     uint64
+	input            string
+	providerKeyword  string
+	candidates       []omnibox.Candidate
+	selected         int
+	rows             [omnibox.MaxVisibleCandidates]widget.Clickable
+	list             widget.List
+	views            []homeView
+	viewIndex        int
+	browserPosition  int
+	needsRefresh     bool
+	restoreSelection int
 }
 
 func newHomeTabState(visible bool) *homeTabState {
 	editor := new(widget.Editor)
 	editor.SingleLine = true
 	editor.Submit = true
-	state := &homeTabState{visible: visible, editor: editor, focusPending: visible, selected: -1}
+	state := &homeTabState{visible: visible, editor: editor, focusPending: visible, selected: -1, restoreSelection: -1}
+	if visible {
+		state.views = []homeView{{home: true, pagePosition: -1}}
+		state.browserPosition = -1
+	} else {
+		state.views = []homeView{{pagePosition: 0}}
+		state.browserPosition = 0
+	}
 	state.list.Axis = layout.Vertical
 	return state
 }
@@ -66,6 +90,25 @@ func (state *homeTabState) closeSuggestions() {
 	}
 	state.candidates = nil
 	state.selected = -1
+}
+
+func (state *homeTabState) cancelSuggestions() {
+	state.restoreSelection = state.selected
+	if state.pipeline != nil {
+		state.pipeline.Cancel()
+	}
+	if state.local != nil {
+		state.local.Cancel()
+	}
+	state.candidates = nil
+	state.needsRefresh = state.editor.Text() != ""
+}
+
+func (state *homeTabState) historySnapshot() homeHistorySnapshot {
+	return homeHistorySnapshot{
+		views: append([]homeView(nil), state.views...), viewIndex: state.viewIndex,
+		browserPosition: state.browserPosition, visible: state.visible,
+	}
 }
 
 func (ui *BrowserUI) homeState(tabID browser.TabID) *homeTabState {
@@ -94,21 +137,24 @@ func (ui *BrowserUI) homeVisible() bool {
 
 func (ui *BrowserUI) showHome() {
 	tabID, navigator := ui.activeNavigationTarget()
-	ui.cancelTabNavigation(tabID)
+	ui.cancelNavigationForHome(tabID)
 	if navigator != nil {
 		navigator.ClearHover()
 	}
 	ui.closeSuggestionPopup()
 	state := ui.homeState(tabID)
-	state.visible = true
-	state.focusPending = true
+	if !state.visible {
+		state.views = append(append([]homeView(nil), state.views[:state.viewIndex+1]...), homeView{home: true, pagePosition: state.browserPosition})
+		state.viewIndex = len(state.views) - 1
+	}
+	ui.activateHomeView(tabID, state, true)
 	state.errorMessage = ""
 	ui.loading = false
 	ui.statusHasError = false
 	ui.pageTitle = "新しいタブ"
 	ui.status = "Growse ホーム"
 	ui.pageStatus = ui.status
-	ui.setCommittedOmniboxURL(tabID, "", true)
+	ui.showBlankOmnibox(tabID)
 	ui.invalidate()
 }
 
@@ -126,6 +172,8 @@ func (ui *BrowserUI) handleHomeActions(gtx layout.Context) {
 		}
 		switch event.(type) {
 		case widget.ChangeEvent:
+			state.selected = -1
+			state.restoreSelection = -1
 			ui.refreshHomeSuggestions(state)
 		case widget.SubmitEvent:
 			ui.submitHomeInput(state, omniboxCurrentTab)
@@ -242,7 +290,7 @@ func (ui *BrowserUI) refreshHomeSuggestions(state *homeTabState) {
 	request := ui.buildSuggestionRequest(state.input, ui.suggestionSnapshot)
 	state.providerKeyword = request.providerKeyword
 	state.generation = state.pipeline.Update(request.input, request.snapshot, request.fetch, request.remoteEnabled)
-	state.selected = -1
+	state.needsRefresh = false
 	ui.syncHomeSuggestions(state)
 }
 
@@ -270,6 +318,10 @@ func (ui *BrowserUI) syncHomeSuggestions(state *homeTabState) {
 	if state.selected >= len(candidates) {
 		state.selected = -1
 	}
+	if state.selected < 0 && state.restoreSelection >= 0 && state.restoreSelection < len(candidates) {
+		state.selected = state.restoreSelection
+	}
+	state.restoreSelection = -1
 }
 
 func (ui *BrowserUI) submitHomeSearch(state *homeTabState) {
@@ -307,7 +359,11 @@ func (ui *BrowserUI) layoutHome(gtx layout.Context) layout.Dimensions {
 	paint.Fill(gtx.Ops, background)
 	tabID, _ := ui.activeNavigationTarget()
 	state := ui.homeState(tabID)
-	ui.syncHomeSuggestions(state)
+	if state.needsRefresh {
+		ui.refreshHomeSuggestions(state)
+	} else {
+		ui.syncHomeSuggestions(state)
+	}
 	return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		maxWidth := gtx.Dp(unit.Dp(620))
 		if gtx.Constraints.Max.X > maxWidth {
@@ -381,10 +437,113 @@ func (ui *BrowserUI) layoutHome(gtx layout.Context) layout.Dimensions {
 
 func (ui *BrowserUI) setHomeVisible(tabID browser.TabID, visible bool) {
 	state := ui.homeState(tabID)
+	ui.activateHomeView(tabID, state, visible)
+}
+
+func (ui *BrowserUI) activateHomeView(tabID browser.TabID, state *homeTabState, visible bool) {
 	state.visible = visible
+	state.cancelSuggestions()
 	if visible {
 		state.focusPending = true
+		ui.showBlankOmnibox(tabID)
+		return
 	}
+	if omniboxState, ok := ui.omniboxStates[tabID]; ok {
+		ui.setCommittedOmniboxURL(tabID, omniboxState.committedURL, true)
+	}
+}
+
+func (ui *BrowserUI) showBlankOmnibox(tabID browser.TabID) {
+	state, ok := ui.omniboxStates[tabID]
+	if !ok {
+		state = omniboxState{editor: newOmniboxEditor("")}
+	}
+	state.observedText = ""
+	state.preview = ""
+	state.editor.SetText("")
+	ui.omniboxStates[tabID] = state
+	if ui.displayedTabID == tabID || ui.tabs == nil {
+		ui.address = state.editor
+	}
+}
+
+func (ui *BrowserUI) cancelNavigationForHome(tabID browser.TabID) {
+	navigation, ok := ui.navigations[tabID]
+	if !ok {
+		return
+	}
+	ui.cancelTabNavigation(tabID)
+	if navigation.homeBefore != nil {
+		ui.restoreHomeHistory(tabID, *navigation.homeBefore)
+	}
+}
+
+func (ui *BrowserUI) beginHomeNavigation(tabID browser.TabID) {
+	state := ui.homeState(tabID)
+	ui.homeRollbacks[tabID] = state.historySnapshot()
+	if state.viewIndex+1 < len(state.views) {
+		state.views = append([]homeView(nil), state.views[:state.viewIndex+1]...)
+	}
+	state.browserPosition++
+	state.views = append(state.views, homeView{pagePosition: state.browserPosition})
+	state.viewIndex = len(state.views) - 1
+	ui.activateHomeView(tabID, state, false)
+}
+
+func (ui *BrowserUI) restoreHomeHistory(tabID browser.TabID, snapshot homeHistorySnapshot) {
+	state := ui.homeState(tabID)
+	state.views = append([]homeView(nil), snapshot.views...)
+	state.viewIndex = snapshot.viewIndex
+	state.browserPosition = snapshot.browserPosition
+	ui.activateHomeView(tabID, state, snapshot.visible)
+}
+
+func (ui *BrowserUI) canTraverseHomeHistory(tabID browser.TabID, delta int) bool {
+	state := ui.homeTabs[tabID]
+	if state == nil {
+		return false
+	}
+	target := state.viewIndex + delta
+	return target >= 0 && target < len(state.views)
+}
+
+func (ui *BrowserUI) traverseHomeHistory(delta int) bool {
+	tabID, navigator := ui.activeNavigationTarget()
+	state := ui.homeTabs[tabID]
+	if state == nil {
+		return false
+	}
+	targetIndex := state.viewIndex + delta
+	if targetIndex < 0 || targetIndex >= len(state.views) {
+		return false
+	}
+	target := state.views[targetIndex]
+	before := state.historySnapshot()
+	state.viewIndex = targetIndex
+	if target.home {
+		ui.activateHomeView(tabID, state, true)
+		ui.loading = false
+		ui.invalidate()
+		return true
+	}
+	ui.activateHomeView(tabID, state, false)
+	if target.pagePosition == state.browserPosition {
+		ui.loading = false
+		ui.invalidate()
+		return true
+	}
+	if navigator == nil {
+		ui.restoreHomeHistory(tabID, before)
+		return true
+	}
+	state.browserPosition = target.pagePosition
+	ui.homeRollbacks[tabID] = before
+	if delta < 0 {
+		ui.startPageLoad(tabID, navigator, "前のページを読み込み中", navigator.Back)
+	} else {
+		ui.startPageLoad(tabID, navigator, "次のページを読み込み中", navigator.Forward)
+	}
+	return true
 }
 
 func (ui *BrowserUI) homeSearchLabel() string {
