@@ -43,6 +43,7 @@ import (
 	"github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/findpage"
 	"github.com/Grove-Computing/Growse/internal/forms"
+	"github.com/Grove-Computing/Growse/internal/homeconfig"
 	layoutengine "github.com/Grove-Computing/Growse/internal/layout"
 	"github.com/Grove-Computing/Growse/internal/network"
 	"github.com/Grove-Computing/Growse/internal/omnibox"
@@ -115,6 +116,10 @@ type BrowserUI struct {
 	address           *widget.Editor
 	omniboxStates     map[browser.TabID]omniboxState
 	homeTabs          map[browser.TabID]*homeTabState
+	homeSettings      homeconfig.Settings
+	homePanel         homeSettingsPanel
+	homeCustomize     widget.Clickable
+	homeShortcuts     [homeconfig.MaxShortcuts]widget.Clickable
 	findStates        map[browser.TabID]*findTabState
 	findFocusPending  bool
 
@@ -465,6 +470,8 @@ func NewBrowserUIWithTabsAndUpdater(navigator Navigator, tabs TabController, inv
 		inspectorButtons:  make(map[browser.TabID]map[dom.NodeID]*widget.Clickable),
 		omniboxStates:     make(map[browser.TabID]omniboxState),
 		homeTabs:          make(map[browser.TabID]*homeTabState),
+		homeSettings:      homeconfig.Defaults(),
+		homePanel:         newHomeSettingsPanel(),
 		findStates:        make(map[browser.TabID]*findTabState),
 		layoutBuild:       layoutengine.BuildWithScroll,
 		layoutBuildImages: layoutengine.BuildWithScrollAndImages,

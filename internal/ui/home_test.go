@@ -245,3 +245,72 @@ func TestHomeCandidateDispositionPreservesSourceQuery(t *testing.T) {
 		})
 	}
 }
+
+func TestHomeShortcutEditorAddsEditsReordersAndDeletes(t *testing.T) {
+	ui := NewBrowserUI(nil, nil)
+	panel := &ui.homePanel
+	panel.open = true
+	gtx := layout.Context{Ops: new(op.Ops), Constraints: layout.Exact(image.Pt(1000, 760)), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}}
+
+	panel.title.SetText("Docs")
+	panel.rawURL.SetText("https://Example.com:443/docs/#section")
+	panel.save.Click()
+	ui.handleHomeSettingsActions(gtx)
+	panel.add.Click()
+	ui.handleHomeSettingsActions(gtx)
+	panel.title.SetText("News")
+	panel.rawURL.SetText("https://news.example/")
+	panel.save.Click()
+	ui.handleHomeSettingsActions(gtx)
+	if got := ui.homeSettings.Shortcuts; len(got) != 2 || got[0].URL != "https://Example.com:443/docs/" {
+		t.Fatalf("added shortcuts = %#v", got)
+	}
+
+	panel.rows[1].up.Click()
+	ui.handleHomeSettingsActions(gtx)
+	if ui.homeSettings.Shortcuts[0].Title != "News" {
+		t.Fatalf("reordered shortcuts = %#v", ui.homeSettings.Shortcuts)
+	}
+	panel.rows[0].edit.Click()
+	ui.handleHomeSettingsActions(gtx)
+	panel.title.SetText("Docs merged")
+	panel.rawURL.SetText("https://example.com/docs")
+	panel.save.Click()
+	ui.handleHomeSettingsActions(gtx)
+	if len(ui.homeSettings.Shortcuts) != 1 || ui.homeSettings.Shortcuts[0].Title != "Docs merged" {
+		t.Fatalf("merged shortcuts = %#v", ui.homeSettings.Shortcuts)
+	}
+	panel.rows[0].remove.Click()
+	ui.handleHomeSettingsActions(gtx)
+	if len(ui.homeSettings.Shortcuts) != 0 {
+		t.Fatalf("deleted shortcuts = %#v", ui.homeSettings.Shortcuts)
+	}
+}
+
+func TestHomeShortcutValidationErrorPreservesSettings(t *testing.T) {
+	ui := NewBrowserUI(nil, nil)
+	_, _ = ui.homeSettings.Add("Safe", "https://safe.example/")
+	before := ui.homeSettings.Clone()
+	ui.homePanel.open = true
+	ui.homePanel.title.SetText("Credential")
+	ui.homePanel.rawURL.SetText("https://user:secret@example.com/")
+	ui.homePanel.save.Click()
+	gtx := layout.Context{Ops: new(op.Ops), Constraints: layout.Exact(image.Pt(1000, 760)), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}}
+	ui.handleHomeSettingsActions(gtx)
+	if ui.homePanel.errorMessage == "" || !reflect.DeepEqual(ui.homeSettings, before) {
+		t.Fatalf("invalid edit = error %q settings %#v", ui.homePanel.errorMessage, ui.homeSettings)
+	}
+}
+
+func TestHomeShortcutDisplayDoesNotStartNavigation(t *testing.T) {
+	ui := NewBrowserUI(&stubNavigator{}, nil)
+	_, _ = ui.homeSettings.Add("No favicon request", "https://resource.example/")
+	gtx := layout.Context{Ops: new(op.Ops), Constraints: layout.Exact(image.Pt(600, 300)), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}}
+	ui.layoutHomeShortcuts(gtx)
+	if len(ui.navigations) != 0 {
+		t.Fatalf("shortcut display started navigation: %#v", ui.navigations)
+	}
+	if got := shortcutLetter(" 日本語 "); got != "日" {
+		t.Fatalf("fallback letter = %q", got)
+	}
+}

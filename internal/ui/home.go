@@ -133,6 +133,16 @@ func (ui *BrowserUI) handleHomeActions(gtx layout.Context) {
 	for state.search.Clicked(gtx) {
 		ui.submitHomeInput(state, omniboxCurrentTab)
 	}
+	for ui.homeCustomize.Clicked(gtx) {
+		ui.homePanel.open = true
+		ui.homePanel.errorMessage = ""
+	}
+	for index := range ui.homeSettings.Shortcuts {
+		for ui.homeShortcuts[index].Clicked(gtx) {
+			ui.startNavigationWithDisposition(ui.homeSettings.Shortcuts[index].URL, omniboxCurrentTab)
+		}
+	}
+	ui.handleHomeSettingsActions(gtx)
 	for index := range state.candidates {
 		if state.rows[index].Clicked(gtx) {
 			ui.submitHomeCandidate(state, state.candidates[index], omniboxCurrentTab)
@@ -288,6 +298,9 @@ func (ui *BrowserUI) submitHomeCandidate(state *homeTabState, candidate omnibox.
 }
 
 func (ui *BrowserUI) layoutHome(gtx layout.Context) layout.Dimensions {
+	if ui.homePanel.open {
+		return ui.layoutHomeSettings(gtx)
+	}
 	ui.imagePaintCache.prepare(nil)
 	paint.Fill(gtx.Ops, color.NRGBA{R: 238, G: 243, B: 248, A: 255})
 	tabID, _ := ui.activeNavigationTarget()
@@ -330,6 +343,15 @@ func (ui *BrowserUI) layoutHome(gtx layout.Context) layout.Dimensions {
 							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 								button := material.Button(ui.theme, &state.search, ui.homeSearchLabel())
 								button.CornerRadius = unit.Dp(12)
+								return button.Layout(gtx)
+							}),
+							layout.Rigid(layout.Spacer{Height: unit.Dp(18)}.Layout),
+							layout.Rigid(ui.layoutHomeShortcuts),
+							layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
+							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+								button := material.Button(ui.theme, &ui.homeCustomize, "ショートカットを編集")
+								button.Background = color.NRGBA{R: 71, G: 85, B: 105, A: 255}
+								button.CornerRadius = unit.Dp(10)
 								return button.Layout(gtx)
 							}),
 							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
