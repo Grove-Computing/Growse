@@ -24,6 +24,7 @@ type homeSettingsPanel struct {
 	title, rawURL    widget.Editor
 	add, save, close widget.Clickable
 	rows             [homeconfig.MaxShortcuts]homeShortcutRow
+	backgrounds      [5]widget.Clickable
 	errorMessage     string
 }
 
@@ -63,7 +64,10 @@ func (ui *BrowserUI) handleHomeSettingsActions(gtx layout.Context) {
 			panel.errorMessage = err.Error()
 			continue
 		}
-		ui.homeSettings = next
+		if !ui.applyHomeSettings(next) {
+			panel.errorMessage = "ホーム設定を保存できません"
+			continue
+		}
 		panel.errorMessage = ""
 	}
 	for index := range ui.homeSettings.Shortcuts {
@@ -79,7 +83,10 @@ func (ui *BrowserUI) handleHomeSettingsActions(gtx layout.Context) {
 			if err := next.Delete(index); err != nil {
 				panel.errorMessage = err.Error()
 			} else {
-				ui.homeSettings = next
+				if !ui.applyHomeSettings(next) {
+					panel.errorMessage = "ホーム設定を保存できません"
+					continue
+				}
 				if panel.editing == index {
 					panel.editing = -1
 					panel.title.SetText("")
@@ -93,7 +100,10 @@ func (ui *BrowserUI) handleHomeSettingsActions(gtx layout.Context) {
 				if err := next.Move(index, index-1); err != nil {
 					panel.errorMessage = err.Error()
 				} else {
-					ui.homeSettings = next
+					if !ui.applyHomeSettings(next) {
+						panel.errorMessage = "ホーム設定を保存できません"
+						continue
+					}
 					panel.editing = -1
 				}
 			}
@@ -104,12 +114,39 @@ func (ui *BrowserUI) handleHomeSettingsActions(gtx layout.Context) {
 				if err := next.Move(index, index+1); err != nil {
 					panel.errorMessage = err.Error()
 				} else {
-					ui.homeSettings = next
+					if !ui.applyHomeSettings(next) {
+						panel.errorMessage = "ホーム設定を保存できません"
+						continue
+					}
 					panel.editing = -1
 				}
 			}
 		}
 	}
+	for index, preset := range homeconfig.BackgroundPresets() {
+		for panel.backgrounds[index].Clicked(gtx) {
+			next := ui.homeSettings.Clone()
+			next.Background = preset.ID
+			if !ui.applyHomeSettings(next) {
+				panel.errorMessage = "背景設定を保存できません"
+			} else {
+				panel.errorMessage = ""
+			}
+		}
+	}
+}
+
+func (ui *BrowserUI) applyHomeSettings(settings homeconfig.Settings) bool {
+	if settings.Validate() != nil {
+		return false
+	}
+	if ui.homeStore != nil {
+		if err := ui.homeStore.Save(settings); err != nil {
+			return false
+		}
+	}
+	ui.homeSettings = settings.Clone()
+	return true
 }
 
 func shortcutLetter(title string) string {
@@ -186,6 +223,19 @@ func (ui *BrowserUI) layoutHomeSettings(gtx layout.Context) layout.Dimensions {
 		}
 		children := []layout.FlexChild{
 			layout.Rigid(material.H5(ui.theme, "ホームのショートカット").Layout),
+			layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				items := make([]layout.FlexChild, 0, len(homeconfig.BackgroundPresets())*2)
+				for index, preset := range homeconfig.BackgroundPresets() {
+					index, preset := index, preset
+					label := preset.Name
+					if preset.ID == ui.homeSettings.Background {
+						label += " ✓"
+					}
+					items = append(items, layout.Rigid(material.Button(ui.theme, &panel.backgrounds[index], label).Layout), layout.Rigid(layout.Spacer{Width: unit.Dp(6)}.Layout))
+				}
+				return layout.Flex{}.Layout(gtx, items...)
+			}),
 			layout.Rigid(layout.Spacer{Height: unit.Dp(12)}.Layout),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				return material.Editor(ui.theme, &panel.title, "タイトル").Layout(gtx)

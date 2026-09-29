@@ -13,6 +13,7 @@ import (
 	"gioui.org/widget"
 	"gioui.org/widget/material"
 	"github.com/Grove-Computing/Growse/internal/browser"
+	"github.com/Grove-Computing/Growse/internal/homeconfig"
 	"github.com/Grove-Computing/Growse/internal/omnibox"
 	"github.com/Grove-Computing/Growse/internal/searchdata"
 )
@@ -302,7 +303,8 @@ func (ui *BrowserUI) layoutHome(gtx layout.Context) layout.Dimensions {
 		return ui.layoutHomeSettings(gtx)
 	}
 	ui.imagePaintCache.prepare(nil)
-	paint.Fill(gtx.Ops, color.NRGBA{R: 238, G: 243, B: 248, A: 255})
+	background, surface := homeBackgroundColors(ui.homeSettings.Background)
+	paint.Fill(gtx.Ops, background)
 	tabID, _ := ui.activeNavigationTarget()
 	state := ui.homeState(tabID)
 	ui.syncHomeSuggestions(state)
@@ -316,7 +318,7 @@ func (ui *BrowserUI) layoutHome(gtx layout.Context) layout.Dimensions {
 		}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 			return layout.Stack{Alignment: layout.Center}.Layout(gtx,
 				layout.Expanded(func(gtx layout.Context) layout.Dimensions {
-					paint.FillShape(gtx.Ops, color.NRGBA{R: 255, G: 255, B: 255, A: 255},
+					paint.FillShape(gtx.Ops, surface,
 						clip.UniformRRect(image.Rectangle{Max: gtx.Constraints.Min}, gtx.Dp(unit.Dp(20))).Op(gtx.Ops))
 					return layout.Dimensions{Size: gtx.Constraints.Min}
 				}),
@@ -417,4 +419,19 @@ func (ui *BrowserUI) layoutHomeCandidates(gtx layout.Context, state *homeTabStat
 			})
 		})
 	})
+}
+
+func homeBackgroundColors(preset string) (color.NRGBA, color.NRGBA) {
+	switch preset {
+	case homeconfig.BackgroundMist:
+		return color.NRGBA{R: 219, G: 234, B: 254, A: 255}, color.NRGBA{R: 248, G: 250, B: 252, A: 246}
+	case homeconfig.BackgroundDusk:
+		return color.NRGBA{R: 49, G: 46, B: 129, A: 255}, color.NRGBA{R: 238, G: 242, B: 255, A: 246}
+	case homeconfig.BackgroundForest:
+		return color.NRGBA{R: 20, G: 83, B: 45, A: 255}, color.NRGBA{R: 240, G: 253, B: 244, A: 246}
+	case homeconfig.BackgroundSunrise:
+		return color.NRGBA{R: 254, G: 215, B: 170, A: 255}, color.NRGBA{R: 255, G: 247, B: 237, A: 246}
+	default:
+		return color.NRGBA{R: 238, G: 243, B: 248, A: 255}, color.NRGBA{R: 255, G: 255, B: 255, A: 255}
+	}
 }

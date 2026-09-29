@@ -2,7 +2,10 @@ package ui
 
 import (
 	"image"
+	"image/color"
 	"net/url"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 
@@ -12,6 +15,7 @@ import (
 	"gioui.org/op"
 	"gioui.org/unit"
 	"github.com/Grove-Computing/Growse/internal/browser"
+	"github.com/Grove-Computing/Growse/internal/homeconfig"
 	"github.com/Grove-Computing/Growse/internal/omnibox"
 )
 
@@ -312,5 +316,67 @@ func TestHomeShortcutDisplayDoesNotStartNavigation(t *testing.T) {
 	}
 	if got := shortcutLetter(" 日本語 "); got != "日" {
 		t.Fatalf("fallback letter = %q", got)
+	}
+}
+
+func TestHomeSettingsPersistAcrossWindows(t *testing.T) {
+	root := t.TempDir()
+	first := NewBrowserUI(nil, nil)
+	if err := first.OpenSearchProfile(root); err != nil {
+		t.Fatal(err)
+	}
+	settings := first.homeSettings.Clone()
+	settings.Background = homeconfig.BackgroundForest
+	if _, err := settings.Add("Growse", "https://growse.example/"); err != nil {
+		t.Fatal(err)
+	}
+	if !first.applyHomeSettings(settings) {
+		t.Fatal("first window did not save home settings")
+	}
+
+	second := NewBrowserUI(nil, nil)
+	if err := second.OpenSearchProfile(root); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(second.homeSettings, settings) {
+		t.Fatalf("second window settings = %#v, want %#v", second.homeSettings, settings)
+	}
+}
+
+func TestHomeSettingsWriteFailurePreservesVisibleState(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "profile")
+	ui := NewBrowserUI(nil, nil)
+	if err := ui.OpenSearchProfile(root); err != nil {
+		t.Fatal(err)
+	}
+	before := ui.homeSettings.Clone()
+	if err := os.Rename(root, root+"-moved"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(root, []byte("profile path blocked"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	next := before.Clone()
+	next.Background = homeconfig.BackgroundDusk
+	if ui.applyHomeSettings(next) {
+		t.Fatal("write unexpectedly succeeded")
+	}
+	if !reflect.DeepEqual(ui.homeSettings, before) {
+		t.Fatalf("failed write changed visible settings: %#v", ui.homeSettings)
+	}
+}
+
+func TestBundledHomeBackgroundPresetsAreOpaqueAndDistinct(t *testing.T) {
+	seen := map[color.NRGBA]bool{}
+	for _, preset := range homeconfig.BackgroundPresets() {
+		background, surface := homeBackgroundColors(preset.ID)
+		if background.A != 255 || surface.A < 240 {
+			t.Fatalf("preset %q colors = %#v %#v", preset.ID, background, surface)
+		}
+		seen[background] = true
+	}
+	if len(seen) != len(homeconfig.BackgroundPresets()) {
+		t.Fatalf("background colors are not distinct: %#v", seen)
 	}
 }

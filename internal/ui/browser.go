@@ -117,6 +117,7 @@ type BrowserUI struct {
 	omniboxStates     map[browser.TabID]omniboxState
 	homeTabs          map[browser.TabID]*homeTabState
 	homeSettings      homeconfig.Settings
+	homeStore         *homeconfig.Store
 	homePanel         homeSettingsPanel
 	homeCustomize     widget.Clickable
 	homeShortcuts     [homeconfig.MaxShortcuts]widget.Clickable

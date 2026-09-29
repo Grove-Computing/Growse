@@ -10,9 +10,16 @@ import (
 )
 
 const (
-	MaxShortcuts    = 10
-	MaxURLBytes     = 4 * 1024
-	MaxTitleScalars = 128
+	MaxShortcuts     = 10
+	MaxURLBytes      = 4 * 1024
+	MaxTitleScalars  = 128
+	MaxSettingsBytes = 64 * 1024
+
+	BackgroundSolid   = "solid"
+	BackgroundMist    = "mist"
+	BackgroundDusk    = "dusk"
+	BackgroundForest  = "forest"
+	BackgroundSunrise = "sunrise"
 )
 
 var (
@@ -31,6 +38,20 @@ type Settings struct {
 	Background string     `json:"background,omitempty"`
 }
 
+type BackgroundPreset struct {
+	ID, Name string
+}
+
+func BackgroundPresets() []BackgroundPreset {
+	return []BackgroundPreset{
+		{BackgroundSolid, "単色"},
+		{BackgroundMist, "Mist"},
+		{BackgroundDusk, "Dusk"},
+		{BackgroundForest, "Forest"},
+		{BackgroundSunrise, "Sunrise"},
+	}
+}
+
 func Defaults() Settings {
 	return Settings{Background: "solid"}
 }
@@ -41,6 +62,9 @@ func (settings Settings) Clone() Settings {
 }
 
 func (settings Settings) Validate() error {
+	if !validBackground(settings.Background) {
+		return ErrInvalid
+	}
 	if len(settings.Shortcuts) > MaxShortcuts {
 		return ErrLimit
 	}
@@ -156,4 +180,13 @@ func validateShortcut(shortcut Shortcut) (Shortcut, string, error) {
 		return Shortcut{}, "", ErrInvalid
 	}
 	return Shortcut{Title: title, URL: stored}, key, nil
+}
+
+func validBackground(value string) bool {
+	switch value {
+	case BackgroundSolid, BackgroundMist, BackgroundDusk, BackgroundForest, BackgroundSunrise:
+		return true
+	default:
+		return false
+	}
 }
