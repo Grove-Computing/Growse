@@ -117,6 +117,7 @@ func (ui *BrowserUI) handleHomeActions(gtx layout.Context) {
 	}
 	tabID, _ := ui.activeNavigationTarget()
 	state := ui.homeState(tabID)
+	ui.handleHomeSuggestionKeys(gtx, state)
 	for {
 		event, ok := state.editor.Update(gtx)
 		if !ok {
@@ -126,11 +127,95 @@ func (ui *BrowserUI) handleHomeActions(gtx layout.Context) {
 		case widget.ChangeEvent:
 			ui.refreshHomeSuggestions(state)
 		case widget.SubmitEvent:
-			ui.submitHomeSearch(state)
+			ui.submitHomeInput(state, omniboxCurrentTab)
 		}
 	}
 	for state.search.Clicked(gtx) {
-		ui.submitHomeSearch(state)
+		ui.submitHomeInput(state, omniboxCurrentTab)
+	}
+	for index := range state.candidates {
+		if state.rows[index].Clicked(gtx) {
+			ui.submitHomeCandidate(state, state.candidates[index], omniboxCurrentTab)
+			return
+		}
+		if state.rows[index].Hovered() {
+			state.selected = index
+		}
+	}
+}
+
+func (ui *BrowserUI) handleHomeSuggestionKeys(gtx layout.Context, state *homeTabState) {
+	for _, modifiers := range []key.Modifiers{key.ModShift, key.ModAlt} {
+		for {
+			event, ok := gtx.Event(
+				key.Filter{Focus: state.editor, Name: key.NameReturn, Required: modifiers},
+				key.Filter{Focus: state.editor, Name: key.NameEnter, Required: modifiers},
+			)
+			if !ok {
+				break
+			}
+			if pressed, ok := event.(key.Event); ok && pressed.State == key.Press {
+				disposition := omniboxNewForegroundTab
+				if modifiers == key.ModAlt {
+					disposition = omniboxNewBackgroundTab
+				}
+				ui.submitHomeInput(state, disposition)
+			}
+		}
+	}
+	for _, name := range []key.Name{key.NameDownArrow, key.NameUpArrow, key.NamePageDown, key.NamePageUp, key.NameHome, key.NameEnd, key.NameEscape, key.NameTab} {
+		for {
+			event, ok := gtx.Event(key.Filter{Focus: state.editor, Name: name, Optional: key.ModShift})
+			if !ok {
+				break
+			}
+			pressed, ok := event.(key.Event)
+			if !ok || pressed.State != key.Press {
+				continue
+			}
+			if name == key.NameEscape {
+				if state.pipeline != nil {
+					state.pipeline.Cancel()
+				}
+				if state.local != nil {
+					state.local.Cancel()
+				}
+				state.candidates = nil
+				state.selected = -1
+				continue
+			}
+			if name == key.NameTab {
+				gtx.Execute(key.FocusCmd{Tag: &state.search})
+				continue
+			}
+			if len(state.candidates) == 0 {
+				ui.refreshHomeSuggestions(state)
+			}
+			if len(state.candidates) == 0 {
+				continue
+			}
+			index := state.selected
+			switch name {
+			case key.NameDownArrow:
+				index = (index + 1) % len(state.candidates)
+			case key.NameUpArrow:
+				if index <= 0 {
+					index = len(state.candidates) - 1
+				} else {
+					index--
+				}
+			case key.NamePageDown:
+				index = min(max(index, 0)+5, len(state.candidates)-1)
+			case key.NamePageUp:
+				index = max(index-5, 0)
+			case key.NameHome:
+				index = 0
+			case key.NameEnd:
+				index = len(state.candidates) - 1
+			}
+			state.selected = index
+			state.list.ScrollTo(index)
+		}
 	}
 }
 
@@ -177,6 +262,10 @@ func (ui *BrowserUI) syncHomeSuggestions(state *homeTabState) {
 }
 
 func (ui *BrowserUI) submitHomeSearch(state *homeTabState) {
+	ui.submitHomeInput(state, omniboxCurrentTab)
+}
+
+func (ui *BrowserUI) submitHomeInput(state *homeTabState, disposition omniboxDisposition) {
 	input := strings.TrimSpace(state.editor.Text())
 	if input == "" {
 		state.errorMessage = "検索語またはURLを入力してください"
@@ -185,7 +274,17 @@ func (ui *BrowserUI) submitHomeSearch(state *homeTabState) {
 		return
 	}
 	state.errorMessage = ""
-	ui.startNavigationWithDisposition(input, omniboxCurrentTab)
+	if state.selected >= 0 && state.selected < len(state.candidates) {
+		ui.submitHomeCandidate(state, state.candidates[state.selected], disposition)
+		return
+	}
+	ui.startNavigationWithDisposition(input, disposition)
+}
+
+func (ui *BrowserUI) submitHomeCandidate(state *homeTabState, candidate omnibox.Candidate, disposition omniboxDisposition) {
+	query := state.editor.Text()
+	ui.executeSuggestion(candidate, state.providerKeyword, disposition)
+	state.editor.SetText(query)
 }
 
 func (ui *BrowserUI) layoutHome(gtx layout.Context) layout.Dimensions {

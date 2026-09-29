@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"testing"
 
+	"gioui.org/io/input"
+	"gioui.org/io/key"
 	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/unit"
@@ -146,5 +148,100 @@ func TestHomeAndOmniboxResolveProviderKeywordIdentically(t *testing.T) {
 	wantURL, err := ui.providerSearchURL("gopher browser")
 	if err != nil || gotURL != wantURL {
 		t.Fatalf("search target = %q, want %q (err %v)", gotURL, wantURL, err)
+	}
+}
+
+func newHomeInputTestUI(t *testing.T) (*BrowserUI, *input.Router, *layout.Context, *homeTabState) {
+	t.Helper()
+	ui := NewBrowserUI(&stubNavigator{}, nil)
+	t.Cleanup(ui.Close)
+	router := new(input.Router)
+	gtx := &layout.Context{Ops: new(op.Ops), Source: router.Source(), Constraints: layout.Exact(image.Pt(1000, 760)), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}}
+	ui.Layout(*gtx)
+	router.Frame(gtx.Ops)
+	gtx.Reset()
+	ui.Layout(*gtx)
+	router.Frame(gtx.Ops)
+	return ui, router, gtx, ui.homeState(0)
+}
+
+func TestHomeNativeEditingKeyboardSelectionAndEscapePreserveQuery(t *testing.T) {
+	ui, router, gtx, state := newHomeInputTestUI(t)
+	router.Queue(key.EditEvent{Range: key.Range{Start: 0, End: 0}, Text: "日本語"})
+	gtx.Reset()
+	ui.Layout(*gtx)
+	router.Frame(gtx.Ops)
+	if state.editor.Text() != "日本語" || len(state.candidates) == 0 || state.candidates[0].Query != "日本語" {
+		t.Fatalf("IME-compatible edit state = text %q candidates %+v", state.editor.Text(), state.candidates)
+	}
+
+	router.Queue(key.Event{Name: key.NameDownArrow, State: key.Press})
+	gtx.Reset()
+	ui.Layout(*gtx)
+	router.Frame(gtx.Ops)
+	if state.selected != 0 {
+		t.Fatalf("keyboard selected = %d", state.selected)
+	}
+	router.Queue(key.Event{Name: key.NameEscape, State: key.Press})
+	gtx.Reset()
+	ui.Layout(*gtx)
+	if state.editor.Text() != "日本語" || len(state.candidates) != 0 {
+		t.Fatalf("escape state = text %q candidates %+v", state.editor.Text(), state.candidates)
+	}
+}
+
+func TestHomeMouseCandidateExecutionPreservesQuery(t *testing.T) {
+	ui := NewBrowserUI(&stubNavigator{}, nil)
+	defer ui.Close()
+	state := ui.homeState(0)
+	state.editor.SetText("gopher")
+	ui.refreshHomeSuggestions(state)
+	if len(state.candidates) == 0 {
+		t.Fatal("home candidate missing")
+	}
+	state.rows[0].Click()
+	gtx := layout.Context{Ops: new(op.Ops), Constraints: layout.Exact(image.Pt(1000, 760)), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}}
+	ui.handleHomeActions(gtx)
+	if state.editor.Text() != "gopher" {
+		t.Fatalf("mouse execution changed query to %q", state.editor.Text())
+	}
+	if ui.homeVisible() {
+		t.Fatal("mouse candidate did not execute in current tab")
+	}
+}
+
+func TestHomeCandidateDispositionPreservesSourceQuery(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		disposition omniboxDisposition
+		foreground  bool
+	}{
+		{"foreground", omniboxNewForegroundTab, true},
+		{"background", omniboxNewBackgroundTab, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			session := browser.NewSession(func() *browser.Browser {
+				loader := &controlledNavigationLoader{started: make(chan struct{}, 1), release: make(chan struct{})}
+				close(loader.release)
+				return browser.New(loader)
+			})
+			first, err := session.NewTab(nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ui := NewBrowserUIWithTabs(nil, session, nil)
+			defer ui.Close()
+			ui.syncActiveTabChrome()
+			state := ui.homeState(first.ID)
+			state.editor.SetText("keep this query")
+			ui.submitHomeCandidate(state, omnibox.Candidate{Source: omnibox.HistorySource, URL: "https://example.test/"}, test.disposition)
+			tabs := session.Tabs()
+			if len(tabs) != 2 || tabs[1].Active != test.foreground {
+				t.Fatalf("tabs after %s = %+v", test.name, tabs)
+			}
+			if state.editor.Text() != "keep this query" {
+				t.Fatalf("source home query = %q", state.editor.Text())
+			}
+		})
 	}
 }

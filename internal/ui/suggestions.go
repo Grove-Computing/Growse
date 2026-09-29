@@ -278,7 +278,12 @@ func (ui *BrowserUI) handleSuggestionKeys(gtx layout.Context) {
 }
 
 func (ui *BrowserUI) submitSuggestion(candidate omnibox.Candidate, disposition omniboxDisposition) {
+	providerKeyword := ui.suggestionPopup.providerKeyword
 	ui.closeSuggestionPopup()
+	ui.executeSuggestion(candidate, providerKeyword, disposition)
+}
+
+func (ui *BrowserUI) executeSuggestion(candidate omnibox.Candidate, providerKeyword string, disposition omniboxDisposition) {
 	if candidate.Source == omnibox.TabSource && ui.tabs != nil {
 		if _, err := ui.tabs.SelectTab(browser.TabID(candidate.TabID)); err != nil {
 			ui.reportTabOperationError("候補Tabを選択できません", err)
@@ -289,8 +294,8 @@ func (ui *BrowserUI) submitSuggestion(candidate omnibox.Candidate, disposition o
 	target := candidate.URL
 	if target == "" {
 		target = candidate.Query
-		if ui.suggestionPopup.providerKeyword != "" {
-			target = ui.suggestionPopup.providerKeyword + " " + target
+		if providerKeyword != "" {
+			target = providerKeyword + " " + target
 		}
 	}
 	ui.startNavigationWithDisposition(target, disposition)
