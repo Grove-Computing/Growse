@@ -15,6 +15,7 @@ import (
 	"gioui.org/widget"
 	"gioui.org/widget/material"
 
+	"github.com/Grove-Computing/Growse/internal/browser"
 	"github.com/Grove-Computing/Growse/internal/omnibox"
 )
 
@@ -160,6 +161,7 @@ func (ui *BrowserUI) handleSearchPanelActions(gtx layout.Context) {
 		return
 	}
 	ui.syncSearchPanel()
+	ui.handleSearchPanelResultKeys(gtx)
 	for {
 		event, ok := panel.editor.Update(gtx)
 		if !ok {
@@ -184,6 +186,93 @@ func (ui *BrowserUI) handleSearchPanelActions(gtx layout.Context) {
 	for panel.closeButton.Clicked(gtx) {
 		ui.closeSearchPanel(gtx)
 	}
+	for index := range panel.candidates {
+		for panel.rows[index].Clicked(gtx) {
+			ui.executeSearchPanelCandidate(gtx, panel.candidates[index], omniboxCurrentTab)
+			return
+		}
+	}
+}
+
+func (ui *BrowserUI) handleSearchPanelResultKeys(gtx layout.Context) {
+	panel := &ui.searchPanel
+	for _, name := range []key.Name{key.NameDownArrow, key.NameUpArrow, key.NamePageDown, key.NamePageUp, key.NameHome, key.NameEnd} {
+		for {
+			event, ok := gtx.Event(key.Filter{Focus: panel.editor, Name: name})
+			if !ok {
+				break
+			}
+			keyEvent, ok := event.(key.Event)
+			if !ok || keyEvent.State != key.Press || len(panel.candidates) == 0 {
+				continue
+			}
+			index := panel.selected
+			switch name {
+			case key.NameDownArrow:
+				index = (index + 1) % len(panel.candidates)
+			case key.NameUpArrow:
+				if index <= 0 {
+					index = len(panel.candidates) - 1
+				} else {
+					index--
+				}
+			case key.NamePageDown:
+				index = min(max(index, 0)+5, len(panel.candidates)-1)
+			case key.NamePageUp:
+				index = max(index-5, 0)
+			case key.NameHome:
+				index = 0
+			case key.NameEnd:
+				index = len(panel.candidates) - 1
+			}
+			panel.selected = index
+			panel.list.ScrollTo(index)
+		}
+	}
+	for {
+		event, ok := gtx.Event(
+			key.Filter{Focus: panel.editor, Name: key.NameReturn, Optional: key.ModShift | key.ModAlt},
+			key.Filter{Focus: panel.editor, Name: key.NameEnter, Optional: key.ModShift | key.ModAlt},
+		)
+		if !ok {
+			break
+		}
+		keyEvent, ok := event.(key.Event)
+		if !ok || keyEvent.State != key.Press || panel.selected < 0 || panel.selected >= len(panel.candidates) {
+			continue
+		}
+		disposition := omniboxCurrentTab
+		if keyEvent.Modifiers.Contain(key.ModAlt) {
+			disposition = omniboxNewBackgroundTab
+		} else if keyEvent.Modifiers.Contain(key.ModShift) {
+			disposition = omniboxNewForegroundTab
+		}
+		ui.executeSearchPanelCandidate(gtx, panel.candidates[panel.selected], disposition)
+		return
+	}
+}
+
+func (ui *BrowserUI) executeSearchPanelCandidate(gtx layout.Context, candidate omnibox.Candidate, disposition omniboxDisposition) {
+	ui.closeSearchPanel(gtx)
+	if candidate.Source == omnibox.TabSource {
+		if ui.tabs == nil {
+			ui.status = "Tabを選択できません"
+			ui.statusHasError = true
+			return
+		}
+		if _, err := ui.tabs.SelectTab(browser.TabID(candidate.TabID)); err != nil {
+			ui.reportTabOperationError("検索結果のTabを選択できません", err)
+			return
+		}
+		ui.syncActiveTabChrome()
+		ui.status = "既存のTabへ切り替えました"
+		ui.statusHasError = false
+		return
+	}
+	if candidate.Source != omnibox.HistorySource && candidate.Source != omnibox.BookmarkSource {
+		return
+	}
+	ui.startNavigationWithDisposition(candidate.URL, disposition)
 }
 
 func (ui *BrowserUI) layoutSearchPanel(gtx layout.Context) layout.Dimensions {
