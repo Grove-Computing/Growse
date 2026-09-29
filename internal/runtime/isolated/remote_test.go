@@ -436,14 +436,14 @@ func TestIsolatedJavaScriptTimerMutatesDocumentAfterStart(t *testing.T) {
 	}
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
-		if result, ok := document.GetElementByID("result"); ok && result.TextContent() == "done" {
+		if result, ok := snapshotElementByID(document.Snapshot().Root, "result"); ok && snapshotTextContent(result) == "done" {
 			break
 		}
 		time.Sleep(time.Millisecond)
 	}
-	result, _ := document.GetElementByID("result")
-	if result.TextContent() != "done" {
-		t.Fatalf("isolated timer result = %q, want done", result.TextContent())
+	result, _ := snapshotElementByID(document.Snapshot().Root, "result")
+	if got := snapshotTextContent(result); got != "done" {
+		t.Fatalf("isolated timer result = %q, want done", got)
 	}
 	if err := document.ApplySnapshot(stale); err != nil {
 		t.Fatal(err)
@@ -453,14 +453,37 @@ func TestIsolatedJavaScriptTimerMutatesDocumentAfterStart(t *testing.T) {
 	}
 	deadline = time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
-		result, _ = document.GetElementByID("result")
-		if frame, _ := result.Attribute("frame"); frame == "ran" {
-			if result.TextContent() != "done" {
-				t.Fatalf("animation frame restored stale DOM text %q", result.TextContent())
+		result, _ = snapshotElementByID(document.Snapshot().Root, "result")
+		if result.Attributes["frame"] == "ran" {
+			if got := snapshotTextContent(result); got != "done" {
+				t.Fatalf("animation frame restored stale DOM text %q", got)
 			}
 			return
 		}
 		time.Sleep(time.Millisecond)
 	}
 	t.Fatal("isolated animation frame mutation was not published")
+}
+
+func snapshotElementByID(node dom.NodeSnapshot, id string) (dom.NodeSnapshot, bool) {
+	if node.Attributes["id"] == id {
+		return node, true
+	}
+	for _, child := range node.Children {
+		if found, ok := snapshotElementByID(child, id); ok {
+			return found, true
+		}
+	}
+	return dom.NodeSnapshot{}, false
+}
+
+func snapshotTextContent(node dom.NodeSnapshot) string {
+	if node.Type == dom.NodeText {
+		return node.Text
+	}
+	var result strings.Builder
+	for _, child := range node.Children {
+		result.WriteString(snapshotTextContent(child))
+	}
+	return result.String()
 }
