@@ -46,6 +46,12 @@ func matchesSupportsCondition(condition css.SupportsCondition) bool {
 	}
 }
 
+// SupportsDeclaration reports whether Growse can parse and apply one CSS declaration.
+// It is shared by @supports evaluation and the JavaScript CSS.supports API.
+func SupportsDeclaration(property, value string) bool {
+	return supportsDeclaration(property, value)
+}
+
 func supportsDeclaration(property, value string) bool {
 	property = strings.ToLower(strings.TrimSpace(property))
 	value = strings.TrimSpace(value)
@@ -54,6 +60,16 @@ func supportsDeclaration(property, value string) bool {
 	}
 	if strings.HasPrefix(property, "--") {
 		return len(value) <= 64<<10
+	}
+	// CSS.supports evaluates declaration syntax before custom-property
+	// substitution. Resolve fallbacks when present so modern feature checks such
+	// as color:var(--probe, red) report the native capability correctly.
+	if strings.Contains(value, "var(") {
+		resolved, valid := resolveVariables(value, map[string]string{})
+		if !valid {
+			return false
+		}
+		value = resolved
 	}
 	if parseGlobalKeyword(value) != globalNone {
 		return supportsProperty(property)

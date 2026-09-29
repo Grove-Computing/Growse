@@ -56,6 +56,7 @@ type Runtime struct {
 	started         bool
 	stopped         bool
 	framePending    atomic.Bool
+	frameInFlight   atomic.Bool
 	pendingDocument dom.DocumentSnapshot
 	pendingMutation bool
 	unsubscribe     func()
@@ -229,6 +230,7 @@ func (r *Runtime) Stop() error {
 	r.pendingDocument = dom.DocumentSnapshot{}
 	r.pendingMutation = false
 	r.framePending.Store(false)
+	r.frameInFlight.Store(false)
 	r.mu.Unlock()
 	if unsubscribe != nil {
 		unsubscribe()
@@ -278,14 +280,7 @@ func (r *Runtime) DispatchDOMEvent(event events.Event) bool {
 	}
 	if response.Document.Root.ID != 0 {
 		if event.Type == events.Load || event.Type == events.Error {
-			r.mu.Lock()
-			r.pendingDocument = response.Document
-			r.pendingMutation = true
-			requestFrame := environment.RequestFrame
-			r.mu.Unlock()
-			if requestFrame != nil {
-				requestFrame()
-			}
+			r.stagePendingDOMMutation(response.Document, environment)
 		} else if environment.Document.ApplySnapshot(response.Document) == nil && environment.OnMutation != nil {
 			environment.OnMutation()
 		}
@@ -301,9 +296,28 @@ func (r *Runtime) DispatchPageEvent(callback func() bool) bool {
 	return callback != nil && callback()
 }
 
-// CommitPendingDOMMutation publishes a resource-event mutation at the caller's
-// frame boundary. Resource handlers run off the UI thread, so applying their
-// snapshot inside that worker completion would race layout and paint.
+func (r *Runtime) stagePendingDOMMutation(snapshot dom.DocumentSnapshot, environment runtimemodel.Environment) {
+	if snapshot.Root.ID == 0 {
+		return
+	}
+	r.mu.Lock()
+	if r.stopped {
+		r.mu.Unlock()
+		return
+	}
+	notify := !r.pendingMutation
+	r.pendingDocument = snapshot
+	r.pendingMutation = true
+	requestFrame := environment.RequestFrame
+	r.mu.Unlock()
+	if notify && requestFrame != nil {
+		requestFrame()
+	}
+}
+
+// CommitPendingDOMMutation publishes a worker mutation at the caller's frame
+// boundary. Asynchronous resource and animation handlers must not modify the
+// browser-owned document while Gio is laying it out or painting it.
 func (r *Runtime) CommitPendingDOMMutation() bool {
 	if r == nil {
 		return false
@@ -334,10 +348,32 @@ func (r *Runtime) RunAnimationFrame(current time.Time) bool {
 	if p == nil || stopped || environment.Document == nil {
 		return false
 	}
+	// Gio calls this method while assembling a window frame. Page callbacks can
+	// perform arbitrary work, so waiting for the worker here would stop desktop
+	// event delivery and make the window appear hung. Keep at most one worker
+	// frame in flight and publish its mutations at a later UI frame boundary.
+	if !r.frameInFlight.CompareAndSwap(false, true) {
+		return false
+	}
 	r.framePending.Store(false)
-	var response boolResponse
 	request := frameRequest{UnixNano: current.UnixNano(), Document: environment.Document.Snapshot()}
-	return r.callTask(context.Background(), "runtime.frame", request, &response) == nil && response.Value
+	go func() {
+		defer r.frameInFlight.Store(false)
+		var response boolResponse
+		_ = r.callTask(context.Background(), "runtime.frame", request, &response)
+		// A request made while this frame was running may already have caused a
+		// Gio frame that could not start another worker task. Wake the window once
+		// more after completion so that request is not stranded.
+		if r.framePending.Load() {
+			r.mu.Lock()
+			requestFrame := r.environment.RequestFrame
+			r.mu.Unlock()
+			if requestFrame != nil {
+				requestFrame()
+			}
+		}
+	}()
+	return true
 }
 
 func (r *Runtime) HasAnimationFrameCallbacks() bool {
@@ -457,7 +493,16 @@ func (r *Runtime) installHostHandlers(p *peer) {
 		r.mu.Lock()
 		environment, stopped := r.environment, r.stopped
 		r.mu.Unlock()
-		if stopped || environment.Document == nil || environment.Document.ApplySnapshot(event.Document) != nil {
+		if stopped || environment.Document == nil {
+			return
+		}
+		if r.frameInFlight.Load() {
+			// Mutations produced by asynchronous animation callbacks must be
+			// published at a Gio frame boundary instead of racing layout.
+			r.stagePendingDOMMutation(event.Document, environment)
+			return
+		}
+		if environment.Document.ApplySnapshot(event.Document) != nil {
 			return
 		}
 		if environment.OnMutation != nil {

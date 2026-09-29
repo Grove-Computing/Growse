@@ -453,6 +453,7 @@ func TestIsolatedJavaScriptTimerMutatesDocumentAfterStart(t *testing.T) {
 	}
 	deadline = time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
+		runtime.CommitPendingDOMMutation()
 		result, _ = snapshotElementByID(document.Snapshot().Root, "result")
 		if result.Attributes["frame"] == "ran" {
 			if got := snapshotTextContent(result); got != "done" {
@@ -463,6 +464,51 @@ func TestIsolatedJavaScriptTimerMutatesDocumentAfterStart(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 	t.Fatal("isolated animation frame mutation was not published")
+}
+
+func TestIsolatedAnimationFrameDoesNotBlockCaller(t *testing.T) {
+	document, err := htmlparser.Parse(strings.NewReader(`<output id="result">pending</output>`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := New(runtimemodel.EngineJavaScript)
+	t.Cleanup(func() { _ = runtime.Stop() })
+	environment := runtimemodel.Environment{
+		Document: document, Events: events.NewDispatcher(), BaseURL: mustURL(t, "https://example.test/page"),
+	}
+	script := runtimemodel.Script{
+		Engine: runtimemodel.EngineJavaScript, SourceURL: environment.BaseURL, Inline: true,
+		Source: `requestAnimationFrame(function () {
+			const started = Date.now();
+			while (Date.now() - started < 200) {}
+			document.getElementById("result").textContent = "done";
+		});`,
+	}
+	if err := runtime.Load(context.Background(), []runtimemodel.Script{script}, environment); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	started := time.Now()
+	if !runtime.RunAnimationFrame(time.Now()) {
+		t.Fatal("animation frame was not scheduled")
+	}
+	if elapsed := time.Since(started); elapsed > 100*time.Millisecond {
+		t.Fatalf("RunAnimationFrame blocked caller for %s", elapsed)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if runtime.CommitPendingDOMMutation() {
+			result, _ := document.GetElementByID("result")
+			if result.TextContent() == "done" {
+				return
+			}
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("asynchronous animation frame mutation was not committed")
 }
 
 func snapshotElementByID(node dom.NodeSnapshot, id string) (dom.NodeSnapshot, bool) {

@@ -10,6 +10,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/dop251/goja"
+
+	stylemodel "github.com/Grove-Computing/Growse/internal/style"
 )
 
 const (
@@ -140,7 +142,31 @@ func (runtime *Runtime) installBrowserGlobals(vm *goja.Runtime) error {
 	if err := performance.DefineDataProperty("timeOrigin", vm.ToValue(float64(origin.UnixNano())/float64(time.Millisecond)), goja.FLAG_FALSE, goja.FLAG_FALSE, goja.FLAG_TRUE); err != nil {
 		return err
 	}
-	return vm.Set("performance", performance)
+	if err := vm.Set("performance", performance); err != nil {
+		return err
+	}
+	cssAPI := vm.NewObject()
+	if err := cssAPI.Set("supports", func(call goja.FunctionCall) goja.Value {
+		property := strings.TrimSpace(call.Argument(0).String())
+		value := ""
+		if len(call.Arguments) > 1 && !goja.IsUndefined(call.Argument(1)) {
+			value = strings.TrimSpace(call.Argument(1).String())
+		} else {
+			condition := strings.TrimSpace(property)
+			if len(condition) >= 2 && condition[0] == '(' && condition[len(condition)-1] == ')' {
+				condition = strings.TrimSpace(condition[1 : len(condition)-1])
+			}
+			separator := strings.IndexByte(condition, ':')
+			if separator <= 0 {
+				return vm.ToValue(false)
+			}
+			property, value = strings.TrimSpace(condition[:separator]), strings.TrimSpace(condition[separator+1:])
+		}
+		return vm.ToValue(stylemodel.SupportsDeclaration(property, value))
+	}); err != nil {
+		return err
+	}
+	return vm.Set("CSS", cssAPI)
 }
 
 func browserURL(raw, base string) (map[string]string, error) {

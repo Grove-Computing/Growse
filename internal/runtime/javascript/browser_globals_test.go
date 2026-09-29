@@ -75,3 +75,28 @@ func TestBrowserGlobalsRejectInvalidAndOversizedInputs(t *testing.T) {
 		t.Fatalf("browser global errors = %q, want %q", message, want)
 	}
 }
+
+func TestBrowserCSSSupportsUsesStyleCapabilities(t *testing.T) {
+	var message string
+	runtime := New()
+	t.Cleanup(func() { _ = runtime.Stop() })
+	source := `
+		console.log([
+			typeof CSS, typeof CSS.supports,
+			CSS.supports("--accent", "red"), CSS.supports("(--accent: red)"),
+			CSS.supports("display", "grid"), CSS.supports("(display: grid)"),
+			CSS.supports("color", "var(--probe, red)"),
+			CSS.supports("unknown-property", "value"), CSS.supports("broken")
+		].join("|"));`
+	environment := runtimemodel.Environment{ConsoleRecord: func(_, value string) { message = value }}
+	if err := runtime.Load(context.Background(), []runtimemodel.Script{javaScript(source)}, environment); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	want := "object|function|true|true|true|true|true|false|false"
+	if message != want {
+		t.Fatalf("CSS.supports = %q, want %q", message, want)
+	}
+}
