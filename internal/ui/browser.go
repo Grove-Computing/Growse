@@ -86,6 +86,7 @@ type BrowserUI struct {
 	backButton        widget.Clickable
 	forwardButton     widget.Clickable
 	reloadButton      widget.Clickable
+	homeButton        widget.Clickable
 	goButton          widget.Clickable
 	bookmarkButton    widget.Clickable
 	updateButton      widget.Clickable
@@ -113,6 +114,7 @@ type BrowserUI struct {
 	viewportClick     gesture.Click
 	address           *widget.Editor
 	omniboxStates     map[browser.TabID]omniboxState
+	homeTabs          map[browser.TabID]bool
 	findStates        map[browser.TabID]*findTabState
 	findFocusPending  bool
 
@@ -142,6 +144,7 @@ type BrowserUI struct {
 	backIcon          *widget.Icon
 	forwardIcon       *widget.Icon
 	reloadIcon        *widget.Icon
+	homeIcon          *widget.Icon
 	pageTitle         string
 	status            string
 	pageStatus        string
@@ -442,6 +445,7 @@ func NewBrowserUIWithTabsAndUpdater(navigator Navigator, tabs TabController, inv
 		backIcon:          mustIcon(widget.NewIcon(icons.NavigationArrowBack)),
 		forwardIcon:       mustIcon(widget.NewIcon(icons.NavigationArrowForward)),
 		reloadIcon:        mustIcon(widget.NewIcon(icons.NavigationRefresh)),
+		homeIcon:          mustIcon(widget.NewIcon(icons.ActionHome)),
 		pageTitle:         "新しい Web を Go で開く",
 		status:            "URLを入力して Gopher ボタンを押してください",
 		pageStatus:        "URLを入力して Gopher ボタンを押してください",
@@ -460,6 +464,7 @@ func NewBrowserUIWithTabsAndUpdater(navigator Navigator, tabs TabController, inv
 		devToolsStates:    make(map[browser.TabID]devToolsTabState),
 		inspectorButtons:  make(map[browser.TabID]map[dom.NodeID]*widget.Clickable),
 		omniboxStates:     make(map[browser.TabID]omniboxState),
+		homeTabs:          make(map[browser.TabID]bool),
 		findStates:        make(map[browser.TabID]*findTabState),
 		layoutBuild:       layoutengine.BuildWithScroll,
 		layoutBuildImages: layoutengine.BuildWithScrollAndImages,
@@ -1410,6 +1415,9 @@ func (ui *BrowserUI) handleActions(gtx layout.Context) {
 			ui.startPageLoad(tabID, navigator, "ページを再読み込み中", navigator.Reload)
 		}
 	}
+	for ui.homeButton.Clicked(gtx) {
+		ui.showHome()
+	}
 	for ui.updateButton.Clicked(gtx) {
 		ui.startUpdate()
 	}
@@ -1619,7 +1627,7 @@ func (ui *BrowserUI) createTab(gtx layout.Context) {
 		ui.reportTabOperationError("新しいTabを選択できません", err)
 		return
 	}
-	gtx.Execute(key.FocusCmd{Tag: ui.address})
+	ui.homeTabs[tab.ID] = true
 }
 
 func (ui *BrowserUI) closeTab(id browser.TabID) bool {
@@ -1630,6 +1638,7 @@ func (ui *BrowserUI) closeTab(id browser.TabID) bool {
 		return false
 	}
 	delete(ui.omniboxStates, id)
+	delete(ui.homeTabs, id)
 	delete(ui.findStates, id)
 	delete(ui.tabRenderStates, id)
 	delete(ui.devToolsStates, id)
@@ -1695,6 +1704,7 @@ func (ui *BrowserUI) startNavigationWithDisposition(rawURL string, disposition o
 		target = classification.URL.String()
 	}
 	if disposition == omniboxCurrentTab {
+		ui.homeTabs[tabID] = false
 		ui.startResolvedNavigation(target, classification.Kind != omnibox.URL)
 		return
 	}
@@ -1763,6 +1773,7 @@ func (ui *BrowserUI) startNavigationInNewTab(rawURL string, background bool, sea
 		ui.reportTabOperationError("新しい Tab を作成できません", err)
 		return
 	}
+	ui.homeTabs[tab.ID] = false
 	targets, ok := ui.tabs.(tabBrowserSource)
 	if !ok {
 		ui.status = "新しい Tab の Navigation を利用できません"
@@ -2163,6 +2174,10 @@ func (ui *BrowserUI) layoutToolbar(gtx layout.Context) layout.Dimensions {
 					layout.Rigid(layout.Spacer{Width: unit.Dp(4)}.Layout),
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 						return ui.layoutToolbarButton(gtx, &ui.reloadButton, ui.reloadIcon, "再読込", canReload)
+					}),
+					layout.Rigid(layout.Spacer{Width: unit.Dp(4)}.Layout),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return ui.layoutToolbarButton(gtx, &ui.homeButton, ui.homeIcon, "ホーム", true)
 					}),
 					layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
 					layout.Rigid(ui.layoutUpdateButton),
@@ -2754,6 +2769,9 @@ func mustIcon(icon *widget.Icon, err error) *widget.Icon {
 }
 
 func (ui *BrowserUI) layoutViewport(gtx layout.Context) layout.Dimensions {
+	if ui.homeVisible() {
+		return ui.layoutHome(gtx)
+	}
 	if ui.navigator != nil {
 		if page := ui.navigator.Page(); page != nil && page.Document != nil {
 			return ui.layoutDocument(gtx, page)
