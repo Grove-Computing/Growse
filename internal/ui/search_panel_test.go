@@ -2,6 +2,7 @@ package ui
 
 import (
 	"image"
+	"net/url"
 	"reflect"
 	"runtime"
 	"testing"
@@ -167,5 +168,106 @@ func TestSearchPanelHistoryAndBookmarkUseRequestedDisposition(t *testing.T) {
 	tabs := session.Tabs()
 	if len(tabs) != 3 || tabs[2].URL != "https://history.example/" || !tabs[2].Active {
 		t.Fatalf("foreground history tabs = %+v", tabs)
+	}
+}
+
+func TestSearchPanelDeletesHistoryByKeyboardAndBookmarkByMouse(t *testing.T) {
+	store := searchdata.NewMemoryStore()
+	when := time.Date(2026, time.September, 29, 2, 0, 0, 0, time.UTC)
+	if err := store.RecordNavigation(searchdata.Navigation{URL: "https://history.example/delete", Title: "Delete history", VisitedAt: when, TopLevel: true, Success: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SaveBookmark("", "https://bookmark.example/delete", "Delete bookmark"); err != nil {
+		t.Fatal(err)
+	}
+	ui := NewBrowserUI(nil, nil)
+	defer ui.Close()
+	ui.SetSearchDataStore(store)
+	router := new(input.Router)
+	gtx := layout.Context{Ops: new(op.Ops), Source: router.Source(), Constraints: layout.Exact(image.Pt(1000, 800)), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}}
+	ui.openSearchPanel(gtx)
+	deadline := time.Now().Add(time.Second)
+	for ui.searchPanel.localApplied != ui.searchPanel.localGeneration && time.Now().Before(deadline) {
+		runtime.Gosched()
+		ui.syncSearchPanel()
+	}
+	ui.Layout(gtx)
+	router.Frame(gtx.Ops)
+
+	historyIndex := -1
+	for index, candidate := range ui.searchPanel.candidates {
+		if candidate.Source == omnibox.HistorySource {
+			historyIndex = index
+		}
+	}
+	if historyIndex < 0 {
+		t.Fatalf("history result missing: %#v", ui.searchPanel.candidates)
+	}
+	ui.searchPanel.selected = historyIndex
+	router.Queue(key.Event{Name: key.NameDeleteForward, State: key.Press})
+	gtx.Reset()
+	ui.Layout(gtx)
+	if len(store.History()) != 0 || len(store.SuggestionSnapshot(t.Context(), "delete").History) != 0 {
+		t.Fatal("keyboard deletion left history in data or index")
+	}
+
+	deadline = time.Now().Add(time.Second)
+	for ui.searchPanel.localApplied != ui.searchPanel.localGeneration && time.Now().Before(deadline) {
+		runtime.Gosched()
+		ui.syncSearchPanel()
+	}
+	bookmarkIndex := -1
+	for index, candidate := range ui.searchPanel.candidates {
+		if candidate.Source == omnibox.BookmarkSource {
+			bookmarkIndex = index
+		}
+	}
+	if bookmarkIndex < 0 {
+		t.Fatalf("bookmark result missing: %#v", ui.searchPanel.candidates)
+	}
+	gtx.Reset()
+	ui.Layout(gtx)
+	ui.searchPanel.deleteButtons[bookmarkIndex].Click()
+	gtx.Reset()
+	ui.Layout(gtx)
+	if len(store.Bookmarks()) != 0 || len(store.SuggestionSnapshot(t.Context(), "delete").Bookmarks) != 0 {
+		t.Fatal("mouse deletion left bookmark in data or index")
+	}
+}
+
+func TestSearchPanelClearHistoryRequiresConfirmationAndKeepsCurrentPage(t *testing.T) {
+	pageURL, err := url.Parse("https://current.example/page")
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := browser.NewPage(pageURL)
+	navigator := &stubNavigator{page: page}
+	store := searchdata.NewMemoryStore()
+	for index, rawURL := range []string{"https://one.example/", "https://two.example/"} {
+		if err := store.RecordNavigation(searchdata.Navigation{URL: rawURL, Title: "History", VisitedAt: time.Unix(int64(index+1), 0), TopLevel: true, Success: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ui := NewBrowserUI(navigator, nil)
+	defer ui.Close()
+	ui.SetSearchDataStore(store)
+	ui.searchPanel.open = true
+	gtx := layout.Context{Ops: new(op.Ops), Constraints: layout.Exact(image.Pt(1000, 800)), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}}
+	ui.layoutSearchPanel(gtx)
+
+	ui.searchPanel.clearHistoryButton.Click()
+	ui.handleSearchPanelActions(gtx)
+	if !ui.searchPanel.confirmClearHistory || ui.searchPanel.clearHistoryCount != 2 || len(store.History()) != 2 {
+		t.Fatalf("confirmation state=%t count=%d history=%d", ui.searchPanel.confirmClearHistory, ui.searchPanel.clearHistoryCount, len(store.History()))
+	}
+	gtx.Reset()
+	ui.layoutSearchPanel(gtx)
+	ui.searchPanel.confirmClearHistoryButton.Click()
+	ui.handleSearchPanelActions(gtx)
+	if ui.searchPanel.confirmClearHistory || len(store.History()) != 0 || len(store.SuggestionSnapshot(t.Context(), "").History) != 0 {
+		t.Fatal("confirmed clear did not remove history from data and index")
+	}
+	if navigator.Page() != page || navigator.Page().URL.String() != pageURL.String() {
+		t.Fatal("clearing history changed the current page")
 	}
 }

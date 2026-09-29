@@ -20,21 +20,27 @@ import (
 )
 
 type searchPanelState struct {
-	open            bool
-	editor          *widget.Editor
-	scope           omnibox.Scope
-	query           string
-	localGeneration uint64
-	localApplied    uint64
-	candidates      []omnibox.Candidate
-	selected        int
-	list            widget.List
-	allButton       widget.Clickable
-	tabsButton      widget.Clickable
-	historyButton   widget.Clickable
-	bookmarksButton widget.Clickable
-	closeButton     widget.Clickable
-	rows            [omnibox.MaxMergedCandidates]widget.Clickable
+	open                      bool
+	editor                    *widget.Editor
+	scope                     omnibox.Scope
+	query                     string
+	localGeneration           uint64
+	localApplied              uint64
+	candidates                []omnibox.Candidate
+	selected                  int
+	list                      widget.List
+	allButton                 widget.Clickable
+	tabsButton                widget.Clickable
+	historyButton             widget.Clickable
+	bookmarksButton           widget.Clickable
+	closeButton               widget.Clickable
+	clearHistoryButton        widget.Clickable
+	cancelClearHistoryButton  widget.Clickable
+	confirmClearHistoryButton widget.Clickable
+	confirmClearHistory       bool
+	clearHistoryCount         int
+	rows                      [omnibox.MaxMergedCandidates]widget.Clickable
+	deleteButtons             [omnibox.MaxMergedCandidates]widget.Clickable
 }
 
 func newSearchPanelState() searchPanelState {
@@ -69,7 +75,11 @@ func (ui *BrowserUI) handleSearchPanelKeyboardShortcuts(gtx layout.Context) {
 		}
 		keyEvent, ok := event.(key.Event)
 		if ok && keyEvent.State == key.Press {
-			ui.closeSearchPanel(gtx)
+			if panel.confirmClearHistory {
+				panel.confirmClearHistory = false
+			} else {
+				ui.closeSearchPanel(gtx)
+			}
 		}
 	}
 }
@@ -87,6 +97,7 @@ func (ui *BrowserUI) openSearchPanel(gtx layout.Context) {
 func (ui *BrowserUI) closeSearchPanel(gtx layout.Context) {
 	panel := &ui.searchPanel
 	panel.open = false
+	panel.confirmClearHistory = false
 	panel.selected = -1
 	panel.candidates = nil
 	if ui.searchPanelSuggestions != nil {
@@ -186,7 +197,24 @@ func (ui *BrowserUI) handleSearchPanelActions(gtx layout.Context) {
 	for panel.closeButton.Clicked(gtx) {
 		ui.closeSearchPanel(gtx)
 	}
+	for panel.clearHistoryButton.Clicked(gtx) {
+		panel.clearHistoryCount = ui.searchPanelHistoryCount()
+		panel.confirmClearHistory = panel.clearHistoryCount > 0
+	}
+	for panel.cancelClearHistoryButton.Clicked(gtx) {
+		panel.confirmClearHistory = false
+	}
+	for panel.confirmClearHistoryButton.Clicked(gtx) {
+		ui.clearSearchPanelHistory()
+	}
+	if panel.confirmClearHistory {
+		return
+	}
 	for index := range panel.candidates {
+		for panel.deleteButtons[index].Clicked(gtx) {
+			ui.deleteSearchPanelCandidate(panel.candidates[index])
+			return
+		}
 		for panel.rows[index].Clicked(gtx) {
 			ui.executeSearchPanelCandidate(gtx, panel.candidates[index], omniboxCurrentTab)
 			return
@@ -228,6 +256,20 @@ func (ui *BrowserUI) handleSearchPanelResultKeys(gtx layout.Context) {
 			panel.selected = index
 			panel.list.ScrollTo(index)
 		}
+	}
+	for {
+		event, ok := gtx.Event(
+			key.Filter{Focus: panel.editor, Name: key.NameDeleteForward},
+			key.Filter{Focus: panel.editor, Name: key.NameDeleteBackward, Required: key.ModShift},
+		)
+		if !ok {
+			break
+		}
+		keyEvent, ok := event.(key.Event)
+		if !ok || keyEvent.State != key.Press || panel.selected < 0 || panel.selected >= len(panel.candidates) {
+			continue
+		}
+		ui.deleteSearchPanelCandidate(panel.candidates[panel.selected])
 	}
 	for {
 		event, ok := gtx.Event(
@@ -288,6 +330,15 @@ func (ui *BrowserUI) layoutSearchPanel(gtx layout.Context) layout.Dimensions {
 						return label.Layout(gtx)
 					}),
 					layout.Flexed(1, layout.Spacer{}.Layout),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						if ui.searchPanelHistoryCount() == 0 {
+							return layout.Dimensions{}
+						}
+						button := material.Button(ui.theme, &ui.searchPanel.clearHistoryButton, "Clear history")
+						button.Background = color.NRGBA{R: 190, G: 24, B: 93, A: 255}
+						return button.Layout(gtx)
+					}),
+					layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 						button := material.Button(ui.theme, &ui.searchPanel.closeButton, "Close")
 						button.Background = color.NRGBA{R: 71, G: 85, B: 105, A: 255}
@@ -353,37 +404,146 @@ func (ui *BrowserUI) layoutSearchPanelScopeButton(clickable *widget.Clickable, l
 
 func (ui *BrowserUI) layoutSearchPanelResults(gtx layout.Context) layout.Dimensions {
 	panel := &ui.searchPanel
+	if panel.confirmClearHistory {
+		return ui.layoutClearHistoryConfirmation(gtx)
+	}
 	if len(panel.candidates) == 0 {
 		label := material.Body1(ui.theme, "No matching tabs, history, or bookmarks")
 		label.Color = color.NRGBA{R: 100, G: 116, B: 139, A: 255}
 		return layout.Center.Layout(gtx, label.Layout)
 	}
 	return material.List(ui.theme, &panel.list).Layout(gtx, len(panel.candidates), func(gtx layout.Context, index int) layout.Dimensions {
-		candidate := panel.candidates[index]
-		return panel.rows[index].Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-			height := gtx.Dp(unit.Dp(64))
-			gtx.Constraints.Min.X = gtx.Constraints.Max.X
-			gtx.Constraints.Min.Y = height
-			gtx.Constraints.Max.Y = height
-			background := color.NRGBA{R: 255, G: 255, B: 255, A: 255}
-			if index == panel.selected {
-				background = color.NRGBA{R: 219, G: 234, B: 254, A: 255}
+		return ui.layoutSearchPanelResult(gtx, index, panel.candidates[index])
+	})
+}
+
+func (ui *BrowserUI) layoutSearchPanelResult(gtx layout.Context, index int, candidate omnibox.Candidate) layout.Dimensions {
+	panel := &ui.searchPanel
+	height := gtx.Dp(unit.Dp(64))
+	gtx.Constraints.Min.X = gtx.Constraints.Max.X
+	gtx.Constraints.Min.Y = height
+	gtx.Constraints.Max.Y = height
+	background := color.NRGBA{R: 255, G: 255, B: 255, A: 255}
+	if index == panel.selected {
+		background = color.NRGBA{R: 219, G: 234, B: 254, A: 255}
+	}
+	paint.FillShape(gtx.Ops, background, clip.UniformRRect(image.Rectangle{Max: gtx.Constraints.Min}, gtx.Dp(unit.Dp(8))).Op(gtx.Ops))
+	semantic.DescriptionOp(candidate.Source.Label() + ": " + candidate.Primary).Add(gtx.Ops)
+	semantic.SelectedOp(index == panel.selected).Add(gtx.Ops)
+	return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+			return panel.rows[index].Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				gtx.Constraints.Min = gtx.Constraints.Max
+				return layout.Inset{Top: unit.Dp(8), Right: unit.Dp(12), Bottom: unit.Dp(8), Left: unit.Dp(12)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+							label := material.Body1(ui.theme, candidate.Primary)
+							label.MaxLines = 1
+							return label.Layout(gtx)
+						}),
+						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+							label := material.Caption(ui.theme, candidate.Source.Label()+" · "+candidate.Secondary)
+							label.Color = color.NRGBA{R: 71, G: 85, B: 105, A: 255}
+							label.MaxLines = 1
+							return label.Layout(gtx)
+						}),
+					)
+				})
+			})
+		}),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			if candidate.Source != omnibox.HistorySource && candidate.Source != omnibox.BookmarkSource {
+				return layout.Dimensions{}
 			}
-			paint.FillShape(gtx.Ops, background, clip.UniformRRect(image.Rectangle{Max: gtx.Constraints.Min}, gtx.Dp(unit.Dp(8))).Op(gtx.Ops))
-			semantic.DescriptionOp(candidate.Source.Label() + ": " + candidate.Primary).Add(gtx.Ops)
-			semantic.SelectedOp(index == panel.selected).Add(gtx.Ops)
-			return layout.Inset{Top: unit.Dp(8), Right: unit.Dp(12), Bottom: unit.Dp(8), Left: unit.Dp(12)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+			gtx.Constraints.Min.X = gtx.Dp(unit.Dp(88))
+			button := material.Button(ui.theme, &panel.deleteButtons[index], "Delete")
+			button.Background = color.NRGBA{R: 226, G: 232, B: 240, A: 255}
+			button.Color = color.NRGBA{R: 127, G: 29, B: 29, A: 255}
+			return layout.Inset{Right: unit.Dp(8)}.Layout(gtx, button.Layout)
+		}),
+	)
+}
+
+func (ui *BrowserUI) searchPanelHistoryCount() int {
+	if ui.searchData == nil {
+		return 0
+	}
+	return len(ui.searchData.History())
+}
+
+func (ui *BrowserUI) deleteSearchPanelCandidate(candidate omnibox.Candidate) {
+	if ui.searchData == nil {
+		return
+	}
+	var err error
+	switch candidate.Source {
+	case omnibox.HistorySource:
+		err = ui.searchData.DeleteHistory(candidate.URL)
+	case omnibox.BookmarkSource:
+		err = ui.searchData.DeleteBookmark(candidate.URL)
+	default:
+		return
+	}
+	if err != nil {
+		ui.status = candidate.Source.Label() + "を削除できませんでした"
+		ui.statusHasError = true
+		return
+	}
+	ui.status = candidate.Source.Label() + "を削除しました"
+	ui.statusHasError = false
+	ui.refreshSearchPanel()
+}
+
+func (ui *BrowserUI) clearSearchPanelHistory() {
+	panel := &ui.searchPanel
+	if ui.searchData == nil {
+		panel.confirmClearHistory = false
+		return
+	}
+	if err := ui.searchData.ClearHistory(); err != nil {
+		ui.status = "Historyを全件削除できませんでした"
+		ui.statusHasError = true
+		return
+	}
+	count := panel.clearHistoryCount
+	panel.confirmClearHistory = false
+	ui.status = fmt.Sprintf("Historyを%d件削除しました", count)
+	ui.statusHasError = false
+	ui.refreshSearchPanel()
+}
+
+func (ui *BrowserUI) layoutClearHistoryConfirmation(gtx layout.Context) layout.Dimensions {
+	panel := &ui.searchPanel
+	return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		gtx.Constraints.Max.X = min(gtx.Constraints.Max.X, gtx.Dp(unit.Dp(560)))
+		return widget.Border{Color: color.NRGBA{R: 203, G: 213, B: 225, A: 255}, CornerRadius: unit.Dp(12), Width: unit.Dp(1)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+			return layout.UniformInset(unit.Dp(24)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 				return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-						label := material.Body1(ui.theme, candidate.Primary)
-						label.MaxLines = 1
+						label := material.H6(ui.theme, fmt.Sprintf("Delete all %d history items?", panel.clearHistoryCount))
 						return label.Layout(gtx)
 					}),
+					layout.Rigid(layout.Spacer{Height: unit.Dp(10)}.Layout),
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-						label := material.Caption(ui.theme, candidate.Source.Label()+" · "+candidate.Secondary)
+						label := material.Body1(ui.theme, "They will also disappear from local search and suggestions. This cannot be undone. Your open tabs and current page stay open.")
 						label.Color = color.NRGBA{R: 71, G: 85, B: 105, A: 255}
-						label.MaxLines = 1
 						return label.Layout(gtx)
+					}),
+					layout.Rigid(layout.Spacer{Height: unit.Dp(18)}.Layout),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return layout.Flex{Spacing: layout.SpaceEnd}.Layout(gtx,
+							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+								button := material.Button(ui.theme, &panel.cancelClearHistoryButton, "Cancel")
+								button.Background = color.NRGBA{R: 100, G: 116, B: 139, A: 255}
+								return button.Layout(gtx)
+							}),
+							layout.Rigid(layout.Spacer{Width: unit.Dp(10)}.Layout),
+							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+								button := material.Button(ui.theme, &panel.confirmClearHistoryButton, "Delete all")
+								button.Background = color.NRGBA{R: 190, G: 24, B: 93, A: 255}
+								return button.Layout(gtx)
+							}),
+						)
 					}),
 				)
 			})
