@@ -400,12 +400,12 @@ func searchHomeLayoutMetrics(narrow bool) homeLayoutMetrics {
 	if narrow {
 		return homeLayoutMetrics{
 			cardWidth: 496, horizontalInset: 16, verticalInset: 24,
-			logoWidth: 64, logoHeight: 52, candidateHeight: 144, shortcutColumns: 2,
+			logoWidth: 64, logoHeight: 64, candidateHeight: 144, shortcutColumns: 2,
 		}
 	}
 	return homeLayoutMetrics{
 		cardWidth: 620, horizontalInset: 48, verticalInset: 40,
-		logoWidth: 88, logoHeight: 72, candidateHeight: 192, shortcutColumns: 5,
+		logoWidth: 80, logoHeight: 80, candidateHeight: 192, shortcutColumns: 5,
 	}
 }
 
@@ -472,8 +472,8 @@ func (ui *BrowserUI) layoutHome(gtx layout.Context) layout.Dimensions {
 								dims := layout.Flex{Axis: layout.Vertical, Alignment: layout.Middle}.Layout(gtx,
 									layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 										gtx.Constraints = layout.Exact(image.Pt(gtx.Dp(metrics.logoWidth), gtx.Dp(metrics.logoHeight)))
-										semantic.DescriptionOp("Growseロゴ").Add(gtx.Ops)
-										return widget.Image{Src: ui.gopher, Fit: widget.Contain, Position: layout.Center}.Layout(gtx)
+										semantic.DescriptionOp("Growseアプリアイコン").Add(gtx.Ops)
+										return widget.Image{Src: ui.growseIcon, Fit: widget.Contain, Position: layout.Center}.Layout(gtx)
 									}),
 									layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
 									layout.Rigid(material.H3(ui.theme, "Growse").Layout),

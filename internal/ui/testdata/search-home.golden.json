@@ -1,12 +1,12 @@
 {
   "desktop": [
     "viewport=1056x700 output=1056x700",
-    "card=620 inset=48,40 logo=88x72",
+    "card=620 inset=48,40 logo=80x80",
     "search-candidates=192 shortcut-columns=5 shortcut-rows=2 scroll=vertical"
   ],
   "narrow": [
     "viewport=496x700 output=496x700",
-    "card=496 inset=16,24 logo=64x52",
+    "card=496 inset=16,24 logo=64x64",
     "search-candidates=144 shortcut-columns=2 shortcut-rows=5 scroll=vertical"
   ],
   "backgrounds": [

@@ -58,6 +58,9 @@ import (
 //go:embed assets/gopher-blue.png
 var gopherPNG []byte
 
+//go:embed assets/growse-icon.png
+var growseIconPNG []byte
+
 const (
 	defaultURL         = "http://localhost:6053"
 	tabRailWidth       = unit.Dp(224)
@@ -143,6 +146,7 @@ type BrowserUI struct {
 	searchPanelSuggestions   *searchdata.LocalPipeline
 
 	gopher            paint.ImageOp
+	growseIcon        paint.ImageOp
 	pointerTag        pointerTag
 	pointer           pointerState
 	nestedScrollPage  *browser.Page
@@ -439,6 +443,10 @@ func NewBrowserUIWithTabsAndUpdater(navigator Navigator, tabs TabController, inv
 	if err != nil {
 		panic("decode embedded Go Gopher image: " + err.Error())
 	}
+	growseIconImage, err := png.Decode(bytes.NewReader(growseIconPNG))
+	if err != nil {
+		panic("decode embedded Growse icon: " + err.Error())
+	}
 
 	updateContext, cancelUpdate := context.WithCancel(context.Background())
 	ui := &BrowserUI{
@@ -450,6 +458,7 @@ func NewBrowserUIWithTabsAndUpdater(navigator Navigator, tabs TabController, inv
 		navigations:       make(map[browser.TabID]tabNavigation),
 		tabRenderStates:   make(map[browser.TabID]tabRenderState),
 		gopher:            paint.NewImageOp(gopherImage),
+		growseIcon:        paint.NewImageOp(growseIconImage),
 		backIcon:          mustIcon(widget.NewIcon(icons.NavigationArrowBack)),
 		forwardIcon:       mustIcon(widget.NewIcon(icons.NavigationArrowForward)),
 		reloadIcon:        mustIcon(widget.NewIcon(icons.NavigationRefresh)),
