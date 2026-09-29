@@ -260,6 +260,13 @@ func TestSearchPanelClearHistoryRequiresConfirmationAndKeepsCurrentPage(t *testi
 	if !ui.searchPanel.confirmClearHistory || ui.searchPanel.clearHistoryCount != 2 || len(store.History()) != 2 {
 		t.Fatalf("confirmation state=%t count=%d history=%d", ui.searchPanel.confirmClearHistory, ui.searchPanel.clearHistoryCount, len(store.History()))
 	}
+	ui.searchPanel.candidates = []omnibox.Candidate{{Source: omnibox.HistorySource, URL: "https://one.example/"}}
+	ui.searchPanel.selected = 0
+	ui.searchPanel.deleteButtons[0].Click()
+	ui.handleSearchPanelActions(gtx)
+	if !ui.searchPanel.confirmClearHistory || len(store.History()) != 2 {
+		t.Fatal("confirmation allowed a background result action")
+	}
 	gtx.Reset()
 	ui.layoutSearchPanel(gtx)
 	ui.searchPanel.confirmClearHistoryButton.Click()

@@ -37,3 +37,27 @@ func TestHistoryDeletionUpdatesDataAndIndexTogether(t *testing.T) {
 		t.Fatal("clear history left data or index candidates")
 	}
 }
+
+func TestHistoryCountTracksAtomicDeletions(t *testing.T) {
+	store := NewMemoryStore()
+	for index, rawURL := range []string{"https://one.example/", "https://two.example/"} {
+		if err := store.RecordNavigation(Navigation{URL: rawURL, Title: "entry", VisitedAt: time.Unix(int64(index+1), 0).UTC(), TopLevel: true, Success: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := store.HistoryCount(); got != 2 {
+		t.Fatalf("HistoryCount() = %d, want 2", got)
+	}
+	if err := store.DeleteHistory("https://one.example/"); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.HistoryCount(); got != 1 {
+		t.Fatalf("HistoryCount() after delete = %d, want 1", got)
+	}
+	if err := store.ClearHistory(); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.HistoryCount(); got != 0 {
+		t.Fatalf("HistoryCount() after clear = %d, want 0", got)
+	}
+}

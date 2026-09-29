@@ -288,6 +288,16 @@ func (s *Store) History() []HistoryEntry {
 	return entries
 }
 
+// HistoryCount returns the number of stored history items without copying or sorting them.
+func (s *Store) HistoryCount() int {
+	if s == nil || s.state == nil {
+		return 0
+	}
+	s.state.mu.RLock()
+	defer s.state.mu.RUnlock()
+	return len(s.state.data.History)
+}
+
 // DeleteHistory removes one normalized URL from both profile data and index.
 func (s *Store) DeleteHistory(rawURL string) error {
 	_, key, err := canonicalURL(rawURL)

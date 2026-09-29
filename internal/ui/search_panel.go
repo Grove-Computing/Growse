@@ -172,6 +172,19 @@ func (ui *BrowserUI) handleSearchPanelActions(gtx layout.Context) {
 		return
 	}
 	ui.syncSearchPanel()
+	for panel.closeButton.Clicked(gtx) {
+		ui.closeSearchPanel(gtx)
+		return
+	}
+	for panel.cancelClearHistoryButton.Clicked(gtx) {
+		panel.confirmClearHistory = false
+	}
+	for panel.confirmClearHistoryButton.Clicked(gtx) {
+		ui.clearSearchPanelHistory()
+	}
+	if panel.confirmClearHistory {
+		return
+	}
 	ui.handleSearchPanelResultKeys(gtx)
 	for {
 		event, ok := panel.editor.Update(gtx)
@@ -194,18 +207,9 @@ func (ui *BrowserUI) handleSearchPanelActions(gtx layout.Context) {
 	for panel.bookmarksButton.Clicked(gtx) {
 		ui.setSearchPanelScope(omnibox.Bookmarks)
 	}
-	for panel.closeButton.Clicked(gtx) {
-		ui.closeSearchPanel(gtx)
-	}
 	for panel.clearHistoryButton.Clicked(gtx) {
 		panel.clearHistoryCount = ui.searchPanelHistoryCount()
 		panel.confirmClearHistory = panel.clearHistoryCount > 0
-	}
-	for panel.cancelClearHistoryButton.Clicked(gtx) {
-		panel.confirmClearHistory = false
-	}
-	for panel.confirmClearHistoryButton.Clicked(gtx) {
-		ui.clearSearchPanelHistory()
 	}
 	if panel.confirmClearHistory {
 		return
@@ -468,7 +472,7 @@ func (ui *BrowserUI) searchPanelHistoryCount() int {
 	if ui.searchData == nil {
 		return 0
 	}
-	return len(ui.searchData.History())
+	return ui.searchData.HistoryCount()
 }
 
 func (ui *BrowserUI) deleteSearchPanelCandidate(candidate omnibox.Candidate) {
