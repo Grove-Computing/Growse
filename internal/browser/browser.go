@@ -68,6 +68,10 @@ type isolatedDOMEventRuntime interface {
 	DispatchDOMEvent(events.Event) bool
 }
 
+type pendingDOMMutationRuntime interface {
+	CommitPendingDOMMutation() bool
+}
+
 type mediaEnvironmentRuntime interface {
 	UpdateMediaEnvironment(runtimemodel.MediaEnvironment)
 }
@@ -263,9 +267,24 @@ func (b *Browser) SetOnMutation(callback func()) {
 // Page returns the currently active page, or nil before the first successful
 // navigation.
 func (b *Browser) Page() *Page {
+	b.mu.RLock()
+	activeRuntime := b.activeRuntime
+	b.mu.RUnlock()
+	if runtime, ok := activeRuntime.(pendingDOMMutationRuntime); ok {
+		runtime.CommitPendingDOMMutation()
+	}
 	page := b.currentPage()
 	if page != nil && page.commitPendingImageLoad() {
-		dispatchImageResourceEvents(b, page)
+		if _, isolated := activeRuntime.(pendingDOMMutationRuntime); isolated {
+			// Isolated resource handlers execute as page tasks and can take longer
+			// than a frame. Their DOM changes are staged until the next Page call,
+			// so dispatch can safely continue outside the UI frame.
+			go dispatchImageResourceEvents(b, page)
+		} else {
+			// In-process runtimes mutate the host DOM directly and must remain on
+			// the caller to avoid racing layout and paint.
+			dispatchImageResourceEvents(b, page)
+		}
 		// The asynchronous loader invalidates when it stages results. If that
 		// happens while a Gio frame is already being assembled, the wake-up can
 		// be coalesced into that frame before Page publishes the staged maps.

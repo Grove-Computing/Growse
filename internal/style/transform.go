@@ -88,7 +88,7 @@ func parseTransformFunction(name string, args []string, context LengthContext) (
 		return float32(degrees) * math.Pi / 180, err == nil
 	}
 	switch name {
-	case "translate", "translatex", "translatey":
+	case "translate", "translatex", "translatey", "translate3d":
 		x, y := LengthPercentage{}, LengthPercentage{}
 		var ok bool
 		if name != "translatey" {
@@ -99,8 +99,12 @@ func parseTransformFunction(name string, args []string, context LengthContext) (
 		if !ok {
 			return TransformFunction{}, false
 		}
-		if name == "translate" && len(args) == 2 {
+		if (name == "translate" && len(args) == 2) || name == "translate3d" {
 			y, ok = length(1)
+		}
+		if name == "translate3d" {
+			z, zOK := length(2)
+			ok = ok && zOK && len(args) == 3 && z.Pixels == 0 && z.Percentage == 0
 		}
 		return TransformFunction{Kind: TransformTranslate, X: x, Y: y}, ok
 	case "scale", "scalex", "scaley":

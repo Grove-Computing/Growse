@@ -207,11 +207,14 @@ func (state *workerState) load(ctx context.Context, payload json.RawMessage) (an
 		LocalStorage: local, SessionStorage: session, StorageSource: request.StorageSource,
 		OnMutation: func() {
 			state.mu.Lock()
-			if state.captureEventMutations {
+			captured := state.captureEventMutations
+			if captured {
 				state.eventMutationWasNotified = true
 			}
 			state.mu.Unlock()
-			_ = state.peer.event("dom.mutation", mutationEvent{Document: document.Snapshot()})
+			if !captured {
+				_ = state.peer.event("dom.mutation", mutationEvent{Document: document.Snapshot()})
+			}
 		},
 		ConsoleRecord: func(level, message string) {
 			_ = state.peer.event("console.record", consoleEvent{Level: level, Message: message})
@@ -356,23 +359,25 @@ func (state *workerState) dispatchEvent(_ context.Context, payload json.RawMessa
 	if runtime == nil || document == nil || dispatcher == nil {
 		return nil, errors.New("runtime worker is unavailable")
 	}
-	if err := document.ApplySnapshotPreservingDetached(request.Document); err != nil {
-		return nil, err
+	if request.Document.Root.ID != 0 {
+		if err := document.ApplySnapshotPreservingDetached(request.Document); err != nil {
+			return nil, err
+		}
 	}
 	if request.Type == events.Input {
 		if target, ok := document.NodeByID(request.Target); ok && forms.IsEditableTextControl(target) {
 			forms.SetCurrentValue(target, request.Value)
 		}
-		state.mu.Lock()
-		state.captureEventMutations = true
-		state.eventMutationWasNotified = false
-		state.mu.Unlock()
-		defer func() {
-			state.mu.Lock()
-			state.captureEventMutations = false
-			state.mu.Unlock()
-		}()
 	}
+	state.mu.Lock()
+	state.captureEventMutations = true
+	state.eventMutationWasNotified = false
+	state.mu.Unlock()
+	defer func() {
+		state.mu.Lock()
+		state.captureEventMutations = false
+		state.mu.Unlock()
+	}()
 	event := events.Event{Type: request.Type, Target: request.Target, X: request.X, Y: request.Y, Value: request.Value}
 	if request.Cancelable {
 		event = events.Cancelable(request.Type, request.Target)
@@ -390,7 +395,7 @@ func (state *workerState) dispatchEvent(_ context.Context, payload json.RawMessa
 	mutationWasNotified := state.eventMutationWasNotified
 	state.mu.Unlock()
 	response := eventResponse{Handled: handled, DefaultPrevented: event.DefaultPrevented(), MutationWasNotified: mutationWasNotified}
-	if request.Type == events.Input {
+	if request.Type == events.Input || mutationWasNotified {
 		response.Document = document.Snapshot()
 	}
 	return response, nil

@@ -487,3 +487,46 @@ func snapshotTextContent(node dom.NodeSnapshot) string {
 	}
 	return result.String()
 }
+
+func TestResourceEventMutationIsCommittedAtFrameBoundary(t *testing.T) {
+	document, err := htmlparser.Parse(strings.NewReader(`<img id="hero"><p id="status">idle</p>`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	hero, _ := document.GetElementByID("hero")
+	status, _ := document.GetElementByID("status")
+	var mutations atomic.Int32
+	runtime := New(runtimemodel.EngineJavaScript)
+	t.Cleanup(func() { _ = runtime.Stop() })
+	environment := runtimemodel.Environment{
+		Document: document, Events: events.NewDispatcher(), BaseURL: mustURL(t, "https://example.test/page"),
+		OnMutation: func() { mutations.Add(1) },
+	}
+	source := `document.getElementById("hero").addEventListener("load", function () { document.getElementById("status").textContent = "loaded"; });`
+	if err := runtime.Load(context.Background(), []runtimemodel.Script{{Engine: runtimemodel.EngineJavaScript, SourceURL: environment.BaseURL, Source: source, Inline: true}}, environment); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	before := mutations.Load()
+	if !runtime.DispatchDOMEvent(events.Event{Type: events.Load, Target: hero.ID}) {
+		t.Fatal("load event was not handled")
+	}
+	if got := status.TextContent(); got != "idle" {
+		t.Fatalf("resource mutation applied before frame boundary: %q", got)
+	}
+	if !runtime.CommitPendingDOMMutation() {
+		t.Fatal("pending resource mutation was not committed")
+	}
+	status, _ = document.GetElementByID("status")
+	if got := status.TextContent(); got != "loaded" {
+		t.Fatalf("committed resource mutation text = %q", got)
+	}
+	if got := mutations.Load() - before; got != 1 {
+		t.Fatalf("resource mutation notifications = %d, want 1", got)
+	}
+	if runtime.CommitPendingDOMMutation() {
+		t.Fatal("resource mutation committed twice")
+	}
+}

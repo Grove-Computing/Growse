@@ -3115,3 +3115,11 @@ func TestFindViewportOcclusionAccountsForFixedAndStickyContent(t *testing.T) {
 		t.Fatalf("find viewport occlusion = top %.0f bottom %.0f, want 102/56", top, bottom)
 	}
 }
+
+func TestTextInkClipAllowsFallbackFontOverflow(t *testing.T) {
+	got := textInkClip(layoutengine.Rect{X: 10, Y: 20, Width: 100, Height: 30}, 8)
+	want := (layoutengine.Rect{X: 10, Y: 12, Width: 100, Height: 46})
+	if got != want {
+		t.Fatalf("text ink clip = %#v, want %#v", got, want)
+	}
+}

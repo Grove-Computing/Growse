@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/events"
 	"github.com/Grove-Computing/Growse/internal/network"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
@@ -43,20 +44,23 @@ var (
 type Runtime struct {
 	mu sync.Mutex
 
-	engine      runtimemodel.Engine
-	generation  uint64
-	environment runtimemodel.Environment
-	peer        *peer
-	command     *exec.Cmd
-	stdin       io.WriteCloser
-	processDone chan error
-	stderr      *limitedBuffer
-	loaded      bool
-	started     bool
-	stopped     bool
-	unsubscribe func()
-	taskTimeout time.Duration
-	sandbox     runtimemodel.SandboxStatus
+	engine          runtimemodel.Engine
+	generation      uint64
+	environment     runtimemodel.Environment
+	peer            *peer
+	command         *exec.Cmd
+	stdin           io.WriteCloser
+	processDone     chan error
+	stderr          *limitedBuffer
+	loaded          bool
+	started         bool
+	stopped         bool
+	framePending    atomic.Bool
+	pendingDocument dom.DocumentSnapshot
+	pendingMutation bool
+	unsubscribe     func()
+	taskTimeout     time.Duration
+	sandbox         runtimemodel.SandboxStatus
 }
 
 // New returns a runtime proxy for engine. The worker is started by Load.
@@ -222,6 +226,9 @@ func (r *Runtime) Stop() error {
 	p, stdin, command, processDone := r.peer, r.stdin, r.command, r.processDone
 	unsubscribe := r.unsubscribe
 	r.unsubscribe = nil
+	r.pendingDocument = dom.DocumentSnapshot{}
+	r.pendingMutation = false
+	r.framePending.Store(false)
 	r.mu.Unlock()
 	if unsubscribe != nil {
 		unsubscribe()
@@ -256,15 +263,30 @@ func (r *Runtime) DispatchDOMEvent(event events.Event) bool {
 		return false
 	}
 	request := eventRequest{
-		Document: environment.Document.Snapshot(), Type: event.Type, Target: event.Target,
+		Type: event.Type, Target: event.Target,
 		X: event.X, Y: event.Y, Value: event.Value, Cancelable: event.IsCancelable(),
+	}
+	// Resource completion does not change browser-owned DOM state. Avoid copying
+	// the entire document into every image load/error event; large pages can
+	// otherwise fill the worker pipe and stall the UI while publishing images.
+	if event.Type != events.Load && event.Type != events.Error {
+		request.Document = environment.Document.Snapshot()
 	}
 	var response eventResponse
 	if err := r.callTask(context.Background(), "runtime.event", request, &response); err != nil {
 		return false
 	}
-	if response.Document.Root.ID != 0 && environment.Document.ApplySnapshot(response.Document) == nil {
-		if !response.MutationWasNotified && environment.OnMutation != nil {
+	if response.Document.Root.ID != 0 {
+		if event.Type == events.Load || event.Type == events.Error {
+			r.mu.Lock()
+			r.pendingDocument = response.Document
+			r.pendingMutation = true
+			requestFrame := environment.RequestFrame
+			r.mu.Unlock()
+			if requestFrame != nil {
+				requestFrame()
+			}
+		} else if environment.Document.ApplySnapshot(response.Document) == nil && environment.OnMutation != nil {
 			environment.OnMutation()
 		}
 	}
@@ -279,6 +301,32 @@ func (r *Runtime) DispatchPageEvent(callback func() bool) bool {
 	return callback != nil && callback()
 }
 
+// CommitPendingDOMMutation publishes a resource-event mutation at the caller's
+// frame boundary. Resource handlers run off the UI thread, so applying their
+// snapshot inside that worker completion would race layout and paint.
+func (r *Runtime) CommitPendingDOMMutation() bool {
+	if r == nil {
+		return false
+	}
+	r.mu.Lock()
+	if !r.pendingMutation {
+		r.mu.Unlock()
+		return false
+	}
+	snapshot := r.pendingDocument
+	environment := r.environment
+	r.pendingDocument = dom.DocumentSnapshot{}
+	r.pendingMutation = false
+	r.mu.Unlock()
+	if environment.Document == nil || environment.Document.ApplySnapshot(snapshot) != nil {
+		return false
+	}
+	if environment.OnMutation != nil {
+		environment.OnMutation()
+	}
+	return true
+}
+
 func (r *Runtime) RunAnimationFrame(current time.Time) bool {
 	r.mu.Lock()
 	p, environment, stopped := r.peer, r.environment, r.stopped
@@ -286,20 +334,14 @@ func (r *Runtime) RunAnimationFrame(current time.Time) bool {
 	if p == nil || stopped || environment.Document == nil {
 		return false
 	}
+	r.framePending.Store(false)
 	var response boolResponse
 	request := frameRequest{UnixNano: current.UnixNano(), Document: environment.Document.Snapshot()}
 	return r.callTask(context.Background(), "runtime.frame", request, &response) == nil && response.Value
 }
 
 func (r *Runtime) HasAnimationFrameCallbacks() bool {
-	r.mu.Lock()
-	p, stopped := r.peer, r.stopped
-	r.mu.Unlock()
-	if p == nil || stopped {
-		return false
-	}
-	var response boolResponse
-	return r.callTask(context.Background(), "runtime.has-frame", nil, &response) == nil && response.Value
+	return r != nil && r.framePending.Load()
 }
 
 func (r *Runtime) SetBackground(background bool) {
@@ -435,6 +477,7 @@ func (r *Runtime) installHostHandlers(p *peer) {
 		}
 	})
 	p.handleEvent("frame.request", func(json.RawMessage) {
+		r.framePending.Store(true)
 		r.mu.Lock()
 		request := r.environment.RequestFrame
 		r.mu.Unlock()

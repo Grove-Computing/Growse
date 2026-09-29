@@ -3531,15 +3531,19 @@ func (ui *BrowserUI) documentTheme() *material.Theme {
 
 func (ui *BrowserUI) installPageFonts(page *browser.Page) {
 	// A Gio Shaper owns bounded LRUs for shaped layouts and glyph operations.
-	// Reuse it only within the same Page generation and Style revision; replacing
-	// the pointer here drops every cached face and glyph on Navigation or font
-	// revision without sharing it with Browser chrome.
-	if page == nil || ui.fontPage == page && ui.fontRevision == page.StyleRevision {
+	// Reuse it within the same Page until its font collection changes. DOM and
+	// ordinary style mutations advance StyleRevision frequently; rebuilding the
+	// system-font fallback cache for each of them stalls dynamic pages.
+	if page == nil {
+		return
+	}
+	fontRevision := page.FontInvalidationSnapshot().Revision
+	if ui.fontPage == page && ui.fontRevision == fontRevision {
 		return
 	}
 	if !page.UsesModernWebCompatibility() {
 		ui.documentTheme().Shaper = newPageTextShaper(gofont.Collection(), true)
-		ui.fontPage, ui.fontRevision = page, page.StyleRevision
+		ui.fontPage, ui.fontRevision = page, fontRevision
 		return
 	}
 	collection := make([]font.FontFace, 0, len(page.Fonts)+len(gofont.Collection()))
@@ -3558,7 +3562,7 @@ func (ui *BrowserUI) installPageFonts(page *browser.Page) {
 	// let Gio resolve glyphs they do not cover from the operating system. This
 	// path belongs only to an explicitly selected modern-web JavaScript Page.
 	ui.documentTheme().Shaper = newPageTextShaper(collection, true)
-	ui.fontPage, ui.fontRevision = page, page.StyleRevision
+	ui.fontPage, ui.fontRevision = page, fontRevision
 }
 
 func newPageTextShaper(collection []font.FontFace, systemFonts bool) *text.Shaper {
@@ -4715,10 +4719,16 @@ func (ui *BrowserUI) layoutDrawText(gtx layout.Context, command paintmodel.DrawT
 		if command.Transform != (stylemodel.Matrix{}) && command.Transform != stylemodel.IdentityMatrix() {
 			defer pushCSSMatrix(gtx, command.Transform, command.X, command.Y).Pop()
 		}
+		// Layout and Gio can select different fallback font metrics. Give glyph ink
+		// a small vertical allowance at overflow edges while keeping the CSS line
+		// box and hit geometry unchanged.
+		clipOutset := max(command.FontSize*.6, float32(2))
 		if command.Clip != nil {
-			defer commandClip(gtx, command.Clip, command.X, command.Y).Push(gtx.Ops).Pop()
+			clipped := textInkClip(*command.Clip, clipOutset)
+			defer commandClip(gtx, &clipped, command.X, command.Y).Push(gtx.Ops).Pop()
 		}
 		for _, region := range command.Clips {
+			region.Rect = textInkClip(region.Rect, clipOutset)
 			defer commandRoundedClip(gtx, region, command.X, command.Y).Push(gtx.Ops).Pop()
 		}
 		height := gtx.Dp(unit.Dp(command.Height))
@@ -4751,6 +4761,13 @@ func (ui *BrowserUI) layoutDrawText(gtx layout.Context, command paintmodel.DrawT
 			return ui.layoutShadowedText(gtx, command.Text, command.FontSize, command.Bold, command.FontFamilies, command.FontStyle, command.LetterSpacing, command.WordSpacing, command.Color, command.Decoration, command.DecorationColor, command.Baseline, command.TextShadows)
 		})
 	})
+}
+
+func textInkClip(rectangle layoutengine.Rect, outset float32) layoutengine.Rect {
+	outset = max(outset, float32(0))
+	rectangle.Y -= outset
+	rectangle.Height += outset * 2
+	return rectangle
 }
 
 func layoutTextCursorArea(gtx layout.Context, width, height int, cursor stylemodel.Cursor, content layout.Widget) layout.Dimensions {

@@ -25,6 +25,15 @@ import (
 	"golang.org/x/image/math/fixed"
 )
 
+func testFontFace(t *testing.T) *textfont.Face {
+	t.Helper()
+	face, err := textfont.ParseTTF(bytes.NewReader(goregular.TTF))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return face
+}
+
 func TestInstallPageFontsUsesDecodedFaceAndKeepsBundledFallback(t *testing.T) {
 	face, err := textfont.ParseTTF(bytes.NewReader(goregular.TTF))
 	if err != nil {
@@ -36,7 +45,7 @@ func TestInstallPageFontsUsesDecodedFaceAndKeepsBundledFallback(t *testing.T) {
 		Family: "Fixture", Style: "normal", Weight: "normal", Decoded: true, Face: face,
 	}}}
 	ui.installPageFonts(page)
-	if ui.pageTheme == nil || ui.pageTheme.Shaper == nil || ui.pageTheme.Shaper == chromeShaper || ui.fontPage != page || ui.fontRevision != 1 {
+	if ui.pageTheme == nil || ui.pageTheme.Shaper == nil || ui.pageTheme.Shaper == chromeShaper || ui.fontPage != page || ui.fontRevision != 0 {
 		t.Fatalf("font shaper state = page theme:%p shaper:%p page:%p revision:%d", ui.pageTheme, ui.pageTheme.Shaper, ui.fontPage, ui.fontRevision)
 	}
 	if ui.theme.Shaper != chromeShaper {
@@ -128,9 +137,17 @@ func TestPageShaperCacheFollowsPageGenerationAndFontRevision(t *testing.T) {
 
 	firstPage.StyleRevision++
 	ui.installPageFonts(firstPage)
+	if ui.pageTheme.Shaper != firstShaper {
+		t.Fatal("ordinary Style revision replaced the font shaping cache")
+	}
+
+	firstPage.CommitWebFontCompletion(browser.FontResource{
+		Family: "Fixture", Style: "normal", Weight: "normal", Loaded: true, Decoded: true, Face: testFontFace(t),
+	})
+	ui.installPageFonts(firstPage)
 	revisedShaper := ui.pageTheme.Shaper
 	if revisedShaper == firstShaper {
-		t.Fatal("font-affecting Style revision retained a stale shaping cache")
+		t.Fatal("font collection revision retained a stale shaping cache")
 	}
 
 	secondPage := &browser.Page{
