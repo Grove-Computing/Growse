@@ -547,3 +547,34 @@ func TestHomeSearchFocusIndicatorAndKeyboardTabOrder(t *testing.T) {
 		t.Fatal("Tab did not move focus from home search to search action")
 	}
 }
+
+func TestHomeSettingsKeyboardMovesFromTitleToURL(t *testing.T) {
+	ui := NewBrowserUI(nil, nil)
+	ui.homePanel.open = true
+	ui.homePanel.focusPending = true
+	router := new(input.Router)
+	gtx := &layout.Context{Ops: new(op.Ops), Source: router.Source(), Constraints: layout.Exact(image.Pt(900, 700)), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}}
+	homeFrame := func() {
+		gtx.Reset()
+		ui.Layout(*gtx)
+		router.Frame(gtx.Ops)
+	}
+	homeFrame()
+	homeFrame()
+	if !gtx.Focused(&ui.homePanel.title) {
+		t.Fatal("home settings did not focus title editor")
+	}
+	router.Queue(key.EditEvent{Range: key.Range{Start: 0, End: 0}, Text: "Docs"})
+	homeFrame()
+	router.Queue(key.Event{Name: key.NameTab, State: key.Press})
+	homeFrame()
+	homeFrame()
+	if !gtx.Focused(&ui.homePanel.rawURL) {
+		t.Fatal("Tab did not move from title to URL editor")
+	}
+	router.Queue(key.EditEvent{Range: key.Range{Start: 0, End: 0}, Text: "https://example.com/"})
+	homeFrame()
+	if ui.homePanel.title.Text() != "Docs" || ui.homePanel.rawURL.Text() != "https://example.com/" {
+		t.Fatalf("keyboard fields = %q / %q", ui.homePanel.title.Text(), ui.homePanel.rawURL.Text())
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"image/color"
 	"strings"
 
+	"gioui.org/io/event"
 	"gioui.org/io/key"
 	"gioui.org/io/semantic"
 	"gioui.org/layout"
@@ -167,6 +168,7 @@ func (ui *BrowserUI) handleHomeActions(gtx layout.Context) {
 	}
 	tabID, _ := ui.activeNavigationTarget()
 	state := ui.homeState(tabID)
+	ui.handleHomeTabTraversal(gtx, state)
 	ui.handleHomeSuggestionKeys(gtx, state)
 	for {
 		event, ok := state.editor.Update(gtx)
@@ -187,6 +189,7 @@ func (ui *BrowserUI) handleHomeActions(gtx layout.Context) {
 	}
 	for ui.homeCustomize.Clicked(gtx) {
 		ui.homePanel.open = true
+		ui.homePanel.focusPending = true
 		ui.homePanel.errorMessage = ""
 	}
 	for index := range ui.homeSettings.Shortcuts {
@@ -203,6 +206,43 @@ func (ui *BrowserUI) handleHomeActions(gtx layout.Context) {
 		if state.rows[index].Hovered() {
 			state.selected = index
 		}
+	}
+}
+
+func moveFocusOnTab(gtx layout.Context, tags []event.Tag) bool {
+	moved := false
+	for index, tag := range tags {
+		for {
+			raw, ok := gtx.Event(key.Filter{Focus: tag, Name: key.NameTab, Optional: key.ModShift})
+			if !ok {
+				break
+			}
+			pressed, ok := raw.(key.Event)
+			if !ok || pressed.State != key.Press || len(tags) == 0 {
+				continue
+			}
+			next := (index + 1) % len(tags)
+			if pressed.Modifiers.Contain(key.ModShift) {
+				next = (index - 1 + len(tags)) % len(tags)
+			}
+			gtx.Execute(key.FocusCmd{Tag: tags[next]})
+			moved = true
+		}
+	}
+	return moved
+}
+
+func (ui *BrowserUI) handleHomeTabTraversal(gtx layout.Context, state *homeTabState) {
+	tags := make([]event.Tag, 0, len(ui.homeSettings.Shortcuts)+3)
+	tags = append(tags, state.editor, &state.search)
+	for index := range ui.homeSettings.Shortcuts {
+		tags = append(tags, &ui.homeShortcuts[index])
+	}
+	tags = append(tags, &ui.homeCustomize)
+	before := gtx.Focused(state.editor)
+	moved := moveFocusOnTab(gtx, tags)
+	if before && moved {
+		state.cancelSuggestions()
 	}
 }
 
@@ -225,7 +265,7 @@ func (ui *BrowserUI) handleHomeSuggestionKeys(gtx layout.Context, state *homeTab
 			}
 		}
 	}
-	for _, name := range []key.Name{key.NameDownArrow, key.NameUpArrow, key.NamePageDown, key.NamePageUp, key.NameHome, key.NameEnd, key.NameEscape, key.NameTab} {
+	for _, name := range []key.Name{key.NameDownArrow, key.NameUpArrow, key.NamePageDown, key.NamePageUp, key.NameHome, key.NameEnd, key.NameEscape} {
 		for {
 			event, ok := gtx.Event(key.Filter{Focus: state.editor, Name: name, Optional: key.ModShift})
 			if !ok {
@@ -244,10 +284,6 @@ func (ui *BrowserUI) handleHomeSuggestionKeys(gtx layout.Context, state *homeTab
 				}
 				state.candidates = nil
 				state.selected = -1
-				continue
-			}
-			if name == key.NameTab {
-				gtx.Execute(key.FocusCmd{Tag: &state.search})
 				continue
 			}
 			if len(state.candidates) == 0 {
@@ -622,6 +658,9 @@ func (ui *BrowserUI) layoutHomeCandidatesWithHeight(gtx layout.Context, state *h
 	return material.List(ui.theme, &state.list).Layout(gtx, len(state.candidates), func(gtx layout.Context, index int) layout.Dimensions {
 		candidate := state.candidates[index]
 		return state.rows[index].Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+			rowHeight := gtx.Dp(unit.Dp(48))
+			gtx.Constraints.Min.Y = rowHeight
+			gtx.Constraints.Max.Y = rowHeight
 			semantic.ClassOp(semantic.Button).Add(gtx.Ops)
 			semantic.DescriptionOp(candidate.Source.Label() + ": " + candidate.Primary).Add(gtx.Ops)
 			semantic.SelectedOp(index == state.selected).Add(gtx.Ops)

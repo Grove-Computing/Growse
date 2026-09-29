@@ -5,6 +5,8 @@ import (
 	"image/color"
 	"strings"
 
+	"gioui.org/io/event"
+	"gioui.org/io/key"
 	"gioui.org/io/semantic"
 	"gioui.org/layout"
 	"gioui.org/op/clip"
@@ -27,6 +29,7 @@ type homeSettingsPanel struct {
 	rows             [homeconfig.MaxShortcuts]homeShortcutRow
 	backgrounds      [5]widget.Clickable
 	list             widget.List
+	focusPending     bool
 	errorMessage     string
 }
 
@@ -44,6 +47,7 @@ func (ui *BrowserUI) handleHomeSettingsActions(gtx layout.Context) {
 	if !panel.open {
 		return
 	}
+	ui.handleHomeSettingsTabTraversal(gtx)
 	for panel.close.Clicked(gtx) {
 		panel.open = false
 		panel.errorMessage = ""
@@ -138,6 +142,20 @@ func (ui *BrowserUI) handleHomeSettingsActions(gtx layout.Context) {
 	}
 }
 
+func (ui *BrowserUI) handleHomeSettingsTabTraversal(gtx layout.Context) {
+	panel := &ui.homePanel
+	tags := make([]event.Tag, 0, 10+len(ui.homeSettings.Shortcuts)*4)
+	for index := range homeconfig.BackgroundPresets() {
+		tags = append(tags, &panel.backgrounds[index])
+	}
+	tags = append(tags, &panel.title, &panel.rawURL, &panel.save, &panel.add, &panel.close)
+	for index := range ui.homeSettings.Shortcuts {
+		row := &panel.rows[index]
+		tags = append(tags, &row.edit, &row.up, &row.down, &row.remove)
+	}
+	_ = moveFocusOnTab(gtx, tags)
+}
+
 func (ui *BrowserUI) applyHomeSettings(settings homeconfig.Settings) bool {
 	if settings.Validate() != nil {
 		return false
@@ -222,6 +240,21 @@ func clipCircle(gtx layout.Context, size int) clip.Op {
 	return clip.Ellipse(image.Rect(0, 0, size, size)).Op(gtx.Ops)
 }
 
+func (ui *BrowserUI) layoutHomeSettingsEditor(gtx layout.Context, editor *widget.Editor, hint, description string) layout.Dimensions {
+	height := gtx.Dp(unit.Dp(44))
+	gtx.Constraints.Min.X = gtx.Constraints.Max.X
+	gtx.Constraints.Min.Y = height
+	gtx.Constraints.Max.Y = height
+	defer clip.Rect{Max: gtx.Constraints.Min}.Push(gtx.Ops).Pop()
+	semantic.ClassOp(semantic.Editor).Add(gtx.Ops)
+	semantic.DescriptionOp(description).Add(gtx.Ops)
+	borderColor, borderWidth := homeSearchBorder(gtx.Focused(editor))
+	return widget.Border{Color: borderColor, CornerRadius: unit.Dp(9), Width: borderWidth}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		return layout.Inset{Top: unit.Dp(8), Right: unit.Dp(10), Bottom: unit.Dp(8), Left: unit.Dp(10)}.Layout(gtx,
+			material.Editor(ui.theme, editor, hint).Layout)
+	})
+}
+
 func (ui *BrowserUI) layoutHomePresetButton(gtx layout.Context, button *widget.Clickable, preset homeconfig.BackgroundPreset, selected bool) layout.Dimensions {
 	return button.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		semantic.ClassOp(semantic.RadioButton).Add(gtx.Ops)
@@ -292,13 +325,11 @@ func (ui *BrowserUI) layoutHomeSettings(gtx layout.Context) layout.Dimensions {
 					}),
 					layout.Rigid(layout.Spacer{Height: unit.Dp(12)}.Layout),
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-						semantic.DescriptionOp("shortcutのタイトル").Add(gtx.Ops)
-						return material.Editor(ui.theme, &panel.title, "タイトル").Layout(gtx)
+						return ui.layoutHomeSettingsEditor(gtx, &panel.title, "タイトル", "shortcutのタイトル")
 					}),
 					layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-						semantic.DescriptionOp("shortcutのURL").Add(gtx.Ops)
-						return material.Editor(ui.theme, &panel.rawURL, "https://example.com/").Layout(gtx)
+						return ui.layoutHomeSettingsEditor(gtx, &panel.rawURL, "https://example.com/", "shortcutのURL")
 					}),
 					layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
@@ -335,7 +366,12 @@ func (ui *BrowserUI) layoutHomeSettings(gtx layout.Context) layout.Dimensions {
 						}),
 					)
 				}
-				return layout.Flex{Axis: layout.Vertical}.Layout(gtx, children...)
+				dimensions := layout.Flex{Axis: layout.Vertical}.Layout(gtx, children...)
+				if panel.focusPending {
+					panel.focusPending = false
+					gtx.Execute(key.FocusCmd{Tag: &panel.title})
+				}
+				return dimensions
 			})
 		})
 	})
