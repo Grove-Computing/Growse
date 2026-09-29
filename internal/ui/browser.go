@@ -53,13 +53,11 @@ import (
 	"github.com/Grove-Computing/Growse/internal/searchprovider"
 	stylemodel "github.com/Grove-Computing/Growse/internal/style"
 	"github.com/Grove-Computing/Growse/internal/updater"
+	desktopassets "github.com/Grove-Computing/Growse/packaging/linux"
 )
 
 //go:embed assets/gopher-blue.png
 var gopherPNG []byte
-
-//go:embed assets/growse-icon.png
-var growseIconPNG []byte
 
 const (
 	defaultURL         = "http://localhost:6053"
@@ -443,7 +441,7 @@ func NewBrowserUIWithTabsAndUpdater(navigator Navigator, tabs TabController, inv
 	if err != nil {
 		panic("decode embedded Go Gopher image: " + err.Error())
 	}
-	growseIconImage, err := png.Decode(bytes.NewReader(growseIconPNG))
+	growseIconImage, err := png.Decode(bytes.NewReader(desktopassets.IconPNG()))
 	if err != nil {
 		panic("decode embedded Growse icon: " + err.Error())
 	}
