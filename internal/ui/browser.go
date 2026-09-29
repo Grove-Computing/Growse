@@ -130,6 +130,8 @@ type BrowserUI struct {
 	providerDiscoveryButtons map[string]*widget.Clickable
 	searchData               *searchdata.Store
 	localSuggestions         *searchdata.LocalPipeline
+	searchPanel              searchPanelState
+	searchPanelSuggestions   *searchdata.LocalPipeline
 
 	gopher            paint.ImageOp
 	pointerTag        pointerTag
@@ -484,6 +486,7 @@ func NewBrowserUIWithTabsAndUpdater(navigator Navigator, tabs TabController, inv
 	ui.omniboxStates[0] = omniboxState{editor: ui.address, committedURL: defaultURL, observedText: defaultURL}
 	ui.pageList.Axis = layout.Vertical
 	ui.bookmarkBarList.Axis = layout.Horizontal
+	ui.searchPanel = newSearchPanelState()
 	ui.tabList.Axis = layout.Vertical
 	ui.devToolsList.Axis = layout.Vertical
 	ui.inspectorList.Axis = layout.Vertical
@@ -508,7 +511,9 @@ func (ui *BrowserUI) Layout(gtx layout.Context) layout.Dimensions {
 		panelHeight = gtx.Dp(devToolsHeight)
 	}
 	geometry := calculateBrowserChromeGeometryWithDevTools(gtx.Constraints.Max, gtx.Dp(tabRailWidth), gtx.Dp(toolbarHeight), panelHeight)
-	if ui.providerPanel.open {
+	if ui.searchPanel.open {
+		layoutRegion(gtx, geometry.viewport, ui.layoutSearchPanel)
+	} else if ui.providerPanel.open {
 		layoutRegion(gtx, geometry.viewport, ui.layoutProviderSettings)
 	} else {
 		layoutRegion(gtx, geometry.viewport, ui.layoutViewport)
@@ -734,6 +739,7 @@ func tabStateColor(tab browser.TabSnapshot) color.NRGBA {
 func (ui *BrowserUI) handleKeyboardShortcuts(gtx layout.Context) {
 	ui.handleTabKeyboardShortcuts(gtx)
 	ui.handleFindKeyboardShortcuts(gtx)
+	ui.handleSearchPanelKeyboardShortcuts(gtx)
 	for {
 		event, ok := gtx.Event(key.Filter{Name: "L", Required: key.ModShortcut})
 		if !ok {
@@ -1370,6 +1376,7 @@ func (ui *BrowserUI) handleActions(gtx layout.Context) {
 	ui.handleSuggestionKeys(gtx)
 	ui.handleOmniboxSubmit(gtx)
 	ui.handleFindActions(gtx)
+	ui.handleSearchPanelActions(gtx)
 
 	for {
 		event, ok := ui.address.Update(gtx)
@@ -2109,6 +2116,9 @@ func (ui *BrowserUI) Close() {
 	ui.suggestions.Close()
 	if ui.localSuggestions != nil {
 		ui.localSuggestions.Close()
+	}
+	if ui.searchPanelSuggestions != nil {
+		ui.searchPanelSuggestions.Close()
 	}
 	ui.cancelUpdate()
 	if ui.navigator != nil {

@@ -21,8 +21,15 @@ func (ui *BrowserUI) SetSearchDataStore(store *searchdata.Store) {
 	}
 	ui.searchData = store
 	ui.localSuggestions = searchdata.NewLocalPipeline(store, ui.invalidate)
+	if ui.searchPanelSuggestions != nil {
+		ui.searchPanelSuggestions.Close()
+	}
+	ui.searchPanelSuggestions = searchdata.NewLocalPipeline(store, ui.invalidate)
 	if ui.suggestionPopup.open {
 		ui.refreshSuggestions()
+	}
+	if ui.searchPanel.open {
+		ui.refreshSearchPanel()
 	}
 }
 
