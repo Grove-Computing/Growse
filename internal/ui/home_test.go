@@ -77,3 +77,26 @@ func TestInternalHomeFillsViewport(t *testing.T) {
 		t.Fatalf("home dimensions = %v", dims.Size)
 	}
 }
+
+func TestHomeShowsDefaultProviderSearchAction(t *testing.T) {
+	ui := NewBrowserUI(nil, nil)
+	if got, want := ui.homeSearchLabel(), "DuckDuckGo で検索"; got != want {
+		t.Fatalf("home search action = %q, want %q", got, want)
+	}
+}
+
+func TestHomeSearchKeepsItsQueryWhenNavigationStarts(t *testing.T) {
+	ui := NewBrowserUI(&stubNavigator{}, nil)
+	state := ui.homeState(0)
+	state.editor.SetText("gopher browser")
+
+	ui.submitHomeSearch(state)
+
+	if state.editor.Text() != "gopher browser" {
+		t.Fatalf("home query = %q", state.editor.Text())
+	}
+	if ui.homeVisible() {
+		t.Fatal("successful search dispatch left home visible")
+	}
+	ui.cancelTabNavigation(0)
+}

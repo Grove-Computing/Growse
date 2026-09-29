@@ -114,7 +114,7 @@ type BrowserUI struct {
 	viewportClick     gesture.Click
 	address           *widget.Editor
 	omniboxStates     map[browser.TabID]omniboxState
-	homeTabs          map[browser.TabID]bool
+	homeTabs          map[browser.TabID]*homeTabState
 	findStates        map[browser.TabID]*findTabState
 	findFocusPending  bool
 
@@ -464,7 +464,7 @@ func NewBrowserUIWithTabsAndUpdater(navigator Navigator, tabs TabController, inv
 		devToolsStates:    make(map[browser.TabID]devToolsTabState),
 		inspectorButtons:  make(map[browser.TabID]map[dom.NodeID]*widget.Clickable),
 		omniboxStates:     make(map[browser.TabID]omniboxState),
-		homeTabs:          make(map[browser.TabID]bool),
+		homeTabs:          make(map[browser.TabID]*homeTabState),
 		findStates:        make(map[browser.TabID]*findTabState),
 		layoutBuild:       layoutengine.BuildWithScroll,
 		layoutBuildImages: layoutengine.BuildWithScrollAndImages,
@@ -1379,6 +1379,7 @@ func (ui *BrowserUI) handleActions(gtx layout.Context) {
 	ui.handleTabActions(gtx)
 	ui.syncActiveTabChrome()
 	ui.handleSuggestionKeys(gtx)
+	ui.handleHomeActions(gtx)
 	ui.handleOmniboxSubmit(gtx)
 	ui.handleFindActions(gtx)
 	ui.handleSearchPanelActions(gtx)
@@ -1627,7 +1628,7 @@ func (ui *BrowserUI) createTab(gtx layout.Context) {
 		ui.reportTabOperationError("新しいTabを選択できません", err)
 		return
 	}
-	ui.homeTabs[tab.ID] = true
+	ui.homeTabs[tab.ID] = newHomeTabState(true)
 }
 
 func (ui *BrowserUI) closeTab(id browser.TabID) bool {
@@ -1704,7 +1705,7 @@ func (ui *BrowserUI) startNavigationWithDisposition(rawURL string, disposition o
 		target = classification.URL.String()
 	}
 	if disposition == omniboxCurrentTab {
-		ui.homeTabs[tabID] = false
+		ui.setHomeVisible(tabID, false)
 		ui.startResolvedNavigation(target, classification.Kind != omnibox.URL)
 		return
 	}
@@ -1773,7 +1774,7 @@ func (ui *BrowserUI) startNavigationInNewTab(rawURL string, background bool, sea
 		ui.reportTabOperationError("新しい Tab を作成できません", err)
 		return
 	}
-	ui.homeTabs[tab.ID] = false
+	ui.homeTabs[tab.ID] = newHomeTabState(false)
 	targets, ok := ui.tabs.(tabBrowserSource)
 	if !ok {
 		ui.status = "新しい Tab の Navigation を利用できません"
