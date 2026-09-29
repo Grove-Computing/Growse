@@ -1639,6 +1639,9 @@ func (ui *BrowserUI) closeTab(id browser.TabID) bool {
 		return false
 	}
 	delete(ui.omniboxStates, id)
+	if state := ui.homeTabs[id]; state != nil {
+		state.closeSuggestions()
+	}
 	delete(ui.homeTabs, id)
 	delete(ui.findStates, id)
 	delete(ui.tabRenderStates, id)
@@ -2140,6 +2143,10 @@ func (ui *BrowserUI) Close() {
 		ui.cancelTabNavigation(tabID)
 	}
 	clear(ui.findStates)
+	for _, state := range ui.homeTabs {
+		state.closeSuggestions()
+	}
+	clear(ui.homeTabs)
 }
 
 func (ui *BrowserUI) layoutToolbar(gtx layout.Context) layout.Dimensions {

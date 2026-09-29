@@ -32,6 +32,11 @@ func (ui *BrowserUI) SetSuggestionSnapshot(snapshot omnibox.Snapshot) {
 	} else {
 		ui.suggestions.Cancel()
 	}
+	for _, state := range ui.homeTabs {
+		if state.visible && state.editor.Text() != "" {
+			ui.refreshHomeSuggestions(state)
+		}
+	}
 }
 
 // SetSuggestionProvider cancels the previous provider before replacing it.
@@ -41,6 +46,14 @@ func (ui *BrowserUI) SetSuggestionProvider(fetch omnibox.RemoteFetcher, enabled 
 	ui.suggestionFetcher, ui.remoteSuggestions = fetch, enabled
 	if ui.suggestionPopup.open {
 		ui.refreshSuggestions()
+	}
+	for _, state := range ui.homeTabs {
+		if state.pipeline != nil {
+			state.pipeline.Cancel()
+		}
+		if state.visible && state.editor.Text() != "" {
+			ui.refreshHomeSuggestions(state)
+		}
 	}
 }
 
@@ -69,21 +82,39 @@ func (ui *BrowserUI) refreshSuggestionsFor(input string) {
 	ui.setOmniboxPreview(tabID, "")
 }
 
-func (ui *BrowserUI) updateSuggestionPipeline(input string, snapshot omnibox.Snapshot) {
+type suggestionRequest struct {
+	input, providerKeyword string
+	snapshot               omnibox.Snapshot
+	fetch                  omnibox.RemoteFetcher
+	remoteEnabled          bool
+}
+
+func (ui *BrowserUI) buildSuggestionRequest(input string, snapshot omnibox.Snapshot) suggestionRequest {
+	snapshot = omnibox.Snapshot{
+		Tabs:      append([]omnibox.Candidate(nil), snapshot.Tabs...),
+		History:   append([]omnibox.Candidate(nil), snapshot.History...),
+		Bookmarks: append([]omnibox.Candidate(nil), snapshot.Bookmarks...),
+		Now:       snapshot.Now,
+	}
 	for _, tab := range ui.tabSnapshots() {
 		snapshot.Tabs = append(snapshot.Tabs, omnibox.Candidate{Primary: tabDisplayTitle(tab), URL: tab.URL, TabID: uint64(tab.ID)})
 	}
-	fetch := ui.suggestionFetcher
+	request := suggestionRequest{input: input, snapshot: snapshot, fetch: ui.suggestionFetcher}
 	original := input
-	p, q, override := ui.providers.Resolve(input)
-	ui.suggestionPopup.providerKeyword = ""
+	provider, query, override := ui.providers.Resolve(input)
 	if override {
-		input = q
-		ui.suggestionPopup.providerKeyword = p.Keyword
-		fetch = ui.providerTransport.Suggestions(p)
+		request.input = query
+		request.providerKeyword = provider.Keyword
+		request.fetch = ui.providerTransport.Suggestions(provider)
 	}
-	enabled := ui.remoteSuggestions && searchprovider.CanSuggest(original) && searchprovider.CanSuggest(input)
-	ui.suggestions.Update(input, snapshot, fetch, enabled)
+	request.remoteEnabled = ui.remoteSuggestions && searchprovider.CanSuggest(original) && searchprovider.CanSuggest(request.input)
+	return request
+}
+
+func (ui *BrowserUI) updateSuggestionPipeline(input string, snapshot omnibox.Snapshot) {
+	request := ui.buildSuggestionRequest(input, snapshot)
+	ui.suggestionPopup.providerKeyword = request.providerKeyword
+	ui.suggestions.Update(request.input, request.snapshot, request.fetch, request.remoteEnabled)
 }
 
 // suggestionPopup keeps selection/preview separate from the native editor.

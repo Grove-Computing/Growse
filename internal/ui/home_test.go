@@ -3,12 +3,14 @@ package ui
 import (
 	"image"
 	"net/url"
+	"reflect"
 	"testing"
 
 	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/unit"
 	"github.com/Grove-Computing/Growse/internal/browser"
+	"github.com/Grove-Computing/Growse/internal/omnibox"
 )
 
 func TestEmptyAndCreatedTabsOpenInternalHome(t *testing.T) {
@@ -99,4 +101,50 @@ func TestHomeSearchKeepsItsQueryWhenNavigationStarts(t *testing.T) {
 		t.Fatal("successful search dispatch left home visible")
 	}
 	ui.cancelTabNavigation(0)
+}
+
+func TestHomeAndOmniboxUseIdenticalClassificationSnapshotAndRanking(t *testing.T) {
+	ui := NewBrowserUI(nil, nil)
+	ui.SetSuggestionSnapshot(omnibox.Snapshot{
+		Bookmarks: []omnibox.Candidate{{Primary: "Guide bookmark", URL: "https://bookmark.example/guide", VisitCount: 4}},
+		History:   []omnibox.Candidate{{Primary: "Guide history", URL: "https://history.example/guide", TypedCount: 2}},
+	})
+	state := ui.homeState(0)
+	state.editor.SetText("@bookmarks guide")
+	ui.refreshHomeSuggestions(state)
+
+	request := ui.buildSuggestionRequest(state.editor.Text(), ui.suggestionSnapshot)
+	want := omnibox.Rank(request.input, request.snapshot, nil)
+	if !reflect.DeepEqual(state.candidates, want) {
+		t.Fatalf("home candidates = %#v, want shared rank %#v", state.candidates, want)
+	}
+	for _, candidate := range state.candidates {
+		if candidate.Source != omnibox.BookmarkSource {
+			t.Fatalf("scoped home candidate source = %v", candidate.Source)
+		}
+	}
+}
+
+func TestHomeAndOmniboxResolveProviderKeywordIdentically(t *testing.T) {
+	ui := NewBrowserUI(nil, nil)
+	state := ui.homeState(0)
+	state.editor.SetText("ddg gopher browser")
+	ui.refreshHomeSuggestions(state)
+	request := ui.buildSuggestionRequest("ddg gopher browser", ui.suggestionSnapshot)
+
+	if state.providerKeyword != request.providerKeyword || state.providerKeyword != "ddg" {
+		t.Fatalf("home provider keyword = %q, shared = %q", state.providerKeyword, request.providerKeyword)
+	}
+	want := omnibox.Rank(request.input, request.snapshot, nil)
+	if !reflect.DeepEqual(state.candidates, want) {
+		t.Fatalf("provider candidates = %#v, want %#v", state.candidates, want)
+	}
+	gotURL, err := ui.providerSearchURL(request.input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantURL, err := ui.providerSearchURL("gopher browser")
+	if err != nil || gotURL != wantURL {
+		t.Fatalf("search target = %q, want %q (err %v)", gotURL, wantURL, err)
+	}
 }

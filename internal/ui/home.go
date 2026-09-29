@@ -13,21 +13,58 @@ import (
 	"gioui.org/widget"
 	"gioui.org/widget/material"
 	"github.com/Grove-Computing/Growse/internal/browser"
+	"github.com/Grove-Computing/Growse/internal/omnibox"
+	"github.com/Grove-Computing/Growse/internal/searchdata"
 )
 
 type homeTabState struct {
-	visible      bool
-	editor       *widget.Editor
-	search       widget.Clickable
-	focusPending bool
-	errorMessage string
+	visible         bool
+	editor          *widget.Editor
+	search          widget.Clickable
+	focusPending    bool
+	errorMessage    string
+	pipeline        *omnibox.Pipeline
+	local           *searchdata.LocalPipeline
+	generation      uint64
+	localGeneration uint64
+	localApplied    uint64
+	input           string
+	providerKeyword string
+	candidates      []omnibox.Candidate
+	selected        int
+	rows            [omnibox.MaxVisibleCandidates]widget.Clickable
+	list            widget.List
 }
 
 func newHomeTabState(visible bool) *homeTabState {
 	editor := new(widget.Editor)
 	editor.SingleLine = true
 	editor.Submit = true
-	return &homeTabState{visible: visible, editor: editor, focusPending: visible}
+	state := &homeTabState{visible: visible, editor: editor, focusPending: visible, selected: -1}
+	state.list.Axis = layout.Vertical
+	return state
+}
+
+func (ui *BrowserUI) ensureHomePipelines(state *homeTabState) {
+	if state.pipeline == nil {
+		state.pipeline = omnibox.NewPipeline(ui.invalidate)
+	}
+	if state.local == nil {
+		state.local = searchdata.NewLocalPipeline(ui.searchData, ui.invalidate)
+	}
+}
+
+func (state *homeTabState) closeSuggestions() {
+	if state.pipeline != nil {
+		state.pipeline.Close()
+		state.pipeline = nil
+	}
+	if state.local != nil {
+		state.local.Close()
+		state.local = nil
+	}
+	state.candidates = nil
+	state.selected = -1
 }
 
 func (ui *BrowserUI) homeState(tabID browser.TabID) *homeTabState {
@@ -85,12 +122,57 @@ func (ui *BrowserUI) handleHomeActions(gtx layout.Context) {
 		if !ok {
 			break
 		}
-		if _, ok := event.(widget.SubmitEvent); ok {
+		switch event.(type) {
+		case widget.ChangeEvent:
+			ui.refreshHomeSuggestions(state)
+		case widget.SubmitEvent:
 			ui.submitHomeSearch(state)
 		}
 	}
 	for state.search.Clicked(gtx) {
 		ui.submitHomeSearch(state)
+	}
+}
+
+func (ui *BrowserUI) refreshHomeSuggestions(state *homeTabState) {
+	ui.ensureHomePipelines(state)
+	state.input = state.editor.Text()
+	query := state.input
+	if classification := omnibox.Classify(query); classification.Kind == omnibox.Command {
+		query = classification.Query
+	}
+	state.localGeneration = state.local.Update(query)
+	state.localApplied = 0
+	request := ui.buildSuggestionRequest(state.input, ui.suggestionSnapshot)
+	state.providerKeyword = request.providerKeyword
+	state.generation = state.pipeline.Update(request.input, request.snapshot, request.fetch, request.remoteEnabled)
+	state.selected = -1
+	ui.syncHomeSuggestions(state)
+}
+
+func (ui *BrowserUI) syncHomeSuggestions(state *homeTabState) {
+	ui.ensureHomePipelines(state)
+	if state.localGeneration != 0 && state.localApplied != state.localGeneration {
+		if generation, local := state.local.Results(); generation == state.localGeneration {
+			local.Now = ui.suggestionSnapshot.Now
+			local.History = append(append([]omnibox.Candidate(nil), ui.suggestionSnapshot.History...), local.History...)
+			local.Bookmarks = append(append([]omnibox.Candidate(nil), ui.suggestionSnapshot.Bookmarks...), local.Bookmarks...)
+			state.localApplied = generation
+			request := ui.buildSuggestionRequest(state.input, local)
+			state.providerKeyword = request.providerKeyword
+			state.generation = state.pipeline.Update(request.input, request.snapshot, request.fetch, request.remoteEnabled)
+		}
+	}
+	generation, candidates := state.pipeline.Results()
+	if generation != state.generation {
+		return
+	}
+	if len(candidates) > omnibox.MaxVisibleCandidates {
+		candidates = candidates[:omnibox.MaxVisibleCandidates]
+	}
+	state.candidates = candidates
+	if state.selected >= len(candidates) {
+		state.selected = -1
 	}
 }
 
@@ -111,6 +193,7 @@ func (ui *BrowserUI) layoutHome(gtx layout.Context) layout.Dimensions {
 	paint.Fill(gtx.Ops, color.NRGBA{R: 238, G: 243, B: 248, A: 255})
 	tabID, _ := ui.activeNavigationTarget()
 	state := ui.homeState(tabID)
+	ui.syncHomeSuggestions(state)
 	return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		maxWidth := gtx.Dp(unit.Dp(620))
 		if gtx.Constraints.Max.X > maxWidth {
@@ -140,6 +223,9 @@ func (ui *BrowserUI) layoutHome(gtx layout.Context) layout.Dimensions {
 									return layout.Inset{Top: unit.Dp(10), Right: unit.Dp(14), Bottom: unit.Dp(10), Left: unit.Dp(14)}.Layout(gtx,
 										material.Editor(ui.theme, state.editor, "検索語またはURLを入力").Layout)
 								})
+							}),
+							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+								return ui.layoutHomeCandidates(gtx, state)
 							}),
 							layout.Rigid(layout.Spacer{Height: unit.Dp(12)}.Layout),
 							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
@@ -184,4 +270,30 @@ func (ui *BrowserUI) homeSearchLabel() string {
 		provider = "検索"
 	}
 	return provider + " で検索"
+}
+
+func (ui *BrowserUI) layoutHomeCandidates(gtx layout.Context, state *homeTabState) layout.Dimensions {
+	if len(state.candidates) == 0 || state.editor.Text() == "" {
+		return layout.Dimensions{}
+	}
+	height := min(gtx.Dp(unit.Dp(48))*len(state.candidates), gtx.Dp(unit.Dp(192)))
+	gtx.Constraints.Min.Y = height
+	gtx.Constraints.Max.Y = height
+	return material.List(ui.theme, &state.list).Layout(gtx, len(state.candidates), func(gtx layout.Context, index int) layout.Dimensions {
+		candidate := state.candidates[index]
+		return state.rows[index].Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+			gtx.Constraints.Min.X = gtx.Constraints.Max.X
+			background := color.NRGBA{R: 248, G: 250, B: 252, A: 255}
+			if index == state.selected {
+				background = color.NRGBA{R: 219, G: 234, B: 254, A: 255}
+			}
+			paint.FillShape(gtx.Ops, background, clip.Rect{Max: gtx.Constraints.Min}.Op())
+			return layout.Inset{Top: unit.Dp(6), Right: unit.Dp(10), Bottom: unit.Dp(6), Left: unit.Dp(10)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+					layout.Rigid(material.Body2(ui.theme, candidate.Primary).Layout),
+					layout.Rigid(material.Caption(ui.theme, candidate.Source.Label()+" · "+candidate.Secondary).Layout),
+				)
+			})
+		})
+	})
 }
