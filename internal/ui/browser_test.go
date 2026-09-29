@@ -23,6 +23,7 @@ import (
 	"github.com/Grove-Computing/Growse/internal/css"
 	"github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/events"
+	"github.com/Grove-Computing/Growse/internal/findpage"
 	"github.com/Grove-Computing/Growse/internal/forms"
 	layoutengine "github.com/Grove-Computing/Growse/internal/layout"
 	"github.com/Grove-Computing/Growse/internal/network"
@@ -2719,4 +2720,398 @@ func testDocument(t *testing.T) *dom.Document {
 		t.Fatal(err)
 	}
 	return document
+}
+
+func TestFindBarShortcutSearchStatusAndWrap(t *testing.T) {
+	document := dom.NewDocument()
+	body := document.CreateElement("body", nil)
+	textNode := document.CreateText("Alpha alpha")
+	if err := document.AppendChild(document.Root, body); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(body, textNode); err != nil {
+		t.Fatal(err)
+	}
+	navigator := &stubNavigator{page: &browser.Page{
+		Document: document, ComputedStyles: style.Compute(document, nil), StyleRevision: 1,
+	}}
+	ui := NewBrowserUI(navigator, nil)
+	router := new(input.Router)
+	gtx := layout.Context{
+		Ops:         new(op.Ops),
+		Source:      router.Source(),
+		Constraints: layout.Exact(image.Pt(1000, 700)),
+		Metric:      unit.Metric{PxPerDp: 1, PxPerSp: 1},
+	}
+
+	ui.Layout(gtx)
+	router.Frame(gtx.Ops)
+	router.Queue(key.Event{Name: "F", Modifiers: key.ModShortcut, State: key.Press})
+	gtx.Reset()
+	ui.Layout(gtx)
+	state := ui.activeFindState()
+	if state == nil || !state.open || !gtx.Focused(state.editor) {
+		t.Fatalf("Ctrl/Command+F state = %#v focused=%t", state, state != nil && gtx.Focused(state.editor))
+	}
+
+	router.Frame(gtx.Ops)
+	router.Queue(key.EditEvent{Range: key.Range{Start: 0, End: 0}, Text: "alpha"})
+	gtx.Reset()
+	ui.Layout(gtx)
+	if !state.searching || state.statusLabel() != "検索中…" {
+		t.Fatalf("pending status = %q searching=%t", state.statusLabel(), state.searching)
+	}
+
+	router.Frame(gtx.Ops)
+	gtx.Reset()
+	ui.Layout(gtx)
+	if got := state.statusLabel(); got != "1 / 2" {
+		t.Fatalf("completed status = %q, want 1 / 2", got)
+	}
+	state.move(1)
+	if got := state.statusLabel(); got != "2 / 2" {
+		t.Fatalf("next status = %q, want 2 / 2", got)
+	}
+	state.move(1)
+	if got := state.statusLabel(); got != "1 / 2" {
+		t.Fatalf("wrapped next status = %q, want 1 / 2", got)
+	}
+	state.move(-1)
+	if got := state.statusLabel(); got != "2 / 2" {
+		t.Fatalf("wrapped previous status = %q, want 2 / 2", got)
+	}
+
+	router.Frame(gtx.Ops)
+	router.Queue(key.Event{Name: key.NameReturn, Modifiers: key.ModShift, State: key.Press})
+	gtx.Reset()
+	ui.Layout(gtx)
+	if got := state.statusLabel(); got != "1 / 2" {
+		t.Fatalf("Shift+Enter status = %q, want 1 / 2", got)
+	}
+}
+
+func TestFindBarDistinguishesEmptyZeroAndLimitStates(t *testing.T) {
+	state := newFindTabState()
+	if got := state.statusLabel(); got != "検索語を入力" {
+		t.Fatalf("empty status = %q", got)
+	}
+	state.editor.SetText("missing")
+	if got := state.statusLabel(); got != "0 / 0" {
+		t.Fatalf("zero status = %q", got)
+	}
+	state.searching = true
+	if got := state.statusLabel(); got != "検索中…" {
+		t.Fatalf("searching status = %q", got)
+	}
+	state.searching = false
+	state.result = findpage.Result{Matches: []findpage.Match{{NodeID: 1}}, Limit: findpage.LimitTextBytes}
+	if got := state.statusLabel(); got != "1件 · 上限超過" {
+		t.Fatalf("limit status = %q", got)
+	}
+}
+
+func TestFindHighlightGeometryUsesTextRunsWithoutChangingDOM(t *testing.T) {
+	document := dom.NewDocument()
+	body := document.CreateElement("body", nil)
+	textNode := document.CreateText("prefix target suffix")
+	for _, edge := range [][2]*dom.Node{{document.Root, body}, {body, textNode}} {
+		if err := document.AppendChild(edge[0], edge[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	page := &browser.Page{Document: document}
+	ui := NewBrowserUI(&stubNavigator{page: page}, nil)
+	state := ui.ensureFindState()
+	state.open = true
+	state.result = findpage.Result{Matches: []findpage.Match{{NodeID: textNode.ID, Start: 7, End: 13}}}
+	list := &paintmodel.DisplayList{Commands: []paintmodel.Command{
+		paintmodel.DrawText{
+			NodeID: textNode.ID, Text: textNode.Text, X: 20, Y: 40, Width: 190, Height: 24, FontSize: 16,
+			Runs: []paintmodel.TextRun{{NodeID: textNode.ID, Text: textNode.Text, Width: 190, FontSize: 16}},
+		},
+	}}
+
+	geometry := ui.findHighlightGeometry(list, page)
+	if len(geometry) != 1 || geometry[0].commandIndex != 0 || geometry[0].matchIndex != 0 ||
+		geometry[0].x <= 20 || geometry[0].width <= 0 || geometry[0].height != 24 {
+		t.Fatalf("highlight geometry = %#v", geometry)
+	}
+	if textNode.Text != "prefix target suffix" || len(textNode.Children) != 0 {
+		t.Fatalf("find highlight changed DOM text node: %#v", textNode)
+	}
+}
+
+func TestFindHighlightGeometryMapsTextNodeMatchToPaintElement(t *testing.T) {
+	document := dom.NewDocument()
+	body := document.CreateElement("body", nil)
+	paragraph := document.CreateElement("p", nil)
+	textNode := document.CreateText("prefix target suffix")
+	for _, edge := range [][2]*dom.Node{{document.Root, body}, {body, paragraph}, {paragraph, textNode}} {
+		if err := document.AppendChild(edge[0], edge[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	page := &browser.Page{Document: document}
+	ui := NewBrowserUI(&stubNavigator{page: page}, nil)
+	state := ui.ensureFindState()
+	state.open = true
+	state.result = findpage.Result{Matches: []findpage.Match{{NodeID: textNode.ID, Start: 7, End: 13}}}
+	list := &paintmodel.DisplayList{Commands: []paintmodel.Command{
+		paintmodel.DrawText{
+			NodeID: paragraph.ID, Text: textNode.Text, X: 20, Y: 40, Width: 190, Height: 24, FontSize: 16,
+			Runs: []paintmodel.TextRun{{NodeID: paragraph.ID, Text: textNode.Text, Width: 190, FontSize: 16}},
+		},
+	}}
+
+	geometry := ui.findHighlightGeometry(list, page)
+	if len(geometry) != 1 || geometry[0].commandIndex != 0 || geometry[0].matchIndex != 0 ||
+		geometry[0].x <= 20 || geometry[0].width <= 0 || geometry[0].height != 24 {
+		t.Fatalf("element-owned highlight geometry = %#v", geometry)
+	}
+}
+
+func TestActiveFindMatchScrollsNearestContainerMinimally(t *testing.T) {
+	document := dom.NewDocument()
+	containerNode := document.CreateElement("section", nil)
+	textNode := document.CreateText("target")
+	for _, edge := range [][2]*dom.Node{{document.Root, containerNode}, {containerNode, textNode}} {
+		if err := document.AppendChild(edge[0], edge[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	computed := style.Map{containerNode.ID: {OverflowY: style.OverflowAuto}}
+	tree := &layoutengine.Tree{
+		Width: 300, Height: 200, ViewportHeight: 200, ScrollWidth: 300, ScrollHeight: 200,
+		Boxes: []layoutengine.Box{{
+			NodeID: textNode.ID, Text: "target", X: 0, Y: 120, Width: 60, Height: 20, FontSize: 16,
+			Runs: []layoutengine.TextRun{{NodeID: textNode.ID, Text: "target", Width: 60, FontSize: 16}},
+		}},
+		Parents: map[dom.NodeID]dom.NodeID{textNode.ID: containerNode.ID},
+		Bounds: map[dom.NodeID]layoutengine.Rect{
+			containerNode.ID: {Width: 100, Height: 50},
+			textNode.ID:      {Y: 120, Width: 60, Height: 20},
+		},
+		ScrollContainers: map[dom.NodeID]layoutengine.ScrollContainer{
+			containerNode.ID: {
+				NodeID: containerNode.ID, Viewport: layoutengine.Rect{Width: 100, Height: 50},
+				ScrollWidth: 100, ScrollHeight: 200, OverflowY: style.OverflowAuto,
+			},
+		},
+		ScrollOffsets:     map[dom.NodeID]layoutengine.ScrollOffset{},
+		StickyConstraints: map[dom.NodeID]layoutengine.StickyConstraint{},
+	}
+	page := &browser.Page{Document: document, ComputedStyles: computed}
+	ui := NewBrowserUI(&stubNavigator{page: page}, nil)
+	ui.layoutCache.baseTree = layoutengine.Clone(tree)
+	state := ui.ensureFindState()
+	state.open = true
+	state.scrollPending = true
+	state.result = findpage.Result{Matches: []findpage.Match{{NodeID: textNode.ID, Start: 0, End: 6}}}
+	displayList := paintmodel.Build(tree)
+	gtx := layout.Context{
+		Ops: new(op.Ops), Constraints: layout.Exact(image.Pt(300, 200)),
+		Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1},
+	}
+
+	ui.scrollActiveFindMatch(gtx, page, tree, displayList)
+
+	offset := ui.nestedScroll[containerNode.ID]
+	if offset.Y != 96 {
+		t.Fatalf("nested find scroll = %#v, want Y=96", offset)
+	}
+	geometry := ui.findHighlightGeometry(displayList, page)
+	if len(geometry) != 1 || geometry[0].y != 24 {
+		t.Fatalf("scrolled highlight geometry = %#v, want Y=24", geometry)
+	}
+	if state.scrollPending {
+		t.Fatal("active find scroll remained pending")
+	}
+}
+
+func TestFindSnapshotRebuildsAfterDOMRevisionAndDropsStaleNodes(t *testing.T) {
+	document := dom.NewDocument()
+	body := document.CreateElement("body", nil)
+	oldText := document.CreateText("target")
+	for _, edge := range [][2]*dom.Node{{document.Root, body}, {body, oldText}} {
+		if err := document.AppendChild(edge[0], edge[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	page := &browser.Page{Document: document, ComputedStyles: style.Compute(document, nil), StyleRevision: 1}
+	ui := NewBrowserUI(&stubNavigator{page: page}, nil)
+	state := ui.ensureFindState()
+	state.open = true
+	state.editor.SetText("target")
+	state.searching = true
+	state.pendingSearch = true
+	ui.runFindSearch(state)
+	if len(state.result.Matches) != 1 || state.result.Matches[0].NodeID != oldText.ID {
+		t.Fatalf("initial matches = %#v", state.result.Matches)
+	}
+
+	if !document.SetTextContent(body.ID, "target and target") {
+		t.Fatal("SetTextContent() failed")
+	}
+	page.ComputedStyles = style.Compute(document, nil)
+	page.StyleRevision++
+	staleList := &paintmodel.DisplayList{Commands: []paintmodel.Command{
+		paintmodel.DrawText{
+			NodeID: oldText.ID, Text: "target", Width: 60, Height: 20, FontSize: 16,
+			Runs: []paintmodel.TextRun{{NodeID: oldText.ID, Text: "target", Width: 60, FontSize: 16}},
+		},
+	}}
+	if geometry := ui.findHighlightGeometry(staleList, page); len(geometry) != 0 {
+		t.Fatalf("removed DOM node produced stale geometry: %#v", geometry)
+	}
+
+	ui.refreshFindSnapshot(page, &layoutengine.Tree{Revision: page.StyleRevision}, 800, 600)
+	newText := body.Children[0]
+	if len(state.result.Matches) != 2 {
+		t.Fatalf("rebuilt matches = %#v, want 2", state.result.Matches)
+	}
+	for _, match := range state.result.Matches {
+		if match.NodeID != newText.ID || match.NodeID == oldText.ID {
+			t.Fatalf("rebuilt match retained stale node: %#v", match)
+		}
+	}
+	if state.searchPage != page || state.searchRevision != page.StyleRevision {
+		t.Fatalf("find revision = page:%p revision:%d", state.searchPage, state.searchRevision)
+	}
+
+	state.scrollPending = false
+	ui.refreshFindSnapshot(page, &layoutengine.Tree{Revision: page.StyleRevision}, 640, 480)
+	if !state.scrollPending || state.viewportWidth != 640 || state.viewportHeight != 480 {
+		t.Fatalf("viewport rebuild = pending:%t size:%vx%v", state.scrollPending, state.viewportWidth, state.viewportHeight)
+	}
+}
+
+func TestFindStateIsIsolatedPerTab(t *testing.T) {
+	created := []*browser.Browser{browser.New(nil), browser.New(nil)}
+	next := 0
+	session := browser.NewSession(func() *browser.Browser {
+		result := created[next]
+		next++
+		return result
+	})
+	first, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.SelectTab(first.ID); err != nil {
+		t.Fatal(err)
+	}
+	ui := NewBrowserUIWithTabs(nil, session, nil)
+	ui.syncActiveTabChrome()
+	firstState := ui.ensureFindState()
+	firstState.open = true
+	firstState.editor.SetText("first")
+	firstState.options.CaseSensitive = true
+	firstState.current = 3
+
+	if _, err := session.SelectTab(second.ID); err != nil {
+		t.Fatal(err)
+	}
+	ui.syncActiveTabChrome()
+	secondState := ui.ensureFindState()
+	secondState.open = true
+	secondState.editor.SetText("second")
+	secondState.options.WholeWord = true
+	secondState.current = 1
+
+	if _, err := session.SelectTab(first.ID); err != nil {
+		t.Fatal(err)
+	}
+	ui.syncActiveTabChrome()
+	if got := ui.activeFindState(); got != firstState || got.editor.Text() != "first" ||
+		!got.options.CaseSensitive || got.options.WholeWord || got.current != 3 {
+		t.Fatalf("restored first find state = %#v", got)
+	}
+	if secondState.editor.Text() != "second" || !secondState.options.WholeWord || secondState.current != 1 {
+		t.Fatalf("second find state was overwritten = %#v", secondState)
+	}
+}
+
+func TestFindEscapeRestoresStartingScrollAndFocus(t *testing.T) {
+	ui := NewBrowserUI(&stubNavigator{}, nil)
+	ui.pageList.Position = layout.Position{First: 0, Offset: 84}
+	ui.nestedScroll = map[dom.NodeID]layoutengine.ScrollOffset{7: {X: 2, Y: 31}}
+	router := new(input.Router)
+	gtx := layout.Context{
+		Ops: new(op.Ops), Source: router.Source(), Constraints: layout.Exact(image.Pt(1000, 700)),
+		Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1},
+	}
+
+	ui.Layout(gtx)
+	gtx.Execute(key.FocusCmd{Tag: ui.address})
+	router.Frame(gtx.Ops)
+	gtx.Reset()
+	ui.Layout(gtx)
+	router.Frame(gtx.Ops)
+	router.Queue(key.Event{Name: "F", Modifiers: key.ModShortcut, State: key.Press})
+	gtx.Reset()
+	ui.Layout(gtx)
+	state := ui.activeFindState()
+	if state == nil || !state.open {
+		t.Fatalf("find state after shortcut = %#v", state)
+	}
+
+	ui.pageList.Position = layout.Position{First: 0, Offset: 260}
+	ui.nestedScroll = map[dom.NodeID]layoutengine.ScrollOffset{7: {Y: 99}}
+	state.result = findpage.Result{Matches: []findpage.Match{{NodeID: 9}}}
+	router.Frame(gtx.Ops)
+	router.Queue(key.Event{Name: key.NameEscape, State: key.Press})
+	gtx.Reset()
+	ui.Layout(gtx)
+
+	if state.open || len(state.result.Matches) != 0 {
+		t.Fatalf("closed find state retained active resources: %#v", state)
+	}
+	if ui.pageList.Position.Offset != 84 || ui.nestedScroll[7] != (layoutengine.ScrollOffset{X: 2, Y: 31}) {
+		t.Fatalf("restored scroll = document:%#v nested:%#v", ui.pageList.Position, ui.nestedScroll)
+	}
+	router.Frame(gtx.Ops)
+	gtx.Reset()
+	ui.Layout(gtx)
+	if !gtx.Focused(ui.address) {
+		t.Fatal("Escape did not restore the starting omnibox focus")
+	}
+}
+
+func TestClosingTabReleasesFindState(t *testing.T) {
+	session := browser.NewSession()
+	tab, err := session.NewTab(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ui := NewBrowserUIWithTabs(nil, session, nil)
+	ui.syncActiveTabChrome()
+	ui.ensureFindState().open = true
+	if !ui.closeTab(tab.ID) {
+		t.Fatal("closeTab() = false")
+	}
+	if _, exists := ui.findStates[tab.ID]; exists {
+		t.Fatal("closed tab retained Find in Page state")
+	}
+}
+
+func TestFindViewportOcclusionAccountsForFixedAndStickyContent(t *testing.T) {
+	target := layoutengine.Rect{X: 40, Y: 260, Width: 60, Height: 20}
+	tree := &layoutengine.Tree{Bounds: map[dom.NodeID]layoutengine.Rect{
+		1: {X: 0, Y: 100, Width: 180, Height: 96},
+		2: {X: 20, Y: 450, Width: 140, Height: 50},
+		3: {X: 220, Y: 100, Width: 60, Height: 120},
+	}}
+	page := &browser.Page{ComputedStyles: style.Map{
+		1: {Position: style.PositionFixed},
+		2: {Position: style.PositionSticky},
+		3: {Position: style.PositionFixed},
+	}}
+	top, bottom := findViewportOcclusion(tree, page, target, 100, 400)
+	if top != 102 || bottom != 56 {
+		t.Fatalf("find viewport occlusion = top %.0f bottom %.0f, want 102/56", top, bottom)
+	}
 }

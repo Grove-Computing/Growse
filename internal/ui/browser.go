@@ -25,6 +25,7 @@ import (
 	"gioui.org/io/event"
 	"gioui.org/io/key"
 	"gioui.org/io/pointer"
+	"gioui.org/io/semantic"
 	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/op/clip"
@@ -40,6 +41,7 @@ import (
 	"github.com/Grove-Computing/Growse/internal/browser"
 	devtoolsmodel "github.com/Grove-Computing/Growse/internal/devtools"
 	"github.com/Grove-Computing/Growse/internal/dom"
+	"github.com/Grove-Computing/Growse/internal/findpage"
 	"github.com/Grove-Computing/Growse/internal/forms"
 	layoutengine "github.com/Grove-Computing/Growse/internal/layout"
 	"github.com/Grove-Computing/Growse/internal/network"
@@ -111,6 +113,8 @@ type BrowserUI struct {
 	viewportClick     gesture.Click
 	address           *widget.Editor
 	omniboxStates     map[browser.TabID]omniboxState
+	findStates        map[browser.TabID]*findTabState
+	findFocusPending  bool
 
 	suggestions              *omnibox.Pipeline
 	suggestionPopup          suggestionPopup
@@ -186,6 +190,67 @@ type browserChromeGeometry struct {
 	toolbar  image.Rectangle
 	viewport image.Rectangle
 	devTools image.Rectangle
+}
+
+type findTabState struct {
+	open              bool
+	editor            *widget.Editor
+	options           findpage.Options
+	result            findpage.Result
+	current           int
+	searching         bool
+	pendingSearch     bool
+	scrollPending     bool
+	searchPage        *browser.Page
+	searchRevision    uint64
+	viewportWidth     float32
+	viewportHeight    float32
+	startPage         *browser.Page
+	startPagePosition layout.Position
+	startNestedScroll map[dom.NodeID]layoutengine.ScrollOffset
+	startPageFocus    dom.NodeID
+	restoreFocus      event.Tag
+	previous          widget.Clickable
+	next              widget.Clickable
+	caseToggle        widget.Clickable
+	wordToggle        widget.Clickable
+	close             widget.Clickable
+}
+
+func newFindTabState() *findTabState {
+	editor := new(widget.Editor)
+	editor.SingleLine = true
+	editor.Submit = true
+	return &findTabState{editor: editor}
+}
+
+func (state *findTabState) statusLabel() string {
+	if state == nil || state.editor.Text() == "" {
+		return "検索語を入力"
+	}
+	if state.searching {
+		return "検索中…"
+	}
+	if state.result.Limit != findpage.LimitNone {
+		return fmt.Sprintf("%d件 · 上限超過", len(state.result.Matches))
+	}
+	if len(state.result.Matches) == 0 {
+		return "0 / 0"
+	}
+	return fmt.Sprintf("%d / %d", state.current+1, len(state.result.Matches))
+}
+
+func (state *findTabState) move(delta int) {
+	count := len(state.result.Matches)
+	if count == 0 {
+		state.current = 0
+		return
+	}
+	state.current = (state.current + delta) % count
+	if state.current < 0 {
+		state.current += count
+	}
+	state.scrollPending = true
 }
 
 type devToolsPanel string
@@ -393,6 +458,7 @@ func NewBrowserUIWithTabsAndUpdater(navigator Navigator, tabs TabController, inv
 		devToolsStates:    make(map[browser.TabID]devToolsTabState),
 		inspectorButtons:  make(map[browser.TabID]map[dom.NodeID]*widget.Clickable),
 		omniboxStates:     make(map[browser.TabID]omniboxState),
+		findStates:        make(map[browser.TabID]*findTabState),
 		layoutBuild:       layoutengine.BuildWithScroll,
 		layoutBuildImages: layoutengine.BuildWithScrollAndImages,
 		layoutBuildFonts:  layoutengine.BuildWithScrollAndResources,
@@ -451,6 +517,7 @@ func (ui *BrowserUI) Layout(gtx layout.Context) layout.Dimensions {
 	layoutRegion(gtx, geometry.toolbar, ui.layoutToolbar)
 	layoutRegion(gtx, geometry.tabRail, ui.layoutTabRail)
 	ui.layoutSuggestions(gtx, geometry.viewport)
+	ui.layoutFindOverlay(gtx, geometry.viewport)
 
 	ui.registerPointerTracker(gtx)
 	return layout.Dimensions{Size: gtx.Constraints.Max}
@@ -666,6 +733,7 @@ func tabStateColor(tab browser.TabSnapshot) color.NRGBA {
 
 func (ui *BrowserUI) handleKeyboardShortcuts(gtx layout.Context) {
 	ui.handleTabKeyboardShortcuts(gtx)
+	ui.handleFindKeyboardShortcuts(gtx)
 	for {
 		event, ok := gtx.Event(key.Filter{Name: "L", Required: key.ModShortcut})
 		if !ok {
@@ -716,6 +784,529 @@ func (ui *BrowserUI) handleKeyboardShortcuts(gtx layout.Context) {
 		}
 		ui.startPageLoad(tabID, navigator, "ページを再読み込み中", navigator.Reload)
 	}
+}
+
+func (ui *BrowserUI) activeFindState() *findTabState {
+	id, _ := ui.activeNavigationTarget()
+	return ui.findStates[id]
+}
+
+func (ui *BrowserUI) ensureFindState() *findTabState {
+	id, _ := ui.activeNavigationTarget()
+	state := ui.findStates[id]
+	if state == nil {
+		state = newFindTabState()
+		ui.findStates[id] = state
+	}
+	return state
+}
+
+func (ui *BrowserUI) handleFindKeyboardShortcuts(gtx layout.Context) {
+	for {
+		event, ok := gtx.Event(key.Filter{Name: "F", Required: key.ModShortcut})
+		if !ok {
+			break
+		}
+		keyEvent, ok := event.(key.Event)
+		if !ok || keyEvent.State != key.Press {
+			continue
+		}
+		state := ui.ensureFindState()
+		if !state.open {
+			ui.captureFindStart(gtx, state)
+			state.open = true
+			if state.editor.Text() != "" {
+				state.searching = true
+				state.pendingSearch = true
+			}
+		}
+		state.editor.SetCaret(0, state.editor.Len())
+		ui.closeSuggestionPopup()
+		gtx.Execute(key.FocusCmd{Tag: state.editor})
+	}
+	state := ui.activeFindState()
+	if state == nil || !state.open {
+		ui.findFocusPending = false
+		return
+	}
+	if ui.findFocusPending {
+		ui.findFocusPending = false
+		gtx.Execute(key.FocusCmd{Tag: state.editor})
+	}
+	for {
+		event, ok := gtx.Event(key.Filter{Name: key.NameF3, Optional: key.ModShift})
+		if !ok {
+			break
+		}
+		keyEvent, ok := event.(key.Event)
+		if !ok || keyEvent.State != key.Press {
+			continue
+		}
+		ui.runFindSearch(state)
+		if keyEvent.Modifiers.Contain(key.ModShift) {
+			state.move(-1)
+		} else {
+			state.move(1)
+		}
+	}
+	for {
+		event, ok := gtx.Event(
+			key.Filter{Focus: state.editor, Name: key.NameReturn, Required: key.ModShift},
+			key.Filter{Focus: state.editor, Name: key.NameEnter, Required: key.ModShift},
+		)
+		if !ok {
+			break
+		}
+		keyEvent, ok := event.(key.Event)
+		if !ok || keyEvent.State != key.Press {
+			continue
+		}
+		ui.runFindSearch(state)
+		state.move(-1)
+	}
+	for {
+		event, ok := gtx.Event(key.Filter{Focus: state.editor, Name: key.NameEscape})
+		if !ok {
+			break
+		}
+		keyEvent, ok := event.(key.Event)
+		if ok && keyEvent.State == key.Press {
+			ui.closeFindBar(gtx, state, true)
+		}
+	}
+}
+
+func (ui *BrowserUI) handleFindActions(gtx layout.Context) {
+	state := ui.activeFindState()
+	if state == nil || !state.open {
+		return
+	}
+	if state.pendingSearch {
+		ui.runFindSearch(state)
+	}
+	for {
+		event, ok := state.editor.Update(gtx)
+		if !ok {
+			break
+		}
+		switch event.(type) {
+		case widget.ChangeEvent:
+			state.searching = true
+			state.pendingSearch = true
+			ui.invalidate()
+		case widget.SubmitEvent:
+			ui.runFindSearch(state)
+			state.move(1)
+		}
+	}
+	for state.previous.Clicked(gtx) {
+		ui.runFindSearch(state)
+		state.move(-1)
+	}
+	for state.next.Clicked(gtx) {
+		ui.runFindSearch(state)
+		state.move(1)
+	}
+	for state.caseToggle.Clicked(gtx) {
+		state.options.CaseSensitive = !state.options.CaseSensitive
+		state.searching = true
+		state.pendingSearch = true
+		ui.invalidate()
+	}
+	for state.wordToggle.Clicked(gtx) {
+		state.options.WholeWord = !state.options.WholeWord
+		state.searching = true
+		state.pendingSearch = true
+		ui.invalidate()
+	}
+	for state.close.Clicked(gtx) {
+		ui.closeFindBar(gtx, state, true)
+	}
+}
+
+func (ui *BrowserUI) captureFindStart(gtx layout.Context, state *findTabState) {
+	if state == nil {
+		return
+	}
+	state.startPagePosition = ui.pageList.Position
+	state.startNestedScroll = cloneFindScrollOffsets(ui.nestedScroll)
+	state.restoreFocus = ui.focusedChromeTag(gtx)
+	if navigator := ui.activeNavigator(); navigator != nil {
+		state.startPage = navigator.Page()
+		if state.startPage != nil {
+			state.startPageFocus = state.startPage.FocusTarget
+		}
+	}
+}
+
+func (ui *BrowserUI) focusedChromeTag(gtx layout.Context) event.Tag {
+	if ui.address != nil && gtx.Focused(ui.address) {
+		return ui.address
+	}
+	for _, editor := range ui.inputEditors {
+		if gtx.Focused(editor) {
+			return editor
+		}
+	}
+	for _, button := range ui.selectButtons {
+		if gtx.Focused(button) {
+			return button
+		}
+	}
+	for _, button := range ui.checkableButtons {
+		if gtx.Focused(button) {
+			return button
+		}
+	}
+	for _, button := range ui.formButtons {
+		if gtx.Focused(button) {
+			return button
+		}
+	}
+	return nil
+}
+
+func cloneFindScrollOffsets(source map[dom.NodeID]layoutengine.ScrollOffset) map[dom.NodeID]layoutengine.ScrollOffset {
+	result := make(map[dom.NodeID]layoutengine.ScrollOffset, len(source))
+	for nodeID, offset := range source {
+		result[nodeID] = offset
+	}
+	return result
+}
+
+func (ui *BrowserUI) closeFindBar(gtx layout.Context, state *findTabState, restore bool) {
+	if state == nil {
+		return
+	}
+	if restore {
+		currentPage := (*browser.Page)(nil)
+		if navigator := ui.activeNavigator(); navigator != nil {
+			currentPage = navigator.Page()
+		}
+		if currentPage == state.startPage {
+			ui.pageList.Position = state.startPagePosition
+			ui.nestedScroll = cloneFindScrollOffsets(state.startNestedScroll)
+			ui.layoutCache = documentLayoutCache{}
+			if ui.navigator != nil && state.startPageFocus != 0 {
+				ui.navigator.UpdateFocus(state.startPageFocus)
+			}
+		}
+		if state.restoreFocus != nil {
+			gtx.Execute(key.FocusCmd{Tag: state.restoreFocus})
+		} else {
+			gtx.Execute(key.FocusCmd{})
+		}
+	}
+	state.open = false
+	state.searching = false
+	state.pendingSearch = false
+	state.scrollPending = false
+	state.result = findpage.Result{}
+	state.searchPage = nil
+	state.searchRevision = 0
+	state.viewportWidth = 0
+	state.viewportHeight = 0
+	state.startPage = nil
+	state.startNestedScroll = nil
+	state.startPageFocus = 0
+	state.restoreFocus = nil
+	ui.invalidate()
+}
+
+func (ui *BrowserUI) runFindSearch(state *findTabState) {
+	if state == nil || !state.open || !state.pendingSearch && !state.searching {
+		return
+	}
+	query := state.editor.Text()
+	if query == "" {
+		state.result = findpage.Result{}
+		state.current = 0
+		state.searching = false
+		state.pendingSearch = false
+		return
+	}
+	var document *dom.Document
+	var styles stylemodel.Map
+	if navigator := ui.activeNavigator(); navigator != nil {
+		if page := navigator.Page(); page != nil {
+			document = page.Document
+			styles = page.ComputedStyles
+			state.searchPage = page
+			state.searchRevision = page.StyleRevision
+		}
+	}
+	previous := findpage.Match{}
+	hasPrevious := state.current >= 0 && state.current < len(state.result.Matches)
+	if hasPrevious {
+		previous = state.result.Matches[state.current]
+	}
+	state.result = findpage.Search(document, styles, query, state.options, findpage.Limits{})
+	state.current = 0
+	if hasPrevious {
+		for index, match := range state.result.Matches {
+			if match == previous {
+				state.current = index
+				break
+			}
+		}
+	}
+	state.searching = false
+	state.pendingSearch = false
+	state.scrollPending = len(state.result.Matches) > 0
+}
+
+func (ui *BrowserUI) refreshFindSnapshot(page *browser.Page, tree *layoutengine.Tree, viewportWidth, viewportHeight float32) {
+	state := ui.activeFindState()
+	if state == nil || !state.open {
+		return
+	}
+	viewportChanged := state.viewportWidth != viewportWidth || state.viewportHeight != viewportHeight
+	searchChanged := state.searchPage != page || state.searchRevision != page.StyleRevision
+	if searchChanged && state.editor.Text() != "" {
+		state.searching = true
+		state.pendingSearch = true
+		ui.runFindSearch(state)
+	}
+	if searchChanged || viewportChanged || tree != nil && tree.Revision != state.searchRevision {
+		state.scrollPending = len(state.result.Matches) > 0
+	}
+	state.searchPage = page
+	state.searchRevision = page.StyleRevision
+	state.viewportWidth = viewportWidth
+	state.viewportHeight = viewportHeight
+}
+
+type findHighlightGeometry struct {
+	commandIndex  int
+	matchIndex    int
+	x, y          float32
+	width, height float32
+	clip          *layoutengine.Rect
+	clips         []layoutengine.ClipRegion
+	transform     stylemodel.Matrix
+	originX       float32
+	originY       float32
+}
+
+type findHighlightTextSegment struct {
+	nodeID dom.NodeID
+	start  int
+}
+
+type findHighlightTextSource struct {
+	text     string
+	segments []findHighlightTextSegment
+}
+
+func collectFindHighlightText(node *dom.Node, source *findHighlightTextSource) {
+	if node == nil {
+		return
+	}
+	if node.Type == dom.NodeText {
+		start := len(source.text)
+		source.text += node.Text
+		source.segments = append(source.segments, findHighlightTextSegment{
+			nodeID: node.ID,
+			start:  start,
+		})
+		return
+	}
+	for _, child := range node.Children {
+		collectFindHighlightText(child, source)
+	}
+}
+
+func findHighlightSource(node *dom.Node) findHighlightTextSource {
+	var source findHighlightTextSource
+	collectFindHighlightText(node, &source)
+	return source
+}
+
+func (ui *BrowserUI) findHighlightGeometry(displayList *paintmodel.DisplayList, page *browser.Page) []findHighlightGeometry {
+	state := ui.activeFindState()
+	if state == nil || !state.open || len(state.result.Matches) == 0 || displayList == nil || page == nil || page.Document == nil {
+		return nil
+	}
+	matches := make(map[dom.NodeID][]int)
+	for index, match := range state.result.Matches {
+		matches[match.NodeID] = append(matches[match.NodeID], index)
+	}
+	sourceOffsets := make(map[dom.NodeID]int)
+	textSources := make(map[dom.NodeID]findHighlightTextSource)
+	result := make([]findHighlightGeometry, 0, len(state.result.Matches))
+	for commandIndex, source := range displayList.Commands {
+		command, ok := source.(paintmodel.DrawText)
+		if !ok {
+			continue
+		}
+		runs := command.Runs
+		if len(runs) == 0 {
+			runs = []paintmodel.TextRun{{
+				NodeID: command.NodeID, Text: command.Text, Width: command.Width,
+				FontSize: command.FontSize, Bold: command.Bold, FontFamilies: command.FontFamilies,
+				FontStyle: command.FontStyle, FontStretch: command.FontStretch,
+				LetterSpacing: command.LetterSpacing, WordSpacing: command.WordSpacing,
+				WritingMode: command.WritingMode, Direction: command.Direction,
+			}}
+		}
+		runX := float32(0)
+		for _, run := range runs {
+			if run.Text == "" || run.Atomic {
+				runX += run.Width
+				continue
+			}
+			node, exists := page.Document.NodeByID(run.NodeID)
+			if !exists {
+				runX += run.Width
+				continue
+			}
+			textSource, cached := textSources[run.NodeID]
+			if !cached {
+				textSource = findHighlightSource(node)
+				textSources[run.NodeID] = textSource
+			}
+			hasMatches := false
+			for _, segment := range textSource.segments {
+				if len(matches[segment.nodeID]) > 0 {
+					hasMatches = true
+					break
+				}
+			}
+			if !hasMatches {
+				runX += run.Width
+				continue
+			}
+			runStart := locateRenderedText(textSource.text, sourceOffsets[run.NodeID], run.Text)
+			if runStart < 0 {
+				runX += run.Width
+				continue
+			}
+			runEnd := runStart + len(run.Text)
+			sourceOffsets[run.NodeID] = runEnd
+			layoutRun := layoutengine.TextRun{
+				NodeID: run.NodeID, Text: run.Text, Width: run.Width, FontSize: run.FontSize, Bold: run.Bold,
+				FontFamilies: append([]string(nil), run.FontFamilies...), FontStyle: run.FontStyle, FontStretch: run.FontStretch,
+				LetterSpacing: run.LetterSpacing, WordSpacing: run.WordSpacing, WritingMode: run.WritingMode, Direction: run.Direction,
+			}
+			for _, segment := range textSource.segments {
+				for _, matchIndex := range matches[segment.nodeID] {
+					match := state.result.Matches[matchIndex]
+					matchStart := segment.start + match.Start
+					matchEnd := segment.start + match.End
+					start, end := max(matchStart, runStart), min(matchEnd, runEnd)
+					if start >= end {
+						continue
+					}
+					prefix := layoutengine.MeasureTextRun(run.Text[:start-runStart], layoutRun, page.WebFonts)
+					advance := layoutengine.MeasureTextRun(run.Text[:end-runStart], layoutRun, page.WebFonts) - prefix
+					if advance <= 0 {
+						advance = run.Width * float32(end-start) / float32(max(runEnd-runStart, 1))
+					}
+					geometry := findHighlightGeometry{
+						commandIndex: commandIndex, matchIndex: matchIndex,
+						x: command.X + runX + prefix, y: command.Y,
+						width: advance, height: command.Height,
+						clip: command.Clip, clips: command.Clips, transform: command.Transform,
+						originX: command.X, originY: command.Y,
+					}
+					if command.WritingMode != stylemodel.WritingModeHorizontalTB {
+						geometry.x = command.X + run.OffsetX
+						geometry.y = command.Y + run.OffsetY + prefix
+						geometry.width = max(run.CrossSize, command.Width)
+						geometry.height = advance
+					}
+					result = append(result, geometry)
+				}
+			}
+			runX += run.Width
+		}
+	}
+	return result
+}
+
+func locateRenderedText(source string, offset int, rendered string) int {
+	if offset < 0 || offset > len(source) {
+		return -1
+	}
+	if relative := strings.Index(source[offset:], rendered); relative >= 0 {
+		return offset + relative
+	}
+	return -1
+}
+
+func (ui *BrowserUI) layoutFindOverlay(gtx layout.Context, viewport image.Rectangle) {
+	state := ui.activeFindState()
+	if state == nil || !state.open || viewport.Empty() {
+		return
+	}
+	width := min(gtx.Dp(unit.Dp(560)), max(viewport.Dx()-gtx.Dp(unit.Dp(24)), 0))
+	height := min(gtx.Dp(unit.Dp(54)), viewport.Dy())
+	if width <= 0 || height <= 0 {
+		return
+	}
+	region := image.Rect(viewport.Max.X-width-gtx.Dp(unit.Dp(12)), viewport.Min.Y+gtx.Dp(unit.Dp(8)), viewport.Max.X-gtx.Dp(unit.Dp(12)), viewport.Min.Y+gtx.Dp(unit.Dp(8))+height)
+	layoutRegion(gtx, region, func(gtx layout.Context) layout.Dimensions {
+		return widget.Border{
+			Color:        color.NRGBA{R: 203, G: 213, B: 225, A: 255},
+			CornerRadius: unit.Dp(10),
+			Width:        unit.Dp(1),
+		}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+			paint.FillShape(gtx.Ops, color.NRGBA{R: 255, G: 255, B: 255, A: 255}, clip.UniformRRect(image.Rectangle{Max: gtx.Constraints.Min}, gtx.Dp(unit.Dp(10))).Op(gtx.Ops))
+			return layout.Inset{Top: unit.Dp(5), Right: unit.Dp(6), Bottom: unit.Dp(5), Left: unit.Dp(10)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+					layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+						editor := material.Editor(ui.theme, state.editor, "ページ内を検索")
+						editor.TextSize = unit.Sp(14)
+						return editor.Layout(gtx)
+					}),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						gtx.Constraints.Min.X = gtx.Dp(unit.Dp(92))
+						label := material.Caption(ui.theme, state.statusLabel())
+						label.Color = color.NRGBA{R: 71, G: 85, B: 105, A: 255}
+						return layout.Center.Layout(gtx, label.Layout)
+					}),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return ui.layoutFindButton(gtx, &state.previous, "↑", false, "前の一致")
+					}),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return ui.layoutFindButton(gtx, &state.next, "↓", false, "次の一致")
+					}),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return ui.layoutFindButton(gtx, &state.caseToggle, "Aa", state.options.CaseSensitive, "大文字と小文字を区別")
+					}),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return ui.layoutFindButton(gtx, &state.wordToggle, "単語", state.options.WholeWord, "単語単位")
+					}),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return ui.layoutFindButton(gtx, &state.close, "×", false, "閉じる")
+					}),
+				)
+			})
+		})
+	})
+}
+
+func (ui *BrowserUI) layoutFindButton(gtx layout.Context, button *widget.Clickable, labelText string, active bool, description string) layout.Dimensions {
+	width := gtx.Dp(unit.Dp(42))
+	if labelText == "単語" {
+		width = gtx.Dp(unit.Dp(52))
+	}
+	gtx.Constraints = layout.Exact(image.Pt(width, gtx.Dp(unit.Dp(40))))
+	return button.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		background := color.NRGBA{A: 0}
+		foreground := color.NRGBA{R: 51, G: 65, B: 85, A: 255}
+		if active {
+			background = color.NRGBA{R: 219, G: 234, B: 254, A: 255}
+			foreground = color.NRGBA{R: 29, G: 78, B: 216, A: 255}
+		}
+		if background.A != 0 {
+			paint.FillShape(gtx.Ops, background, clip.UniformRRect(image.Rectangle{Max: gtx.Constraints.Min}, gtx.Dp(unit.Dp(7))).Op(gtx.Ops))
+		}
+		label := material.Body2(ui.theme, labelText)
+		label.Color = foreground
+		semantic.DescriptionOp(description).Add(gtx.Ops)
+		return layout.Center.Layout(gtx, label.Layout)
+	})
 }
 
 func (ui *BrowserUI) handleTabKeyboardShortcuts(gtx layout.Context) {
@@ -778,6 +1369,7 @@ func (ui *BrowserUI) handleActions(gtx layout.Context) {
 	ui.syncActiveTabChrome()
 	ui.handleSuggestionKeys(gtx)
 	ui.handleOmniboxSubmit(gtx)
+	ui.handleFindActions(gtx)
 
 	for {
 		event, ok := ui.address.Update(gtx)
@@ -1031,6 +1623,7 @@ func (ui *BrowserUI) closeTab(id browser.TabID) bool {
 		return false
 	}
 	delete(ui.omniboxStates, id)
+	delete(ui.findStates, id)
 	delete(ui.tabRenderStates, id)
 	delete(ui.devToolsStates, id)
 	delete(ui.inspectorButtons, id)
@@ -1363,6 +1956,7 @@ func (ui *BrowserUI) syncActiveTabChrome() {
 	ui.closeSuggestionPopup()
 	ui.displayedTabID = active.ID
 	ui.navigator = navigator
+	ui.findFocusPending = ui.findStates[active.ID] != nil && ui.findStates[active.ID].open
 	committedURL := active.URL
 	if page := navigator.Page(); page != nil && page.URL != nil {
 		committedURL = page.URL.String()
@@ -1523,6 +2117,7 @@ func (ui *BrowserUI) Close() {
 	for tabID := range ui.navigations {
 		ui.cancelTabNavigation(tabID)
 	}
+	clear(ui.findStates)
 }
 
 func (ui *BrowserUI) layoutToolbar(gtx layout.Context) layout.Dimensions {
@@ -2256,8 +2851,10 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 			page.RecordRenderEvent(browser.RenderDisplayListReuse)
 		}
 	}
+	ui.refreshFindSnapshot(page, tree, viewportWidth, viewportHeight)
 	documentPosition := ui.pageList.Position
 	nestedScrollConsumed := ui.handleNestedScrollEvents(gtx, page, tree, displayList)
+	ui.scrollActiveFindMatch(gtx, page, tree, displayList)
 	dirtySnapshot := page.RenderInvalidationSnapshot()
 	page.RecordCompositorSnapshot(len(dirtySnapshot.StyleNodes), len(displayList.Layers), len(displayList.DamageRegions))
 	paint.Fill(gtx.Ops, rgba(displayList.Background))
@@ -2295,18 +2892,162 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 	return dimensions
 }
 
+func (ui *BrowserUI) scrollActiveFindMatch(gtx layout.Context, page *browser.Page, tree *layoutengine.Tree, displayList *paintmodel.DisplayList) {
+	state := ui.activeFindState()
+	if state == nil || !state.open || !state.scrollPending || state.current < 0 || state.current >= len(state.result.Matches) {
+		return
+	}
+	defer func() { state.scrollPending = false }()
+	activeBounds := func() (layoutengine.Rect, bool) {
+		var result layoutengine.Rect
+		found := false
+		for _, geometry := range ui.findHighlightGeometry(displayList, page) {
+			if geometry.matchIndex != state.current {
+				continue
+			}
+			current := layoutengine.Rect{X: geometry.x, Y: geometry.y, Width: geometry.width, Height: geometry.height}
+			if !found {
+				result, found = current, true
+				continue
+			}
+			minimumX, minimumY := min(result.X, current.X), min(result.Y, current.Y)
+			maximumX := max(result.X+result.Width, current.X+current.Width)
+			maximumY := max(result.Y+result.Height, current.Y+current.Height)
+			result = layoutengine.Rect{X: minimumX, Y: minimumY, Width: maximumX - minimumX, Height: maximumY - minimumY}
+		}
+		return result, found
+	}
+	bounds, found := activeBounds()
+	if !found {
+		return
+	}
+	match := state.result.Matches[state.current]
+	for ancestor := tree.Parents[match.NodeID]; ancestor != 0; ancestor = tree.Parents[ancestor] {
+		container, exists := tree.ScrollContainers[ancestor]
+		if !exists || isDocumentBody(page, ancestor) {
+			continue
+		}
+		targetX, targetY := container.Offset.X, container.Offset.Y
+		margin := float32(6)
+		if bounds.X < container.Viewport.X+margin {
+			targetX += bounds.X - container.Viewport.X - margin
+		} else if bounds.X+bounds.Width > container.Viewport.X+container.Viewport.Width-margin {
+			targetX += bounds.X + bounds.Width - container.Viewport.X - container.Viewport.Width + margin
+		}
+		if bounds.Y < container.Viewport.Y+margin {
+			targetY += bounds.Y - container.Viewport.Y - margin
+		} else if bounds.Y+bounds.Height > container.Viewport.Y+container.Viewport.Height-margin {
+			targetY += bounds.Y + bounds.Height - container.Viewport.Y - container.Viewport.Height + margin
+		}
+		if len(layoutengine.ApplyScrollContainerOffset(tree, page.ComputedStyles, ancestor, targetX, targetY)) == 0 {
+			continue
+		}
+		container = tree.ScrollContainers[ancestor]
+		ui.nestedScroll[ancestor] = container.Offset
+		if ui.layoutCache.baseTree != nil {
+			layoutengine.ApplyScrollContainerOffset(ui.layoutCache.baseTree, page.ComputedStyles, ancestor, container.Offset.X, container.Offset.Y)
+		}
+		paintmodel.ApplyAnimatedLayout(displayList, tree)
+		if updated, ok := activeBounds(); ok {
+			bounds = updated
+		}
+	}
+	ui.layoutCache.tree = layoutengine.Clone(tree)
+	ui.layoutCache.displayList = displayList
+
+	pixelsPerDP := gtx.Metric.PxPerDp
+	if pixelsPerDP <= 0 {
+		pixelsPerDP = 1
+	}
+	currentScroll := max(float32(ui.pageList.Position.Offset)/pixelsPerDP, float32(0))
+	viewportHeight := float32(gtx.Constraints.Max.Y) / pixelsPerDP
+	topInset, bottomInset := findViewportOcclusion(tree, page, bounds, currentScroll, viewportHeight)
+	visibleTop := currentScroll + topInset
+	visibleBottom := currentScroll + viewportHeight - bottomInset
+	targetScroll := currentScroll
+	if bounds.Y < visibleTop {
+		targetScroll = max(bounds.Y-topInset, float32(0))
+	} else if bounds.Y+bounds.Height > visibleBottom {
+		targetScroll = max(bounds.Y+bounds.Height-viewportHeight+bottomInset, float32(0))
+	}
+	if targetScroll != currentScroll {
+		ui.pageList.Position.First = 0
+		ui.pageList.Position.Offset = int(math.Round(float64(targetScroll * pixelsPerDP)))
+	}
+}
+
+func findViewportOcclusion(tree *layoutengine.Tree, page *browser.Page, target layoutengine.Rect, scrollY, viewportHeight float32) (float32, float32) {
+	topInset, bottomInset := float32(70), float32(12)
+	if tree == nil || page == nil || viewportHeight <= 0 {
+		return topInset, bottomInset
+	}
+	viewportBottom := scrollY + viewportHeight
+	for nodeID, computed := range page.ComputedStyles {
+		if computed.Position != stylemodel.PositionFixed && computed.Position != stylemodel.PositionSticky {
+			continue
+		}
+		bounds, exists := tree.Bounds[nodeID]
+		if !exists || bounds.Width <= 0 || bounds.Height <= 0 ||
+			bounds.X+bounds.Width <= target.X || bounds.X >= target.X+target.Width {
+			continue
+		}
+		if bounds.Y <= scrollY+viewportHeight/2 && bounds.Y+bounds.Height > scrollY {
+			topInset = max(topInset, bounds.Y+bounds.Height-scrollY+6)
+		} else if bounds.Y < viewportBottom && bounds.Y+bounds.Height >= scrollY+viewportHeight/2 {
+			bottomInset = max(bottomInset, viewportBottom-bounds.Y+6)
+		}
+	}
+	return min(topInset, viewportHeight), min(bottomInset, viewportHeight)
+}
+
 func (ui *BrowserUI) layoutDocumentPaintLayer(gtx layout.Context, displayList *paintmodel.DisplayList, page *browser.Page) layout.Dimensions {
-	children := make([]layout.StackChild, 0, len(displayList.Commands)+1)
+	highlightsByCommand := make(map[int][]findHighlightGeometry)
+	for _, geometry := range ui.findHighlightGeometry(displayList, page) {
+		highlightsByCommand[geometry.commandIndex] = append(highlightsByCommand[geometry.commandIndex], geometry)
+	}
+	children := make([]layout.StackChild, 0, len(displayList.Commands)+len(highlightsByCommand)+1)
 	children = append(children, layout.Stacked(func(gtx layout.Context) layout.Dimensions {
 		return layout.Spacer{Height: unit.Dp(max(displayList.ScrollHeight, displayList.Height))}.Layout(gtx)
 	}))
-	for _, source := range displayList.Commands {
+	for index, source := range displayList.Commands {
+		for _, sourceGeometry := range highlightsByCommand[index] {
+			geometry := sourceGeometry
+			children = append(children, layout.Stacked(func(gtx layout.Context) layout.Dimensions {
+				return ui.layoutFindHighlight(gtx, geometry)
+			}))
+		}
 		command := source
 		children = append(children, layout.Stacked(func(gtx layout.Context) layout.Dimensions {
 			return ui.layoutAbsolutePaintCommand(gtx, command, page)
 		}))
 	}
 	return layout.Stack{Alignment: layout.NW}.Layout(gtx, children...)
+}
+
+func (ui *BrowserUI) layoutFindHighlight(gtx layout.Context, geometry findHighlightGeometry) layout.Dimensions {
+	left := unit.Dp(max(geometry.x, float32(0)))
+	viewportWidth := float32(gtx.Constraints.Max.X) / gtx.Metric.PxPerDp
+	right := unit.Dp(max(viewportWidth-geometry.x-geometry.width, float32(0)))
+	return layoutPaintCommand(gtx, geometry.y, geometry.height, layout.Inset{Left: left, Right: right}, func(gtx layout.Context) layout.Dimensions {
+		if geometry.transform != (stylemodel.Matrix{}) && geometry.transform != stylemodel.IdentityMatrix() {
+			defer pushCSSMatrix(gtx, geometry.transform, geometry.x, geometry.y).Pop()
+		}
+		if geometry.clip != nil {
+			defer commandClip(gtx, geometry.clip, geometry.x, geometry.y).Push(gtx.Ops).Pop()
+		}
+		for _, region := range geometry.clips {
+			defer commandRoundedClip(gtx, region, geometry.x, geometry.y).Push(gtx.Ops).Pop()
+		}
+		width := max(gtx.Dp(unit.Dp(geometry.width)), 1)
+		height := max(gtx.Dp(unit.Dp(geometry.height)), 1)
+		gtx.Constraints = layout.Exact(image.Pt(width, height))
+		fill := color.NRGBA{R: 253, G: 224, B: 71, A: 150}
+		if state := ui.activeFindState(); state != nil && geometry.matchIndex == state.current {
+			fill = color.NRGBA{R: 251, G: 146, B: 60, A: 210}
+		}
+		paint.FillShape(gtx.Ops, fill, clip.UniformRRect(image.Rectangle{Max: gtx.Constraints.Min}, gtx.Dp(unit.Dp(2))).Op(gtx.Ops))
+		return layout.Dimensions{Size: gtx.Constraints.Min}
+	})
 }
 
 func (ui *BrowserUI) layoutAbsolutePaintCommand(gtx layout.Context, source paintmodel.Command, page *browser.Page) layout.Dimensions {
