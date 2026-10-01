@@ -169,6 +169,12 @@ type BrowserUI struct {
 	layoutBuildImages func(*dom.Document, stylemodel.Map, map[dom.NodeID]layoutengine.ImageResource, float32, float32, float32, float32) *layoutengine.Tree
 	layoutBuildFonts  func(*dom.Document, stylemodel.Map, map[dom.NodeID]layoutengine.ImageResource, *layoutengine.FontSet, float32, float32, float32, float32) *layoutengine.Tree
 	layoutCache       documentLayoutCache
+	renderContext     context.Context
+	cancelRender      context.CancelFunc
+	renderJobs        chan documentRenderJob
+	renderResults     chan documentRenderResult
+	renderPending     documentRenderKey
+	asyncRender       bool
 	imagePaintCache   pageImagePaintCache
 	fontPage          *browser.Page
 	fontRevision      uint64
@@ -452,6 +458,7 @@ func NewBrowserUIWithTabsAndUpdater(navigator Navigator, tabs TabController, inv
 		navigator:         navigator,
 		tabs:              tabs,
 		invalidate:        invalidate,
+		asyncRender:       invalidate != nil,
 		results:           make(chan navigationResult, browser.DefaultSessionPolicy().MaxTabs),
 		navigations:       make(map[browser.TabID]tabNavigation),
 		tabRenderStates:   make(map[browser.TabID]tabRenderState),
@@ -514,6 +521,7 @@ func NewBrowserUIWithTabsAndUpdater(navigator Navigator, tabs TabController, inv
 	ui.devToolsList.Axis = layout.Vertical
 	ui.inspectorList.Axis = layout.Vertical
 	ui.networkList.Axis = layout.Vertical
+	ui.startRenderWorker()
 	ui.startUpdateCheck()
 	return ui
 }
@@ -2167,6 +2175,9 @@ func (ui *BrowserUI) tabIsActive(id browser.TabID) bool {
 
 // Close cancels an in-flight navigation when the window closes.
 func (ui *BrowserUI) Close() {
+	if ui.cancelRender != nil {
+		ui.cancelRender()
+	}
 	ui.suggestions.Close()
 	if ui.localSuggestions != nil {
 		ui.localSuggestions.Close()
@@ -2913,7 +2924,7 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 	case stylemodel.AnimationDamageLayout:
 		page.RecordRenderEvent(browser.RenderLayoutFrame)
 	}
-	tree, displayList, reusedDisplayList := ui.cachedDocumentFrame(page, viewportWidth, viewportHeight, gtx.Metric.PxPerDp)
+	tree, displayList, reusedDisplayList := ui.cachedDocumentFrameAsync(page, viewportWidth, viewportHeight, gtx.Metric.PxPerDp)
 	if animationDamage == stylemodel.AnimationDamageLayout {
 		page.RecordRenderRebuild(browser.RenderRebuildAnimation)
 		tree = ui.buildDocumentTree(page, frameStyles, viewportWidth, viewportHeight, gtx.Metric.PxPerDp)

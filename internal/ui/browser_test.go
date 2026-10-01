@@ -3123,3 +3123,62 @@ func TestTextInkClipAllowsFallbackFontOverflow(t *testing.T) {
 		t.Fatalf("text ink clip = %#v, want %#v", got, want)
 	}
 }
+
+func TestAsyncRenderWorkerKeepsLayoutBuildOffCallingFrame(t *testing.T) {
+	document := dom.NewDocument()
+	paragraph := document.CreateElement("p", nil)
+	if err := document.AppendChild(document.Root, paragraph); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(paragraph, document.CreateText("worker result")); err != nil {
+		t.Fatal(err)
+	}
+	page := &browser.Page{Document: document, ComputedStyles: style.Compute(document, nil), StyleRevision: 1}
+	invalidated := make(chan struct{}, 2)
+	ui := NewBrowserUI(&stubNavigator{page: page}, func() {
+		select {
+		case invalidated <- struct{}{}:
+		default:
+		}
+	})
+	defer ui.Close()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	ui.layoutBuild = func(document *dom.Document, styles style.Map, width, height, scrollX, scrollY float32) *layoutengine.Tree {
+		close(started)
+		<-release
+		return layoutengine.BuildWithScroll(document, styles, width, height, scrollX, scrollY)
+	}
+	before := time.Now()
+	tree, _, reused := ui.cachedDocumentFrameAsync(page, 800, 600, 1)
+	if elapsed := time.Since(before); elapsed > 100*time.Millisecond {
+		t.Fatalf("calling frame blocked on layout for %v", elapsed)
+	}
+	if tree == nil || reused {
+		t.Fatalf("placeholder frame = tree:%#v reused:%t", tree, reused)
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("render worker did not start")
+	}
+	close(release)
+	select {
+	case <-invalidated:
+	case <-time.After(time.Second):
+		t.Fatal("render worker did not request a frame")
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		_, displayList, reused := ui.cachedDocumentFrameAsync(page, 800, 600, 1)
+		if reused {
+			for _, command := range displayList.Commands {
+				if text, ok := command.(paintmodel.DrawText); ok && text.Text == "worker result" {
+					return
+				}
+			}
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("worker-built display list was not published")
+}
