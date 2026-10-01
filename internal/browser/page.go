@@ -313,16 +313,6 @@ func (p *Page) commitImageResourceLoadLocked(nodeID dom.NodeID, resource layoutm
 	}
 }
 
-func (p *Page) commitBackgroundImageLoad(generation uint64, resource string, decoded image.Image, failure string) bool {
-	p.imageMu.Lock()
-	defer p.imageMu.Unlock()
-	if generation != p.imageGeneration {
-		return false
-	}
-	p.commitBackgroundImageLoadLocked(resource, decoded, failure)
-	return true
-}
-
 func (p *Page) commitBackgroundImageLoadLocked(resource string, decoded image.Image, failure string) {
 	backgrounds := make(map[string]image.Image, len(p.BackgroundImages)+1)
 	for currentURL, current := range p.BackgroundImages {
