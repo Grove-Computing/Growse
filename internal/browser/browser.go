@@ -1512,15 +1512,41 @@ func (b *Browser) loadWithClient(ctx context.Context, pageURL *url.URL, commit h
 
 	var response *network.Response
 	var err error
+	var imageLoad *imageNavigation
+	responseHeaders := func(head network.ResponseHead) {
+		if imageLoad != nil {
+			return
+		}
+		loaded, commitErr := b.commitImageResponseHead(navigationContext, head, commit, historyIndex, navigationID, engine, reducedMotion, pageStore)
+		if commitErr == nil {
+			imageLoad = loaded
+		}
+	}
 	if loader, ok := documentClient.(requestLoader); ok {
-		response, err = loader.Do(navigationContext, &network.Request{Method: http.MethodGet, URL: pageURL, Kind: requestKind, Observer: pageStore.ObserveNetwork})
+		response, err = loader.Do(navigationContext, &network.Request{Method: http.MethodGet, URL: pageURL, Kind: requestKind, Observer: pageStore.ObserveNetwork, OnResponseHeaders: responseHeaders})
 	} else {
 		response, err = documentClient.Get(navigationContext, pageURL)
 	}
 	if err != nil {
 		cancel()
+		if page := finishImageNavigationError(imageLoad, err, onMutation); page != nil {
+			return page, nil
+		}
 		pageStore.Close()
 		return nil, fmt.Errorf("navigate to %s: %w", network.RedactedURL(pageURL), err)
+	}
+	if _, imageResponse := imageMediaType(response.ContentType); imageResponse {
+		if imageLoad == nil {
+			head := network.ResponseHead{URL: response.URL, StatusCode: response.StatusCode, Header: response.Header, ContentType: response.ContentType, Redirected: response.Redirected}
+			imageLoad, err = b.commitImageResponseHead(navigationContext, head, commit, historyIndex, navigationID, engine, reducedMotion, pageStore)
+			if err != nil {
+				cancel()
+				return nil, err
+			}
+		}
+		page, finishErr := b.finishImageNavigation(imageLoad, response, navigationID, onMutation)
+		cancel()
+		return page, finishErr
 	}
 	return b.finishLoad(navigationContext, pageURL, response, commit, historyIndex, navigationID, resourceClient, runtimeClient, engineFactory, engine, storageManager, onMutation, reducedMotion, pageStore)
 }

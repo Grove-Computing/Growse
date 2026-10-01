@@ -50,6 +50,15 @@ type Response struct {
 	CacheStatus string
 }
 
+// ResponseHead is the response metadata available before its body is read.
+type ResponseHead struct {
+	URL         *url.URL
+	StatusCode  int
+	Header      http.Header
+	ContentType string
+	Redirected  bool
+}
+
 // Request contains the HTTP request data accepted by the network client.
 type Request struct {
 	Method      string
@@ -64,6 +73,9 @@ type Request struct {
 	Initiator   string
 	Schedule    string
 	Observer    func(Observation)
+	// OnResponseHeaders runs synchronously after response validation and before
+	// the body is read. Callers must return quickly and must not retain Header.
+	OnResponseHeaders func(ResponseHead)
 }
 
 // Observation is body-free request metadata emitted after one client operation.
@@ -310,6 +322,7 @@ func (c *Client) Do(ctx context.Context, requestData *Request) (result *Response
 		}
 		if result != nil {
 			result.CacheStatus = "hit"
+			notifyResponseHeaders(requestData, result.URL, result.StatusCode, result.Header, result.ContentType, result.Redirected)
 		}
 		return result, resultErr
 	}
@@ -355,6 +368,11 @@ func (c *Client) Do(ctx context.Context, requestData *Request) (result *Response
 	if err := validateCORSResponse(response, requestData); err != nil {
 		return nil, err
 	}
+	finalURL := requestData.URL
+	if response.Request != nil && response.Request.URL != nil {
+		finalURL = response.Request.URL
+	}
+	notifyResponseHeaders(requestData, finalURL, response.StatusCode, response.Header, response.Header.Get("Content-Type"), finalURL.String() != requestData.URL.String())
 
 	if response.ContentLength > c.maxBodyBytes {
 		return nil, fmt.Errorf("%w: limit is %d bytes", ErrResponseTooLarge, c.maxBodyBytes)
@@ -371,10 +389,6 @@ func (c *Client) Do(ctx context.Context, requestData *Request) (result *Response
 		return nil, fmt.Errorf("%w: limit is %d bytes", ErrResponseTooLarge, c.maxBodyBytes)
 	}
 
-	finalURL := requestData.URL
-	if response.Request != nil && response.Request.URL != nil {
-		finalURL = response.Request.URL
-	}
 	cachedResult := &Response{
 		URL:         cloneURL(finalURL),
 		StatusCode:  response.StatusCode,
@@ -399,6 +413,16 @@ func (c *Client) Do(ctx context.Context, requestData *Request) (result *Response
 	}
 	c.cache.Store(&cacheRequest, cachedResult)
 	return prepareCachedResponse(cachedResult, requestData)
+}
+
+func notifyResponseHeaders(request *Request, finalURL *url.URL, statusCode int, header http.Header, contentType string, redirected bool) {
+	if request == nil || request.OnResponseHeaders == nil {
+		return
+	}
+	request.OnResponseHeaders(ResponseHead{
+		URL: cloneURL(finalURL), StatusCode: statusCode, Header: header.Clone(),
+		ContentType: contentType, Redirected: redirected,
+	})
 }
 
 func observationErrorCategory(err error) string {

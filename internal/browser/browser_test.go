@@ -955,14 +955,14 @@ func TestBrowserReducedMotionSettingRecomputesAuthorMediaQuery(t *testing.T) {
 	}
 }
 
-func TestNavigateRejectsUnsupportedContentType(t *testing.T) {
+func TestNavigateRejectsUnsupportedNonImageContentType(t *testing.T) {
 	browser := New(stubLoader{response: &network.Response{
-		URL:         mustParseURL(t, "https://example.com/image.png"),
+		URL:         mustParseURL(t, "https://example.com/file.pdf"),
 		StatusCode:  200,
-		ContentType: "image/png",
+		ContentType: "application/pdf",
 	}})
 
-	if _, err := browser.Navigate(context.Background(), "https://example.com/image.png"); err == nil {
+	if _, err := browser.Navigate(context.Background(), "https://example.com/file.pdf"); err == nil {
 		t.Fatal("Navigate() error = nil, want unsupported Content-Type error")
 	}
 }
@@ -972,7 +972,7 @@ func TestCachedNavigationStillValidatesDocumentMIMEType(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
 		requests++
 		response.Header().Set("Cache-Control", "max-age=60")
-		response.Header().Set("Content-Type", "image/png")
+		response.Header().Set("Content-Type", "application/pdf")
 		_, _ = response.Write([]byte("not-html"))
 	}))
 	defer server.Close()
