@@ -21,7 +21,7 @@ type documentRenderKey struct {
 
 type documentRenderJob struct {
 	key         documentRenderKey
-	snapshot    browser.PageRenderSnapshot
+	page        *browser.Page
 	nested      map[dom.NodeID]layoutengine.ScrollOffset
 	build       func(*dom.Document, stylemodel.Map, float32, float32, float32, float32) *layoutengine.Tree
 	buildImages func(*dom.Document, stylemodel.Map, map[dom.NodeID]layoutengine.ImageResource, float32, float32, float32, float32) *layoutengine.Tree
@@ -33,6 +33,7 @@ type documentRenderResult struct {
 	tree, baseTree *layoutengine.Tree
 	displayList    *paintmodel.DisplayList
 	layoutBuilds   int
+	valid          bool
 }
 
 func (ui *BrowserUI) startRenderWorker() {
@@ -65,9 +66,16 @@ func (ui *BrowserUI) startRenderWorker() {
 }
 
 func buildDocumentRenderJob(job documentRenderJob) documentRenderResult {
+	if job.page == nil {
+		return documentRenderResult{key: job.key}
+	}
+	snapshot, ok := job.page.CaptureRenderSnapshot()
+	if !ok {
+		return documentRenderResult{key: job.key}
+	}
+	job.key.revision = snapshot.Revision
 	buildTree := func(scrollY float32) *layoutengine.Tree {
 		var tree *layoutengine.Tree
-		snapshot := job.snapshot
 		switch {
 		case job.buildFonts != nil && (snapshot.ImageResources != nil || snapshot.WebFonts != nil):
 			tree = job.buildFonts(snapshot.Document, snapshot.ComputedStyles, snapshot.ImageResources, snapshot.WebFonts, job.key.viewportWidth, job.key.viewportHeight, 0, scrollY)
@@ -103,7 +111,16 @@ func buildDocumentRenderJob(job documentRenderJob) documentRenderResult {
 			}
 		}
 	}
-	return documentRenderResult{key: job.key, tree: tree, baseTree: baseTree, displayList: paintmodel.Build(tree), layoutBuilds: builds}
+	return documentRenderResult{key: job.key, tree: tree, baseTree: baseTree, displayList: paintmodel.Build(tree), layoutBuilds: builds, valid: true}
+}
+
+func sameDocumentRenderView(left, right documentRenderKey) bool {
+	return left.page == right.page &&
+		left.viewportWidth == right.viewportWidth &&
+		left.viewportHeight == right.viewportHeight &&
+		left.pxPerDp == right.pxPerDp &&
+		left.listFirst == right.listFirst &&
+		left.listOffset == right.listOffset
 }
 
 func (ui *BrowserUI) cachedDocumentFrameAsync(page *browser.Page, viewportWidth, viewportHeight, pxPerDp float32) (*layoutengine.Tree, *paintmodel.DisplayList, bool) {
@@ -115,7 +132,16 @@ func (ui *BrowserUI) cachedDocumentFrameAsync(page *browser.Page, viewportWidth,
 	for {
 		select {
 		case result := <-ui.renderResults:
-			if result.key != key {
+			if !sameDocumentRenderView(result.key, key) {
+				continue
+			}
+			if sameDocumentRenderView(ui.renderPending, result.key) && ui.renderPending.revision <= result.key.revision {
+				ui.renderPending = documentRenderKey{}
+			}
+			if !result.valid || result.tree == nil {
+				continue
+			}
+			if ui.layoutCache.page == page && ui.layoutCache.revision > result.key.revision {
 				continue
 			}
 			for range result.layoutBuilds {
@@ -123,8 +149,7 @@ func (ui *BrowserUI) cachedDocumentFrameAsync(page *browser.Page, viewportWidth,
 			}
 			page.RecordRenderEvent(browser.RenderDisplayListBuild)
 			page.SyncFrameViewports(result.tree)
-			ui.layoutCache = documentLayoutCache{page: page, revision: key.revision, viewportWidth: viewportWidth, viewportHeight: viewportHeight, listFirst: position.First, listOffset: position.Offset, tree: result.tree, baseTree: result.baseTree, displayList: result.displayList}
-			ui.renderPending = documentRenderKey{}
+			ui.layoutCache = documentLayoutCache{page: page, revision: result.key.revision, viewportWidth: result.key.viewportWidth, viewportHeight: result.key.viewportHeight, listFirst: result.key.listFirst, listOffset: result.key.listOffset, tree: result.tree, baseTree: result.baseTree, displayList: result.displayList}
 		default:
 			goto drained
 		}
@@ -136,27 +161,24 @@ drained:
 		return layoutengine.Clone(cache.tree), cache.displayList, true
 	}
 	if ui.renderPending != key {
-		if snapshot, ok := page.CaptureRenderSnapshot(); ok {
-			key.revision = snapshot.Revision
-			nested := make(map[dom.NodeID]layoutengine.ScrollOffset, len(ui.nestedScroll))
-			for nodeID, offset := range ui.nestedScroll {
-				nested[nodeID] = offset
+		nested := make(map[dom.NodeID]layoutengine.ScrollOffset, len(ui.nestedScroll))
+		for nodeID, offset := range ui.nestedScroll {
+			nested[nodeID] = offset
+		}
+		job := documentRenderJob{key: key, page: page, nested: nested, build: ui.layoutBuild, buildImages: ui.layoutBuildImages, buildFonts: ui.layoutBuildFonts}
+		select {
+		case ui.renderJobs <- job:
+			ui.renderPending = key
+			page.RecordRenderRebuild(browser.RenderRebuildInitial)
+		default:
+			select {
+			case <-ui.renderJobs:
+			default:
 			}
-			job := documentRenderJob{key: key, snapshot: snapshot, nested: nested, build: ui.layoutBuild, buildImages: ui.layoutBuildImages, buildFonts: ui.layoutBuildFonts}
 			select {
 			case ui.renderJobs <- job:
 				ui.renderPending = key
-				page.RecordRenderRebuild(browser.RenderRebuildInitial)
 			default:
-				select {
-				case <-ui.renderJobs:
-				default:
-				}
-				select {
-				case ui.renderJobs <- job:
-					ui.renderPending = key
-				default:
-				}
 			}
 		}
 	}

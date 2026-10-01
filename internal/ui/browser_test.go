@@ -3182,3 +3182,75 @@ func TestAsyncRenderWorkerKeepsLayoutBuildOffCallingFrame(t *testing.T) {
 	}
 	t.Fatal("worker-built display list was not published")
 }
+
+func TestBuildDocumentRenderJobCapturesCurrentPageRevision(t *testing.T) {
+	document := dom.NewDocument()
+	paragraph := document.CreateElement("p", nil)
+	if err := document.AppendChild(document.Root, paragraph); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(paragraph, document.CreateText("current revision")); err != nil {
+		t.Fatal(err)
+	}
+	page := &browser.Page{Document: document, ComputedStyles: style.Compute(document, nil), StyleRevision: 7}
+	result := buildDocumentRenderJob(documentRenderJob{
+		key:  documentRenderKey{page: page, revision: 2, viewportWidth: 800, viewportHeight: 600, pxPerDp: 1},
+		page: page,
+	})
+	if !result.valid {
+		t.Fatal("worker result is invalid")
+	}
+	if result.key.revision != 7 || result.tree.Revision != 7 {
+		t.Fatalf("worker revision = key:%d tree:%d, want 7", result.key.revision, result.tree.Revision)
+	}
+}
+
+func TestAsyncRenderPublishesCompletedRevisionWhileReactKeepsMutating(t *testing.T) {
+	document := dom.NewDocument()
+	page := &browser.Page{Document: document, ComputedStyles: style.Compute(document, nil), StyleRevision: 3}
+	tree := &layoutengine.Tree{
+		Revision:         2,
+		Width:            800,
+		Height:           600,
+		ViewportHeight:   600,
+		ScrollWidth:      800,
+		ScrollHeight:     600,
+		Parents:          map[dom.NodeID]dom.NodeID{},
+		Bounds:           map[dom.NodeID]layoutengine.Rect{},
+		ScrollContainers: map[dom.NodeID]layoutengine.ScrollContainer{},
+		ScrollOffsets:    map[dom.NodeID]layoutengine.ScrollOffset{},
+	}
+	staleKey := documentRenderKey{page: page, revision: 2, viewportWidth: 800, viewportHeight: 600, pxPerDp: 1}
+	ui := &BrowserUI{
+		asyncRender:   true,
+		renderJobs:    make(chan documentRenderJob, 1),
+		renderResults: make(chan documentRenderResult, 1),
+		renderPending: staleKey,
+	}
+	ui.renderResults <- documentRenderResult{
+		key:         staleKey,
+		tree:        tree,
+		baseTree:    layoutengine.Clone(tree),
+		displayList: paintmodel.Build(tree),
+		valid:       true,
+	}
+
+	got, _, reused := ui.cachedDocumentFrameAsync(page, 800, 600, 1)
+	if !reused || got.Revision != 2 {
+		t.Fatalf("completed frame = revision:%d reused:%t, want revision 2 reused", got.Revision, reused)
+	}
+	if ui.layoutCache.revision != 2 {
+		t.Fatalf("cached revision = %d, want 2", ui.layoutCache.revision)
+	}
+	select {
+	case job := <-ui.renderJobs:
+		if job.page != page {
+			t.Fatal("follow-up render job does not reference the current page")
+		}
+		if job.key.revision != 3 {
+			t.Fatalf("follow-up revision = %d, want 3", job.key.revision)
+		}
+	default:
+		t.Fatal("latest React revision was not queued after publishing the completed frame")
+	}
+}
