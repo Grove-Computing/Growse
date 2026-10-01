@@ -7,10 +7,66 @@ import (
 	"testing"
 
 	"github.com/Grove-Computing/Growse/internal/events"
+	"github.com/Grove-Computing/Growse/internal/forms"
 	htmlparser "github.com/Grove-Computing/Growse/internal/html"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 	"github.com/dop251/goja"
 )
+
+func TestBrowserInputIsVisibleToReactStyleValueTracker(t *testing.T) {
+	document, err := htmlparser.Parse(strings.NewReader(`<input id="query" value="hoge">`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, _ := document.GetElementByID("query")
+	dispatcher := events.NewDispatcher()
+	runtime := New()
+	t.Cleanup(func() { _ = runtime.Stop() })
+	source := `
+		var input = document.getElementById("query");
+		if (!("oninput" in document)) throw new Error("input events are not advertised");
+		if (input.type !== "text") throw new Error("input type default is not text");
+		var descriptor = Object.getOwnPropertyDescriptor(input.constructor.prototype, "value");
+		var trackerValue = input.value;
+		Object.defineProperty(input, "value", {
+			configurable: true,
+			get: function () { return descriptor.get.call(this); },
+			set: function (value) {
+				trackerValue = String(value);
+				descriptor.set.call(this, value);
+			}
+		});
+		input._valueTracker = {
+			getValue: function () { return trackerValue; },
+			setValue: function (value) { trackerValue = String(value); }
+		};
+		var received = "";
+		document.addEventListener("input", function (event) {
+			var nextValue = event.target.value;
+			if (event.target._valueTracker.getValue() !== nextValue && event.isTrusted) {
+				event.target._valueTracker.setValue(nextValue);
+				received = nextValue;
+			}
+		});`
+	startJavaScriptRuntime(t, runtime, source, runtimemodel.Environment{Document: document, Events: dispatcher})
+
+	if !runtime.DispatchDOMEvent(events.Event{Type: events.Input, Target: target.ID, Value: "golang"}) {
+		t.Fatal("DispatchDOMEvent() = false, want true")
+	}
+	var received string
+	if err := runtime.runSync(context.Background(), func(vm *goja.Runtime) error {
+		received = vm.Get("received").String()
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if received != "golang" {
+		t.Fatalf("React-style tracker received = %q, want golang", received)
+	}
+	if value := forms.CurrentValue(target); value != "golang" {
+		t.Fatalf("input value = %q, want golang", value)
+	}
+}
 
 func TestEventListenersReceiveSupportedEventsOnPageQueue(t *testing.T) {
 	document, err := htmlparser.Parse(strings.NewReader(`<input id="target" value="initial">`))
@@ -185,6 +241,56 @@ func TestEventPropagationMetadataRemovalAndCancellation(t *testing.T) {
 	want := []string{"capture:1:true:true", "target:2:true:true:false", "prevented:true", "same-target"}
 	if !reflect.DeepEqual(order, want) {
 		t.Fatalf("JavaScript propagation order = %v, want %v", order, want)
+	}
+}
+
+func TestInitialInlineEventHandlerAttributesExecuteWithElementReceiver(t *testing.T) {
+	document, err := htmlparser.Parse(strings.NewReader(`<button id="target" onload="this.setAttribute('loaded', event.type)"></button>`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := New()
+	t.Cleanup(func() { _ = runtime.Stop() })
+	source := `document.getElementById("target").dispatchEvent(new Event("load"));`
+	startJavaScriptRuntime(t, runtime, source, runtimemodel.Environment{Document: document, Events: events.NewDispatcher()})
+	target, _ := document.GetElementByID("target")
+	if value, _ := target.Attribute("loaded"); value != "load" {
+		t.Fatalf("inline load handler value = %q, want load", value)
+	}
+}
+
+func TestLifecycleEventHandlerPropertiesRunAndCanBeReplaced(t *testing.T) {
+	document, err := htmlparser.Parse(strings.NewReader(`<main></main>`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := New()
+	t.Cleanup(func() { _ = runtime.Stop() })
+	source := `
+		var lifecycle = [];
+		function removed() { lifecycle.push("removed"); }
+		document.onreadystatechange = removed;
+		document.onreadystatechange = function (event) {
+			lifecycle.push(event.type + ":" + document.readyState + ":" + (this === document));
+		};
+		window.onload = function (event) {
+			lifecycle.push(event.type + ":" + document.readyState + ":" + (this === window));
+		};`
+	startJavaScriptRuntime(t, runtime, source, runtimemodel.Environment{Document: document, Events: events.NewDispatcher()})
+
+	var lifecycle []string
+	if err := runtime.runSync(context.Background(), func(vm *goja.Runtime) error {
+		return vm.ExportTo(vm.Get("lifecycle"), &lifecycle)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"readystatechange:interactive:true",
+		"readystatechange:complete:true",
+		"load:complete:true",
+	}
+	if !reflect.DeepEqual(lifecycle, want) {
+		t.Fatalf("lifecycle handlers = %v, want %v", lifecycle, want)
 	}
 }
 

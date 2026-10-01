@@ -136,8 +136,10 @@ type eventRequest struct {
 }
 
 type eventResponse struct {
-	Handled          bool `json:"handled"`
-	DefaultPrevented bool `json:"defaultPrevented"`
+	Handled             bool                 `json:"handled"`
+	DefaultPrevented    bool                 `json:"defaultPrevented"`
+	MutationWasNotified bool                 `json:"mutationWasNotified,omitempty"`
+	Document            dom.DocumentSnapshot `json:"document"`
 }
 
 type fetchRequest struct {

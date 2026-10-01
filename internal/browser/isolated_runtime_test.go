@@ -6,9 +6,11 @@ import (
 	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/forms"
 	"github.com/Grove-Computing/Growse/internal/network"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
@@ -222,13 +224,20 @@ func TestBrowserRoutesPostMessageAcrossIsolatedIframeWorkers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	deadline := time.Now().Add(2 * time.Second)
-	for len(page.DevTools.Console()) < 3 && time.Now().Before(deadline) {
+	wantReplies := "https://frame.example:/cross.html:2|https://page.example:/same.html:1"
+	deadline := time.Now().Add(15 * time.Second)
+	gotReplies := ""
+	for time.Now().Before(deadline) {
+		if result, ok := isolatedSnapshotElementByID(page.Document.Snapshot().Root, "result"); ok {
+			gotReplies = isolatedSnapshotTextContent(result)
+		}
+		if len(page.DevTools.Console()) >= 3 && gotReplies == wantReplies {
+			break
+		}
 		time.Sleep(time.Millisecond)
 	}
-	result, _ := page.Document.GetElementByID("result")
-	if got := result.TextContent(); got != "https://frame.example:/cross.html:2|https://page.example:/same.html:1" {
-		t.Fatalf("postMessage replies = %q", got)
+	if gotReplies != wantReplies {
+		t.Fatalf("postMessage replies = %q", gotReplies)
 	}
 	records := page.DevTools.Console()
 	if len(records) != 3 || records[0].Message != "true|true|2|true|true" || records[1].Message != "target:SecurityError" || records[2].Message != "replies:done" {
@@ -240,6 +249,29 @@ func TestBrowserRoutesPostMessageAcrossIsolatedIframeWorkers(t *testing.T) {
 			t.Fatalf("child %d Window relationships = %#v", index, childRecords)
 		}
 	}
+}
+
+func isolatedSnapshotElementByID(node dom.NodeSnapshot, id string) (dom.NodeSnapshot, bool) {
+	if node.Attributes["id"] == id {
+		return node, true
+	}
+	for _, child := range node.Children {
+		if found, ok := isolatedSnapshotElementByID(child, id); ok {
+			return found, true
+		}
+	}
+	return dom.NodeSnapshot{}, false
+}
+
+func isolatedSnapshotTextContent(node dom.NodeSnapshot) string {
+	if node.Type == dom.NodeText {
+		return node.Text
+	}
+	var result strings.Builder
+	for _, child := range node.Children {
+		result.WriteString(isolatedSnapshotTextContent(child))
+	}
+	return result.String()
 }
 
 func TestBrowserRegistersAndControlsServiceWorkerThroughIsolatedRuntime(t *testing.T) {

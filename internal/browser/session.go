@@ -107,6 +107,7 @@ type Session struct {
 	onActiveMutation func()
 	fetchLimiter     *fetchapi.Limiter
 	devToolsSession  *devtools.SessionStore
+	sharedImages     *sharedDecodedImageCache
 }
 
 // NewSession creates an empty browser session.
@@ -139,7 +140,7 @@ func NewSessionWithPolicy(factory BrowserFactory, policy SessionPolicy) *Session
 	if policy.MaxFetches <= 0 {
 		policy.MaxFetches = defaults.MaxFetches
 	}
-	return &Session{factory: factory, policy: policy, fetchLimiter: fetchapi.NewLimiter(policy.MaxFetches), devToolsSession: devtools.NewSessionStore()}
+	return &Session{factory: factory, policy: policy, fetchLimiter: fetchapi.NewLimiter(policy.MaxFetches), devToolsSession: devtools.NewSessionStore(), sharedImages: newSharedDecodedImageCache()}
 }
 
 // NewTab adds an empty tab or a tab with a requested initial URL. Navigation
@@ -274,6 +275,7 @@ func (s *Session) newTabLocked(initialURL *url.URL, state TabState) (*Tab, error
 		return nil, ErrTabBrowser
 	}
 	browser.SetFetchLimiter(s.fetchLimiter)
+	browser.setSharedImageCache(s.sharedImages)
 	browser.SetDevToolsSession(s.devToolsSession)
 	for _, existing := range s.tabs {
 		if existing != nil && existing.browser == browser && existing.state != TabClosed {
@@ -541,6 +543,8 @@ func (s *Session) Close() error {
 	s.activeID = 0
 	s.factory = nil
 	s.onActiveMutation = nil
+	sharedImages := s.sharedImages
+	s.sharedImages = nil
 	for _, tab := range tabs {
 		if tab != nil {
 			tab.state = TabClosing
@@ -557,6 +561,7 @@ func (s *Session) Close() error {
 		}
 		tab.state = TabClosed
 	}
+	sharedImages.clear()
 	return closeErr
 }
 

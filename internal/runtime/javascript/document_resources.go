@@ -22,6 +22,9 @@ func (runtime *Runtime) initialScriptElement(documentOrder int) *domapi.Element 
 	}
 	order := 0
 	for _, element := range runtime.domAPI.GetElementsByTagName("script") {
+		if _, noModule := element.GetAttribute("nomodule"); noModule {
+			continue
+		}
 		typeValue, present := element.GetAttribute("type")
 		if !javaScriptElementType(typeValue, present) {
 			continue

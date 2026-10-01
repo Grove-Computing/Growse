@@ -31,6 +31,7 @@ func TestDiskCacheRestoresFreshResponseAcrossClientRestart(t *testing.T) {
 	if _, err := first.Get(context.Background(), target); err != nil {
 		t.Fatal(err)
 	}
+	first.FlushCache()
 	second, err := NewClientWithCacheRoot(server.Client(), 1024, root)
 	if err != nil {
 		t.Fatal(err)
@@ -56,6 +57,7 @@ func TestDiskCacheAppliesEntryOriginTotalAndCountLimitsWithLRUEviction(t *testin
 	for _, request := range requests {
 		cache.Store(request, diskTestResponse(request, []byte("123456")))
 	}
+	cache.FlushDisk()
 	restarted := newTestPersistentCache(t, root, limits)
 	if _, ok := restarted.Match(requests[0]); ok {
 		t.Fatal("least-recently-used entry survived deterministic eviction")
@@ -68,6 +70,7 @@ func TestDiskCacheAppliesEntryOriginTotalAndCountLimitsWithLRUEviction(t *testin
 
 	oversized := &Request{Method: http.MethodGet, URL: mustParseURL(t, "https://example.test/oversized")}
 	cache.Store(oversized, diskTestResponse(oversized, []byte("1234567")))
+	cache.FlushDisk()
 	if _, ok := newTestPersistentCache(t, root, limits).Match(oversized); ok {
 		t.Fatal("oversized entry was persisted")
 	}
@@ -81,6 +84,7 @@ func TestDiskCacheChecksumFailureRemovesOnlyCorruptEntry(t *testing.T) {
 	healthy := &Request{Method: http.MethodGet, URL: mustParseURL(t, "https://example.test/healthy")}
 	cache.Store(corrupt, diskTestResponse(corrupt, []byte("corrupt-body")))
 	cache.Store(healthy, diskTestResponse(healthy, []byte("healthy-body")))
+	cache.FlushDisk()
 	key, _ := baseCacheKey(corrupt)
 	id := diskEntryID(key, nil, nil)
 	if err := os.WriteFile(filepath.Join(root, id+".body"), []byte("tampered"), 0o600); err != nil {
@@ -106,6 +110,7 @@ func TestDiskCacheSchemaMismatchRemovesOnlyIncompatibleEntry(t *testing.T) {
 	healthy := &Request{Method: http.MethodGet, URL: mustParseURL(t, "https://example.test/current")}
 	cache.Store(incompatible, diskTestResponse(incompatible, []byte("old")))
 	cache.Store(healthy, diskTestResponse(healthy, []byte("current")))
+	cache.FlushDisk()
 	key, _ := baseCacheKey(incompatible)
 	id := diskEntryID(key, nil, nil)
 	metadataPath := filepath.Join(root, id+".json")
@@ -154,6 +159,7 @@ func TestConcurrentDiskCacheWritesKeepMetadataAndBodyTogether(t *testing.T) {
 		}(index)
 	}
 	wait.Wait()
+	cache.FlushDisk()
 
 	restarted := newTestPersistentCache(t, root, limits)
 	response, found := restarted.Match(request)
@@ -178,5 +184,27 @@ func diskTestResponse(request *Request, body []byte) *Response {
 	return &Response{
 		URL: request.URL, StatusCode: http.StatusOK,
 		Header: http.Header{"Cache-Control": []string{"max-age=3600"}}, Body: body,
+	}
+}
+
+func TestDiskCacheStoreDoesNotBlockOnFilesystemWriter(t *testing.T) {
+	cache := newTestPersistentCache(t, t.TempDir(), diskCacheLimits{maxEntries: 4, maxEntryBytes: 1024, maxOriginBytes: 4096, maxTotalBytes: 4096})
+	request := &Request{Method: http.MethodGet, URL: mustParseURL(t, "https://example.test/async")}
+	cache.disk.mu.Lock()
+	done := make(chan bool, 1)
+	go func() { done <- cache.Store(request, diskTestResponse(request, []byte("queued"))) }()
+	select {
+	case stored := <-done:
+		if !stored {
+			t.Fatal("memory cache rejected async store")
+		}
+	case <-time.After(100 * time.Millisecond):
+		cache.disk.mu.Unlock()
+		t.Fatal("Store blocked on the disk writer")
+	}
+	cache.disk.mu.Unlock()
+	cache.FlushDisk()
+	if _, ok := newTestPersistentCache(t, cache.disk.root, cache.disk.limits).Match(request); !ok {
+		t.Fatal("queued disk write was not durable after FlushDisk")
 	}
 }

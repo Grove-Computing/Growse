@@ -194,6 +194,11 @@ func collectScriptsForEngine(root *dom.Node, engine runtimemodel.Engine) []scrip
 			return
 		}
 		if node.Type == dom.NodeElement && node.TagName == "script" {
+			if engine == runtimemodel.EngineJavaScript {
+				if _, noModule := node.Attribute("nomodule"); noModule {
+					return
+				}
+			}
 			typeValue, hasType := node.Attribute("type")
 			scriptEngine, kind := classifyScript(typeValue, hasType)
 			if scriptEngine == engine {
@@ -296,7 +301,22 @@ func isJavaScriptContentType(value string) bool {
 		return false
 	}
 	switch strings.ToLower(mediaType) {
-	case "text/javascript", "application/javascript", "application/ecmascript", "text/ecmascript":
+	case "application/ecmascript",
+		"application/javascript",
+		"application/x-ecmascript",
+		"application/x-javascript",
+		"text/ecmascript",
+		"text/javascript",
+		"text/javascript1.0",
+		"text/javascript1.1",
+		"text/javascript1.2",
+		"text/javascript1.3",
+		"text/javascript1.4",
+		"text/javascript1.5",
+		"text/jscript",
+		"text/livescript",
+		"text/x-ecmascript",
+		"text/x-javascript":
 		return true
 	default:
 		return false

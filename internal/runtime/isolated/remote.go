@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/events"
 	"github.com/Grove-Computing/Growse/internal/network"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
@@ -30,7 +31,7 @@ const (
 	workerEnvironmentKey = "GROWSE_RUNTIME_WORKER"
 	workerStopTimeout    = time.Second
 	maxWorkerStderrBytes = 64 << 10
-	defaultTaskTimeout   = 5 * time.Second
+	defaultTaskTimeout   = 30 * time.Second
 	maxSessionWorkers    = 32
 )
 
@@ -41,22 +42,27 @@ var (
 
 // Runtime is a browser-side proxy for one isolated Go or JavaScript runtime.
 type Runtime struct {
-	mu sync.Mutex
+	mu     sync.Mutex
+	pageMu sync.Mutex
 
-	engine      runtimemodel.Engine
-	generation  uint64
-	environment runtimemodel.Environment
-	peer        *peer
-	command     *exec.Cmd
-	stdin       io.WriteCloser
-	processDone chan error
-	stderr      *limitedBuffer
-	loaded      bool
-	started     bool
-	stopped     bool
-	unsubscribe func()
-	taskTimeout time.Duration
-	sandbox     runtimemodel.SandboxStatus
+	engine          runtimemodel.Engine
+	generation      uint64
+	environment     runtimemodel.Environment
+	peer            *peer
+	command         *exec.Cmd
+	stdin           io.WriteCloser
+	processDone     chan error
+	stderr          *limitedBuffer
+	loaded          bool
+	started         bool
+	stopped         bool
+	framePending    atomic.Bool
+	frameInFlight   atomic.Bool
+	pendingDocument dom.DocumentSnapshot
+	pendingMutation bool
+	unsubscribe     func()
+	taskTimeout     time.Duration
+	sandbox         runtimemodel.SandboxStatus
 }
 
 // New returns a runtime proxy for engine. The worker is started by Load.
@@ -222,6 +228,10 @@ func (r *Runtime) Stop() error {
 	p, stdin, command, processDone := r.peer, r.stdin, r.command, r.processDone
 	unsubscribe := r.unsubscribe
 	r.unsubscribe = nil
+	r.pendingDocument = dom.DocumentSnapshot{}
+	r.pendingMutation = false
+	r.framePending.Store(false)
+	r.frameInFlight.Store(false)
 	r.mu.Unlock()
 	if unsubscribe != nil {
 		unsubscribe()
@@ -256,12 +266,32 @@ func (r *Runtime) DispatchDOMEvent(event events.Event) bool {
 		return false
 	}
 	request := eventRequest{
-		Document: environment.Document.Snapshot(), Type: event.Type, Target: event.Target,
+		Type: event.Type, Target: event.Target,
 		X: event.X, Y: event.Y, Value: event.Value, Cancelable: event.IsCancelable(),
+	}
+	// Resource completion does not change browser-owned DOM state. Avoid copying
+	// the entire document into every image load/error event; large pages can
+	// otherwise fill the worker pipe and stall the UI while publishing images.
+	if event.Type != events.Load && event.Type != events.Error {
+		r.pageMu.Lock()
+		request.Document = environment.Document.Snapshot()
+		r.pageMu.Unlock()
 	}
 	var response eventResponse
 	if err := r.callTask(context.Background(), "runtime.event", request, &response); err != nil {
 		return false
+	}
+	if response.Document.Root.ID != 0 {
+		if event.Type == events.Load || event.Type == events.Error {
+			r.stagePendingDOMMutation(response.Document, environment)
+		} else {
+			r.pageMu.Lock()
+			err := environment.Document.ApplySnapshot(response.Document)
+			r.pageMu.Unlock()
+			if err == nil && environment.OnMutation != nil {
+				environment.OnMutation()
+			}
+		}
 	}
 	if response.DefaultPrevented {
 		event.PreventDefault()
@@ -271,7 +301,63 @@ func (r *Runtime) DispatchDOMEvent(event events.Event) bool {
 
 // DispatchPageEvent preserves the Runtime interface used by serialized browser inspection.
 func (r *Runtime) DispatchPageEvent(callback func() bool) bool {
-	return callback != nil && callback()
+	if callback == nil {
+		return false
+	}
+	r.pageMu.Lock()
+	defer r.pageMu.Unlock()
+	return callback()
+}
+
+func (r *Runtime) stagePendingDOMMutation(snapshot dom.DocumentSnapshot, environment runtimemodel.Environment) {
+	if snapshot.Root.ID == 0 {
+		return
+	}
+	r.mu.Lock()
+	if r.stopped {
+		r.mu.Unlock()
+		return
+	}
+	notify := !r.pendingMutation
+	r.pendingDocument = snapshot
+	r.pendingMutation = true
+	requestFrame := environment.RequestFrame
+	r.mu.Unlock()
+	if notify && requestFrame != nil {
+		requestFrame()
+	}
+}
+
+// CommitPendingDOMMutation publishes a worker mutation at the caller's frame
+// boundary. Asynchronous resource and animation handlers must not modify the
+// browser-owned document while Gio is laying it out or painting it.
+func (r *Runtime) CommitPendingDOMMutation() bool {
+	if r == nil {
+		return false
+	}
+	r.mu.Lock()
+	if !r.pendingMutation {
+		r.mu.Unlock()
+		return false
+	}
+	snapshot := r.pendingDocument
+	environment := r.environment
+	r.pendingDocument = dom.DocumentSnapshot{}
+	r.pendingMutation = false
+	r.mu.Unlock()
+	if environment.Document == nil {
+		return false
+	}
+	r.pageMu.Lock()
+	err := environment.Document.ApplySnapshot(snapshot)
+	r.pageMu.Unlock()
+	if err != nil {
+		return false
+	}
+	if environment.OnMutation != nil {
+		environment.OnMutation()
+	}
+	return true
 }
 
 func (r *Runtime) RunAnimationFrame(current time.Time) bool {
@@ -281,20 +367,36 @@ func (r *Runtime) RunAnimationFrame(current time.Time) bool {
 	if p == nil || stopped || environment.Document == nil {
 		return false
 	}
-	var response boolResponse
+	// Gio calls this method while assembling a window frame. Page callbacks can
+	// perform arbitrary work, so waiting for the worker here would stop desktop
+	// event delivery and make the window appear hung. Keep at most one worker
+	// frame in flight and publish its mutations at a later UI frame boundary.
+	if !r.frameInFlight.CompareAndSwap(false, true) {
+		return false
+	}
+	r.framePending.Store(false)
 	request := frameRequest{UnixNano: current.UnixNano(), Document: environment.Document.Snapshot()}
-	return r.callTask(context.Background(), "runtime.frame", request, &response) == nil && response.Value
+	go func() {
+		defer r.frameInFlight.Store(false)
+		var response boolResponse
+		_ = r.callTask(context.Background(), "runtime.frame", request, &response)
+		// A request made while this frame was running may already have caused a
+		// Gio frame that could not start another worker task. Wake the window once
+		// more after completion so that request is not stranded.
+		if r.framePending.Load() {
+			r.mu.Lock()
+			requestFrame := r.environment.RequestFrame
+			r.mu.Unlock()
+			if requestFrame != nil {
+				requestFrame()
+			}
+		}
+	}()
+	return true
 }
 
 func (r *Runtime) HasAnimationFrameCallbacks() bool {
-	r.mu.Lock()
-	p, stopped := r.peer, r.stopped
-	r.mu.Unlock()
-	if p == nil || stopped {
-		return false
-	}
-	var response boolResponse
-	return r.callTask(context.Background(), "runtime.has-frame", nil, &response) == nil && response.Value
+	return r != nil && r.framePending.Load()
 }
 
 func (r *Runtime) SetBackground(background bool) {
@@ -410,7 +512,19 @@ func (r *Runtime) installHostHandlers(p *peer) {
 		r.mu.Lock()
 		environment, stopped := r.environment, r.stopped
 		r.mu.Unlock()
-		if stopped || environment.Document == nil || environment.Document.ApplySnapshot(event.Document) != nil {
+		if stopped || environment.Document == nil {
+			return
+		}
+		if r.frameInFlight.Load() {
+			// Mutations produced by asynchronous animation callbacks must be
+			// published at a Gio frame boundary instead of racing layout.
+			r.stagePendingDOMMutation(event.Document, environment)
+			return
+		}
+		r.pageMu.Lock()
+		err := environment.Document.ApplySnapshot(event.Document)
+		r.pageMu.Unlock()
+		if err != nil {
 			return
 		}
 		if environment.OnMutation != nil {
@@ -430,6 +544,7 @@ func (r *Runtime) installHostHandlers(p *peer) {
 		}
 	})
 	p.handleEvent("frame.request", func(json.RawMessage) {
+		r.framePending.Store(true)
 		r.mu.Lock()
 		request := r.environment.RequestFrame
 		r.mu.Unlock()

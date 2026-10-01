@@ -1752,7 +1752,7 @@ func TestDuckDuckGoResultClickNavigatesDirectlyWithoutIntermediatePage(t *testin
 	if err := document.AppendChild(document.Root, anchor); err != nil {
 		t.Fatal(err)
 	}
-	pageURL, _ := url.Parse("https://html.duckduckgo.com/html/?q=hoge")
+	pageURL, _ := url.Parse("https://duckduckgo.com/?q=hoge&ia=web")
 	page := &browser.Page{URL: pageURL, Document: document, Events: events.NewDispatcher()}
 	navigator := &recordingNavigator{stubNavigator: stubNavigator{page: page}, navigated: make(chan string, 1)}
 	ui := NewBrowserUI(navigator, nil)
@@ -3113,5 +3113,144 @@ func TestFindViewportOcclusionAccountsForFixedAndStickyContent(t *testing.T) {
 	top, bottom := findViewportOcclusion(tree, page, target, 100, 400)
 	if top != 102 || bottom != 56 {
 		t.Fatalf("find viewport occlusion = top %.0f bottom %.0f, want 102/56", top, bottom)
+	}
+}
+
+func TestTextInkClipAllowsFallbackFontOverflow(t *testing.T) {
+	got := textInkClip(layoutengine.Rect{X: 10, Y: 20, Width: 100, Height: 30}, 8)
+	want := (layoutengine.Rect{X: 10, Y: 12, Width: 100, Height: 46})
+	if got != want {
+		t.Fatalf("text ink clip = %#v, want %#v", got, want)
+	}
+}
+
+func TestAsyncRenderWorkerKeepsLayoutBuildOffCallingFrame(t *testing.T) {
+	document := dom.NewDocument()
+	paragraph := document.CreateElement("p", nil)
+	if err := document.AppendChild(document.Root, paragraph); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(paragraph, document.CreateText("worker result")); err != nil {
+		t.Fatal(err)
+	}
+	page := &browser.Page{Document: document, ComputedStyles: style.Compute(document, nil), StyleRevision: 1}
+	invalidated := make(chan struct{}, 2)
+	ui := NewBrowserUI(&stubNavigator{page: page}, func() {
+		select {
+		case invalidated <- struct{}{}:
+		default:
+		}
+	})
+	defer ui.Close()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	ui.layoutBuild = func(document *dom.Document, styles style.Map, width, height, scrollX, scrollY float32) *layoutengine.Tree {
+		close(started)
+		<-release
+		return layoutengine.BuildWithScroll(document, styles, width, height, scrollX, scrollY)
+	}
+	before := time.Now()
+	tree, _, reused := ui.cachedDocumentFrameAsync(page, 800, 600, 1)
+	if elapsed := time.Since(before); elapsed > 100*time.Millisecond {
+		t.Fatalf("calling frame blocked on layout for %v", elapsed)
+	}
+	if tree == nil || reused {
+		t.Fatalf("placeholder frame = tree:%#v reused:%t", tree, reused)
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("render worker did not start")
+	}
+	close(release)
+	select {
+	case <-invalidated:
+	case <-time.After(time.Second):
+		t.Fatal("render worker did not request a frame")
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		_, displayList, reused := ui.cachedDocumentFrameAsync(page, 800, 600, 1)
+		if reused {
+			for _, command := range displayList.Commands {
+				if text, ok := command.(paintmodel.DrawText); ok && text.Text == "worker result" {
+					return
+				}
+			}
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("worker-built display list was not published")
+}
+
+func TestBuildDocumentRenderJobCapturesCurrentPageRevision(t *testing.T) {
+	document := dom.NewDocument()
+	paragraph := document.CreateElement("p", nil)
+	if err := document.AppendChild(document.Root, paragraph); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(paragraph, document.CreateText("current revision")); err != nil {
+		t.Fatal(err)
+	}
+	page := &browser.Page{Document: document, ComputedStyles: style.Compute(document, nil), StyleRevision: 7}
+	result := buildDocumentRenderJob(documentRenderJob{
+		key:  documentRenderKey{page: page, revision: 2, viewportWidth: 800, viewportHeight: 600, pxPerDp: 1},
+		page: page,
+	})
+	if !result.valid {
+		t.Fatal("worker result is invalid")
+	}
+	if result.key.revision != 7 || result.tree.Revision != 7 {
+		t.Fatalf("worker revision = key:%d tree:%d, want 7", result.key.revision, result.tree.Revision)
+	}
+}
+
+func TestAsyncRenderPublishesCompletedRevisionWhileReactKeepsMutating(t *testing.T) {
+	document := dom.NewDocument()
+	page := &browser.Page{Document: document, ComputedStyles: style.Compute(document, nil), StyleRevision: 3}
+	tree := &layoutengine.Tree{
+		Revision:         2,
+		Width:            800,
+		Height:           600,
+		ViewportHeight:   600,
+		ScrollWidth:      800,
+		ScrollHeight:     600,
+		Parents:          map[dom.NodeID]dom.NodeID{},
+		Bounds:           map[dom.NodeID]layoutengine.Rect{},
+		ScrollContainers: map[dom.NodeID]layoutengine.ScrollContainer{},
+		ScrollOffsets:    map[dom.NodeID]layoutengine.ScrollOffset{},
+	}
+	staleKey := documentRenderKey{page: page, revision: 2, viewportWidth: 800, viewportHeight: 600, pxPerDp: 1}
+	ui := &BrowserUI{
+		asyncRender:   true,
+		renderJobs:    make(chan documentRenderJob, 1),
+		renderResults: make(chan documentRenderResult, 1),
+		renderPending: staleKey,
+	}
+	ui.renderResults <- documentRenderResult{
+		key:         staleKey,
+		tree:        tree,
+		baseTree:    layoutengine.Clone(tree),
+		displayList: paintmodel.Build(tree),
+		valid:       true,
+	}
+
+	got, _, reused := ui.cachedDocumentFrameAsync(page, 800, 600, 1)
+	if !reused || got.Revision != 2 {
+		t.Fatalf("completed frame = revision:%d reused:%t, want revision 2 reused", got.Revision, reused)
+	}
+	if ui.layoutCache.revision != 2 {
+		t.Fatalf("cached revision = %d, want 2", ui.layoutCache.revision)
+	}
+	select {
+	case job := <-ui.renderJobs:
+		if job.page != page {
+			t.Fatal("follow-up render job does not reference the current page")
+		}
+		if job.key.revision != 3 {
+			t.Fatalf("follow-up revision = %d, want 3", job.key.revision)
+		}
+	default:
+		t.Fatal("latest React revision was not queued after publishing the completed frame")
 	}
 }

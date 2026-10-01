@@ -972,3 +972,18 @@ func TestBuildPreservesExplicitEmptySubmitValueAndCSSBackground(t *testing.T) {
 		t.Fatalf("submit geometry = %#v inside form %#v, want x=%v width=%v", decoration.Rect, formBounds, wantX, wantWidth)
 	}
 }
+
+func TestEmptyIconButtonLabelDoesNotFallBackToSubmit(t *testing.T) {
+	button := dom.NewDocument().CreateElement("button", map[string]string{"type": "button", "aria-controls": "menu"})
+	if got := submitButtonLabel(button); got != "⋯" {
+		t.Fatalf("menu icon label = %q, want ellipsis", got)
+	}
+	button = dom.NewDocument().CreateElement("button", map[string]string{"type": "submit", "aria-label": "Search"})
+	if got := submitButtonLabel(button); got != "⌕" {
+		t.Fatalf("search icon label = %q, want search glyph", got)
+	}
+	button = dom.NewDocument().CreateElement("button", map[string]string{"type": "button"})
+	if got := submitButtonLabel(button); got != "" {
+		t.Fatalf("unlabelled icon button = %q, want empty", got)
+	}
+}

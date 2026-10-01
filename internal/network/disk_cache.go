@@ -45,6 +45,13 @@ type diskCache struct {
 	limits  diskCacheLimits
 	records map[string]diskCacheRecord
 	access  uint64
+	writes  chan diskCacheWrite
+	pending sync.WaitGroup
+}
+
+type diskCacheWrite struct {
+	baseKey string
+	entry   *cacheEntry
 }
 
 type diskCacheRecord struct {
@@ -111,9 +118,10 @@ func newDiskCache(root string, limits diskCacheLimits) (*diskCache, error) {
 	if err := os.Chmod(root, 0o700); err != nil { // #nosec G302 -- this is a directory and 0700 denies group and other access.
 		return nil, errors.New("protect HTTP cache directory")
 	}
-	cache := &diskCache{root: root, limits: limits, records: make(map[string]diskCacheRecord)}
+	cache := &diskCache{root: root, limits: limits, records: make(map[string]diskCacheRecord), writes: make(chan diskCacheWrite, 128)}
 	cache.scan()
 	cache.evict()
+	go cache.writeLoop()
 	return cache, nil
 }
 
@@ -170,6 +178,37 @@ func (cache *diskCache) validRecord(id string, record diskCacheRecord) bool {
 	}
 	origin, err := OriginFromURL(parsed)
 	return err == nil && origin.String() == record.Origin && headersWithinLimits(record.Response.Header)
+}
+
+func (cache *diskCache) storeAsync(baseKey string, entry *cacheEntry) bool {
+	if cache == nil || entry == nil || entry.response == nil || int64(len(entry.response.Body)) > cache.limits.maxEntryBytes {
+		return false
+	}
+	copy := *entry
+	copy.vary = append([]string(nil), entry.vary...)
+	copy.varyValues = append([]string(nil), entry.varyValues...)
+	copy.response = cloneResponse(entry.response)
+	cache.pending.Add(1)
+	select {
+	case cache.writes <- diskCacheWrite{baseKey: baseKey, entry: &copy}:
+		return true
+	default:
+		cache.pending.Done()
+		return false
+	}
+}
+
+func (cache *diskCache) writeLoop() {
+	for write := range cache.writes {
+		cache.store(write.baseKey, write.entry)
+		cache.pending.Done()
+	}
+}
+
+func (cache *diskCache) flush() {
+	if cache != nil {
+		cache.pending.Wait()
+	}
 }
 
 func (cache *diskCache) store(baseKey string, entry *cacheEntry) bool {

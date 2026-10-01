@@ -171,3 +171,38 @@ func TestJavaScriptMatchMediaChangeFollowsBrowserViewport(t *testing.T) {
 		t.Fatalf("matchMedia change = %q", target.Attributes["data-change"])
 	}
 }
+
+func TestPageRenderSnapshotReusesLayoutUntilViewportChanges(t *testing.T) {
+	pageURL := mustParseURL(t, "https://app.example/cssom-cache")
+	loader := stubLoader{response: &network.Response{
+		URL: pageURL, StatusCode: 200, ContentType: "text/html",
+		Body: []byte(`<html><body><main id="target" style="width: 120px">content</main></body></html>`),
+	}}
+	browserState := New(loader)
+	t.Cleanup(func() { _ = browserState.Close() })
+	page, err := browserState.Navigate(context.Background(), pageURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, ok := page.Document.GetElementByID("target")
+	if !ok {
+		t.Fatal("CSSOM cache target is missing")
+	}
+	before := page.RenderMetricsSnapshot().LayoutBuilds
+	if _, err := pageRenderSnapshot(context.Background(), page, target.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pageRenderSnapshot(context.Background(), page, target.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := page.RenderMetricsSnapshot().LayoutBuilds; got != before+1 {
+		t.Fatalf("same-revision layout builds = %d, want %d", got, before+1)
+	}
+	page.ViewportWidth++
+	if _, err := pageRenderSnapshot(context.Background(), page, target.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := page.RenderMetricsSnapshot().LayoutBuilds; got != before+2 {
+		t.Fatalf("viewport-change layout builds = %d, want %d", got, before+2)
+	}
+}

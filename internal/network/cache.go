@@ -80,6 +80,14 @@ func NewHTTPCacheWithDisk(cacheRoot string) (*HTTPCache, error) {
 	return &HTTPCache{entries: make(map[string][]*cacheEntry), now: time.Now, disk: disk}, nil
 }
 
+// FlushDisk waits for queued persistence writes. Normal navigations never need
+// to call it; application shutdown and restart tests use it as a durability barrier.
+func (cache *HTTPCache) FlushDisk() {
+	if cache != nil && cache.disk != nil {
+		cache.disk.flush()
+	}
+}
+
 // Store はCache対象Request/Responseをvariantとして保存する。
 func (cache *HTTPCache) Store(request *Request, response *Response) bool {
 	key, ok := baseCacheKey(request)
@@ -108,7 +116,7 @@ func (cache *HTTPCache) Store(request *Request, response *Response) bool {
 			cache.entries[key] = variants
 			cache.mu.Unlock()
 			if cache.disk != nil {
-				cache.disk.store(key, entry)
+				cache.disk.storeAsync(key, entry)
 			}
 			return true
 		}
@@ -121,7 +129,7 @@ func (cache *HTTPCache) Store(request *Request, response *Response) bool {
 	cache.count++
 	cache.mu.Unlock()
 	if cache.disk != nil {
-		cache.disk.store(key, entry)
+		cache.disk.storeAsync(key, entry)
 	}
 	return true
 }
@@ -307,7 +315,7 @@ func (cache *HTTPCache) MergeNotModified(request *Request, notModified http.Head
 		result := cloneResponse(entry.response)
 		cache.mu.Unlock()
 		if cache.disk != nil {
-			cache.disk.store(key, entry)
+			cache.disk.storeAsync(key, entry)
 		}
 		return result, true
 	}
@@ -339,6 +347,7 @@ func (cache *HTTPCache) InvalidateURL(request *Request, target *url.URL) {
 		cache.count = 0
 	}
 	if cache.disk != nil {
+		cache.disk.flush()
 		cache.disk.invalidate(keys)
 	}
 }

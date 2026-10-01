@@ -70,3 +70,36 @@ func TestDocumentResourceCollectionsCurrentScriptAndLifecycleStayConsistent(t *t
 		t.Fatalf("style refreshes = %d, want 1", refreshes)
 	}
 }
+
+func TestInitialScriptElementSkipsNoModuleScript(t *testing.T) {
+	document, err := htmlparser.Parse(strings.NewReader(`<html><body>
+		<script id="legacy" nomodule></script>
+		<script id="target" src="/app.js" onload="document.body.setAttribute('data-loaded', this.id)"></script>
+	</body></html>`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := New()
+	t.Cleanup(func() { _ = runtime.Stop() })
+	script := runtimemodel.Script{
+		Engine: runtimemodel.EngineJavaScript, Kind: runtimemodel.ScriptClassic,
+		DocumentOrder: 0, SourceURL: moduleTestURL(t, "https://app.example/app.js"),
+		Source: `document.body.setAttribute("data-executed", document.currentScript.id);`,
+	}
+	if err := runtime.Load(context.Background(), []runtimemodel.Script{script}, runtimemodel.Environment{Document: document, Events: events.NewDispatcher()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	body, ok := document.QuerySelector("body")
+	if !ok {
+		t.Fatal("body is missing")
+	}
+	if got := body.Attributes["data-executed"]; got != "target" {
+		t.Fatalf("executed script = %q, want target", got)
+	}
+	if got := body.Attributes["data-loaded"]; got != "target" {
+		t.Fatalf("load target = %q, want target", got)
+	}
+}

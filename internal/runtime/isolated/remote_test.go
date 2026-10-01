@@ -5,16 +5,69 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/events"
+	"github.com/Grove-Computing/Growse/internal/forms"
 	htmlparser "github.com/Grove-Computing/Growse/internal/html"
 	"github.com/Grove-Computing/Growse/internal/network"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 	storagecore "github.com/Grove-Computing/Growse/internal/storage"
 )
+
+func TestIsolatedBrowserInputOverridesStaleWorkerSnapshot(t *testing.T) {
+	document, err := htmlparser.Parse(strings.NewReader(`<input id="query" value="hoge">`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, _ := document.GetElementByID("query")
+	runtime := New(runtimemodel.EngineJavaScript)
+	t.Cleanup(func() { _ = runtime.Stop() })
+	var mutations atomic.Int32
+	environment := runtimemodel.Environment{
+		Document: document, Events: events.NewDispatcher(), BaseURL: mustURL(t, "https://example.test/search"),
+		OnMutation: func() { mutations.Add(1) },
+	}
+	source := `
+		var input = document.getElementById("query");
+		var descriptor = Object.getOwnPropertyDescriptor(input.constructor.prototype, "value");
+		var trackerValue = input.value;
+		Object.defineProperty(input, "value", {
+			configurable: true,
+			get: function () { return descriptor.get.call(this); },
+			set: function (value) { trackerValue = String(value); descriptor.set.call(this, value); }
+		});
+		input._valueTracker = { getValue: function () { return trackerValue; }, setValue: function (value) { trackerValue = String(value); } };
+		document.addEventListener("input", function (event) {
+			var nextValue = event.target.value;
+			if (event.target._valueTracker.getValue() !== nextValue) {
+				event.target._valueTracker.setValue(nextValue);
+				event.target.setAttribute("data-received", nextValue);
+			}
+		});`
+	if err := runtime.Load(context.Background(), []runtimemodel.Script{{Engine: runtimemodel.EngineJavaScript, SourceURL: environment.BaseURL, Source: source, Inline: true}}, environment); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	beforeInput := mutations.Load()
+	if !runtime.DispatchDOMEvent(events.Event{Type: events.Input, Target: target.ID, Value: "golang"}) {
+		t.Fatal("DispatchDOMEvent() = false, want true")
+	}
+	if value := forms.CurrentValue(target); value != "golang" {
+		t.Fatalf("host input value = %q, want golang", value)
+	}
+	if value, _ := target.Attribute("data-received"); value != "golang" {
+		t.Fatalf("React-style handler received = %q, want golang", value)
+	}
+	if got := mutations.Load() - beforeInput; got != 1 {
+		t.Fatalf("input mutation notifications = %d, want 1", got)
+	}
+}
 
 func TestIsolatedJavaScriptFetchUsesDocumentResourceBaseURL(t *testing.T) {
 	documentURL := mustURL(t, "https://example.test/root/page.html")
@@ -361,4 +414,165 @@ func mustURL(t *testing.T, value string) *url.URL {
 		t.Fatal(err)
 	}
 	return parsed
+}
+
+func TestIsolatedJavaScriptTimerMutatesDocumentAfterStart(t *testing.T) {
+	document, err := htmlparser.Parse(strings.NewReader(`<output id="result">pending</output>`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := New(runtimemodel.EngineJavaScript)
+	t.Cleanup(func() { _ = runtime.Stop() })
+	stale := document.Snapshot()
+	environment := runtimemodel.Environment{Document: document, Events: events.NewDispatcher(), BaseURL: mustURL(t, "https://example.test/page")}
+	script := runtimemodel.Script{Engine: runtimemodel.EngineJavaScript, SourceURL: environment.BaseURL, Source: `
+		setTimeout(function () { document.getElementById("result").textContent = "done"; }, 10);
+		requestAnimationFrame(function () { document.getElementById("result").setAttribute("frame", "ran"); });`, Inline: true}
+	if err := runtime.Load(context.Background(), []runtimemodel.Script{script}, environment); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if result, ok := snapshotElementByID(document.Snapshot().Root, "result"); ok && snapshotTextContent(result) == "done" {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	result, _ := snapshotElementByID(document.Snapshot().Root, "result")
+	if got := snapshotTextContent(result); got != "done" {
+		t.Fatalf("isolated timer result = %q, want done", got)
+	}
+	if err := document.ApplySnapshot(stale); err != nil {
+		t.Fatal(err)
+	}
+	if !runtime.RunAnimationFrame(time.Now()) {
+		t.Fatal("isolated animation frame did not run")
+	}
+	deadline = time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		runtime.CommitPendingDOMMutation()
+		result, _ = snapshotElementByID(document.Snapshot().Root, "result")
+		if result.Attributes["frame"] == "ran" {
+			if got := snapshotTextContent(result); got != "done" {
+				t.Fatalf("animation frame restored stale DOM text %q", got)
+			}
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("isolated animation frame mutation was not published")
+}
+
+func TestIsolatedAnimationFrameDoesNotBlockCaller(t *testing.T) {
+	document, err := htmlparser.Parse(strings.NewReader(`<output id="result">pending</output>`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := New(runtimemodel.EngineJavaScript)
+	t.Cleanup(func() { _ = runtime.Stop() })
+	environment := runtimemodel.Environment{
+		Document: document, Events: events.NewDispatcher(), BaseURL: mustURL(t, "https://example.test/page"),
+	}
+	script := runtimemodel.Script{
+		Engine: runtimemodel.EngineJavaScript, SourceURL: environment.BaseURL, Inline: true,
+		Source: `requestAnimationFrame(function () {
+			const started = Date.now();
+			while (Date.now() - started < 200) {}
+			document.getElementById("result").textContent = "done";
+		});`,
+	}
+	if err := runtime.Load(context.Background(), []runtimemodel.Script{script}, environment); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	started := time.Now()
+	if !runtime.RunAnimationFrame(time.Now()) {
+		t.Fatal("animation frame was not scheduled")
+	}
+	if elapsed := time.Since(started); elapsed > 100*time.Millisecond {
+		t.Fatalf("RunAnimationFrame blocked caller for %s", elapsed)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if runtime.CommitPendingDOMMutation() {
+			result, _ := document.GetElementByID("result")
+			if result.TextContent() == "done" {
+				return
+			}
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("asynchronous animation frame mutation was not committed")
+}
+
+func snapshotElementByID(node dom.NodeSnapshot, id string) (dom.NodeSnapshot, bool) {
+	if node.Attributes["id"] == id {
+		return node, true
+	}
+	for _, child := range node.Children {
+		if found, ok := snapshotElementByID(child, id); ok {
+			return found, true
+		}
+	}
+	return dom.NodeSnapshot{}, false
+}
+
+func snapshotTextContent(node dom.NodeSnapshot) string {
+	if node.Type == dom.NodeText {
+		return node.Text
+	}
+	var result strings.Builder
+	for _, child := range node.Children {
+		result.WriteString(snapshotTextContent(child))
+	}
+	return result.String()
+}
+
+func TestResourceEventMutationIsCommittedAtFrameBoundary(t *testing.T) {
+	document, err := htmlparser.Parse(strings.NewReader(`<img id="hero"><p id="status">idle</p>`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	hero, _ := document.GetElementByID("hero")
+	status, _ := document.GetElementByID("status")
+	var mutations atomic.Int32
+	runtime := New(runtimemodel.EngineJavaScript)
+	t.Cleanup(func() { _ = runtime.Stop() })
+	environment := runtimemodel.Environment{
+		Document: document, Events: events.NewDispatcher(), BaseURL: mustURL(t, "https://example.test/page"),
+		OnMutation: func() { mutations.Add(1) },
+	}
+	source := `document.getElementById("hero").addEventListener("load", function () { document.getElementById("status").textContent = "loaded"; });`
+	if err := runtime.Load(context.Background(), []runtimemodel.Script{{Engine: runtimemodel.EngineJavaScript, SourceURL: environment.BaseURL, Source: source, Inline: true}}, environment); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	before := mutations.Load()
+	if !runtime.DispatchDOMEvent(events.Event{Type: events.Load, Target: hero.ID}) {
+		t.Fatal("load event was not handled")
+	}
+	if got := status.TextContent(); got != "idle" {
+		t.Fatalf("resource mutation applied before frame boundary: %q", got)
+	}
+	if !runtime.CommitPendingDOMMutation() {
+		t.Fatal("pending resource mutation was not committed")
+	}
+	status, _ = document.GetElementByID("status")
+	if got := status.TextContent(); got != "loaded" {
+		t.Fatalf("committed resource mutation text = %q", got)
+	}
+	if got := mutations.Load() - before; got != 1 {
+		t.Fatalf("resource mutation notifications = %d, want 1", got)
+	}
+	if runtime.CommitPendingDOMMutation() {
+		t.Fatal("resource mutation committed twice")
+	}
 }

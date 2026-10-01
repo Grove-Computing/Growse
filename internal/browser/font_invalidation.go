@@ -87,6 +87,22 @@ func (p *Page) CommitWebFontCompletionForGeneration(generation uint64, resource 
 	return cloneFontInvalidation(p.fontDirty), true
 }
 
+// CommitWebFontFailureForGeneration records one current asynchronous font
+// failure without invalidating layout, which continues to use fallback faces.
+func (p *Page) CommitWebFontFailureForGeneration(generation uint64, resource FontResource) bool {
+	if p == nil || resource.Error == "" {
+		return false
+	}
+	p.fontMu.Lock()
+	defer p.fontMu.Unlock()
+	if generation != p.fontGeneration {
+		return false
+	}
+	p.Fonts = append(p.Fonts, resource)
+	p.FontErrors = append(p.FontErrors, resource.Error+": "+resource.Family)
+	return true
+}
+
 func (p *Page) FontInvalidationSnapshot() FontInvalidation {
 	if p == nil {
 		return FontInvalidation{}
@@ -213,4 +229,38 @@ func fontResourceCovers(resource FontResource, value rune) bool {
 		}
 	}
 	return false
+}
+
+func (p *Page) stageWebFontResult(generation uint64, resource FontResource) bool {
+	if p == nil {
+		return false
+	}
+	p.fontMu.Lock()
+	defer p.fontMu.Unlock()
+	if generation != p.fontGeneration {
+		return false
+	}
+	p.pendingFonts = append(p.pendingFonts, resource)
+	return true
+}
+
+func (p *Page) commitPendingWebFonts() bool {
+	if p == nil {
+		return false
+	}
+	p.fontMu.Lock()
+	generation := p.fontGeneration
+	pending := append([]FontResource(nil), p.pendingFonts...)
+	p.pendingFonts = nil
+	p.fontMu.Unlock()
+	committed := false
+	for _, resource := range pending {
+		if resource.Loaded {
+			_, ok := p.CommitWebFontCompletionForGeneration(generation, resource)
+			committed = committed || ok
+		} else {
+			committed = p.CommitWebFontFailureForGeneration(generation, resource) || committed
+		}
+	}
+	return committed
 }

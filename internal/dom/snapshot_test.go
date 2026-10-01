@@ -58,6 +58,32 @@ func TestApplySnapshotReusesRetainedNodesAndDisconnectsRemovedNodes(t *testing.T
 	}
 }
 
+func TestApplySnapshotPreservingDetachedKeepsRuntimeOwnedSubtree(t *testing.T) {
+	document := NewDocument()
+	parent := document.CreateElement("main", nil)
+	detachedRoot := document.CreateElement("section", map[string]string{"id": "detached"})
+	detachedChild := document.CreateText("kept")
+	_ = document.AppendChild(document.Root, parent)
+	_ = document.AppendChild(parent, detachedRoot)
+	_ = document.AppendChild(detachedRoot, detachedChild)
+
+	snapshot := document.Snapshot()
+	snapshot.Root.Children[0].Children = nil
+	if err := document.ApplySnapshotPreservingDetached(snapshot); err != nil {
+		t.Fatalf("ApplySnapshotPreservingDetached() error = %v", err)
+	}
+	got, ok := document.NodeByID(detachedRoot.ID)
+	if !ok || got != detachedRoot || got.Parent != nil || len(got.Children) != 1 || got.Children[0] != detachedChild || detachedChild.Parent != got {
+		t.Fatalf("detached subtree was not retained: root=%#v child=%#v", got, detachedChild)
+	}
+	if _, ok := document.GetElementByID("detached"); ok {
+		t.Fatal("detached node remained in the connected ID index")
+	}
+	if document.IsConnected(got) {
+		t.Fatal("retained runtime node is still connected")
+	}
+}
+
 func TestApplySnapshotRejectsMalformedTreesWithoutReplacingDocument(t *testing.T) {
 	document := NewDocument()
 	root := document.Root

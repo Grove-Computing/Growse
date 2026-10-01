@@ -507,7 +507,7 @@ func (runtime *Runtime) dispatchDynamicScriptEvent(_ *goja.Runtime, snapshot dyn
 	runtime.mu.Lock()
 	environment := runtime.environment
 	runtime.mu.Unlock()
-	if environment.Document == nil || environment.Events == nil || snapshot.element == nil || !snapshot.element.IsConnected() {
+	if environment.Document == nil || environment.Events == nil || snapshot.element == nil || snapshot.element.NodeName() == "" {
 		return
 	}
 	environment.Events.DispatchTree(environment.Document, events.Event{Type: eventType, Target: snapshot.id})

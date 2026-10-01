@@ -71,6 +71,7 @@ func (runtime *Runtime) installObservers(vm *goja.Runtime) error {
 			if err != nil {
 				panic(vm.NewTypeError(err.Error()))
 			}
+			runtime.captureDOMMutationDiff()
 			record.targets[target.ID()] = options
 			return goja.Undefined()
 		})
@@ -223,14 +224,31 @@ func (runtime *Runtime) handleDOMMutation() {
 	if runtime.mutationCount > runtime.maxMutationsPerTask {
 		panic(runtime.vm.NewTypeError("DOM mutation limit exceeded"))
 	}
-	if runtime.environment.Document != nil {
-		current := runtime.environment.Document.Snapshot()
-		runtime.queueMutationDiff(runtime.mutationSnapshot, current)
-		runtime.mutationSnapshot = current
-	}
+	runtime.mutationSnapshotDirty = true
+	runtime.mutationNotificationDirty = true
 	if len(runtime.resizeObservers) != 0 || len(runtime.intersectionObservers) != 0 {
 		runtime.requestObserverFrame()
 	}
+}
+
+func (runtime *Runtime) captureDOMMutationDiff() {
+	if !runtime.mutationSnapshotDirty || runtime.environment.Document == nil {
+		return
+	}
+	current := runtime.environment.Document.Snapshot()
+	if len(runtime.mutationObservers) != 0 {
+		runtime.queueMutationDiff(runtime.mutationSnapshot, current)
+	}
+	runtime.mutationSnapshot = current
+	runtime.mutationSnapshotDirty = false
+}
+
+func (runtime *Runtime) flushDOMMutation() {
+	runtime.captureDOMMutationDiff()
+	if !runtime.mutationNotificationDirty {
+		return
+	}
+	runtime.mutationNotificationDirty = false
 	if runtime.environment.OnMutation != nil {
 		runtime.environment.OnMutation()
 	}
@@ -263,27 +281,29 @@ func flattenMutationSnapshot(snapshot dommodel.DocumentSnapshot) map[dommodel.No
 
 func (runtime *Runtime) queueMutationDiff(previous, current dommodel.DocumentSnapshot) {
 	before, after := flattenMutationSnapshot(previous), flattenMutationSnapshot(current)
-	for id, oldState := range before {
-		newState, exists := after[id]
-		if !exists {
-			continue
+	ids := make([]int, 0, len(before))
+	for id := range before {
+		if _, exists := after[id]; exists {
+			ids = append(ids, int(id))
 		}
-		if !equalNodeIDs(oldState.children, newState.children) {
-			added, removed := childDifference(oldState.children, newState.children)
-			runtime.queueMutation(mutationRecord{typeName: "childList", target: id, added: added, removed: removed}, before, after)
-		}
-		if oldState.node.Type == dommodel.NodeText && oldState.node.Text != newState.node.Text {
-			old := oldState.node.Text
-			runtime.queueMutation(mutationRecord{typeName: "characterData", target: id, oldValue: &old}, before, after)
-		}
-		attributeNames := make(map[string]bool, len(oldState.node.Attributes)+len(newState.node.Attributes))
+	}
+	sort.Ints(ids)
+	for _, value := range ids {
+		id := dommodel.NodeID(value)
+		oldState, newState := before[id], after[id]
+		attributeNames := make([]string, 0, len(oldState.node.Attributes)+len(newState.node.Attributes))
+		seen := make(map[string]bool, len(oldState.node.Attributes)+len(newState.node.Attributes))
 		for name := range oldState.node.Attributes {
-			attributeNames[name] = true
+			seen[name] = true
+			attributeNames = append(attributeNames, name)
 		}
 		for name := range newState.node.Attributes {
-			attributeNames[name] = true
+			if !seen[name] {
+				attributeNames = append(attributeNames, name)
+			}
 		}
-		for name := range attributeNames {
+		sort.Strings(attributeNames)
+		for _, name := range attributeNames {
 			oldValue, oldOK := oldState.node.Attributes[name]
 			newValue, newOK := newState.node.Attributes[name]
 			if oldOK == newOK && oldValue == newValue {
@@ -295,6 +315,22 @@ func (runtime *Runtime) queueMutationDiff(previous, current dommodel.DocumentSna
 				old = &copyValue
 			}
 			runtime.queueMutation(mutationRecord{typeName: "attributes", target: id, attributeName: name, oldValue: old}, before, after)
+		}
+	}
+	for _, value := range ids {
+		id := dommodel.NodeID(value)
+		oldState, newState := before[id], after[id]
+		if oldState.node.Type == dommodel.NodeText && oldState.node.Text != newState.node.Text {
+			old := oldState.node.Text
+			runtime.queueMutation(mutationRecord{typeName: "characterData", target: id, oldValue: &old}, before, after)
+		}
+	}
+	for _, value := range ids {
+		id := dommodel.NodeID(value)
+		oldState, newState := before[id], after[id]
+		if !equalNodeIDs(oldState.children, newState.children) {
+			added, removed := childDifference(oldState.children, newState.children)
+			runtime.queueMutation(mutationRecord{typeName: "childList", target: id, added: added, removed: removed}, before, after)
 		}
 	}
 }
@@ -438,6 +474,7 @@ func (runtime *Runtime) deliverMutationObservers(vm *goja.Runtime) {
 				runtime.recordError(fmt.Sprintf("JavaScript MutationObserver callback: %v", err))
 			}
 			callbacks++
+			runtime.captureDOMMutationDiff()
 			delivered = true
 			if callbacks >= runtime.maxObserverCallbacks {
 				break

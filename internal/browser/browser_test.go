@@ -955,14 +955,14 @@ func TestBrowserReducedMotionSettingRecomputesAuthorMediaQuery(t *testing.T) {
 	}
 }
 
-func TestNavigateRejectsUnsupportedContentType(t *testing.T) {
+func TestNavigateRejectsUnsupportedNonImageContentType(t *testing.T) {
 	browser := New(stubLoader{response: &network.Response{
-		URL:         mustParseURL(t, "https://example.com/image.png"),
+		URL:         mustParseURL(t, "https://example.com/file.pdf"),
 		StatusCode:  200,
-		ContentType: "image/png",
+		ContentType: "application/pdf",
 	}})
 
-	if _, err := browser.Navigate(context.Background(), "https://example.com/image.png"); err == nil {
+	if _, err := browser.Navigate(context.Background(), "https://example.com/file.pdf"); err == nil {
 		t.Fatal("Navigate() error = nil, want unsupported Content-Type error")
 	}
 }
@@ -972,7 +972,7 @@ func TestCachedNavigationStillValidatesDocumentMIMEType(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
 		requests++
 		response.Header().Set("Cache-Control", "max-age=60")
-		response.Header().Set("Content-Type", "image/png")
+		response.Header().Set("Content-Type", "application/pdf")
 		_, _ = response.Write([]byte("not-html"))
 	}))
 	defer server.Close()
@@ -1529,6 +1529,37 @@ func TestSubmitHonorsValidationPreventDefaultAndNoValidate(t *testing.T) {
 				t.Fatalf("submit err=%v requests=%v", err, loader.requested)
 			}
 		})
+	}
+}
+
+func TestSubmitUsesCapturedFormDataWhenSubmitHandlerReplacesForm(t *testing.T) {
+	document := dom.NewDocument()
+	form := document.CreateElement("form", map[string]string{"action": "/result"})
+	input := document.CreateElement("input", map[string]string{"name": "q", "value": "golang"})
+	if err := document.AppendChild(document.Root, form); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(form, input); err != nil {
+		t.Fatal(err)
+	}
+	baseURL := mustParseURL(t, "https://example.com/search")
+	targetURL := mustParseURL(t, "https://example.com/result?q=golang")
+	loader := &routeLoader{responses: map[string]*network.Response{
+		targetURL.String(): {URL: targetURL, StatusCode: 200, ContentType: "text/html", Body: []byte(`<!doctype html><title>Result</title>`)},
+	}}
+	page := &Page{URL: baseURL, Document: document, ComputedStyles: style.Compute(document, nil), Events: events.NewDispatcher()}
+	page.Events.AddEventListener(form.ID, events.Submit, func(events.Event) {
+		_, _ = document.Remove(form.ID)
+	})
+	browserState := New(loader)
+	browserState.SetPage(page)
+
+	submitted, err := browserState.Submit(context.Background(), form.ID, 0)
+	if err != nil {
+		t.Fatalf("Submit() error = %v", err)
+	}
+	if submitted.URL.String() != targetURL.String() || len(loader.requested) != 1 {
+		t.Fatalf("submitted URL = %s requests=%v", submitted.URL, loader.requested)
 	}
 }
 

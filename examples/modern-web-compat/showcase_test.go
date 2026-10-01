@@ -65,6 +65,7 @@ func TestModernWebCompatibilityShowcaseRunsEntirelyLocally(t *testing.T) {
 	waitForFixtureText(t, engine, mutations, "next-hydration-marker", "hydrated")
 	waitForFixtureImage(t, engine, mutations, "next-image")
 	waitForFixtureImage(t, engine, mutations, "next-svg")
+	waitForFixtureFonts(t, engine, mutations, 1)
 	jsPage := engine.Page()
 	if len(jsPage.Fonts) != 1 || !jsPage.Fonts[0].Decoded {
 		t.Fatalf("showcase Web Font = %+v errors=%v", jsPage.Fonts, jsPage.FontErrors)
