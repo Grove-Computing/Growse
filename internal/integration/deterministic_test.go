@@ -180,6 +180,7 @@ func TestSchedulerFrameProfileAndHTTPCacheAreDeterministic(t *testing.T) {
 		if err != nil || string(response.Body) != "fixture" {
 			t.Fatalf("HTTP fixture = (%v, %v)", response, err)
 		}
+		client.FlushCache()
 	}
 	if requests != 1 {
 		t.Fatalf("fake HTTP requests = %d, want one plus Disk Cache hit", requests)

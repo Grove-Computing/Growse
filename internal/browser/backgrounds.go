@@ -396,6 +396,17 @@ func loadReplacedImageNodeWithCache(ctx context.Context, client ResourceLoader, 
 		}
 		lastTarget = target
 		resource.URL = target.String()
+		if target.Scheme == "data" {
+			decoded, err := decodeDataBackground(target.String(), budget)
+			if err != nil {
+				resource.Error = "data image decode failed"
+				continue
+			}
+			bounds := decoded.Bounds()
+			resource.Loaded, resource.Error = true, ""
+			resource.IntrinsicWidth, resource.IntrinsicHeight = float32(bounds.Dx()), float32(bounds.Dy())
+			return resource, decoded, ""
+		}
 		if target.Scheme != "http" && target.Scheme != "https" {
 			resource.Error = "image URL is not a supported HTTP(S) URL"
 			continue

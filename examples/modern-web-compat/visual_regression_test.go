@@ -76,7 +76,7 @@ func TestFrameworkFixtureVisualRegression(t *testing.T) {
 	}
 	engine.UpdateViewport(1024, 720)
 	waitForFixtureText(t, engine, mutations, "chunk-state", "chunk failure isolated")
-	waitForFixtureRevision(t, engine, mutations, 6)
+	waitForFixtureRevision(t, engine, mutations, 5)
 	actual.States = append(actual.States, visualFixtureState("fallback-devtools", engine.Page(), "diagnostic-root", "chunk-state", "broken-image"))
 
 	wantBytes, err := os.ReadFile("testdata/framework-visual.golden.json")
