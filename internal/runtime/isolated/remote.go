@@ -42,7 +42,8 @@ var (
 
 // Runtime is a browser-side proxy for one isolated Go or JavaScript runtime.
 type Runtime struct {
-	mu sync.Mutex
+	mu     sync.Mutex
+	pageMu sync.Mutex
 
 	engine          runtimemodel.Engine
 	generation      uint64
@@ -272,7 +273,9 @@ func (r *Runtime) DispatchDOMEvent(event events.Event) bool {
 	// the entire document into every image load/error event; large pages can
 	// otherwise fill the worker pipe and stall the UI while publishing images.
 	if event.Type != events.Load && event.Type != events.Error {
+		r.pageMu.Lock()
 		request.Document = environment.Document.Snapshot()
+		r.pageMu.Unlock()
 	}
 	var response eventResponse
 	if err := r.callTask(context.Background(), "runtime.event", request, &response); err != nil {
@@ -281,8 +284,13 @@ func (r *Runtime) DispatchDOMEvent(event events.Event) bool {
 	if response.Document.Root.ID != 0 {
 		if event.Type == events.Load || event.Type == events.Error {
 			r.stagePendingDOMMutation(response.Document, environment)
-		} else if environment.Document.ApplySnapshot(response.Document) == nil && environment.OnMutation != nil {
-			environment.OnMutation()
+		} else {
+			r.pageMu.Lock()
+			err := environment.Document.ApplySnapshot(response.Document)
+			r.pageMu.Unlock()
+			if err == nil && environment.OnMutation != nil {
+				environment.OnMutation()
+			}
 		}
 	}
 	if response.DefaultPrevented {
@@ -293,7 +301,12 @@ func (r *Runtime) DispatchDOMEvent(event events.Event) bool {
 
 // DispatchPageEvent preserves the Runtime interface used by serialized browser inspection.
 func (r *Runtime) DispatchPageEvent(callback func() bool) bool {
-	return callback != nil && callback()
+	if callback == nil {
+		return false
+	}
+	r.pageMu.Lock()
+	defer r.pageMu.Unlock()
+	return callback()
 }
 
 func (r *Runtime) stagePendingDOMMutation(snapshot dom.DocumentSnapshot, environment runtimemodel.Environment) {
@@ -332,7 +345,13 @@ func (r *Runtime) CommitPendingDOMMutation() bool {
 	r.pendingDocument = dom.DocumentSnapshot{}
 	r.pendingMutation = false
 	r.mu.Unlock()
-	if environment.Document == nil || environment.Document.ApplySnapshot(snapshot) != nil {
+	if environment.Document == nil {
+		return false
+	}
+	r.pageMu.Lock()
+	err := environment.Document.ApplySnapshot(snapshot)
+	r.pageMu.Unlock()
+	if err != nil {
 		return false
 	}
 	if environment.OnMutation != nil {
@@ -502,7 +521,10 @@ func (r *Runtime) installHostHandlers(p *peer) {
 			r.stagePendingDOMMutation(event.Document, environment)
 			return
 		}
-		if environment.Document.ApplySnapshot(event.Document) != nil {
+		r.pageMu.Lock()
+		err := environment.Document.ApplySnapshot(event.Document)
+		r.pageMu.Unlock()
+		if err != nil {
 			return
 		}
 		if environment.OnMutation != nil {
