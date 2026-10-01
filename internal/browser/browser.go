@@ -1534,6 +1534,7 @@ func (b *Browser) loadWithClient(ctx context.Context, pageURL *url.URL, commit h
 	var response *network.Response
 	var err error
 	var imageLoad *imageNavigation
+	var preloader *streamingPreloader
 	responseHeaders := func(head network.ResponseHead) {
 		if imageLoad != nil {
 			return
@@ -1542,11 +1543,26 @@ func (b *Browser) loadWithClient(ctx context.Context, pageURL *url.URL, commit h
 		if commitErr == nil {
 			imageLoad = loaded
 		}
+		mediaType, _, parseErr := mime.ParseMediaType(head.ContentType)
+		if parseErr == nil && (mediaType == "text/html" || mediaType == "application/xhtml+xml") && preloader == nil {
+			if loader, ok := resourceClient.(requestLoader); ok {
+				preloader = newStreamingPreloader(navigationContext, loader, head.URL, string(engine), pageStore.ObserveNetwork)
+			}
+		}
+	}
+	bodyChunk := func(chunk []byte) {
+		if preloader != nil {
+			preloader.write(chunk)
+		}
 	}
 	if loader, ok := documentClient.(requestLoader); ok {
-		response, err = loader.Do(navigationContext, &network.Request{Method: http.MethodGet, URL: pageURL, Kind: requestKind, Observer: pageStore.ObserveNetwork, OnResponseHeaders: responseHeaders})
+		response, err = loader.Do(navigationContext, &network.Request{Method: http.MethodGet, URL: pageURL, Kind: requestKind, Observer: pageStore.ObserveNetwork, OnResponseHeaders: responseHeaders, OnBodyChunk: bodyChunk})
 	} else {
 		response, err = documentClient.Get(navigationContext, pageURL)
+	}
+	if preloader != nil {
+		preloader.finishInput()
+		resourceClient = preloader
 	}
 	if err != nil {
 		cancel()

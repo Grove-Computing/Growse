@@ -76,6 +76,9 @@ type Request struct {
 	// OnResponseHeaders runs synchronously after response validation and before
 	// the body is read. Callers must return quickly and must not retain Header.
 	OnResponseHeaders func(ResponseHead)
+	// OnBodyChunk runs synchronously as response bytes arrive. The slice is only
+	// valid for the duration of the callback.
+	OnBodyChunk func([]byte)
 }
 
 // Observation is body-free request metadata emitted after one client operation.
@@ -323,6 +326,9 @@ func (c *Client) Do(ctx context.Context, requestData *Request) (result *Response
 		if result != nil {
 			result.CacheStatus = "hit"
 			notifyResponseHeaders(requestData, result.URL, result.StatusCode, result.Header, result.ContentType, result.Redirected)
+			if requestData.OnBodyChunk != nil && len(result.Body) != 0 {
+				requestData.OnBodyChunk(result.Body)
+			}
 		}
 		return result, resultErr
 	}
@@ -378,7 +384,7 @@ func (c *Client) Do(ctx context.Context, requestData *Request) (result *Response
 		return nil, fmt.Errorf("%w: limit is %d bytes", ErrResponseTooLarge, c.maxBodyBytes)
 	}
 
-	body, err := io.ReadAll(io.LimitReader(response.Body, c.maxBodyBytes+1))
+	body, err := readResponseBody(response.Body, c.maxBodyBytes, requestData.OnBodyChunk)
 	if err != nil {
 		if errors.Is(err, io.ErrUnexpectedEOF) {
 			return nil, fmt.Errorf("%w: %v", ErrResponseTruncated, err)
@@ -413,6 +419,29 @@ func (c *Client) Do(ctx context.Context, requestData *Request) (result *Response
 	}
 	c.cache.Store(&cacheRequest, cachedResult)
 	return prepareCachedResponse(cachedResult, requestData)
+}
+
+func readResponseBody(reader io.Reader, maxBytes int64, onChunk func([]byte)) ([]byte, error) {
+	limited := io.LimitReader(reader, maxBytes+1)
+	var body bytes.Buffer
+	buffer := make([]byte, 32<<10)
+	for {
+		read, err := limited.Read(buffer)
+		if read > 0 {
+			chunk := buffer[:read]
+			_, _ = body.Write(chunk)
+			if onChunk != nil {
+				onChunk(chunk)
+			}
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	return body.Bytes(), nil
 }
 
 func notifyResponseHeaders(request *Request, finalURL *url.URL, statusCode int, header http.Header, contentType string, redirected bool) {
