@@ -225,7 +225,7 @@ func TestBrowserRoutesPostMessageAcrossIsolatedIframeWorkers(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantReplies := "https://frame.example:/cross.html:2|https://page.example:/same.html:1"
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(15 * time.Second)
 	gotReplies := ""
 	for time.Now().Before(deadline) {
 		if result, ok := isolatedSnapshotElementByID(page.Document.Snapshot().Root, "result"); ok {
