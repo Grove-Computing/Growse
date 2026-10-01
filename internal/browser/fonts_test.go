@@ -63,6 +63,10 @@ func TestNavigateLoadsWebFontsOnlyForExplicitJavaScriptEngine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	deadline := time.Now().Add(time.Second)
+	for len(jsPage.Fonts) == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
 	if len(jsPage.Fonts) != 1 || !jsPage.Fonts[0].Decoded || len(jsLoader.requested) != 2 {
 		t.Fatalf("JavaScript page fonts=%#v requested=%#v", jsPage.Fonts, jsLoader.requested)
 	}
@@ -84,10 +88,17 @@ func TestWebFontTimeoutKeepsPageVisibleWithBundledFallback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
-		t.Fatalf("optional font timeout took %v", elapsed)
+	if elapsed := time.Since(started); elapsed > 100*time.Millisecond {
+		t.Fatalf("navigation waited for optional font: %v", elapsed)
 	}
-	if page.Document == nil || page.WebFonts == nil || len(page.FontErrors) != 1 || page.Fonts[0].Error != "font load timed out" {
+	if page.Document == nil || page.WebFonts == nil {
+		t.Fatalf("fallback page was not committed: %#v", page)
+	}
+	deadline := time.Now().Add(time.Second)
+	for len(page.FontErrors) == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if len(page.FontErrors) != 1 || len(page.Fonts) != 1 || page.Fonts[0].Error != "font load timed out" {
 		t.Fatalf("page font fallback state = fonts:%#v errors:%#v", page.Fonts, page.FontErrors)
 	}
 	tree := layoutmodel.BuildWithScrollAndResources(page.Document, page.ComputedStyles, page.ImageResources, page.WebFonts, 800, 600, 0, 0)

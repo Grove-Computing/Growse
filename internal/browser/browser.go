@@ -1693,7 +1693,6 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 		imageDocument = snapshotImageDocument(document)
 		replacedImages = make(map[dom.NodeID]layoutengine.ImageResource)
 		decodedImages = make(map[string]image.Image)
-		fonts, fontErrors = loadWebFonts(ctx, fontResources, response.URL, stylesheet)
 	}
 	var scriptErrors []string
 	var importMap map[string]string
@@ -1835,6 +1834,28 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	if engine == runtimemodel.EngineJavaScript && (documentHasViewportImageWork(imageDocument) || len(backgroundResources) != 0) {
 		loadContext, generation := page.beginImageLoad(context.Background())
 		b.loadPageImagesAsync(loadContext, generation, page, imageResources, baseURL, imageDocument, 1280, imagePolicy, imageBudget, imageCache, backgroundResources, backgroundPreloads, true, onMutation)
+	}
+	if engine == runtimemodel.EngineJavaScript && len(stylesheet.FontFaces) != 0 {
+		generation := page.BeginWebFontLoad()
+		go func() {
+			_, _ = loadWebFontsWithCallback(ctx, fontResources, response.URL, stylesheet, func(resource FontResource) {
+				b.mu.RLock()
+				active := b.page == page && navigationID == b.navigationID
+				b.mu.RUnlock()
+				if !active || ctx.Err() != nil {
+					return
+				}
+				committed := false
+				if resource.Loaded {
+					_, committed = page.CommitWebFontCompletionForGeneration(generation, resource)
+				} else {
+					committed = page.CommitWebFontFailureForGeneration(generation, resource)
+				}
+				if committed && onMutation != nil {
+					onMutation()
+				}
+			})
+		}()
 	}
 	for _, childRuntime := range childRuntimes {
 		if runtime, ok := childRuntime.(backgroundRuntime); ok {
