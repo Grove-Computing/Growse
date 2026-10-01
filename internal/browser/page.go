@@ -94,6 +94,7 @@ type Page struct {
 	imageGeneration     uint64
 	pendingImageLoad    *pendingImageLoad
 	imageEvents         map[dom.NodeID]string
+	imageEventsDirty    bool
 	imageCache          *imageResourceCache
 	imageDirty          ImageInvalidation
 	fontMu              sync.Mutex
@@ -178,6 +179,7 @@ func (p *Page) commitPendingImageLoad() bool {
 	}
 	p.AnimatedImages = animatedImagesForResources(pending.resources, p.imageCache)
 	p.StyleRevision++
+	p.imageEventsDirty = true
 	return true
 }
 
@@ -190,6 +192,7 @@ func (p *Page) commitImageLoad(generation uint64, resources map[dom.NodeID]layou
 	p.ImageResources, p.Images, p.ImageErrors = resources, images, boundedImageDiagnostics(failures)
 	p.AnimatedImages = animatedImagesForResources(resources, p.imageCache)
 	p.StyleRevision++
+	p.imageEventsDirty = true
 	return true
 }
 
@@ -239,6 +242,7 @@ func (p *Page) commitImageResourceLoadLocked(nodeID dom.NodeID, resource layoutm
 	if failure != "" {
 		p.ImageErrors = appendImageDiagnostic(append([]string(nil), p.ImageErrors...), failure)
 	}
+	p.imageEventsDirty = true
 	intrinsicChanged := previous.IntrinsicWidth != resource.IntrinsicWidth || previous.IntrinsicHeight != resource.IntrinsicHeight
 	p.imageDirty.Revision++
 	p.imageDirty.Target = nodeID
@@ -253,6 +257,33 @@ func (p *Page) commitImageResourceLoadLocked(nodeID dom.NodeID, resource layoutm
 		}
 		p.StyleRevision++
 	}
+}
+
+func (p *Page) commitBackgroundImageLoad(generation uint64, resource string, decoded image.Image, failure string) bool {
+	p.imageMu.Lock()
+	defer p.imageMu.Unlock()
+	if generation != p.imageGeneration {
+		return false
+	}
+	backgrounds := make(map[string]image.Image, len(p.BackgroundImages)+1)
+	for currentURL, current := range p.BackgroundImages {
+		backgrounds[currentURL] = current
+	}
+	if decoded != nil {
+		backgrounds[resource] = decoded
+	}
+	p.BackgroundImages = backgrounds
+	if failure != "" {
+		p.BackgroundErrors = appendImageDiagnostic(append([]string(nil), p.BackgroundErrors...), failure)
+	}
+	p.StyleRevision++
+	return true
+}
+
+func (p *Page) hasPendingImageEvents() bool {
+	p.imageMu.Lock()
+	defer p.imageMu.Unlock()
+	return p.imageEventsDirty
 }
 
 // ImageInvalidationSnapshot returns a payload-free copy suitable for the UI

@@ -274,7 +274,8 @@ func (b *Browser) Page() *Page {
 		runtime.CommitPendingDOMMutation()
 	}
 	page := b.currentPage()
-	if page != nil && page.commitPendingImageLoad() {
+	committedImages := page != nil && page.commitPendingImageLoad()
+	if page != nil && (committedImages || page.hasPendingImageEvents()) {
 		if _, isolated := activeRuntime.(pendingDOMMutationRuntime); isolated {
 			// Isolated resource handlers execute as page tasks and can take longer
 			// than a frame. Their DOM changes are staged until the next Page call,
@@ -285,7 +286,7 @@ func (b *Browser) Page() *Page {
 			// the caller to avoid racing layout and paint.
 			dispatchImageResourceEvents(b, page)
 		}
-		// The asynchronous loader invalidates when it stages results. If that
+		// The asynchronous loader invalidates when it publishes results. If that
 		// happens while a Gio frame is already being assembled, the wake-up can
 		// be coalesced into that frame before Page publishes the staged maps.
 		// Request one more frame after publication so decoded images never wait
@@ -890,33 +891,53 @@ func (b *Browser) UpdateViewport(width, height float32) bool {
 
 func (b *Browser) loadPageImagesAsync(loadContext context.Context, generation uint64, page *Page, imageLoader ResourceLoader, baseURL *url.URL, document *dom.Document, width float32, policy map[dom.NodeID]bool, budget *imageDecodeBudget, imageCache *imageResourceCache, backgroundResources []string, backgroundPreloads map[string]resourcePriority, loadBackgrounds bool, onMutation func()) {
 	go func() {
-		var resources map[dom.NodeID]layoutengine.ImageResource
-		var images, backgrounds map[string]image.Image
-		var failures, backgroundFailures []string
+		notify := func() {
+			b.mu.RLock()
+			active := b.page == page && page.Engine == runtimemodel.EngineJavaScript
+			b.mu.RUnlock()
+			if active && loadContext.Err() == nil && onMutation != nil {
+				onMutation()
+			}
+		}
 		var group sync.WaitGroup
 		group.Add(1)
 		go func() {
 			defer group.Done()
-			resources, images, failures = loadReplacedImagesWithCache(loadContext, imageLoader, baseURL, document, width, 1, policy, budget, imageCache)
+			_, _, _ = loadReplacedImagesWithCallback(loadContext, imageLoader, baseURL, document, width, 1, policy, budget, imageCache, func(result imageLoadResult) {
+				if page.commitImageResourceLoad(generation, result.nodeID, result.resource, result.decoded, result.failure) {
+					notify()
+				}
+			})
 		}()
 		if loadBackgrounds {
 			group.Add(1)
 			go func() {
 				defer group.Done()
-				backgrounds, backgroundFailures = loadBackgroundImageResourcesWithCache(loadContext, imageLoader, backgroundResources, budget, imageCache, backgroundPreloads)
+				_, _ = loadBackgroundImageResourcesWithCallback(loadContext, imageLoader, backgroundResources, budget, imageCache, backgroundPreloads, func(result backgroundLoadResult) {
+					if page.commitBackgroundImageLoad(generation, result.resource, result.decoded, result.failure) {
+						notify()
+					}
+				})
 			}()
 		}
-		group.Wait()
 		inlineResources, inlineImages, inlineFailures := loadInlineSVGImagesWithBudget(document, budget)
-		mergeImageResources(resources, images, inlineResources, inlineImages)
-		failures = append(failures, inlineFailures...)
-		b.mu.RLock()
-		active := b.page == page && page.Engine == runtimemodel.EngineJavaScript
-		b.mu.RUnlock()
-		staged := active && loadContext.Err() == nil && page.stageImageLoad(generation, resources, images, failures, backgrounds, backgroundFailures, loadBackgrounds)
-		if staged && onMutation != nil {
-			onMutation()
+		for nodeID, resource := range inlineResources {
+			failure := ""
+			if resource.Error != "" {
+				failure = resource.Error
+			}
+			if page.commitImageResourceLoad(generation, nodeID, resource, inlineImages[resource.URL], failure) {
+				notify()
+			}
 		}
+		if len(inlineFailures) != 0 {
+			page.imageMu.Lock()
+			if generation == page.imageGeneration {
+				page.ImageErrors = boundedImageDiagnostics(append(page.ImageErrors, inlineFailures...))
+			}
+			page.imageMu.Unlock()
+		}
+		group.Wait()
 	}()
 }
 

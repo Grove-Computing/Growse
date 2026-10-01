@@ -137,19 +137,30 @@ func backgroundImageResources(computed style.Map) []string {
 	return resources
 }
 
+type backgroundLoadResult struct {
+	resource string
+	decoded  image.Image
+	failure  string
+}
+
 func loadBackgroundImageResourcesWithCache(ctx context.Context, client ResourceLoader, resources []string, budget *imageDecodeBudget, cache *imageResourceCache, preloads map[string]resourcePriority) (map[string]image.Image, []string) {
+	return loadBackgroundImageResourcesWithCallback(ctx, client, resources, budget, cache, preloads, nil)
+}
+
+func loadBackgroundImageResourcesWithCallback(ctx context.Context, client ResourceLoader, resources []string, budget *imageDecodeBudget, cache *imageResourceCache, preloads map[string]resourcePriority, onResult func(backgroundLoadResult)) (map[string]image.Image, []string) {
 	images := make(map[string]image.Image)
-	type backgroundResult struct {
-		resource string
-		decoded  image.Image
-		failure  string
-	}
-	results := make([]backgroundResult, len(resources))
+	results := make([]backgroundLoadResult, len(resources))
 	jobs := make([]resourceJob, len(resources))
 	for index, resource := range resources {
 		index, resource := index, resource
 		jobs[index] = resourceJob{priority: backgroundResourcePriority(resource, preloads), order: index, run: func(jobContext context.Context) {
-			result := backgroundResult{resource: resource}
+			result := backgroundLoadResult{resource: resource}
+			defer func() {
+				results[index] = result
+				if onResult != nil {
+					onResult(result)
+				}
+			}()
 			if strings.HasPrefix(strings.ToLower(resource), "data:") {
 				decoded, err := decodeDataBackground(resource, budget)
 				if err != nil {
@@ -157,18 +168,15 @@ func loadBackgroundImageResourcesWithCache(ctx context.Context, client ResourceL
 				} else {
 					result.decoded = decoded
 				}
-				results[index] = result
 				return
 			}
 			resourceURL, err := url.Parse(resource)
 			if err != nil || resourceURL.Scheme != "http" && resourceURL.Scheme != "https" {
 				result.failure = "background image URL is not a supported HTTP(S) URL"
-				results[index] = result
 				return
 			}
 			if client == nil {
 				result.failure = "background image request failed: " + network.RedactedDiagnosticURL(resourceURL)
-				results[index] = result
 				return
 			}
 			loaded := cache.load(jobContext, client, resourceURL, budget)
@@ -184,12 +192,15 @@ func loadBackgroundImageResourcesWithCache(ctx context.Context, client ResourceL
 			default:
 				result.decoded = loaded.decoded
 			}
-			results[index] = result
 		}}
 	}
 	rejected := runBoundedResourceJobs(ctx, jobs)
 	for _, job := range jobs[len(jobs)-rejected:] {
-		results[job.order] = backgroundResult{resource: resources[job.order], failure: "background image resource queue saturated"}
+		result := backgroundLoadResult{resource: resources[job.order], failure: "background image resource queue saturated"}
+		results[job.order] = result
+		if onResult != nil {
+			onResult(result)
+		}
 	}
 	var errors []string
 	for _, result := range results {
@@ -282,18 +293,23 @@ func loadReplacedImagesWithPolicyAndBudget(ctx context.Context, client ResourceL
 	return loadReplacedImagesWithCache(ctx, client, baseURL, document, viewportWidth, deviceScale, eligible, budget, newImageResourceCache())
 }
 
+type imageLoadResult struct {
+	nodeID   dom.NodeID
+	resource layout.ImageResource
+	decoded  image.Image
+	failure  string
+}
+
 func loadReplacedImagesWithCache(ctx context.Context, client ResourceLoader, baseURL *url.URL, document *dom.Document, viewportWidth, deviceScale float32, eligible map[dom.NodeID]bool, budget *imageDecodeBudget, cache *imageResourceCache) (map[dom.NodeID]layout.ImageResource, map[string]image.Image, []string) {
+	return loadReplacedImagesWithCallback(ctx, client, baseURL, document, viewportWidth, deviceScale, eligible, budget, cache, nil)
+}
+
+func loadReplacedImagesWithCallback(ctx context.Context, client ResourceLoader, baseURL *url.URL, document *dom.Document, viewportWidth, deviceScale float32, eligible map[dom.NodeID]bool, budget *imageDecodeBudget, cache *imageResourceCache, onResult func(imageLoadResult)) (map[dom.NodeID]layout.ImageResource, map[string]image.Image, []string) {
 	resources := make(map[dom.NodeID]layout.ImageResource)
 	images := make(map[string]image.Image)
 	var errors []string
 	if client == nil || baseURL == nil || document == nil {
 		return resources, images, errors
-	}
-	type imageLoadResult struct {
-		nodeID   dom.NodeID
-		resource layout.ImageResource
-		decoded  image.Image
-		failure  string
 	}
 	var nodes []*dom.Node
 	var visit func(*dom.Node)
@@ -323,7 +339,11 @@ func loadReplacedImagesWithCache(ctx context.Context, client ResourceLoader, bas
 			priority: imageResourcePriority(node, target, load, preloads), order: index,
 			run: func(jobContext context.Context) {
 				resource, decoded, failure := loadReplacedImageNodeWithCache(jobContext, client, baseURL, node, viewportWidth, deviceScale, load, budget, cache)
-				results[index] = imageLoadResult{nodeID: node.ID, resource: resource, decoded: decoded, failure: failure}
+				result := imageLoadResult{nodeID: node.ID, resource: resource, decoded: decoded, failure: failure}
+				results[index] = result
+				if onResult != nil {
+					onResult(result)
+				}
 			},
 		}
 	}
@@ -331,10 +351,13 @@ func loadReplacedImagesWithCache(ctx context.Context, client ResourceLoader, bas
 	for _, job := range jobs[len(jobs)-rejected:] {
 		node := nodes[job.order]
 		alt, _ := node.Attribute("alt")
-		results[job.order] = imageLoadResult{
-			nodeID:   node.ID,
-			resource: layout.ImageResource{Alt: alt, Error: "image resource queue saturated"},
-			failure:  "image resource queue saturated",
+		result := imageLoadResult{
+			nodeID: node.ID, resource: layout.ImageResource{Alt: alt, Error: "image resource queue saturated"},
+			failure: "image resource queue saturated",
+		}
+		results[job.order] = result
+		if onResult != nil {
+			onResult(result)
 		}
 	}
 	for _, result := range results {
@@ -537,6 +560,7 @@ func dispatchImageResourceEvents(browserState *Browser, page *Page) {
 	}
 	var pending []events.Event
 	page.imageMu.Lock()
+	page.imageEventsDirty = false
 	if page.imageEvents == nil {
 		page.imageEvents = make(map[dom.NodeID]string)
 	}
