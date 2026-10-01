@@ -103,6 +103,7 @@ type Browser struct {
 	devToolsSession  *devtools.SessionStore
 	serviceWorkers   *serviceworker.Manager
 	onNavigation     func(NavigationRecord)
+	sharedImages     *sharedDecodedImageCache
 }
 
 var nextStorageSourceID atomic.Uint64
@@ -157,7 +158,7 @@ func NewWithRuntimeFactoryAndStorageAndServiceWorkers(client ResourceLoader, fac
 	}
 	return &Browser{
 		client: client, runtimeFactory: factory, engineFactory: runtimemodel.ForGo(factory), engine: runtimemodel.EngineGo,
-		history: newHistory(), clock: animationmodel.SystemClock{}, storage: manager, active: true,
+		history: newHistory(), clock: animationmodel.SystemClock{}, storage: manager, active: true, sharedImages: newSharedDecodedImageCache(),
 		storageSourceID: nextStorageSourceID.Add(1), devToolsSession: devtools.NewSessionStore(),
 		serviceWorkers: serviceWorkers,
 	}
@@ -237,6 +238,26 @@ func (b *Browser) SetTabActive(active bool) {
 }
 
 // SetFetchLimiter sets the Browser Session shared WebGo Fetch limit.
+
+func (b *Browser) newImageResourceCache() *imageResourceCache {
+	b.mu.Lock()
+	if b.sharedImages == nil {
+		b.sharedImages = newSharedDecodedImageCache()
+	}
+	shared := b.sharedImages
+	b.mu.Unlock()
+	return newImageResourceCacheWithShared(shared)
+}
+
+func (b *Browser) setSharedImageCache(shared *sharedDecodedImageCache) {
+	if b == nil || shared == nil {
+		return
+	}
+	b.mu.Lock()
+	b.sharedImages = shared
+	b.mu.Unlock()
+}
+
 func (b *Browser) SetFetchLimiter(limiter *fetchapi.Limiter) {
 	if b == nil {
 		return
@@ -1689,7 +1710,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	}
 	computedStyles, styleErrors := computeStableStylesWithDiagnostics(document, stylesheet, style.InteractionState{}, 1280, 720, reducedMotion, engine == runtimemodel.EngineJavaScript)
 	imageBudget := newImageDecodeBudget()
-	imageCache := newImageResourceCache()
+	imageCache := b.newImageResourceCache()
 	backgroundResources := backgroundImageResources(computedStyles)
 	backgroundPreloads := imagePreloadPriorities(document, baseURL)
 	backgroundImages := make(map[string]image.Image)

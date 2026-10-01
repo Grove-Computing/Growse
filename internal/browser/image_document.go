@@ -66,7 +66,7 @@ func (b *Browser) commitImageResponseHead(ctx context.Context, head network.Resp
 	document, nodeID := buildImageDocument(head.URL)
 	stylesheet := &css.Stylesheet{}
 	computed, styleErrors := computeStableStylesWithDiagnostics(document, stylesheet, style.InteractionState{}, 1280, 720, reducedMotion, engine == runtimemodel.EngineJavaScript)
-	cache := newImageResourceCache()
+	cache := b.newImageResourceCache()
 	resource := layoutengine.ImageResource{URL: head.URL.String(), Alt: path.Base(head.URL.Path), Deferred: true}
 	page := &Page{
 		URL: cloneURL(head.URL), BaseURL: cloneURL(head.URL), StatusCode: head.StatusCode, ContentType: head.ContentType,

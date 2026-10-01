@@ -14,7 +14,11 @@ import (
 	"github.com/Grove-Computing/Growse/internal/network"
 )
 
-const maxPageImageCacheBytes = 256 << 20
+const (
+	maxPageImageCacheBytes     = 256 << 20
+	maxSharedDecodedImageBytes = 128 << 20
+	maxSharedDecodedImages     = 256
+)
 
 type imageLoadFailure uint8
 
@@ -83,12 +87,98 @@ type imageResourceCache struct {
 	coalesced  uint64
 	canceled   uint64
 	rejected   uint64
+	shared     *sharedDecodedImageCache
+}
+
+type sharedDecodedImageKey struct{ URL, Validator string }
+type sharedDecodedImage struct {
+	decoded       image.Image
+	width, height int
+	orientation   int
+	animation     *animatedImageData
+	animationErr  string
+	bytes         int64
+	lastUsed      uint64
+}
+type sharedDecodedImageCache struct {
+	mu      sync.Mutex
+	entries map[sharedDecodedImageKey]sharedDecodedImage
+	bytes   int64
+	tick    uint64
+}
+
+func newSharedDecodedImageCache() *sharedDecodedImageCache {
+	return &sharedDecodedImageCache{entries: make(map[sharedDecodedImageKey]sharedDecodedImage)}
+}
+
+func (cache *sharedDecodedImageCache) load(rawURL, validator string) (sharedDecodedImage, bool) {
+	if cache == nil || validator == "" {
+		return sharedDecodedImage{}, false
+	}
+	key := sharedDecodedImageKey{URL: rawURL, Validator: validator}
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	entry, ok := cache.entries[key]
+	if !ok {
+		return sharedDecodedImage{}, false
+	}
+	cache.tick++
+	entry.lastUsed = cache.tick
+	cache.entries[key] = entry
+	return entry, true
+}
+
+func (cache *sharedDecodedImageCache) store(rawURL, validator string, source cachedImageResource) {
+	if cache == nil || validator == "" || source.decoded == nil {
+		return
+	}
+	key := sharedDecodedImageKey{URL: rawURL, Validator: validator}
+	bytes := int64(source.width) * int64(source.height) * 4
+	if bytes <= 0 || bytes > maxSharedDecodedImageBytes {
+		return
+	}
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	if previous, ok := cache.entries[key]; ok {
+		cache.bytes -= previous.bytes
+	}
+	cache.tick++
+	cache.entries[key] = sharedDecodedImage{decoded: source.decoded, width: source.width, height: source.height, orientation: source.orientation, animation: source.animation, animationErr: source.animationErr, bytes: bytes, lastUsed: cache.tick}
+	cache.bytes += bytes
+	for cache.bytes > maxSharedDecodedImageBytes || len(cache.entries) > maxSharedDecodedImages {
+		var oldest sharedDecodedImageKey
+		oldestTick := ^uint64(0)
+		for currentKey, current := range cache.entries {
+			if current.lastUsed < oldestTick {
+				oldest, oldestTick = currentKey, current.lastUsed
+			}
+		}
+		entry := cache.entries[oldest]
+		cache.bytes -= entry.bytes
+		delete(cache.entries, oldest)
+	}
+}
+
+func (cache *sharedDecodedImageCache) clear() {
+	if cache == nil {
+		return
+	}
+	cache.mu.Lock()
+	cache.entries = make(map[sharedDecodedImageKey]sharedDecodedImage)
+	cache.bytes, cache.tick = 0, 0
+	cache.mu.Unlock()
 }
 
 type imageResourceCacheStats struct{ hits, misses, evictions, decodes, resizes, coalesced, canceled, rejected uint64 }
 
 func newImageResourceCache() *imageResourceCache {
 	return newImageResourceCacheWithLimits(maxPageImageCacheBytes, maxPageImageResources)
+}
+
+func newImageResourceCacheWithShared(shared *sharedDecodedImageCache) *imageResourceCache {
+	cache := newImageResourceCacheWithLimits(maxPageImageCacheBytes, maxPageImageResources)
+	cache.shared = shared
+	return cache
 }
 
 func newImageResourceCacheWithLimits(maxBytes int64, maxEntries int) *imageResourceCache {
@@ -223,17 +313,28 @@ func (cache *imageResourceCache) fetch(client ResourceLoader, target *url.URL, b
 		if mediaType == "image/jpeg" {
 			result.orientation = jpegEXIFOrientation(response.Body)
 		}
-		cache.mu.Lock()
-		cache.decodes++
-		cache.mu.Unlock()
-		result.decoded, result.width, result.height, result.err = decodeImageResponseWithBudget(result.body, result.contentType, budget)
-		if result.err != nil {
-			result.failure = imageLoadDecodeFailure
-		} else if animation, animationErr := decodeAnimatedImage(result.body, mediaType, budget); animationErr != nil {
-			result.failure = imageLoadDecodeFailure
-			result.animationErr = "animated image frame decode failed"
+		if shared, ok := cache.shared.load(key, result.validator); ok && budget.reserveSurface(shared.width, shared.height) {
+			result.decoded, result.width, result.height = shared.decoded, shared.width, shared.height
+			result.orientation, result.animation, result.animationErr = shared.orientation, shared.animation, shared.animationErr
+			cache.mu.Lock()
+			cache.hits++
+			cache.mu.Unlock()
 		} else {
-			result.animation = animation
+			cache.mu.Lock()
+			cache.decodes++
+			cache.mu.Unlock()
+			result.decoded, result.width, result.height, result.err = decodeImageResponseWithBudget(result.body, result.contentType, budget)
+			if result.err != nil {
+				result.failure = imageLoadDecodeFailure
+			} else if animation, animationErr := decodeAnimatedImage(result.body, mediaType, budget); animationErr != nil {
+				result.failure = imageLoadDecodeFailure
+				result.animationErr = "animated image frame decode failed"
+			} else {
+				result.animation = animation
+			}
+			if result.failure == imageLoadOK {
+				cache.shared.store(key, result.validator, result)
+			}
 		}
 	}
 

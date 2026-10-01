@@ -172,6 +172,13 @@ func NewClientWithCacheRoot(httpClient *http.Client, maxBodyBytes int64, cacheRo
 	return client, nil
 }
 
+// FlushCache waits for queued disk-cache writes without affecting live requests.
+func (c *Client) FlushCache() {
+	if c != nil && c.cache != nil {
+		c.cache.FlushDisk()
+	}
+}
+
 func configuredHTTPClient(source *http.Client) *http.Client {
 	copy := *source
 	if copy.Transport == nil {
