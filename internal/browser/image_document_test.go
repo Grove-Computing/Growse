@@ -60,6 +60,7 @@ func TestImageNavigationPublishesDocumentBeforeBodyCompletes(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
+	page = browser.Page()
 	resource := page.ImageResources[imageNode.ID]
 	if !resource.Loaded || resource.IntrinsicWidth != 3 || resource.IntrinsicHeight != 2 || page.Images[resource.URL] == nil {
 		t.Fatalf("completed image resource = %#v", resource)

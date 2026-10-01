@@ -170,7 +170,7 @@ func (b *Browser) finishImageNavigation(navigation *imageNavigation, response *n
 	}
 	page.Source = append([]byte(nil), response.Body...)
 	page.StatusCode, page.ContentType = response.StatusCode, response.ContentType
-	page.commitImageResourceLoad(navigation.generation, navigation.nodeID, resource, decoded, failure)
+	page.stageImageResourceLoad(navigation.generation, navigation.nodeID, resource, decoded, failure)
 	page.Document.SetReadyState("complete")
 	if onMutation != nil {
 		onMutation()

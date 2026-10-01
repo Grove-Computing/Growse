@@ -65,6 +65,7 @@ func TestNavigateLoadsWebFontsOnlyForExplicitJavaScriptEngine(t *testing.T) {
 	}
 	deadline := time.Now().Add(time.Second)
 	for len(jsPage.Fonts) == 0 && time.Now().Before(deadline) {
+		jsPage = jsBrowser.Page()
 		time.Sleep(time.Millisecond)
 	}
 	if len(jsPage.Fonts) != 1 || !jsPage.Fonts[0].Decoded || len(jsLoader.requested) != 2 {
@@ -96,6 +97,7 @@ func TestWebFontTimeoutKeepsPageVisibleWithBundledFallback(t *testing.T) {
 	}
 	deadline := time.Now().Add(time.Second)
 	for len(page.FontErrors) == 0 && time.Now().Before(deadline) {
+		page = browserState.Page()
 		time.Sleep(time.Millisecond)
 	}
 	if len(page.FontErrors) != 1 || len(page.Fonts) != 1 || page.Fonts[0].Error != "font load timed out" {

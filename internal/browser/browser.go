@@ -295,6 +295,7 @@ func (b *Browser) Page() *Page {
 		runtime.CommitPendingDOMMutation()
 	}
 	page := b.currentPage()
+	committedFonts := page != nil && page.commitPendingWebFonts()
 	committedImages := page != nil && page.commitPendingImageLoad()
 	if page != nil && (committedImages || page.hasPendingImageEvents()) {
 		if _, isolated := activeRuntime.(pendingDOMMutationRuntime); isolated {
@@ -312,6 +313,14 @@ func (b *Browser) Page() *Page {
 		// be coalesced into that frame before Page publishes the staged maps.
 		// Request one more frame after publication so decoded images never wait
 		// for an unrelated resize, hover, or input event to become visible.
+		b.mu.RLock()
+		onMutation := b.onMutation
+		b.mu.RUnlock()
+		if onMutation != nil {
+			onMutation()
+		}
+	}
+	if committedFonts {
 		b.mu.RLock()
 		onMutation := b.onMutation
 		b.mu.RUnlock()
@@ -925,7 +934,7 @@ func (b *Browser) loadPageImagesAsync(loadContext context.Context, generation ui
 		go func() {
 			defer group.Done()
 			_, _, _ = loadReplacedImagesWithCallback(loadContext, imageLoader, baseURL, document, width, 1, policy, budget, imageCache, func(result imageLoadResult) {
-				if page.commitImageResourceLoad(generation, result.nodeID, result.resource, result.decoded, result.failure) {
+				if page.stageImageResourceLoad(generation, result.nodeID, result.resource, result.decoded, result.failure) {
 					notify()
 				}
 			})
@@ -935,7 +944,7 @@ func (b *Browser) loadPageImagesAsync(loadContext context.Context, generation ui
 			go func() {
 				defer group.Done()
 				_, _ = loadBackgroundImageResourcesWithCallback(loadContext, imageLoader, backgroundResources, budget, imageCache, backgroundPreloads, func(result backgroundLoadResult) {
-					if page.commitBackgroundImageLoad(generation, result.resource, result.decoded, result.failure) {
+					if page.stageBackgroundImageLoad(generation, result.resource, result.decoded, result.failure) {
 						notify()
 					}
 				})
@@ -947,17 +956,11 @@ func (b *Browser) loadPageImagesAsync(loadContext context.Context, generation ui
 			if resource.Error != "" {
 				failure = resource.Error
 			}
-			if page.commitImageResourceLoad(generation, nodeID, resource, inlineImages[resource.URL], failure) {
+			if page.stageImageResourceLoad(generation, nodeID, resource, inlineImages[resource.URL], failure) {
 				notify()
 			}
 		}
-		if len(inlineFailures) != 0 {
-			page.imageMu.Lock()
-			if generation == page.imageGeneration {
-				page.ImageErrors = boundedImageDiagnostics(append(page.ImageErrors, inlineFailures...))
-			}
-			page.imageMu.Unlock()
-		}
+		_ = inlineFailures
 		group.Wait()
 	}()
 }
@@ -1882,12 +1885,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 				if !active || ctx.Err() != nil {
 					return
 				}
-				committed := false
-				if resource.Loaded {
-					_, committed = page.CommitWebFontCompletionForGeneration(generation, resource)
-				} else {
-					committed = page.CommitWebFontFailureForGeneration(generation, resource)
-				}
+				committed := page.stageWebFontResult(generation, resource)
 				if committed && onMutation != nil {
 					onMutation()
 				}

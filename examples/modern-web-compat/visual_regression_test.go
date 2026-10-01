@@ -56,6 +56,7 @@ func TestFrameworkFixtureVisualRegression(t *testing.T) {
 	engine.UpdateViewport(1024, 720)
 	waitForFixtureText(t, engine, mutations, "next-hydration-marker", "hydrated")
 	waitForFixtureRevision(t, engine, mutations, 6)
+	waitForFixtureResources(t, engine, mutations, 2, 1)
 	page = engine.Page()
 	actual.States = append(actual.States, visualFixtureState("next-hydrated", page, "__next", "next-hydration-marker", "next-count"))
 	if !engine.DispatchClick(fixtureNode(t, page, "next-counter").ID, 0, 0) {
@@ -77,6 +78,7 @@ func TestFrameworkFixtureVisualRegression(t *testing.T) {
 	engine.UpdateViewport(1024, 720)
 	waitForFixtureText(t, engine, mutations, "chunk-state", "chunk failure isolated")
 	waitForFixtureRevision(t, engine, mutations, 5)
+	waitForFixtureResources(t, engine, mutations, 1, 1)
 	actual.States = append(actual.States, visualFixtureState("fallback-devtools", engine.Page(), "diagnostic-root", "chunk-state", "broken-image"))
 
 	wantBytes, err := os.ReadFile("testdata/framework-visual.golden.json")
@@ -92,6 +94,28 @@ func TestFrameworkFixtureVisualRegression(t *testing.T) {
 		encoded, _ := json.MarshalIndent(actual, "", "  ")
 		t.Fatalf("framework visual snapshot changed; inspect before updating golden\n--- actual ---\n%s", encoded)
 	}
+}
+
+func waitForFixtureResources(t *testing.T, engine *browser.Browser, mutations <-chan struct{}, images, fonts int) {
+	t.Helper()
+	deadline := time.NewTimer(3 * time.Second)
+	defer deadline.Stop()
+	for {
+		page := engine.Page()
+		if page != nil && len(page.ImageResources) >= images && len(page.Fonts) >= fonts {
+			return
+		}
+		select {
+		case <-mutations:
+		case <-deadline.C:
+			t.Fatalf("resource state = images:%d/%d fonts:%d/%d", len(page.ImageResources), images, len(page.Fonts), fonts)
+		}
+	}
+}
+
+func waitForFixtureFonts(t *testing.T, engine *browser.Browser, mutations <-chan struct{}, fonts int) {
+	t.Helper()
+	waitForFixtureResources(t, engine, mutations, 0, fonts)
 }
 
 func waitForFixtureRevision(t *testing.T, engine *browser.Browser, mutations <-chan struct{}, want uint64) {
