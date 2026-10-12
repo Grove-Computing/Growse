@@ -3,7 +3,7 @@ module github.com/Grove-Computing/Growse
 go 1.26.6
 
 require (
-	gioui.org v0.10.2
+	gioui.org v0.10.3
 	github.com/dop251/goja v0.0.0-20260822123354-58e940e0d230
 	github.com/evanw/esbuild v0.28.2
 	github.com/gen2brain/avif v0.6.0
@@ -18,8 +18,8 @@ require (
 	github.com/traefik/yaegi v0.16.1
 	golang.org/x/exp/shiny v0.0.0-20250408133849-7e4ce0ab07d0
 	golang.org/x/image v0.46.0
-	golang.org/x/net v0.59.0
-	golang.org/x/sys v0.48.0
+	golang.org/x/net v0.60.0
+	golang.org/x/sys v0.49.0
 )
 
 require (
@@ -27,6 +27,7 @@ require (
 	github.com/dlclark/regexp2/v2 v2.5.2 // indirect
 	github.com/ebitengine/purego v0.10.1 // indirect
 	github.com/go-sourcemap/sourcemap v2.1.3+incompatible // indirect
+	github.com/godbus/dbus/v5 v5.2.2 // indirect
 	github.com/google/pprof v0.0.0-20230207041349-798e818bf904 // indirect
 	golang.org/x/text v0.42.0 // indirect
 )
