@@ -1,4 +1,4 @@
-FROM golang:1.27-bookworm@sha256:69a7b9788769bec032d238959b61854e9ae87f57be9029ec04e9885fabf99195 AS build
+FROM golang:1.27-bookworm@sha256:dc0963f32053e4bc451d24d87e3892d42d01021b61f093e98eb95c0352bb84b0 AS build
 
 RUN sed -i 's|http://deb.debian.org|https://deb.debian.org|g; s|http://security.debian.org|https://security.debian.org|g' /etc/apt/sources.list.d/debian.sources \
     && apt-get update \
@@ -25,7 +25,7 @@ RUN CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
     && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
     go build -trimpath -ldflags="-s -w" -o /out/growse-smoke ./cmd/growse-smoke
 
-FROM ubuntu:26.04@sha256:da6fc2be547864451aa253836dd926da33623312df4a9a243e35dc877c378a78
+FROM ubuntu:26.04@sha256:6a06111c3b0a8600feadb270aec771dc239bf407b25625f93f44ab00e11f4d3c
 
 # Ubuntuのベースイメージに含まれるPebbleはGrowseでは使用しない。
 # 不要なGoバイナリをランタイムへ残さず、脆弱性の影響範囲から外す。
@@ -34,6 +34,8 @@ RUN apt-get update \
     && sed -i 's|http://archive.ubuntu.com|https://archive.ubuntu.com|g; s|http://security.ubuntu.com|https://security.ubuntu.com|g' /etc/apt/sources.list.d/ubuntu.sources \
     && apt-get update \
     && apt-get install --no-install-recommends -y \
+        apt \
+        libapt-pkg7.0 \
         fonts-noto-cjk \
         libegl1 \
         libffi8 \
@@ -57,6 +59,13 @@ COPY --from=build /src/examples/external-web-platform /usr/local/share/growse/ex
 COPY --from=build /src/examples/modern-web-compat /usr/local/share/growse/examples/modern-web-compat
 COPY --from=build /src/examples/browser-grade-compat /usr/local/share/growse/examples/browser-grade-compat
 COPY --from=build /src/examples/css-layout-2026 /usr/local/share/growse/examples/css-layout-2026
+
+# スモークテストは生成済みの静的fixtureだけを使用する。ビルド用の依存関係定義を
+# ランタイムへ含めると、実行されないnpm依存関係までイメージスキャン対象になる。
+RUN rm -f \
+    /usr/local/share/growse/examples/modern-web-compat/package.json \
+    /usr/local/share/growse/examples/modern-web-compat/pnpm-lock.yaml \
+    /usr/local/share/growse/examples/modern-web-compat/pnpm-workspace.yaml
 
 USER growse
 ENTRYPOINT ["growse"]
