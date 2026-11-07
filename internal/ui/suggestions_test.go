@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"gioui.org/f32"
 	"gioui.org/io/input"
@@ -13,6 +14,7 @@ import (
 	"image"
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/Grove-Computing/Growse/internal/browser"
 	"github.com/Grove-Computing/Growse/internal/omnibox"
@@ -48,6 +50,35 @@ func TestSuggestionPipelineConnectedToTabsAndLocalSnapshots(t *testing.T) {
 	next, _ = ui.suggestions.Results()
 	if next <= generation {
 		t.Fatal("provider change did not invalidate generation")
+	}
+}
+
+func TestSuggestionRemoteFailureKeepsDraftAndLocalCandidates(t *testing.T) {
+	ui := NewBrowserUI(nil, nil)
+	defer ui.Close()
+	ui.SetSuggestionSnapshot(omnibox.Snapshot{History: []omnibox.Candidate{{Primary: "Guide history", URL: "https://local.example/guide"}}})
+	failed := make(chan struct{})
+	ui.SetSuggestionProvider(func(_ context.Context, query string) ([]string, error) {
+		if query != "guide" {
+			t.Errorf("remote query = %q", query)
+		}
+		close(failed)
+		return nil, errors.New("unavailable")
+	}, true)
+	ui.address.SetText("guide")
+	ui.refreshSuggestions()
+
+	select {
+	case <-failed:
+	case <-time.After(time.Second):
+		t.Fatal("remote failure did not complete")
+	}
+	ui.syncSuggestions()
+	if ui.address.Text() != "guide" {
+		t.Fatalf("remote failure changed draft to %q", ui.address.Text())
+	}
+	if len(ui.suggestionPopup.candidates) != 2 || ui.suggestionPopup.candidates[1].Source != omnibox.HistorySource {
+		t.Fatalf("remote failure changed local candidates: %+v", ui.suggestionPopup.candidates)
 	}
 }
 
