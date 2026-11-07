@@ -472,6 +472,24 @@ func TestFailedNavigationRestoresHomeViewAndQuery(t *testing.T) {
 	}
 }
 
+func TestHomeKeepsOversizedQueryAndShowsFiniteError(t *testing.T) {
+	ui := NewBrowserUI(&stubNavigator{}, nil)
+	defer ui.Close()
+	state := ui.homeState(0)
+	query := strings.Repeat("a", omnibox.MaxQueryBytes+1)
+	state.editor.SetText(query)
+
+	ui.refreshHomeSuggestions(state)
+	if state.editor.Text() != query || state.errorMessage == "" || len(state.candidates) != 0 {
+		t.Fatalf("refresh state = input %d bytes error %q candidates %d", len(state.editor.Text()), state.errorMessage, len(state.candidates))
+	}
+
+	ui.submitHomeInput(state, omniboxCurrentTab)
+	if state.editor.Text() != query || state.errorMessage == "" || !ui.statusHasError {
+		t.Fatalf("submit state = input %d bytes error %q statusError %t", len(state.editor.Text()), state.errorMessage, ui.statusHasError)
+	}
+}
+
 func flattenSemanticNodes(nodes []input.SemanticNode) []input.SemanticNode {
 	// Router.AppendSemantics already returns every node in tree order while also
 	// retaining child links for assistive-technology consumers.

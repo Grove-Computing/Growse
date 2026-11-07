@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"reflect"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -42,6 +43,25 @@ func TestSearchPanelUsesOmniboxRankingForEveryScope(t *testing.T) {
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("scope %q results = %#v, want %#v", scope, got, want)
 		}
+	}
+}
+
+func TestSearchPanelKeepsInputAndReportsSharedLimit(t *testing.T) {
+	ui := NewBrowserUI(nil, nil)
+	defer ui.Close()
+	panel := &ui.searchPanel
+	oversized := strings.Repeat("a", omnibox.MaxInputBytes+1)
+	panel.editor.SetText(oversized)
+	ui.refreshSearchPanel()
+	if panel.editor.Text() != oversized || panel.errorMessage == "" || len(panel.candidates) != 0 {
+		t.Fatalf("oversized state = input %d bytes error %q candidates %d", len(panel.editor.Text()), panel.errorMessage, len(panel.candidates))
+	}
+
+	localOnly := strings.Repeat("b", omnibox.MaxQueryBytes+1)
+	panel.editor.SetText(localOnly)
+	ui.refreshSearchPanel()
+	if panel.editor.Text() != localOnly || panel.errorMessage != "" {
+		t.Fatalf("local-only state = input %d bytes error %q", len(panel.editor.Text()), panel.errorMessage)
 	}
 }
 

@@ -44,6 +44,19 @@ func TestClassifyRejectsUnsafeOrAmbiguousURLShapedInput(t *testing.T) {
 	}
 }
 
+func TestValidateInputKeepsLocalAndProviderBoundariesSeparate(t *testing.T) {
+	localOnly := strings.Repeat("a", MaxQueryBytes+1)
+	if err := ValidateInput(localOnly); err != nil {
+		t.Fatalf("local-only input rejected: %v", err)
+	}
+	if got := Classify(localOnly); got.Kind != Invalid || got.Error == "" {
+		t.Fatalf("provider query classification = %+v, want finite limit error", got)
+	}
+	if err := ValidateInput(strings.Repeat("a", MaxInputBytes+1)); err == nil {
+		t.Fatal("oversized shared input was accepted")
+	}
+}
+
 func TestClassifyRecognizesOnlyLeadingReservedCommands(t *testing.T) {
 	for _, test := range []struct {
 		input string
