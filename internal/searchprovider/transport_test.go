@@ -42,6 +42,26 @@ func TestTransportBoundsPrivacyAndEncoding(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestMalformedSuggestionResponsesReturnFiniteError(t *testing.T) {
+	for _, body := range []string{
+		`{`,
+		`{"phrase":"not-an-array"}`,
+		`["other query",["term"]]`,
+		`["query",{"term":"not-an-array"}]`,
+		`[{"phrase":1}]`,
+	} {
+		t.Run(body, func(t *testing.T) {
+			tr := NewTransport(&http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header), Request: r}, nil
+			})})
+			terms, err := tr.Suggestions(Builtin())(context.Background(), "query")
+			if err != ErrResponse || len(terms) != 0 {
+				t.Fatalf("malformed response = terms %#v error %v", terms, err)
+			}
+		})
+	}
+}
 func TestRedirectPolicy(t *testing.T) {
 	tr := NewTransport(nil)
 	for _, target := range []string{"http://example.com/", "https://u:p@example.com/", "https://example.com/#x"} {

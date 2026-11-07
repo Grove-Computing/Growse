@@ -106,6 +106,50 @@ func TestSuggestionRequestBlocksSensitiveOriginalAndResolvedInput(t *testing.T) 
 	}
 }
 
+func TestBrowserUICloseCancelsPendingSuggestionWithoutWaiting(t *testing.T) {
+	ui := NewBrowserUI(nil, nil)
+	started := make(chan context.Context, 1)
+	finished := make(chan struct{})
+	ui.SetSuggestionProvider(func(ctx context.Context, _ string) ([]string, error) {
+		started <- ctx
+		<-ctx.Done()
+		close(finished)
+		return nil, ctx.Err()
+	}, true)
+	ui.address.SetText("pending query")
+	ui.refreshSuggestions()
+
+	var requestContext context.Context
+	select {
+	case requestContext = <-started:
+	case <-time.After(time.Second):
+		t.Fatal("pending suggestion did not start")
+	}
+	closed := make(chan struct{})
+	go func() {
+		ui.Close()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("window close waited for remote suggestion")
+	}
+	select {
+	case <-requestContext.Done():
+	case <-time.After(time.Second):
+		t.Fatal("window close did not cancel request context")
+	}
+	select {
+	case <-finished:
+	case <-time.After(time.Second):
+		t.Fatal("remote suggestion did not finish after cancellation")
+	}
+	if ui.address.Text() != "pending query" {
+		t.Fatalf("window close changed draft to %q", ui.address.Text())
+	}
+}
+
 func suggestionFrame(ui *BrowserUI, router *input.Router, gtx *layout.Context) {
 	gtx.Reset()
 	ui.Layout(*gtx)
