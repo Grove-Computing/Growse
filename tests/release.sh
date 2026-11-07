@@ -50,7 +50,7 @@ for value in \
     'tar -czf "dist/$archive_name"' \
     "Compress-Archive" \
     ".sha256" \
-    "anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26" \
+    "anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c" \
     'dist/growse_${{ env.RELEASE_TAG }}_${{ matrix.artifact }}.spdx.json' \
     'scripts/validate-sbom.sh' \
     "actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8" \
