@@ -356,12 +356,18 @@ func (ui *BrowserUI) layoutSearchPanel(gtx layout.Context) layout.Dimensions {
 						}
 						button := material.Button(ui.theme, &ui.searchPanel.clearHistoryButton, "Clear history")
 						button.Background = color.NRGBA{R: 190, G: 24, B: 93, A: 255}
+						if gtx.Focused(&ui.searchPanel.clearHistoryButton) {
+							button.Background = color.NRGBA{R: 30, G: 64, B: 175, A: 255}
+						}
 						return button.Layout(gtx)
 					}),
 					layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 						button := material.Button(ui.theme, &ui.searchPanel.closeButton, "Close")
 						button.Background = color.NRGBA{R: 71, G: 85, B: 105, A: 255}
+						if gtx.Focused(&ui.searchPanel.closeButton) {
+							button.Background = color.NRGBA{R: 30, G: 64, B: 175, A: 255}
+						}
 						return button.Layout(gtx)
 					}),
 				)
@@ -388,7 +394,8 @@ func (ui *BrowserUI) layoutSearchPanelEditor(gtx layout.Context) layout.Dimensio
 	height := gtx.Dp(unit.Dp(48))
 	gtx.Constraints.Min.Y = height
 	gtx.Constraints.Max.Y = height
-	return widget.Border{Color: color.NRGBA{R: 148, G: 163, B: 184, A: 255}, CornerRadius: unit.Dp(10), Width: unit.Dp(1)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+	borderColor, borderWidth := focusBorder(gtx.Focused(ui.searchPanel.editor))
+	return widget.Border{Color: borderColor, CornerRadius: unit.Dp(10), Width: borderWidth}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		paint.FillShape(gtx.Ops, color.NRGBA{R: 255, G: 255, B: 255, A: 255}, clip.UniformRRect(image.Rectangle{Max: gtx.Constraints.Min}, gtx.Dp(unit.Dp(10))).Op(gtx.Ops))
 		editor := material.Editor(ui.theme, ui.searchPanel.editor, "Search open tabs, history, and bookmarks")
 		return layout.Inset{Top: unit.Dp(10), Right: unit.Dp(14), Bottom: unit.Dp(8), Left: unit.Dp(14)}.Layout(gtx, editor.Layout)
@@ -418,6 +425,7 @@ func (ui *BrowserUI) layoutSearchPanelScopeButton(clickable *widget.Clickable, l
 			button.Background = color.NRGBA{R: 37, G: 99, B: 235, A: 255}
 			button.Color = color.NRGBA{R: 255, G: 255, B: 255, A: 255}
 		}
+		button.Background = focusSurface(gtx.Focused(clickable), button.Background)
 		return button.Layout(gtx)
 	}
 }
@@ -444,7 +452,7 @@ func (ui *BrowserUI) layoutSearchPanelResult(gtx layout.Context, index int, cand
 	gtx.Constraints.Min.Y = height
 	gtx.Constraints.Max.Y = height
 	background := color.NRGBA{R: 255, G: 255, B: 255, A: 255}
-	if index == panel.selected {
+	if index == panel.selected || gtx.Focused(&panel.rows[index]) {
 		background = color.NRGBA{R: 219, G: 234, B: 254, A: 255}
 	}
 	paint.FillShape(gtx.Ops, background, clip.UniformRRect(image.Rectangle{Max: gtx.Constraints.Min}, gtx.Dp(unit.Dp(8))).Op(gtx.Ops))
@@ -479,6 +487,10 @@ func (ui *BrowserUI) layoutSearchPanelResult(gtx layout.Context, index int, cand
 			button := material.Button(ui.theme, &panel.deleteButtons[index], "Delete")
 			button.Background = color.NRGBA{R: 226, G: 232, B: 240, A: 255}
 			button.Color = color.NRGBA{R: 127, G: 29, B: 29, A: 255}
+			if gtx.Focused(&panel.deleteButtons[index]) {
+				button.Background = color.NRGBA{R: 30, G: 64, B: 175, A: 255}
+				button.Color = color.NRGBA{R: 255, G: 255, B: 255, A: 255}
+			}
 			return layout.Inset{Right: unit.Dp(8)}.Layout(gtx, button.Layout)
 		}),
 	)
@@ -555,12 +567,18 @@ func (ui *BrowserUI) layoutClearHistoryConfirmation(gtx layout.Context) layout.D
 							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 								button := material.Button(ui.theme, &panel.cancelClearHistoryButton, "Cancel")
 								button.Background = color.NRGBA{R: 100, G: 116, B: 139, A: 255}
+								if gtx.Focused(&panel.cancelClearHistoryButton) {
+									button.Background = color.NRGBA{R: 30, G: 64, B: 175, A: 255}
+								}
 								return button.Layout(gtx)
 							}),
 							layout.Rigid(layout.Spacer{Width: unit.Dp(10)}.Layout),
 							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 								button := material.Button(ui.theme, &panel.confirmClearHistoryButton, "Delete all")
 								button.Background = color.NRGBA{R: 190, G: 24, B: 93, A: 255}
+								if gtx.Focused(&panel.confirmClearHistoryButton) {
+									button.Background = color.NRGBA{R: 30, G: 64, B: 175, A: 255}
+								}
 								return button.Layout(gtx)
 							}),
 						)

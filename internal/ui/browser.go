@@ -1302,10 +1302,11 @@ func (ui *BrowserUI) layoutFindOverlay(gtx layout.Context, viewport image.Rectan
 	}
 	region := image.Rect(viewport.Max.X-width-gtx.Dp(unit.Dp(12)), viewport.Min.Y+gtx.Dp(unit.Dp(8)), viewport.Max.X-gtx.Dp(unit.Dp(12)), viewport.Min.Y+gtx.Dp(unit.Dp(8))+height)
 	layoutRegion(gtx, region, func(gtx layout.Context) layout.Dimensions {
+		borderColor, borderWidth := focusBorder(gtx.Focused(state.editor))
 		return widget.Border{
-			Color:        color.NRGBA{R: 203, G: 213, B: 225, A: 255},
+			Color:        borderColor,
 			CornerRadius: unit.Dp(10),
-			Width:        unit.Dp(1),
+			Width:        borderWidth,
 		}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 			paint.FillShape(gtx.Ops, color.NRGBA{R: 255, G: 255, B: 255, A: 255}, clip.UniformRRect(image.Rectangle{Max: gtx.Constraints.Min}, gtx.Dp(unit.Dp(10))).Op(gtx.Ops))
 			return layout.Inset{Top: unit.Dp(5), Right: unit.Dp(6), Bottom: unit.Dp(5), Left: unit.Dp(10)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
@@ -1355,6 +1356,7 @@ func (ui *BrowserUI) layoutFindButton(gtx layout.Context, button *widget.Clickab
 			background = color.NRGBA{R: 219, G: 234, B: 254, A: 255}
 			foreground = color.NRGBA{R: 29, G: 78, B: 216, A: 255}
 		}
+		background = focusSurface(gtx.Focused(button), background)
 		if background.A != 0 {
 			paint.FillShape(gtx.Ops, background, clip.UniformRRect(image.Rectangle{Max: gtx.Constraints.Min}, gtx.Dp(unit.Dp(7))).Op(gtx.Ops))
 		}
@@ -1423,6 +1425,7 @@ func (ui *BrowserUI) handleActions(gtx layout.Context) {
 	ui.consumeUpdateResults()
 	ui.handleTabActions(gtx)
 	ui.syncActiveTabChrome()
+	ui.handleFocusTraversal(gtx)
 	ui.handleSuggestionKeys(gtx)
 	ui.handleHomeActions(gtx)
 	ui.handleOmniboxSubmit(gtx)
@@ -2811,6 +2814,9 @@ func (ui *BrowserUI) layoutToolbarButton(gtx layout.Context, button *widget.Clic
 		style.Background = color.NRGBA{R: 238, G: 242, B: 247, A: 255}
 		style.Color = color.NRGBA{R: 160, G: 169, B: 182, A: 255}
 	}
+	if enabled {
+		style.Background = focusSurface(gtx.Focused(button), style.Background)
+	}
 	style.Size = unit.Dp(22)
 	style.Inset = layout.UniformInset(unit.Dp(11))
 	return style.Layout(gtx)
@@ -2827,10 +2833,11 @@ func (ui *BrowserUI) layoutAddressBar(gtx layout.Context) layout.Dimensions {
 	gtx.Constraints.Min.Y = height
 	gtx.Constraints.Max.Y = height
 
+	borderColor, borderWidth := focusBorder(gtx.Focused(ui.address))
 	return widget.Border{
-		Color:        color.NRGBA{R: 183, G: 193, B: 207, A: 255},
+		Color:        borderColor,
 		CornerRadius: unit.Dp(12),
-		Width:        unit.Dp(1),
+		Width:        borderWidth,
 	}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		return layout.Stack{Alignment: layout.Center}.Layout(gtx,
 			layout.Expanded(func(gtx layout.Context) layout.Dimensions {
@@ -2868,6 +2875,9 @@ func (ui *BrowserUI) layoutGopherButton(gtx layout.Context) layout.Dimensions {
 	gtx.Constraints = layout.Exact(image.Pt(width, height))
 
 	return ui.goButton.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		if gtx.Focused(&ui.goButton) {
+			paint.FillShape(gtx.Ops, focusSurface(true, color.NRGBA{}), clip.UniformRRect(image.Rectangle{Max: gtx.Constraints.Min}, gtx.Dp(unit.Dp(10))).Op(gtx.Ops))
+		}
 		return widget.Image{
 			Src:      ui.gopher,
 			Fit:      widget.Contain,

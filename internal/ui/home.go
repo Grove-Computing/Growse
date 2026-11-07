@@ -504,9 +504,7 @@ func (ui *BrowserUI) layoutHome(gtx layout.Context) layout.Dimensions {
 									}),
 									layout.Rigid(layout.Spacer{Height: unit.Dp(12)}.Layout),
 									layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-										button := material.Button(ui.theme, &state.search, ui.homeSearchLabel())
-										button.CornerRadius = unit.Dp(12)
-										return button.Layout(gtx)
+										return ui.layoutTextButton(gtx, &state.search, ui.homeSearchLabel())
 									}),
 									layout.Rigid(layout.Spacer{Height: unit.Dp(18)}.Layout),
 									layout.Rigid(func(gtx layout.Context) layout.Dimensions {
@@ -516,6 +514,9 @@ func (ui *BrowserUI) layoutHome(gtx layout.Context) layout.Dimensions {
 									layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 										button := material.Button(ui.theme, &ui.homeCustomize, "ショートカットを編集")
 										button.Background = color.NRGBA{R: 71, G: 85, B: 105, A: 255}
+										if gtx.Focused(&ui.homeCustomize) {
+											button.Background = color.NRGBA{R: 30, G: 64, B: 175, A: 255}
+										}
 										button.CornerRadius = unit.Dp(10)
 										return button.Layout(gtx)
 									}),

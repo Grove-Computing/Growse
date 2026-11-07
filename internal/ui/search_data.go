@@ -6,6 +6,8 @@ import (
 	"image/color"
 
 	"gioui.org/layout"
+	"gioui.org/op/clip"
+	"gioui.org/op/paint"
 	"gioui.org/unit"
 	"gioui.org/widget"
 	"gioui.org/widget/material"
@@ -94,6 +96,7 @@ func (ui *BrowserUI) layoutBookmarkButton(gtx layout.Context) layout.Dimensions 
 	button.Color = color.NRGBA{R: 52, G: 64, B: 84, A: 255}
 	button.Size = unit.Dp(22)
 	button.Inset = layout.UniformInset(unit.Dp(9))
+	button.Background = focusSurface(gtx.Focused(&ui.bookmarkButton), button.Background)
 	return button.Layout(gtx)
 }
 
@@ -164,6 +167,9 @@ func (ui *BrowserUI) layoutBookmarkBarItem(gtx layout.Context, button *widget.Cl
 	}
 	return layout.Inset{Right: unit.Dp(4)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		return material.Clickable(gtx, button, func(gtx layout.Context) layout.Dimensions {
+			if gtx.Focused(button) {
+				paint.FillShape(gtx.Ops, focusSurface(true, color.NRGBA{}), clip.UniformRRect(image.Rectangle{Max: gtx.Constraints.Min}, gtx.Dp(unit.Dp(6))).Op(gtx.Ops))
+			}
 			return layout.Inset{Top: unit.Dp(4), Right: unit.Dp(8), Bottom: unit.Dp(4), Left: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 				return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {

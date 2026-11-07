@@ -221,7 +221,7 @@ func (ui *BrowserUI) handleSuggestionKeys(gtx layout.Context) {
 	ui.syncSuggestions()
 	names := []key.Name{key.NameDownArrow, key.NameUpArrow}
 	if ui.suggestionPopup.open {
-		names = append(names, key.NamePageUp, key.NamePageDown, key.NameHome, key.NameEnd, key.NameEscape, key.NameTab)
+		names = append(names, key.NamePageUp, key.NamePageDown, key.NameHome, key.NameEnd, key.NameEscape)
 	}
 	for _, name := range names {
 		for {
@@ -236,15 +236,8 @@ func (ui *BrowserUI) handleSuggestionKeys(gtx layout.Context) {
 			if ui.addressIMEActive() {
 				continue
 			}
-			if name == key.NameEscape || name == key.NameTab {
+			if name == key.NameEscape {
 				ui.closeSuggestionPopup()
-				if name == key.NameTab {
-					if e.Modifiers.Contain(key.ModShift) {
-						gtx.Execute(key.FocusCmd{Tag: &ui.devToolsButton})
-					} else {
-						gtx.Execute(key.FocusCmd{Tag: &ui.goButton})
-					}
-				}
 				continue
 			}
 			if !ui.suggestionPopup.open {
