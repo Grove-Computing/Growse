@@ -117,6 +117,7 @@ python3 -m http.server 6053 --directory examples/data-app
 | Persistent App Showcase | `examples/persistent-app` | Scheduler、same-document Routing、Local / Session Storage、Fetch、HTTP Cache、offline状態 |
 | Multi-Tab Workspace | `go run ./examples/multi-tab-workspace` | Vertical Tab、Storage Event、共有Cookie / Cache、Tab別Session / Scheduler |
 | DevTools Showcase | `go run ./examples/devtools` | Console 4 level、DOM / Style / Layout、成功Fetch、redirect、cache、HTTP error、timeout |
+| Search Showcase | `go run ./examples/search-showcase` | Omnibox全source、fake remote、Home、Find in Page、failure、profile復旧、desktop / narrow evidence |
 | Dual Runtime Showcase | `go run ./examples/dual-runtime` | 同じUIのGo / JavaScript切替、DOM、Event、Timer、Fetch、Storage、History、Runtime error |
 | External Web Platform | `go run ./examples/external-web-platform` | 外部classic / Module、dynamic import、WASM、same / cross-origin iframe、Service Worker offline、cross-origin CSS、sandbox |
 | Modern Web Compatibility | `go run ./examples/modern-web-compat` | Next.js / SvelteKit SSR、Tailwind CSS v4実artifact、SSR先行表示、段階的image更新、hydration、priority / cache / lifecycle診断 |
@@ -130,6 +131,8 @@ WebGoソースは通常のGo build対象から除外するため、各Demoでは
 Multi-Tab Workspaceは専用のlocal fixture serverを起動し、Growseで`http://localhost:6053`を開きます。Notes画面のリンクからTasksとActivityを新しいVertical Tabへ開けます。外部ServiceやAPI keyは不要です。
 
 DevTools Showcaseも専用のlocal fixture serverだけを使用します。外部通信や実Credentialなしで、Console、Inspector、Networkの通常・error・timeout・cache状態を再現できます。
+
+Search Showcaseはlocalhost TLS serverと一時profileをprocess内に作り、window終了時に破棄します。`guide`でInput / Tab / History / Bookmark / fake remote suggestion、`timeout`と`oversize`で有限failure、`Find mutation` TabでLatin / CJK / combining mark / nested scroll / DOM mutationを確認できます。desktopは1280×800、narrowは720×640をvisual evidenceの基準とし、詳しい操作は[Search Showcase手順](examples/search-showcase/README.md)に記載しています。
 
 Dual Runtime Showcaseもlocalhost内だけで完結します。ツールバーの`Go` / `JS`を押すとPageを完全reloadし、同じHTML/CSS上のCounterとWeb API処理を選択Engineだけで実行します。
 
