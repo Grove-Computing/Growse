@@ -41,6 +41,7 @@ type searchPanelState struct {
 	clearHistoryCount         int
 	rows                      [omnibox.MaxMergedCandidates]widget.Clickable
 	deleteButtons             [omnibox.MaxMergedCandidates]widget.Clickable
+	ime                       imeInputState
 }
 
 func newSearchPanelState() searchPanelState {
@@ -75,6 +76,9 @@ func (ui *BrowserUI) handleSearchPanelKeyboardShortcuts(gtx layout.Context) {
 		}
 		keyEvent, ok := event.(key.Event)
 		if ok && keyEvent.State == key.Press {
+			if panel.ime.active(panel.editor) {
+				continue
+			}
 			if panel.confirmClearHistory {
 				panel.confirmClearHistory = false
 			} else {
@@ -191,9 +195,12 @@ func (ui *BrowserUI) handleSearchPanelActions(gtx layout.Context) {
 		if !ok {
 			break
 		}
-		if _, changed := event.(widget.ChangeEvent); changed {
+		if _, changed := event.(widget.ChangeEvent); changed && panel.ime.changed(panel.editor) {
 			ui.refreshSearchPanel()
 		}
+	}
+	if gtx.Focused(panel.editor) && panel.ime.committed(panel.editor) {
+		ui.refreshSearchPanel()
 	}
 	for panel.allButton.Clicked(gtx) {
 		ui.setSearchPanelScope("")
@@ -238,6 +245,9 @@ func (ui *BrowserUI) handleSearchPanelResultKeys(gtx layout.Context) {
 			if !ok || keyEvent.State != key.Press || len(panel.candidates) == 0 {
 				continue
 			}
+			if panel.ime.active(panel.editor) {
+				continue
+			}
 			index := panel.selected
 			switch name {
 			case key.NameDownArrow:
@@ -273,6 +283,9 @@ func (ui *BrowserUI) handleSearchPanelResultKeys(gtx layout.Context) {
 		if !ok || keyEvent.State != key.Press || panel.selected < 0 || panel.selected >= len(panel.candidates) {
 			continue
 		}
+		if panel.ime.active(panel.editor) {
+			continue
+		}
 		ui.deleteSearchPanelCandidate(panel.candidates[panel.selected])
 	}
 	for {
@@ -285,6 +298,9 @@ func (ui *BrowserUI) handleSearchPanelResultKeys(gtx layout.Context) {
 		}
 		keyEvent, ok := event.(key.Event)
 		if !ok || keyEvent.State != key.Press || panel.selected < 0 || panel.selected >= len(panel.candidates) {
+			continue
+		}
+		if panel.ime.active(panel.editor) {
 			continue
 		}
 		disposition := omniboxCurrentTab

@@ -55,6 +55,7 @@ type homeTabState struct {
 	browserPosition  int
 	needsRefresh     bool
 	restoreSelection int
+	ime              imeInputState
 }
 
 func newHomeTabState(visible bool) *homeTabState {
@@ -177,12 +178,23 @@ func (ui *BrowserUI) handleHomeActions(gtx layout.Context) {
 		}
 		switch event.(type) {
 		case widget.ChangeEvent:
+			if !state.ime.changed(state.editor) {
+				continue
+			}
 			state.selected = -1
 			state.restoreSelection = -1
 			ui.refreshHomeSuggestions(state)
 		case widget.SubmitEvent:
+			if state.ime.active(state.editor) {
+				continue
+			}
 			ui.submitHomeInput(state, omniboxCurrentTab)
 		}
+	}
+	if gtx.Focused(state.editor) && state.ime.committed(state.editor) {
+		state.selected = -1
+		state.restoreSelection = -1
+		ui.refreshHomeSuggestions(state)
 	}
 	for state.search.Clicked(gtx) {
 		ui.submitHomeInput(state, omniboxCurrentTab)
@@ -257,6 +269,9 @@ func (ui *BrowserUI) handleHomeSuggestionKeys(gtx layout.Context, state *homeTab
 				break
 			}
 			if pressed, ok := event.(key.Event); ok && pressed.State == key.Press {
+				if state.ime.active(state.editor) {
+					continue
+				}
 				disposition := omniboxNewForegroundTab
 				if modifiers == key.ModAlt {
 					disposition = omniboxNewBackgroundTab
@@ -273,6 +288,9 @@ func (ui *BrowserUI) handleHomeSuggestionKeys(gtx layout.Context, state *homeTab
 			}
 			pressed, ok := event.(key.Event)
 			if !ok || pressed.State != key.Press {
+				continue
+			}
+			if state.ime.active(state.editor) {
 				continue
 			}
 			if name == key.NameEscape {

@@ -27,13 +27,13 @@ func (ui *BrowserUI) SetSuggestionSnapshot(snapshot omnibox.Snapshot) {
 		History:   append([]omnibox.Candidate(nil), snapshot.History...),
 		Bookmarks: append([]omnibox.Candidate(nil), snapshot.Bookmarks...),
 	}
-	if ui.suggestionPopup.open {
+	if ui.suggestionPopup.open && !ui.addressIMEComposing() {
 		ui.refreshSuggestions()
 	} else {
 		ui.suggestions.Cancel()
 	}
 	for _, state := range ui.homeTabs {
-		if state.visible && state.editor.Text() != "" {
+		if state.visible && state.editor.Text() != "" && !state.ime.composing {
 			ui.refreshHomeSuggestions(state)
 		}
 	}
@@ -44,14 +44,14 @@ func (ui *BrowserUI) SetSuggestionSnapshot(snapshot omnibox.Snapshot) {
 func (ui *BrowserUI) SetSuggestionProvider(fetch omnibox.RemoteFetcher, enabled bool) {
 	ui.suggestions.Cancel()
 	ui.suggestionFetcher, ui.remoteSuggestions = fetch, enabled
-	if ui.suggestionPopup.open {
+	if ui.suggestionPopup.open && !ui.addressIMEComposing() {
 		ui.refreshSuggestions()
 	}
 	for _, state := range ui.homeTabs {
 		if state.pipeline != nil {
 			state.pipeline.Cancel()
 		}
-		if state.visible && state.editor.Text() != "" {
+		if state.visible && state.editor.Text() != "" && !state.ime.composing {
 			ui.refreshHomeSuggestions(state)
 		}
 	}
@@ -231,6 +231,9 @@ func (ui *BrowserUI) handleSuggestionKeys(gtx layout.Context) {
 			}
 			e, ok := event.(key.Event)
 			if !ok || e.State != key.Press {
+				continue
+			}
+			if ui.addressIMEActive() {
 				continue
 			}
 			if name == key.NameEscape || name == key.NameTab {

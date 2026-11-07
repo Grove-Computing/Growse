@@ -235,6 +235,7 @@ type findTabState struct {
 	caseToggle        widget.Clickable
 	wordToggle        widget.Clickable
 	close             widget.Clickable
+	ime               imeInputState
 }
 
 func newFindTabState() *findTabState {
@@ -429,6 +430,7 @@ type omniboxState struct {
 	preview      string
 	scope        omnibox.Scope
 	scopeQuery   string
+	ime          imeInputState
 }
 
 // NewBrowserUI creates a browser toolbar and an empty viewport.
@@ -898,6 +900,9 @@ func (ui *BrowserUI) handleFindKeyboardShortcuts(gtx layout.Context) {
 		if !ok || keyEvent.State != key.Press {
 			continue
 		}
+		if state.ime.active(state.editor) {
+			continue
+		}
 		ui.runFindSearch(state)
 		state.move(-1)
 	}
@@ -908,6 +913,9 @@ func (ui *BrowserUI) handleFindKeyboardShortcuts(gtx layout.Context) {
 		}
 		keyEvent, ok := event.(key.Event)
 		if ok && keyEvent.State == key.Press {
+			if state.ime.active(state.editor) {
+				continue
+			}
 			ui.closeFindBar(gtx, state, true)
 		}
 	}
@@ -928,13 +936,24 @@ func (ui *BrowserUI) handleFindActions(gtx layout.Context) {
 		}
 		switch event.(type) {
 		case widget.ChangeEvent:
+			if !state.ime.changed(state.editor) {
+				continue
+			}
 			state.searching = true
 			state.pendingSearch = true
 			ui.invalidate()
 		case widget.SubmitEvent:
+			if state.ime.active(state.editor) {
+				continue
+			}
 			ui.runFindSearch(state)
 			state.move(1)
 		}
+	}
+	if gtx.Focused(state.editor) && state.ime.committed(state.editor) {
+		state.searching = true
+		state.pendingSearch = true
+		ui.invalidate()
 	}
 	for state.previous.Clicked(gtx) {
 		ui.runFindSearch(state)
@@ -1415,9 +1434,12 @@ func (ui *BrowserUI) handleActions(gtx layout.Context) {
 		if !ok {
 			break
 		}
-		if _, changed := event.(widget.ChangeEvent); changed {
+		if _, changed := event.(widget.ChangeEvent); changed && ui.addressIMEChanged() {
 			ui.handleOmniboxChange(gtx)
 		}
+	}
+	if gtx.Focused(ui.address) && ui.addressIMECommitted() {
+		ui.handleOmniboxChange(gtx)
 	}
 	ui.handleSuggestionMouseAndFocus(gtx)
 	ui.handleBookmarkBarActions(gtx)
@@ -1521,6 +1543,9 @@ func (ui *BrowserUI) handleOmniboxSubmit(gtx layout.Context) {
 		if !ok || keyEvent.State != key.Press {
 			continue
 		}
+		if ui.addressIMEActive() {
+			continue
+		}
 		disposition := omniboxCurrentTab
 		if keyEvent.Modifiers.Contain(key.ModAlt) {
 			disposition = omniboxNewBackgroundTab
@@ -1535,6 +1560,37 @@ func (ui *BrowserUI) handleOmniboxSubmit(gtx layout.Context) {
 			ui.startNavigationWithDisposition(ui.address.Text(), disposition)
 		}
 	}
+}
+
+func (ui *BrowserUI) updateAddressIME(update func(*imeInputState) bool) bool {
+	tabID, _ := ui.activeNavigationTarget()
+	state, ok := ui.omniboxStates[tabID]
+	if !ok {
+		state = omniboxState{editor: ui.address}
+	}
+	if state.editor == nil {
+		state.editor = ui.address
+	}
+	result := update(&state.ime)
+	ui.omniboxStates[tabID] = state
+	return result
+}
+
+func (ui *BrowserUI) addressIMEActive() bool {
+	return ui.updateAddressIME(func(state *imeInputState) bool { return state.active(ui.address) })
+}
+
+func (ui *BrowserUI) addressIMEComposing() bool {
+	tabID, _ := ui.activeNavigationTarget()
+	return ui.omniboxStates[tabID].ime.composing
+}
+
+func (ui *BrowserUI) addressIMEChanged() bool {
+	return ui.updateAddressIME(func(state *imeInputState) bool { return state.changed(ui.address) })
+}
+
+func (ui *BrowserUI) addressIMECommitted() bool {
+	return ui.updateAddressIME(func(state *imeInputState) bool { return state.committed(ui.address) })
 }
 
 func (ui *BrowserUI) switchActiveEngine() {
