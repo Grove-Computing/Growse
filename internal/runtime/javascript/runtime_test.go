@@ -91,6 +91,7 @@ func TestRuntimeOrdersClassicScriptsAndDocumentLifecycle(t *testing.T) {
 		{Engine: runtimemodel.EngineJavaScript, Schedule: runtimemodel.ScriptAsync, DocumentOrder: 5, FetchOrder: 1, Source: `order.push("async-fast")`},
 		{Engine: runtimemodel.EngineJavaScript, Schedule: runtimemodel.ScriptParserBlocking, DocumentOrder: 2, Source: `order.push("blocking-2")`},
 		{Engine: runtimemodel.EngineJavaScript, Schedule: runtimemodel.ScriptDefer, DocumentOrder: 3, Source: `order.push("defer-1")`},
+		{Engine: runtimemodel.EngineJavaScript, Schedule: runtimemodel.ScriptParserBlocking, DocumentOrder: 7, Source: `order.push("blocking-3")`},
 	}
 	runtime := New()
 	t.Cleanup(func() { _ = runtime.Stop() })
@@ -100,7 +101,7 @@ func TestRuntimeOrdersClassicScriptsAndDocumentLifecycle(t *testing.T) {
 	if err := runtime.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	want := "blocking-1,blocking-2,ready:interactive,defer-1,defer-2,DOMContentLoaded:interactive,async-fast,async-slow,ready:complete,load:complete"
+	want := "blocking-1,blocking-2,async-fast,async-slow,blocking-3,ready:interactive,defer-1,defer-2,DOMContentLoaded:interactive,ready:complete,load:complete"
 	if len(records) != 1 || records[0] != [2]string{"log", want} {
 		t.Fatalf("lifecycle records = %v, want %q", records, want)
 	}

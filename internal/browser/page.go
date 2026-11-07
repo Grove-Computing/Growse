@@ -39,75 +39,98 @@ func compatibilityProfileForEngine(engine runtimemodel.Engine) CompatibilityProf
 // Runtimeの状態はスクリプト取得エラーと分けて保持し、Goコードを実行できない場合も
 // ページの表示を継続できるようにする。
 type Page struct {
-	HistoryID          uint64
-	HistoryState       string
-	ScrollFirst        int
-	ScrollOffset       int
-	ScrollRevision     uint64
-	URL                *url.URL
-	BaseURL            *url.URL
-	StatusCode         int
-	ContentType        string
-	Source             []byte
-	Document           *dom.Document
-	Events             *events.Dispatcher
-	Stylesheet         *css.Stylesheet
-	ComputedStyles     style.Map
-	StyleErrors        []string
-	Animations         *style.AnimationRegistry
-	Transitions        *style.TransitionRegistry
-	BackgroundImages   map[string]image.Image
-	BackgroundErrors   []string
-	ImageResources     map[dom.NodeID]layoutmodel.ImageResource
-	Images             map[string]image.Image
-	AnimatedImages     map[dom.NodeID]*animatedImagePlayer
-	ImageErrors        []string
-	Fonts              []FontResource
-	FontErrors         []string
-	WebFonts           *layoutmodel.FontSet
-	Engine             runtimemodel.Engine
-	Compatibility      CompatibilityProfile
-	Scripts            []Script
-	ImportMap          map[string]string
-	ScriptErrors       []string
-	RuntimeStarted     bool
-	RuntimeError       string
-	Sandbox            runtimemodel.SandboxStatus
-	HoverTarget        dom.NodeID
-	HoverPath          []dom.NodeID
-	FocusTarget        dom.NodeID
-	FocusVisible       bool
-	Submitter          dom.NodeID
-	ViewportWidth      float32
-	ViewportHeight     float32
-	ReducedMotion      bool
-	StyleRevision      uint64
-	DevTools           *devtools.PageStore
-	Frames             []*Frame
-	FramePolicy        runtimemodel.FramePolicy
-	window             runtimemodel.WindowContext
-	windows            *windowRegistry
-	serviceWorkers     *serviceworker.Manager
-	imageLoader        ResourceLoader
-	imageMu            sync.Mutex
-	imageCancel        context.CancelFunc
-	imageGeneration    uint64
-	pendingImageLoad   *pendingImageLoad
-	imageEvents        map[dom.NodeID]string
-	imageCache         *imageResourceCache
-	imageDirty         ImageInvalidation
-	fontMu             sync.Mutex
-	fontGeneration     uint64
-	fontDirty          FontInvalidation
-	styleMu            sync.Mutex
-	renderMu           sync.Mutex
-	renderMetrics      RenderMetrics
-	renderDirty        RenderInvalidation
-	frameScheduleMu    sync.Mutex
-	lastFrame          time.Time
-	lastAnimationFrame time.Time
-	frameGeneration    uint64
-	frameClosed        bool
+	HistoryID           uint64
+	HistoryState        string
+	ScrollFirst         int
+	ScrollOffset        int
+	ScrollRevision      uint64
+	URL                 *url.URL
+	BaseURL             *url.URL
+	StatusCode          int
+	ContentType         string
+	Source              []byte
+	Document            *dom.Document
+	Events              *events.Dispatcher
+	Stylesheet          *css.Stylesheet
+	ComputedStyles      style.Map
+	StyleErrors         []string
+	Animations          *style.AnimationRegistry
+	Transitions         *style.TransitionRegistry
+	BackgroundImages    map[string]image.Image
+	BackgroundErrors    []string
+	ImageResources      map[dom.NodeID]layoutmodel.ImageResource
+	Images              map[string]image.Image
+	AnimatedImages      map[dom.NodeID]*animatedImagePlayer
+	ImageErrors         []string
+	Fonts               []FontResource
+	FontErrors          []string
+	WebFonts            *layoutmodel.FontSet
+	Engine              runtimemodel.Engine
+	Compatibility       CompatibilityProfile
+	Scripts             []Script
+	ImportMap           map[string]string
+	ScriptErrors        []string
+	RuntimeStarted      bool
+	RuntimeError        string
+	Sandbox             runtimemodel.SandboxStatus
+	HoverTarget         dom.NodeID
+	HoverPath           []dom.NodeID
+	FocusTarget         dom.NodeID
+	FocusVisible        bool
+	Submitter           dom.NodeID
+	ViewportWidth       float32
+	ViewportHeight      float32
+	ReducedMotion       bool
+	StyleRevision       uint64
+	DevTools            *devtools.PageStore
+	Frames              []*Frame
+	FramePolicy         runtimemodel.FramePolicy
+	window              runtimemodel.WindowContext
+	windows             *windowRegistry
+	serviceWorkers      *serviceworker.Manager
+	imageLoader         ResourceLoader
+	imageMu             sync.Mutex
+	imageCancel         context.CancelFunc
+	imageGeneration     uint64
+	pendingImageLoad    *pendingImageLoad
+	pendingImageResults []pendingImageResource
+	pendingBackgrounds  []pendingBackgroundImage
+	imageEvents         map[dom.NodeID]string
+	imageEventsDirty    bool
+	imageCache          *imageResourceCache
+	imageDirty          ImageInvalidation
+	fontMu              sync.Mutex
+	fontGeneration      uint64
+	pendingFonts        []FontResource
+	fontDirty           FontInvalidation
+	styleMu             sync.Mutex
+	cssomMu             sync.Mutex
+	cssomLayout         *layoutmodel.Tree
+	cssomRevision       uint64
+	cssomViewportWidth  float32
+	cssomViewportHeight float32
+	renderMu            sync.Mutex
+	renderMetrics       RenderMetrics
+	renderDirty         RenderInvalidation
+	frameScheduleMu     sync.Mutex
+	lastFrame           time.Time
+	lastAnimationFrame  time.Time
+	frameGeneration     uint64
+	frameClosed         bool
+}
+
+type pendingImageResource struct {
+	generation uint64
+	nodeID     dom.NodeID
+	resource   layoutmodel.ImageResource
+	decoded    image.Image
+	failure    string
+}
+type pendingBackgroundImage struct {
+	generation uint64
+	resource   string
+	decoded    image.Image
+	failure    string
 }
 
 type pendingImageLoad struct {
@@ -140,6 +163,8 @@ func (p *Page) beginImageLoad(parent context.Context) (context.Context, uint64) 
 		p.imageCancel()
 	}
 	p.pendingImageLoad = nil
+	p.pendingImageResults = nil
+	p.pendingBackgrounds = nil
 	ctx, cancel := context.WithCancel(parent)
 	p.imageCancel = cancel
 	p.imageGeneration++
@@ -162,17 +187,53 @@ func (p *Page) stageImageLoad(generation uint64, resources map[dom.NodeID]layout
 func (p *Page) commitPendingImageLoad() bool {
 	p.imageMu.Lock()
 	defer p.imageMu.Unlock()
+	committed := false
 	pending := p.pendingImageLoad
-	if pending == nil || pending.generation != p.imageGeneration {
+	if pending != nil && pending.generation == p.imageGeneration {
+		p.pendingImageLoad = nil
+		p.ImageResources, p.Images, p.ImageErrors = pending.resources, pending.images, boundedImageDiagnostics(pending.failures)
+		if pending.replaceBackgrounds {
+			p.BackgroundImages, p.BackgroundErrors = pending.backgrounds, boundedImageDiagnostics(pending.backgroundFailures)
+		}
+		p.AnimatedImages = animatedImagesForResources(pending.resources, p.imageCache)
+		p.StyleRevision++
+		p.imageEventsDirty = true
+		committed = true
+	}
+	for _, result := range p.pendingImageResults {
+		if result.generation == p.imageGeneration {
+			p.commitImageResourceLoadLocked(result.nodeID, result.resource, result.decoded, result.failure)
+			committed = true
+		}
+	}
+	for _, result := range p.pendingBackgrounds {
+		if result.generation == p.imageGeneration {
+			p.commitBackgroundImageLoadLocked(result.resource, result.decoded, result.failure)
+			committed = true
+		}
+	}
+	p.pendingImageResults = nil
+	p.pendingBackgrounds = nil
+	return committed
+}
+
+func (p *Page) stageImageResourceLoad(generation uint64, nodeID dom.NodeID, resource layoutmodel.ImageResource, decoded image.Image, failure string) bool {
+	p.imageMu.Lock()
+	defer p.imageMu.Unlock()
+	if generation != p.imageGeneration {
 		return false
 	}
-	p.pendingImageLoad = nil
-	p.ImageResources, p.Images, p.ImageErrors = pending.resources, pending.images, boundedImageDiagnostics(pending.failures)
-	if pending.replaceBackgrounds {
-		p.BackgroundImages, p.BackgroundErrors = pending.backgrounds, boundedImageDiagnostics(pending.backgroundFailures)
+	p.pendingImageResults = append(p.pendingImageResults, pendingImageResource{generation: generation, nodeID: nodeID, resource: resource, decoded: decoded, failure: failure})
+	return true
+}
+
+func (p *Page) stageBackgroundImageLoad(generation uint64, resource string, decoded image.Image, failure string) bool {
+	p.imageMu.Lock()
+	defer p.imageMu.Unlock()
+	if generation != p.imageGeneration {
+		return false
 	}
-	p.AnimatedImages = animatedImagesForResources(pending.resources, p.imageCache)
-	p.StyleRevision++
+	p.pendingBackgrounds = append(p.pendingBackgrounds, pendingBackgroundImage{generation: generation, resource: resource, decoded: decoded, failure: failure})
 	return true
 }
 
@@ -185,6 +246,7 @@ func (p *Page) commitImageLoad(generation uint64, resources map[dom.NodeID]layou
 	p.ImageResources, p.Images, p.ImageErrors = resources, images, boundedImageDiagnostics(failures)
 	p.AnimatedImages = animatedImagesForResources(resources, p.imageCache)
 	p.StyleRevision++
+	p.imageEventsDirty = true
 	return true
 }
 
@@ -234,6 +296,7 @@ func (p *Page) commitImageResourceLoadLocked(nodeID dom.NodeID, resource layoutm
 	if failure != "" {
 		p.ImageErrors = appendImageDiagnostic(append([]string(nil), p.ImageErrors...), failure)
 	}
+	p.imageEventsDirty = true
 	intrinsicChanged := previous.IntrinsicWidth != resource.IntrinsicWidth || previous.IntrinsicHeight != resource.IntrinsicHeight
 	p.imageDirty.Revision++
 	p.imageDirty.Target = nodeID
@@ -248,6 +311,27 @@ func (p *Page) commitImageResourceLoadLocked(nodeID dom.NodeID, resource layoutm
 		}
 		p.StyleRevision++
 	}
+}
+
+func (p *Page) commitBackgroundImageLoadLocked(resource string, decoded image.Image, failure string) {
+	backgrounds := make(map[string]image.Image, len(p.BackgroundImages)+1)
+	for currentURL, current := range p.BackgroundImages {
+		backgrounds[currentURL] = current
+	}
+	if decoded != nil {
+		backgrounds[resource] = decoded
+	}
+	p.BackgroundImages = backgrounds
+	if failure != "" {
+		p.BackgroundErrors = appendImageDiagnostic(append([]string(nil), p.BackgroundErrors...), failure)
+	}
+	p.StyleRevision++
+}
+
+func (p *Page) hasPendingImageEvents() bool {
+	p.imageMu.Lock()
+	defer p.imageMu.Unlock()
+	return p.imageEventsDirty
 }
 
 // ImageInvalidationSnapshot returns a payload-free copy suitable for the UI
@@ -275,6 +359,8 @@ func (p *Page) cancelImageLoads() {
 	}
 	p.imageGeneration++
 	p.pendingImageLoad = nil
+	p.pendingImageResults = nil
+	p.pendingBackgrounds = nil
 	p.imageMu.Unlock()
 }
 

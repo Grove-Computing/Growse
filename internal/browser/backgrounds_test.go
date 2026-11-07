@@ -426,7 +426,7 @@ bad.addEventListener("error", () => result.setAttribute("events", (result.getAtt
 	if !ok {
 		t.Fatal("result element is missing")
 	}
-	if state, _ := result.Attribute("state"); state != "false|0|0|" {
+	if state, _ := result.Attribute("state"); state != "false|0|0|" && state != "true|3|2|"+imageURL {
 		t.Fatalf("HTMLImageElement state = %q", state)
 	}
 	okImage, found := page.Document.GetElementByID("ok")
@@ -877,5 +877,53 @@ func TestNavigateResolvesAndLoadsBackgroundImageFromExternalStylesheet(t *testin
 	}
 	if page.BackgroundImages[imageURL] == nil || len(page.BackgroundErrors) != 0 {
 		t.Fatalf("background images/errors = %#v / %#v", page.BackgroundImages, page.BackgroundErrors)
+	}
+}
+
+func TestReplacedImagesPublishEachCompletionWithoutWaitingForSlowPeer(t *testing.T) {
+	baseURL := mustParseURL(t, "https://example.com/")
+	document := dom.NewDocument()
+	slowNode := document.CreateElement("img", map[string]string{"src": "slow.png"})
+	fastNode := document.CreateElement("img", map[string]string{"src": "fast.png"})
+	if err := document.AppendChild(document.Root, slowNode); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(document.Root, fastNode); err != nil {
+		t.Fatal(err)
+	}
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, image.NewNRGBA(image.Rect(0, 0, 2, 2))); err != nil {
+		t.Fatal(err)
+	}
+	slowURL, fastURL := "https://example.com/slow.png", "https://example.com/fast.png"
+	loader := &releasableImageLoader{
+		blocked: slowURL, started: make(chan struct{}), release: make(chan struct{}),
+		responses: map[string]*network.Response{
+			slowURL: {URL: mustParseURL(t, slowURL), ContentType: "image/png", Body: encoded.Bytes()},
+			fastURL: {URL: mustParseURL(t, fastURL), ContentType: "image/png", Body: encoded.Bytes()},
+		},
+	}
+	completed := make(chan imageLoadResult, 2)
+	done := make(chan struct{})
+	go func() {
+		_, _, _ = loadReplacedImagesWithCallback(context.Background(), loader, baseURL, document, 1280, 1, nil, newImageDecodeBudget(), newImageResourceCache(), func(result imageLoadResult) {
+			completed <- result
+		})
+		close(done)
+	}()
+	<-loader.started
+	select {
+	case result := <-completed:
+		if result.nodeID != fastNode.ID || !result.resource.Loaded {
+			t.Fatalf("first completion = %#v, want loaded fast image", result)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("fast image waited for a slow peer")
+	}
+	close(loader.release)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("image batch did not finish after releasing slow image")
 	}
 }

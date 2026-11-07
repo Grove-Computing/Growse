@@ -1,6 +1,7 @@
 package style
 
 import (
+	"sort"
 	"strconv"
 	"strings"
 
@@ -23,6 +24,117 @@ type winner struct {
 	order       [2]int
 	layer       string
 	layerOrder  int
+}
+
+type indexedStylesheet struct {
+	stylesheet  *css.Stylesheet
+	layerOrders map[string]int
+	universal   []int
+	byTag       map[string][]int
+	byID        map[string][]int
+	byClass     map[string][]int
+	hasContent  []bool
+	marks       []uint32
+	generation  uint32
+}
+
+func newIndexedStylesheet(stylesheet *css.Stylesheet) *indexedStylesheet {
+	if stylesheet == nil {
+		stylesheet = &css.Stylesheet{}
+	}
+	index := &indexedStylesheet{
+		stylesheet: stylesheet, layerOrders: make(map[string]int, len(stylesheet.LayerOrder)),
+		byTag: make(map[string][]int), byID: make(map[string][]int), byClass: make(map[string][]int),
+		hasContent: make([]bool, len(stylesheet.Rules)), marks: make([]uint32, len(stylesheet.Rules)),
+	}
+	for position, layer := range stylesheet.LayerOrder {
+		index.layerOrders[layer] = position
+	}
+	for ruleIndex, rule := range stylesheet.Rules {
+		for _, declaration := range rule.Declarations {
+			if declaration.Property == "content" {
+				index.hasContent[ruleIndex] = true
+				break
+			}
+		}
+		seenKeys := make(map[string]struct{}, len(rule.Selectors))
+		for _, selector := range rule.Selectors {
+			kind, value := selectorTargetIndexKey(selector)
+			key := kind + "\x00" + value
+			if _, exists := seenKeys[key]; exists {
+				continue
+			}
+			seenKeys[key] = struct{}{}
+			switch kind {
+			case "id":
+				index.byID[value] = append(index.byID[value], ruleIndex)
+			case "class":
+				index.byClass[value] = append(index.byClass[value], ruleIndex)
+			case "tag":
+				index.byTag[value] = append(index.byTag[value], ruleIndex)
+			default:
+				index.universal = append(index.universal, ruleIndex)
+			}
+		}
+	}
+	return index
+}
+
+func selectorTargetIndexKey(selector css.Selector) (string, string) {
+	if len(selector.Compounds) == 0 {
+		if selector.ID != "" {
+			return "id", selector.ID
+		}
+		if selector.Class != "" {
+			return "class", selector.Class
+		}
+		if selector.Tag != "" {
+			return "tag", selector.Tag
+		}
+		return "", ""
+	}
+	target := selector.Compounds[len(selector.Compounds)-1]
+	if len(target.IDs) != 0 {
+		return "id", target.IDs[0]
+	}
+	if len(target.Classes) != 0 {
+		return "class", target.Classes[0]
+	}
+	if target.Type != "" {
+		return "tag", target.Type
+	}
+	return "", ""
+}
+
+func (index *indexedStylesheet) candidateRules(node *dom.Node, nodeID string, nodeClasses map[string]struct{}, contentOnly bool) []int {
+	if index == nil || node == nil {
+		return nil
+	}
+	index.generation++
+	if index.generation == 0 {
+		clear(index.marks)
+		index.generation = 1
+	}
+	result := make([]int, 0, len(index.universal)+len(index.byTag[node.TagName]))
+	appendRules := func(ruleIndexes []int) {
+		for _, ruleIndex := range ruleIndexes {
+			if (contentOnly && !index.hasContent[ruleIndex]) || index.marks[ruleIndex] == index.generation {
+				continue
+			}
+			index.marks[ruleIndex] = index.generation
+			result = append(result, ruleIndex)
+		}
+	}
+	appendRules(index.universal)
+	appendRules(index.byTag[node.TagName])
+	if nodeID != "" {
+		appendRules(index.byID[nodeID])
+	}
+	for class := range nodeClasses {
+		appendRules(index.byClass[class])
+	}
+	sort.Ints(result)
+	return result
 }
 
 // Compute applies UA defaults, inheritance, selector matching and cascade.
@@ -88,11 +200,16 @@ func ComputeWithEnvironment(document *dom.Document, stylesheet *css.Stylesheet, 
 	if environment.Pointer == "" {
 		environment.Pointer = "fine"
 	}
-	computeNode(document.Root, initialStyle(), stylesheet, state, environment, result)
+	authorRules := newIndexedStylesheet(stylesheet)
+	var userAgentRules *indexedStylesheet
+	if environment.BrowserDefaults {
+		userAgentRules = newIndexedStylesheet(browserUAStylesheet())
+	}
+	computeNode(document.Root, initialStyle(), authorRules, userAgentRules, state, environment, result)
 	return result
 }
 
-func computeNode(node *dom.Node, parent ComputedStyle, stylesheet *css.Stylesheet, state InteractionState, environment Environment, result Map) {
+func computeNode(node *dom.Node, parent ComputedStyle, stylesheet, userAgentStylesheet *indexedStylesheet, state InteractionState, environment Environment, result Map) {
 	if node == nil || node.Type == dom.NodeDocumentFragment {
 		return
 	}
@@ -101,7 +218,7 @@ func computeNode(node *dom.Node, parent ComputedStyle, stylesheet *css.Styleshee
 		computed = initialStyle()
 	} else if node.Type == dom.NodeElement {
 		if environment.BrowserDefaults {
-			computed = applyAuthorRules(node, computed, parent, browserUAStylesheet(), state, environment, result, false)
+			computed = applyAuthorRules(node, computed, parent, userAgentStylesheet, state, environment, result, false)
 		} else {
 			computed = applyUADefaults(node.TagName, computed)
 		}
@@ -124,7 +241,7 @@ func computeNode(node *dom.Node, parent ComputedStyle, stylesheet *css.Styleshee
 		}
 	}
 	for _, child := range node.Children {
-		computeNode(child, computed, stylesheet, state, childEnvironment, result)
+		computeNode(child, computed, stylesheet, userAgentStylesheet, state, childEnvironment, result)
 	}
 }
 
@@ -252,16 +369,17 @@ func applyUADefaults(tag string, computed ComputedStyle) ComputedStyle {
 	return computed
 }
 
-func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet *css.Stylesheet, state InteractionState, environment Environment, computedAncestors Map, includeInline bool) ComputedStyle {
-	if stylesheet == nil {
-		stylesheet = &css.Stylesheet{}
-	}
-	layerOrders := make(map[string]int, len(stylesheet.LayerOrder))
-	for index, layer := range stylesheet.LayerOrder {
-		layerOrders[layer] = index
-	}
+func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, index *indexedStylesheet, state InteractionState, environment Environment, computedAncestors Map, includeInline bool) ComputedStyle {
+	stylesheet := index.stylesheet
 	candidates := make(map[string][]winner)
 	customCandidateCount := 0
+	nodeID, _ := node.Attribute("id")
+	nodeClasses := make(map[string]struct{})
+	if value, ok := node.Attribute("class"); ok {
+		for _, class := range strings.Fields(value) {
+			nodeClasses[class] = struct{}{}
+		}
+	}
 	appendCandidate := func(property string, candidate winner) {
 		if strings.HasPrefix(property, "--") {
 			if len(candidate.value) > css.MaxCustomPropertyValueBytes {
@@ -276,15 +394,19 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 		}
 		candidates[property] = append(candidates[property], candidate)
 	}
-	appendStylesheet := func(candidateStylesheet *css.Stylesheet) {
-		if candidateStylesheet == nil {
-			return
-		}
-		candidateLayerOrders := make(map[string]int, len(candidateStylesheet.LayerOrder))
-		for index, layer := range candidateStylesheet.LayerOrder {
-			candidateLayerOrders[layer] = index
-		}
-		for _, rule := range candidateStylesheet.Rules {
+	appendStylesheet := func() {
+		for _, ruleIndex := range index.candidateRules(node, nodeID, nodeClasses, false) {
+			rule := stylesheet.Rules[ruleIndex]
+			mayMatch := false
+			for _, selector := range rule.Selectors {
+				if selectorTargetMayMatch(node, selector, nodeID, nodeClasses) {
+					mayMatch = true
+					break
+				}
+			}
+			if !mayMatch {
+				continue
+			}
 			if !matchesMediaGroups(rule.Media, environment) || !matchesSupportsGroups(rule.Supports) || !matchesContainerGroups(node, rule.Containers, computedAncestors, environment) {
 				continue
 			}
@@ -302,7 +424,7 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 							specificity: selector.Specificity(), order: [2]int{rule.Order, declarationIndex}, layer: rule.Layer,
 						}
 						if rule.Layer != "" {
-							candidate.layerOrder = candidateLayerOrders[rule.Layer]
+							candidate.layerOrder = index.layerOrders[rule.Layer]
 						}
 						appendCandidate(property, candidate)
 					}
@@ -310,7 +432,7 @@ func applyAuthorRules(node *dom.Node, computed, parent ComputedStyle, stylesheet
 			}
 		}
 	}
-	appendStylesheet(stylesheet)
+	appendStylesheet()
 	if inlineValue, ok := node.Attribute("style"); ok && includeInline {
 		declarations, _ := css.ParseDeclarations(inlineValue)
 		for declarationIndex, declaration := range declarations {
@@ -1250,9 +1372,17 @@ func isCSSNameByte(value byte) bool {
 		value >= 'A' && value <= 'Z' || value >= '0' && value <= '9' || value >= 0x80
 }
 
-func applyGeneratedContent(node *dom.Node, computed ComputedStyle, stylesheet *css.Stylesheet, state InteractionState, environment Environment, computedAncestors Map) ComputedStyle {
-	if stylesheet == nil {
+func applyGeneratedContent(node *dom.Node, computed ComputedStyle, index *indexedStylesheet, state InteractionState, environment Environment, computedAncestors Map) ComputedStyle {
+	if index == nil || index.stylesheet == nil {
 		return computed
+	}
+	stylesheet := index.stylesheet
+	nodeID, _ := node.Attribute("id")
+	nodeClasses := make(map[string]struct{})
+	if value, ok := node.Attribute("class"); ok {
+		for _, class := range strings.Fields(value) {
+			nodeClasses[class] = struct{}{}
+		}
 	}
 	for _, target := range []struct {
 		kind        css.PseudoElementKind
@@ -1261,17 +1391,14 @@ func applyGeneratedContent(node *dom.Node, computed ComputedStyle, stylesheet *c
 		{css.PseudoElementBefore, &computed.BeforeContent},
 		{css.PseudoElementAfter, &computed.AfterContent},
 	} {
-		layerOrders := make(map[string]int, len(stylesheet.LayerOrder))
-		for index, layer := range stylesheet.LayerOrder {
-			layerOrders[layer] = index
-		}
 		var candidates []winner
-		for _, rule := range stylesheet.Rules {
+		for _, ruleIndex := range index.candidateRules(node, nodeID, nodeClasses, true) {
+			rule := stylesheet.Rules[ruleIndex]
 			if !matchesMediaGroups(rule.Media, environment) || !matchesSupportsGroups(rule.Supports) || !matchesContainerGroups(node, rule.Containers, computedAncestors, environment) {
 				continue
 			}
 			for _, selector := range rule.Selectors {
-				if selectorPseudoElement(selector) != target.kind || !matches(node, selector, state) {
+				if selectorPseudoElement(selector) != target.kind || !selectorTargetMayMatch(node, selector, nodeID, nodeClasses) || !matches(node, selector, state) {
 					continue
 				}
 				for declarationIndex, declaration := range rule.Declarations {
@@ -1283,7 +1410,7 @@ func applyGeneratedContent(node *dom.Node, computed ComputedStyle, stylesheet *c
 						specificity: selector.Specificity(), order: [2]int{rule.Order, declarationIndex}, layer: rule.Layer,
 					}
 					if rule.Layer != "" {
-						candidate.layerOrder = layerOrders[rule.Layer]
+						candidate.layerOrder = index.layerOrders[rule.Layer]
 					}
 					candidates = append(candidates, candidate)
 				}
@@ -1301,6 +1428,37 @@ func applyGeneratedContent(node *dom.Node, computed ComputedStyle, stylesheet *c
 		}
 	}
 	return computed
+}
+
+func selectorTargetMayMatch(node *dom.Node, selector css.Selector, nodeID string, nodeClasses map[string]struct{}) bool {
+	if node == nil || node.Type != dom.NodeElement {
+		return false
+	}
+	if len(selector.Compounds) == 0 {
+		if selector.Tag != "" && selector.Tag != node.TagName || selector.ID != "" && selector.ID != nodeID {
+			return false
+		}
+		if selector.Class != "" {
+			_, ok := nodeClasses[selector.Class]
+			return ok
+		}
+		return true
+	}
+	target := selector.Compounds[len(selector.Compounds)-1]
+	if target.Type != "" && target.Type != node.TagName {
+		return false
+	}
+	for _, id := range target.IDs {
+		if id != nodeID {
+			return false
+		}
+	}
+	for _, class := range target.Classes {
+		if _, ok := nodeClasses[class]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func selectorPseudoElement(selector css.Selector) css.PseudoElementKind {
