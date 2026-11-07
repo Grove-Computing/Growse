@@ -82,6 +82,30 @@ func TestSuggestionRemoteFailureKeepsDraftAndLocalCandidates(t *testing.T) {
 	}
 }
 
+func TestSuggestionRequestBlocksSensitiveOriginalAndResolvedInput(t *testing.T) {
+	ui := NewBrowserUI(nil, nil)
+	defer ui.Close()
+	ui.remoteSuggestions = true
+	for _, input := range []string{
+		"https://example.com/private",
+		"user:password@example.com",
+		"@search private query",
+		"localhost",
+		"ddg localhost",
+		"ddg user:password@example.com",
+		"ddg @search private query",
+	} {
+		request := ui.buildSuggestionRequest(input, omnibox.Snapshot{})
+		if request.remoteEnabled {
+			t.Errorf("remote enabled for sensitive input %q resolved as %q", input, request.input)
+		}
+	}
+	request := ui.buildSuggestionRequest("ddg gopher browser", omnibox.Snapshot{})
+	if !request.remoteEnabled || request.input != "gopher browser" {
+		t.Fatalf("safe keyword request = enabled %t input %q", request.remoteEnabled, request.input)
+	}
+}
+
 func suggestionFrame(ui *BrowserUI, router *input.Router, gtx *layout.Context) {
 	gtx.Reset()
 	ui.Layout(*gtx)
