@@ -158,8 +158,8 @@ func visualFixtureState(name string, page *browser.Page, rootID string, textIDs 
 		}
 	}
 	sort.Strings(reasons)
-	return fmt.Sprintf("%s engine=%s root=%.0f,%.0f %.0fx%.0f boxes=%d paint=%d fonts=%d images=%d revision=%d text=[%s] diagnostics=[%s]",
-		name, page.Engine, bounds.X, bounds.Y, bounds.Width, bounds.Height, len(tree.Boxes), len(display.Commands), len(page.Fonts), len(page.ImageResources), page.StyleRevision,
+	return fmt.Sprintf("%s engine=%s root=%.0f,%.0f %.0fx%.0f boxes=%d paint=%d fonts=%d images=%d text=[%s] diagnostics=[%s]",
+		name, page.Engine, bounds.X, bounds.Y, bounds.Width, bounds.Height, len(tree.Boxes), len(display.Commands), len(page.Fonts), len(page.ImageResources),
 		strings.Join(texts, ";"), strings.Join(reasons, ","))
 }
 
