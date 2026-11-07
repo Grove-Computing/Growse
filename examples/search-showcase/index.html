@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.Title}} · Growse Search Showcase</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main>
+    <p class="eyebrow">GROWSE · V0.21.0 · OFFLINE</p>
+    <h1>{{.Title}}</h1>
+    <p class="route">fixture route: <code>{{.Route}}</code>{{if .Query}} · query: <strong>{{.Query}}</strong>{{end}}</p>
+    {{if .Find}}
+    <section class="find-fixture">
+      <h2>Find in Page scenario</h2>
+      <p><kbd>Ctrl/⌘</kbd> + <kbd>F</kbd>で、<code>interoperability</code>、<code>検索対象</code>、<code>Café</code>を順に検索します。</p>
+      <p class="long-copy">Interoperability appears inside this deliberately long Latin paragraph. Browser search must keep matching after extensive wrapping, punctuation, repeated layout words, and enough descriptive prose to occupy several visual lines without truncating the searchable text. The paragraph continues with accessibility, determinism, normalization, viewport geometry, lifecycle safety, and one final interoperability marker.</p>
+      <p>長文の日本語でも検索対象という語をDOM順で見つけます。折返しが増えても、検索対象のmatch数とactive rangeは同じ内容を示します。</p>
+      <p>combining sequence: <span id="combining">Cafe&#x301;</span> / precomposed query: Café</p>
+      <div class="nested-scroll" aria-label="nested scroll find fixture">
+        <p>nested scrollの先頭です。active matchは内側のscroll containerを移動します。</p>
+        <div class="scroll-spacer">geometry spacer<br>layout spacer<br>viewport spacer<br>scroll spacer</div>
+        <p id="nested-target">nested needle は内側の末尾付近にあります。</p>
+      </div>
+      <button id="mutate-find" type="button">DOM mutationを追加</button>
+      <output id="mutation-state">before mutation</output>
+      <p id="mutation-target">mutation前の安全なtext</p>
+    </section>
+    <script type="text/go" src="/_find.go"></script>
+    {{else}}
+    <section>
+      <h2>Smart Omnibox scenario</h2>
+      <ol>
+        <li><kbd>Ctrl/⌘</kbd> + <kbd>L</kbd>を押し、<code>guide</code>を入力します。</li>
+        <li>Input、Tab、History、Bookmark、fake remoteの全sourceと決定的rankingを確認します。</li>
+        <li><kbd>Enter</kbd>、<kbd>Shift</kbd> + <kbd>Enter</kbd>、<kbd>Alt</kbd> + <kbd>Enter</kbd>でcurrent / foreground / background Tabを確認します。</li>
+        <li>Homeへ戻り、中央検索欄でも同じ<code>guide</code>候補を確認します。</li>
+      </ol>
+    </section>
+    <section>
+      <h2>Classification inputs</h2>
+      <p><code>demo gopher browser</code>、<code>@tabs guide</code>、<code>@history guide</code>、<code>@bookmarks guide</code>、このfixtureのHTTPS URLを順に試せます。</p>
+      <p>providerとPageはprocess内localhostだけで完結し、Public Internetや実profileを使用しません。</p>
+    </section>
+    <section>
+      <h2>Failure, profile, and recovery scenarios</h2>
+      <ol>
+        <li>検索設定でremote suggestionをoff / onし、即時cancelとlocalhost endpointへの復帰を確認します。</li>
+        <li><code>timeout</code>と<code>oversize</code>を入力し、local候補と入力が残る有限failureを確認します。</li>
+        <li><kbd>Ctrl/⌘</kbd> + <kbd>Shift</kbd> + <kbd>A</kbd>でSearch panelを開き、History / Bookmarkの個別削除と全History削除を確認します。</li>
+        <li>Homeの「ショートカットを編集」でshortcutと背景を変更します。一時profileへのatomic保存と次回起動時の安全なindex再構築を、実profileに触れず再現できます。</li>
+      </ol>
+    </section>
+    {{end}}
+  </main>
+</body>
+</html>

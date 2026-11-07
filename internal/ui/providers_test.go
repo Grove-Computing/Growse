@@ -65,6 +65,20 @@ func TestProviderPrivacyDefaultsAndDisable(t *testing.T) {
 	}
 }
 
+func TestSearchProviderTransportCanUseEmbeddedTLSClient(t *testing.T) {
+	ui := NewBrowserUI(nil, nil)
+	defer ui.Close()
+	transport := searchprovider.NewTransport(nil)
+	ui.SetSearchProviderTransport(transport)
+	if ui.providerTransport != transport {
+		t.Fatal("embedded provider transport was not retained")
+	}
+	ui.SetSearchProviderTransport(nil)
+	if ui.providerTransport == nil || ui.providerTransport == transport {
+		t.Fatal("nil transport did not restore the production default")
+	}
+}
+
 func TestProviderProfileRestartAndFailedCommit(t *testing.T) {
 	root := t.TempDir()
 	ui := NewBrowserUI(nil, nil)

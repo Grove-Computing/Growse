@@ -15,6 +15,7 @@ examples=(
   flexbox
   modern-web-compat
   persistent-app
+  search-showcase
   todo
 )
 
@@ -41,6 +42,7 @@ go test \
   ./examples/modern-web-compat \
   ./examples/multi-tab-workspace \
   ./examples/persistent-app \
+  ./examples/search-showcase \
   ./examples/todo
 
-echo "v0.20.0 Demo回帰検証成功: ${examples[*]} multi-tab-workspace"
+echo "v0.21.0 Demo回帰検証成功: ${examples[*]} multi-tab-workspace"
