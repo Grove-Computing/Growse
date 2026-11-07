@@ -31,6 +31,7 @@ HTMLとCSSで画面を構築し、Tab単位の`Go` / `JS` selectorでWebGoまた
 | Offline | Service Worker registration / lifecycle / fetch、Cache Storage、idle restart |
 | Web API | Go / JavaScript共通のDOM Event、Fetch、Scheduler、History、Navigation、Storage、Console API |
 | DevTools | Console、Inspector、Network、秘密情報を持たないPage / Frame / Service Worker Runtime診断 |
+| Search | Omnibox、検索ホーム、Tab / History / Bookmark横断検索、Unicode Find in Page、明示opt-inのremote suggestion |
 
 詳しい対応範囲と制限は、[CSS対応表](docs/css-support.md)、[Form / Fetch / Cookie対応表](docs/form-fetch-cookie-support.md)、[Storage / Cache対応表](docs/storage-cache-support.md)を参照してください。
 
@@ -55,7 +56,7 @@ wget -qO- https://github.com/Grove-Computing/Growse/releases/latest/download/ins
 Versionとインストール先を指定する場合は、環境変数を利用します。
 
 ```sh
-wget -qO- https://github.com/Grove-Computing/Growse/releases/latest/download/install.sh | GROWSE_VERSION=v0.20.0 GROWSE_INSTALL_DIR=/usr/local/bin bash
+wget -qO- https://github.com/Grove-Computing/Growse/releases/latest/download/install.sh | GROWSE_VERSION=v0.21.0 GROWSE_INSTALL_DIR=/usr/local/bin bash
 ```
 
 GUI Applicationの配置先は、`GROWSE_DATA_HOME`、`GROWSE_APPLICATIONS_DIR`、`GROWSE_WINDOWS_PROGRAMS_DIR`で変更できます。
@@ -65,7 +66,7 @@ GUI Applicationの配置先は、`GROWSE_DATA_HOME`、`GROWSE_APPLICATIONS_DIR`�
 Linux amd64のDocker imageを、GitHub Container Registryから取得できます。
 
 ```sh
-docker pull ghcr.io/grove-computing/growse:v0.20.0
+docker pull ghcr.io/grove-computing/growse:v0.21.0
 ```
 
 GrowseはGUI applicationのため、Containerから起動する場合はホストのDisplay ServerとGPU deviceを接続する必要があります。
@@ -74,7 +75,7 @@ GrowseはGUI applicationのため、Containerから起動する場合はホス�
 
 ### 必要なもの
 
-- Go 1.26以降
+- Go 1.26.10
 - Gioが利用するOSのグラフィックス開発ライブラリ
 
 Ubuntu / Debian系では、次のパッケージをインストールします。
@@ -176,6 +177,12 @@ Animation中のPaintとHit Testingは、同じFrameの値を参照します。tr
 - リンクへカーソルを重ねると、認証情報を除去した遷移先URLを状態表示に示します。
 - ウィンドウ内では、青いGopherをマウスカーソルとして表示します。
 
+### Search
+
+空Tabと新規Tabは、中央検索欄、最大10件のサイトshortcut、単色または同梱preset背景を持つ内部検索ホームを開きます。Omniboxと検索ホームは同じURL / query分類、provider、Tab / History / Bookmark snapshot、rankingを使います。`@tabs`、`@history`、`@bookmarks`、`@search`でsourceを限定でき、`Ctrl+Shift+A` / `Cmd+Shift+A`で横断Search panel、`Ctrl+F` / `Cmd+F`でUnicode対応のFind in Pageを開けます。
+
+remote suggestionは既定で無効です。明示opt-in後もURL、credential、command、localhost / IPを送らず、無効化、入力変更、Tab切替、closeで進行中requestをcancelします。shortcut・背景、provider、History / BookmarkはOS標準profileへatomic保存しますが、query、候補response、Page本文は保存・log・telemetryへ複製しません。操作、shortcut一覧、対応範囲と上限は[Search対応表](docs/search-support.md)、provider設定は[Search Provider](docs/search-providers.md)を参照してください。
+
 ### Go / JavaScript Dual Runtime
 
 Goでは`<script type="text/go">`をYaegiで、JavaScriptではtype省略、`text/javascript`、`application/javascript`と`type="module"`をgojaで実行します。Go sourceはtrusted loopbackかつsame-originに限定します。JavaScriptは通常のHTTP(S) Pageでinline / external classicとES Modulesを実行し、redirect、MIME、mixed content、CORS、credentials、integrity、sizeをBrowser側で検証します。選択していないEngineのScriptは取得しません。
@@ -210,7 +217,9 @@ DevToolsはRequest / Response body、Header、Cookie、Authorizationを保持し
 
 | 文書 | 内容 |
 | --- | --- |
+| [Search対応表](docs/search-support.md) | Omnibox、検索ホーム、shortcut一覧、Find、横断検索、keyboard / IME、privacy、保存範囲 |
 | [Search Provider](docs/search-providers.md) | v0.21.0のprovider管理、keyword、OpenSearch確認登録、候補privacy、設定保存 |
+| [SvelteKit 3.0 RC検証](docs/sveltekit-3-verification.md) | 固定version、再build digest、SSR / hydration / interaction / navigation / Engine分離の個別evidence |
 | [CSS対応表](docs/css-support.md) | CSS Property、Layout、Animationの対応状況と制限 |
 | [Form / Fetch / Cookie対応表](docs/form-fetch-cookie-support.md) | Form、HTTP、Cookie、CORSの対応状況と制限 |
 | [Storage / Cache対応表](docs/storage-cache-support.md) | Web Storage、HTTP Cache、永続化、quotaの対応状況と制限 |
@@ -233,6 +242,7 @@ DevToolsはRequest / Response body、Header、Cookie、Authorizationを保持し
 | [v0.18.0リリース定義](docs/v0.18.0.md) | v0.18.0 Browser-grade Resource Loading、非同期image commit、script lifecycle、priority、cache / cancel診断の完了条件 |
 | [v0.19.0リリース定義](docs/v0.19.0.md) | v0.19.0 CSS Layout 2026、Flow / Table / Flex / Grid / Subgrid / Writing Mode / Sticky / Multi-columnと仕様適合の完了条件 |
 | [v0.20.0リリース定義](docs/v0.20.0.md) | v0.20.0 Real-World CSS Compatibility、7サイトcorpus、P0 / P1 gate、live smokeの完了条件 |
+| [v0.21.0リリース定義](docs/v0.21.0.md) | v0.21.0 Browser Search Suite、検索ホーム、Omnibox、Find、local検索、privacyとrelease gate |
 
 ## 品質チェック
 
@@ -257,13 +267,13 @@ Go Modules、GitHub Actions、Docker base imageの依存関係は、Dependabot�
 
 ## セキュリティ
 
-v0.20.0はRuntime workerのdefault-deny境界を維持し、font fallback、visual raster、gradient / filter surfaceにもglyph 50,000件、画像16 megapixel、artifact 1件16 MiB・corpus合計256 MiBの上限を適用します。Layoutも実行時間、box / fragment、recursion、line / float、column balancingへ上限を設けます。Navigation、Page close、Engine切替では進行中resourceをcancelしますが、実験的browserとして未知のnative/runtime/decoder脆弱性への完全耐性は保証しません。外部Go sourceは引き続きtrusted loopbackだけに限定されます。Growseを権限の高いユーザーや機密profileで実行しないでください。
+v0.21.0はRuntime workerのdefault-deny境界を維持し、検索queryの外部送信を明示opt-inに限定します。URL、credential、command、localhost / IP、localのTab / History / Bookmark dataはsuggestion endpointへ送らず、query、候補response、Page本文をlogやtelemetryへ複製しません。既存のfont、image、Layout、Runtime上限も継続します。実験的browserとして未知のnative/runtime/decoder脆弱性への完全耐性は保証しないため、Growseを権限の高いユーザーや機密profileで実行しないでください。
 
 脆弱性の非公開報告方法、サポート対象、通信とResource LoadingのSecurity Boundaryは[SECURITY.md](SECURITY.md)を参照してください。
 
 ## リリース成果物
 
-`v0.20.0`のようなVersion tagをpushすると、GitHub Actionsが次の成果物、SHA-256 checksum、SPDX JSON SBOMをGitHub Releaseへ公開します。ArchiveとSBOMにはGitHub Artifact Attestation、Docker imageにはBuildKitのSBOMとSLSA Provenanceを付与します。
+`v0.21.0`のようなVersion tagをpushすると、GitHub Actionsが次の成果物、SHA-256 checksum、SPDX JSON SBOMをGitHub Releaseへ公開します。ArchiveとSBOMにはGitHub Artifact Attestation、Docker imageにはBuildKitのSBOMとSLSA Provenanceを付与します。
 
 - Linux amd64
 - macOS Intel
