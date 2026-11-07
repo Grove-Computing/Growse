@@ -674,6 +674,7 @@ func (ui *BrowserUI) layoutHomeCandidatesWithHeight(gtx layout.Context, state *h
 	height := min(gtx.Dp(unit.Dp(48))*len(state.candidates), gtx.Dp(maxHeight))
 	gtx.Constraints.Min.Y = height
 	gtx.Constraints.Max.Y = height
+	semantic.DescriptionOp(selectionSummary("ホーム検索候補", len(state.candidates), state.selected)).Add(gtx.Ops)
 	return material.List(ui.theme, &state.list).Layout(gtx, len(state.candidates), func(gtx layout.Context, index int) layout.Dimensions {
 		candidate := state.candidates[index]
 		return state.rows[index].Layout(gtx, func(gtx layout.Context) layout.Dimensions {

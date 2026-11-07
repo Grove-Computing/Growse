@@ -1312,12 +1312,16 @@ func (ui *BrowserUI) layoutFindOverlay(gtx layout.Context, viewport image.Rectan
 			return layout.Inset{Top: unit.Dp(5), Right: unit.Dp(6), Bottom: unit.Dp(5), Left: unit.Dp(10)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 				return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
 					layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+						semantic.ClassOp(semantic.Editor).Add(gtx.Ops)
+						semantic.DescriptionOp("ページ内検索語").Add(gtx.Ops)
 						editor := material.Editor(ui.theme, state.editor, "ページ内を検索")
 						editor.TextSize = unit.Sp(14)
 						return editor.Layout(gtx)
 					}),
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 						gtx.Constraints.Min.X = gtx.Dp(unit.Dp(92))
+						defer clip.Rect{Max: gtx.Constraints.Max}.Push(gtx.Ops).Pop()
+						semantic.DescriptionOp("ページ内検索: " + state.statusLabel()).Add(gtx.Ops)
 						label := material.Caption(ui.theme, state.statusLabel())
 						label.Color = color.NRGBA{R: 71, G: 85, B: 105, A: 255}
 						return layout.Center.Layout(gtx, label.Layout)
@@ -1362,7 +1366,9 @@ func (ui *BrowserUI) layoutFindButton(gtx layout.Context, button *widget.Clickab
 		}
 		label := material.Body2(ui.theme, labelText)
 		label.Color = foreground
+		semantic.ClassOp(semantic.Button).Add(gtx.Ops)
 		semantic.DescriptionOp(description).Add(gtx.Ops)
+		semantic.SelectedOp(active).Add(gtx.Ops)
 		return layout.Center.Layout(gtx, label.Layout)
 	})
 }
@@ -2834,6 +2840,12 @@ func (ui *BrowserUI) layoutAddressBar(gtx layout.Context) layout.Dimensions {
 	gtx.Constraints.Max.Y = height
 
 	borderColor, borderWidth := focusBorder(gtx.Focused(ui.address))
+	addressDescription := "Omnibox。URLまたは検索語を入力"
+	if ui.statusHasError {
+		addressDescription += "。エラー: " + ui.status
+	}
+	semantic.ClassOp(semantic.Editor).Add(gtx.Ops)
+	semantic.DescriptionOp(addressDescription).Add(gtx.Ops)
 	return widget.Border{
 		Color:        borderColor,
 		CornerRadius: unit.Dp(12),
@@ -2875,6 +2887,8 @@ func (ui *BrowserUI) layoutGopherButton(gtx layout.Context) layout.Dimensions {
 	gtx.Constraints = layout.Exact(image.Pt(width, height))
 
 	return ui.goButton.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		semantic.ClassOp(semantic.Button).Add(gtx.Ops)
+		semantic.DescriptionOp("Omniboxの入力を開く").Add(gtx.Ops)
 		if gtx.Focused(&ui.goButton) {
 			paint.FillShape(gtx.Ops, focusSurface(true, color.NRGBA{}), clip.UniformRRect(image.Rectangle{Max: gtx.Constraints.Min}, gtx.Dp(unit.Dp(10))).Op(gtx.Ops))
 		}

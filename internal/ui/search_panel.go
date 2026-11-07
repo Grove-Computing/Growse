@@ -398,7 +398,12 @@ func (ui *BrowserUI) layoutSearchPanelEditor(gtx layout.Context) layout.Dimensio
 	return widget.Border{Color: borderColor, CornerRadius: unit.Dp(10), Width: borderWidth}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		paint.FillShape(gtx.Ops, color.NRGBA{R: 255, G: 255, B: 255, A: 255}, clip.UniformRRect(image.Rectangle{Max: gtx.Constraints.Min}, gtx.Dp(unit.Dp(10))).Op(gtx.Ops))
 		editor := material.Editor(ui.theme, ui.searchPanel.editor, "Search open tabs, history, and bookmarks")
-		return layout.Inset{Top: unit.Dp(10), Right: unit.Dp(14), Bottom: unit.Dp(8), Left: unit.Dp(14)}.Layout(gtx, editor.Layout)
+		return layout.Inset{Top: unit.Dp(10), Right: unit.Dp(14), Bottom: unit.Dp(8), Left: unit.Dp(14)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+			defer clip.Rect{Max: gtx.Constraints.Max}.Push(gtx.Ops).Pop()
+			semantic.ClassOp(semantic.Editor).Add(gtx.Ops)
+			semantic.DescriptionOp("Tabs、History、Bookmarksを検索").Add(gtx.Ops)
+			return editor.Layout(gtx)
+		})
 	})
 }
 
@@ -432,6 +437,7 @@ func (ui *BrowserUI) layoutSearchPanelScopeButton(clickable *widget.Clickable, l
 
 func (ui *BrowserUI) layoutSearchPanelResults(gtx layout.Context) layout.Dimensions {
 	panel := &ui.searchPanel
+	semantic.DescriptionOp(selectionSummary("検索結果", len(panel.candidates), panel.selected)).Add(gtx.Ops)
 	if panel.confirmClearHistory {
 		return ui.layoutClearHistoryConfirmation(gtx)
 	}
@@ -456,12 +462,13 @@ func (ui *BrowserUI) layoutSearchPanelResult(gtx layout.Context, index int, cand
 		background = color.NRGBA{R: 219, G: 234, B: 254, A: 255}
 	}
 	paint.FillShape(gtx.Ops, background, clip.UniformRRect(image.Rectangle{Max: gtx.Constraints.Min}, gtx.Dp(unit.Dp(8))).Op(gtx.Ops))
-	semantic.DescriptionOp(candidate.Source.Label() + ": " + candidate.Primary).Add(gtx.Ops)
-	semantic.SelectedOp(index == panel.selected).Add(gtx.Ops)
 	return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
 		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 			return panel.rows[index].Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 				gtx.Constraints.Min = gtx.Constraints.Max
+				semantic.ClassOp(semantic.Button).Add(gtx.Ops)
+				semantic.DescriptionOp(candidate.Source.Label() + ": " + candidate.Primary).Add(gtx.Ops)
+				semantic.SelectedOp(index == panel.selected).Add(gtx.Ops)
 				return layout.Inset{Top: unit.Dp(8), Right: unit.Dp(12), Bottom: unit.Dp(8), Left: unit.Dp(12)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 					return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 						layout.Rigid(func(gtx layout.Context) layout.Dimensions {

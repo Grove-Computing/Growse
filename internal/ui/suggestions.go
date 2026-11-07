@@ -345,6 +345,7 @@ func (ui *BrowserUI) layoutSuggestions(gtx layout.Context, viewport image.Rectan
 	popup.list.Axis = layout.Vertical
 	layoutRegion(gtx, popup.bounds, func(gtx layout.Context) layout.Dimensions {
 		paint.Fill(gtx.Ops, color.NRGBA{R: 255, G: 255, B: 255, A: 255})
+		semantic.DescriptionOp(selectionSummary("検索候補", len(popup.candidates), popup.selected)).Add(gtx.Ops)
 		return material.List(ui.theme, &popup.list).Layout(gtx, len(popup.candidates), func(gtx layout.Context, index int) layout.Dimensions {
 			candidate := popup.candidates[index]
 			return popup.rows[index].Layout(gtx, func(gtx layout.Context) layout.Dimensions {
@@ -355,6 +356,7 @@ func (ui *BrowserUI) layoutSuggestions(gtx layout.Context, viewport image.Rectan
 					background = color.NRGBA{R: 219, G: 234, B: 254, A: 255}
 				}
 				paint.FillShape(gtx.Ops, background, clip.Rect{Max: gtx.Constraints.Min}.Op())
+				semantic.ClassOp(semantic.Button).Add(gtx.Ops)
 				semantic.DescriptionOp(candidate.Source.Label() + ": " + candidate.Primary).Add(gtx.Ops)
 				semantic.SelectedOp(index == popup.selected).Add(gtx.Ops)
 				return layout.Inset{Top: unit.Dp(6), Bottom: unit.Dp(6), Left: unit.Dp(12), Right: unit.Dp(12)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
