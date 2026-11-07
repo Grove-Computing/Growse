@@ -1,14 +1,17 @@
 package main
 
 import (
-	"context"
 	"embed"
+	"encoding/json"
 	"html/template"
 	"io/fs"
 	"log"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	gioapp "gioui.org/app"
@@ -39,6 +42,20 @@ type pageData struct {
 
 func searchShowcaseHandler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("/suggest", func(response http.ResponseWriter, request *http.Request) {
+		query := request.URL.Query().Get("q")
+		switch query {
+		case "timeout":
+			<-request.Context().Done()
+			return
+		case "oversize":
+			response.Header().Set("Content-Type", "application/json")
+			_, _ = response.Write([]byte(strings.Repeat("x", searchprovider.MaxSuggestionBytes+1)))
+			return
+		}
+		response.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(response).Encode([]any{query, []string{query + " remote", query + " ranking"}})
+	})
 	mux.HandleFunc("/style.css", func(response http.ResponseWriter, _ *http.Request) {
 		body, err := fs.ReadFile(showcaseAssets, "style.css")
 		if err != nil {
@@ -80,56 +97,60 @@ func searchShowcaseHandler() http.Handler {
 }
 
 type searchShowcase struct {
-	server   *httptest.Server
-	client   *network.Client
-	session  *browser.Session
-	chrome   *ui.BrowserUI
-	data     *searchdata.Store
-	settings searchprovider.Settings
-	remote   omnibox.RemoteFetcher
+	server      *httptest.Server
+	client      *network.Client
+	session     *browser.Session
+	chrome      *ui.BrowserUI
+	data        *searchdata.Store
+	settings    searchprovider.Settings
+	remote      omnibox.RemoteFetcher
+	profileRoot string
 }
 
 func newSearchShowcase(invalidate func()) (*searchShowcase, error) {
+	profileRoot, err := os.MkdirTemp("", "growse-search-showcase-*")
+	if err != nil {
+		return nil, err
+	}
 	server := httptest.NewTLSServer(searchShowcaseHandler())
 	client := network.NewClientWithLimits(server.Client(), 1<<20)
-	data := searchdata.NewMemoryStore()
+	showcase := &searchShowcase{server: server, client: client, profileRoot: profileRoot}
+	data, err := searchdata.OpenStore(profileRoot)
+	if err != nil {
+		showcase.Close()
+		return nil, err
+	}
+	showcase.data = data
 	fixed := time.Date(2026, time.November, 7, 9, 0, 0, 0, time.UTC)
 	if err := data.RecordNavigation(searchdata.Navigation{
 		URL: server.URL + "/history-guide", Title: "Guide history", VisitedAt: fixed, Typed: true, TopLevel: true, Success: true,
 	}); err != nil {
-		server.Close()
+		showcase.Close()
 		return nil, err
 	}
 	if _, err := data.SaveBookmark("", server.URL+"/bookmark-guide", "Guide bookmark"); err != nil {
-		server.Close()
+		showcase.Close()
 		return nil, err
 	}
 
 	settings := searchprovider.Defaults()
 	provider := searchprovider.Provider{
 		ID: "showcase", Name: "Offline Showcase", Keyword: "demo",
-		SearchTemplate: server.URL + "/search?q={searchTerms}",
+		SearchTemplate: server.URL + "/search?q={searchTerms}", SuggestionTemplate: server.URL + "/suggest?q={searchTerms}",
 	}
 	if err := settings.Put(provider); err != nil {
-		server.Close()
+		showcase.Close()
 		return nil, err
 	}
 	settings.DefaultID = provider.ID
 	settings.RemoteSuggestions = true
 	if err := settings.Validate(); err != nil {
-		server.Close()
+		showcase.Close()
 		return nil, err
 	}
-	remote := func(ctx context.Context, query string) ([]string, error) {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		default:
-		}
-		return []string{query + " remote", query + " ranking"}, nil
-	}
-
-	showcase := &searchShowcase{server: server, client: client, data: data, settings: settings, remote: remote}
+	providerTransport := searchprovider.NewTransport(server.Client())
+	showcase.settings = settings
+	showcase.remote = providerTransport.Suggestions(provider)
 	showcase.session = browser.NewSession(func() *browser.Browser {
 		state := browser.NewWithRuntimeFactory(client, func() runtimemodel.Runtime { return yaegi.New() })
 		state.SetNavigationObserver(func(record browser.NavigationRecord) {
@@ -160,13 +181,15 @@ func newSearchShowcase(invalidate func()) (*searchShowcase, error) {
 	showcase.session.SetOnActiveMutation(invalidate)
 	showcase.chrome = ui.NewBrowserUIWithTabs(nil, showcase.session, invalidate)
 	showcase.chrome.SetSearchDataStore(data)
+	if err := showcase.chrome.OpenSearchProfile(profileRoot); err != nil {
+		showcase.Close()
+		return nil, err
+	}
+	showcase.chrome.SetSearchProviderTransport(providerTransport)
 	if err := showcase.chrome.SetSearchProviders(settings); err != nil {
 		showcase.Close()
 		return nil, err
 	}
-	// The Showcase provider is deliberately in-process. No suggestion request
-	// reaches the TLS fixture or the public network.
-	showcase.chrome.SetSuggestionProvider(remote, true)
 	return showcase, nil
 }
 
@@ -203,6 +226,14 @@ func (showcase *searchShowcase) Close() {
 		showcase.server.Close()
 		showcase.server = nil
 	}
+	if showcase.profileRoot != "" {
+		_ = os.RemoveAll(showcase.profileRoot)
+		showcase.profileRoot = ""
+	}
+}
+
+func (showcase *searchShowcase) profilePath(name string) string {
+	return filepath.Join(showcase.profileRoot, name)
 }
 
 func runSearchShowcase(window *gioapp.Window) error {

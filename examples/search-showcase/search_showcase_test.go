@@ -4,16 +4,21 @@ import (
 	"context"
 	"io"
 	"net/http/httptest"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Grove-Computing/Growse/internal/browser"
 	"github.com/Grove-Computing/Growse/internal/findpage"
+	"github.com/Grove-Computing/Growse/internal/homeconfig"
 	"github.com/Grove-Computing/Growse/internal/network"
 	"github.com/Grove-Computing/Growse/internal/omnibox"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
 	"github.com/Grove-Computing/Growse/internal/runtime/yaegi"
+	"github.com/Grove-Computing/Growse/internal/searchdata"
+	"github.com/Grove-Computing/Growse/internal/searchprovider"
 )
 
 func TestSearchShowcaseReproducesEverySuggestionSourceOffline(t *testing.T) {
@@ -92,6 +97,79 @@ func TestSearchShowcaseFindFixtureCoversUnicodeNestedScrollAndMutation(t *testin
 	}
 }
 
+func TestSearchShowcaseReproducesFailureDeletionAndProfileRecovery(t *testing.T) {
+	showcase, err := newSearchShowcase(func() {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer showcase.Close()
+
+	settings := showcase.chrome.SearchProviders()
+	settings.RemoteSuggestions = false
+	if err := showcase.chrome.SetSearchProviders(settings); err != nil || showcase.chrome.SearchProviders().RemoteSuggestions {
+		t.Fatalf("provider opt-out = settings %+v error %v", showcase.chrome.SearchProviders(), err)
+	}
+	settings.RemoteSuggestions = true
+	if err := showcase.chrome.SetSearchProviders(settings); err != nil || !showcase.chrome.SearchProviders().RemoteSuggestions {
+		t.Fatalf("provider opt-in = settings %+v error %v", showcase.chrome.SearchProviders(), err)
+	}
+
+	timeoutContext, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	started := time.Now()
+	if terms, err := showcase.remote(timeoutContext, "timeout"); err == nil || len(terms) != 0 || time.Since(started) > 3*time.Second {
+		t.Fatalf("timeout response = terms %#v error %v elapsed %s", terms, err, time.Since(started))
+	}
+	if terms, err := showcase.remote(t.Context(), "oversize"); err != searchprovider.ErrResponse || len(terms) != 0 {
+		t.Fatalf("oversize response = terms %#v error %v", terms, err)
+	}
+
+	if err := showcase.data.DeleteHistory(showcase.server.URL + "/history-guide"); err != nil {
+		t.Fatal(err)
+	}
+	if err := showcase.data.DeleteBookmark(showcase.server.URL + "/bookmark-guide"); err != nil {
+		t.Fatal(err)
+	}
+	local := showcase.data.SuggestionSnapshot(t.Context(), "guide")
+	if len(local.History) != 0 || len(local.Bookmarks) != 0 {
+		t.Fatalf("deleted local results remained indexed: %+v", local)
+	}
+	if err := showcase.data.RecordNavigation(searchdata.Navigation{URL: showcase.server.URL + "/history-guide", Title: "Guide history", VisitedAt: time.Now(), TopLevel: true, Success: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := showcase.data.SaveBookmark("", showcase.server.URL+"/bookmark-guide", "Guide bookmark"); err != nil {
+		t.Fatal(err)
+	}
+	profile, err := os.ReadFile(showcase.profilePath("search-data.json"))
+	if err != nil || strings.Contains(string(profile), `"index"`) {
+		t.Fatalf("rebuildable search profile = error %v body %s", err, profile)
+	}
+
+	homeStore, err := homeconfig.OpenStore(showcase.profileRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := homeconfig.Defaults()
+	first.Background = homeconfig.BackgroundDusk
+	if _, err := first.Add("Guide shortcut", showcase.server.URL+"/tab-guide"); err != nil {
+		t.Fatal(err)
+	}
+	if err := homeStore.Save(first); err != nil {
+		t.Fatal(err)
+	}
+	second := first.Clone()
+	second.Background = homeconfig.BackgroundForest
+	if err := homeStore.Save(second); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(showcase.profilePath("home-settings.json"), []byte("broken"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if recovered := homeStore.Load(); !reflect.DeepEqual(recovered, first) {
+		t.Fatalf("home recovery = %+v, want %+v", recovered, first)
+	}
+}
+
 func TestSearchShowcaseDocumentsClassificationHomeAndDispositionSteps(t *testing.T) {
 	server := newTLSServerForTest(t)
 	response, err := server.Client().Get(server.URL + "/tab-guide")
@@ -104,7 +182,7 @@ func TestSearchShowcaseDocumentsClassificationHomeAndDispositionSteps(t *testing
 		t.Fatal(err)
 	}
 	text := string(body)
-	for _, marker := range []string{"guide", "@tabs", "@history", "@bookmarks", "Shift", "Alt", "Home", "fake remote", "Public Internet"} {
+	for _, marker := range []string{"guide", "@tabs", "@history", "@bookmarks", "Shift", "Alt", "Home", "fake remote", "Public Internet", "timeout", "oversize", "History / Bookmark", "atomic"} {
 		if !strings.Contains(text, marker) {
 			t.Errorf("showcase instructions missing %q", marker)
 		}

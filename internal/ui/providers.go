@@ -18,6 +18,17 @@ import (
 
 // SearchProviders returns a value snapshot of browser-owned configuration.
 func (ui *BrowserUI) SearchProviders() searchprovider.Settings { return ui.providers.Clone() }
+
+// SetSearchProviderTransport replaces the browser-owned provider transport.
+// Embedded offline hosts use it to supply their own trusted local TLS client.
+func (ui *BrowserUI) SetSearchProviderTransport(transport *searchprovider.Transport) {
+	if transport == nil {
+		transport = searchprovider.NewTransport(nil)
+	}
+	ui.providerTransport = transport
+	ui.SetSuggestionProvider(transport.Suggestions(ui.providers.Default()), ui.providers.RemoteSuggestions)
+}
+
 func (ui *BrowserUI) SetSearchProviders(s searchprovider.Settings) error {
 	if s.Validate() != nil {
 		return searchprovider.ErrInvalid

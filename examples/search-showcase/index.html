@@ -43,6 +43,15 @@
       <p><code>demo gopher browser</code>、<code>@tabs guide</code>、<code>@history guide</code>、<code>@bookmarks guide</code>、このfixtureのHTTPS URLを順に試せます。</p>
       <p>providerとPageはprocess内localhostだけで完結し、Public Internetや実profileを使用しません。</p>
     </section>
+    <section>
+      <h2>Failure, profile, and recovery scenarios</h2>
+      <ol>
+        <li>検索設定でremote suggestionをoff / onし、即時cancelとlocalhost endpointへの復帰を確認します。</li>
+        <li><code>timeout</code>と<code>oversize</code>を入力し、local候補と入力が残る有限failureを確認します。</li>
+        <li><kbd>Ctrl/⌘</kbd> + <kbd>Shift</kbd> + <kbd>A</kbd>でSearch panelを開き、History / Bookmarkの個別削除と全History削除を確認します。</li>
+        <li>Homeの「ショートカットを編集」でshortcutと背景を変更します。一時profileへのatomic保存と次回起動時の安全なindex再構築を、実profileに触れず再現できます。</li>
+      </ol>
+    </section>
     {{end}}
   </main>
 </body>
