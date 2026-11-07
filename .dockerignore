@@ -1,5 +1,7 @@
 .git
 .github
+**/node_modules
+**/.next
 coverage.out
 dist
 growse
