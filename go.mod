@@ -1,6 +1,6 @@
 module github.com/Grove-Computing/Growse
 
-go 1.26.6
+go 1.26.10
 
 require (
 	gioui.org v0.10.2

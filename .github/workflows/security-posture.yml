@@ -25,7 +25,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.26.6"
+          go-version: "1.26.10"
       - run: >-
           go run github.com/securego/gosec/v2/cmd/gosec@v2.28.0
           -fmt sarif -out gosec.sarif
@@ -63,7 +63,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.26.6"
+          go-version: "1.26.10"
       - name: Fuzz parsers
         run: |
           go test -run='^$' -fuzz=FuzzParse -fuzztime=30s ./internal/html

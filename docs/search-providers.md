@@ -14,4 +14,4 @@ toolbarの「検索設定」からproviderを管理する。初期設定はDuckD
 
 設定はOS標準のGrowse profile内の`search-providers.json`へ保存する。providerは最大32件、keywordは32 Unicode scalar value、設定は64 KiB。temporary fileのsyncとatomic renameでcommitし、writerをprofile単位のlockで直列化する。保存失敗時は既存設定を維持する（外部候補の無効化だけは即時反映）。破損時は直前の有効snapshotまたはDuckDuckGoへ復旧し、外部候補を無効にする。
 
-検証は`GOTOOLCHAIN=go1.26.6 go test ./internal/searchprovider ./internal/ui ./internal/omnibox ./internal/network`で実行できる。テストのprovider通信は注入したHTTP transportを使い、実検索providerへ接続しない。
+検証は`GOTOOLCHAIN=go1.26.10 go test ./internal/searchprovider ./internal/ui ./internal/omnibox ./internal/network`で実行できる。テストのprovider通信は注入したHTTP transportを使い、実検索providerへ接続しない。
