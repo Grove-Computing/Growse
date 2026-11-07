@@ -32,6 +32,8 @@
 
 ## 実行したgate
 
+中心となる個別testは`TestSvelteKitIsolatedDesktopRuntimeHydratesPromptly`と`TestSvelteKitSSRFixtureHydratesAndEnhancesForm`である。
+
 ```sh
 GOTOOLCHAIN=go1.26.10 go test -race ./examples/modern-web-compat \
   -run 'Test(SvelteKitIsolatedDesktopRuntimeHydratesPromptly|SvelteKitSSRFixtureHydratesAndEnhancesForm)$' \
