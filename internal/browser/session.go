@@ -107,6 +107,7 @@ type Session struct {
 	onActiveMutation func()
 	fetchLimiter     *fetchapi.Limiter
 	devToolsSession  *devtools.SessionStore
+	sharedImages     *sharedDecodedImageCache
 }
 
 // NewSession creates an empty browser session.
@@ -139,7 +140,7 @@ func NewSessionWithPolicy(factory BrowserFactory, policy SessionPolicy) *Session
 	if policy.MaxFetches <= 0 {
 		policy.MaxFetches = defaults.MaxFetches
 	}
-	return &Session{factory: factory, policy: policy, fetchLimiter: fetchapi.NewLimiter(policy.MaxFetches), devToolsSession: devtools.NewSessionStore()}
+	return &Session{factory: factory, policy: policy, fetchLimiter: fetchapi.NewLimiter(policy.MaxFetches), devToolsSession: devtools.NewSessionStore(), sharedImages: newSharedDecodedImageCache()}
 }
 
 // NewTab adds an empty tab or a tab with a requested initial URL. Navigation
@@ -171,6 +172,21 @@ func (s *Session) NewTab(initialURL *url.URL) (TabSnapshot, error) {
 	tab.browser.SetTabActive(state == TabActive)
 	s.tabs = append(s.tabs, tab)
 	return snapshotTab(tab, len(s.tabs)-1, state == TabActive), nil
+}
+
+// BrowserTarget returns the isolated navigator for a live tab without
+// selecting it. Browser chrome uses this for background-tab navigation.
+func (s *Session) BrowserTarget(id TabID) (*Browser, bool) {
+	if s == nil {
+		return nil, false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	tab, ok := s.tabByIDLocked(id)
+	if !ok || tab.browser == nil || tab.state == TabClosing || tab.state == TabClosed {
+		return nil, false
+	}
+	return tab.browser, true
 }
 
 // SetTabTitle stores a validated document title for browser chrome.
@@ -225,7 +241,7 @@ func (s *Session) FinishTabNavigation(id TabID, failed bool) (TabSnapshot, error
 		tab.loading = false
 		runtimeFailed := false
 		if tab.browser != nil {
-			if page := tab.browser.Page(); page != nil {
+			if page := tab.browser.currentPage(); page != nil {
 				runtimeFailed = page.RuntimeError != ""
 			}
 		}
@@ -239,7 +255,7 @@ func (s *Session) FinishTabNavigation(id TabID, failed bool) (TabSnapshot, error
 			tab.status = "取得完了"
 		}
 		if tab.browser != nil {
-			if page := tab.browser.Page(); page != nil && page.Document != nil {
+			if page := tab.browser.currentPage(); page != nil && page.Document != nil {
 				if title := page.Document.Title(); utf8.ValidString(title) && len(title) <= s.policy.MaxTitleBytes {
 					tab.title = title
 				}
@@ -259,6 +275,7 @@ func (s *Session) newTabLocked(initialURL *url.URL, state TabState) (*Tab, error
 		return nil, ErrTabBrowser
 	}
 	browser.SetFetchLimiter(s.fetchLimiter)
+	browser.setSharedImageCache(s.sharedImages)
 	browser.SetDevToolsSession(s.devToolsSession)
 	for _, existing := range s.tabs {
 		if existing != nil && existing.browser == browser && existing.state != TabClosed {
@@ -526,6 +543,8 @@ func (s *Session) Close() error {
 	s.activeID = 0
 	s.factory = nil
 	s.onActiveMutation = nil
+	sharedImages := s.sharedImages
+	s.sharedImages = nil
 	for _, tab := range tabs {
 		if tab != nil {
 			tab.state = TabClosing
@@ -542,6 +561,7 @@ func (s *Session) Close() error {
 		}
 		tab.state = TabClosed
 	}
+	sharedImages.clear()
 	return closeErr
 }
 
@@ -556,7 +576,7 @@ func snapshotTab(tab *Tab, position int, active bool) TabSnapshot {
 	if tab.initialURL != nil {
 		snapshot.URL = displayTabURL(tab.initialURL)
 	} else if tab.browser != nil {
-		page := tab.browser.Page()
+		page := tab.browser.currentPage()
 		if page != nil && page.URL != nil {
 			snapshot.URL = displayTabURL(page.URL)
 		}

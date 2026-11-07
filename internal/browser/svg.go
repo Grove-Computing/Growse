@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"image/draw"
 	"io"
 	"math"
 	"sort"
@@ -43,11 +44,12 @@ type svgMetadata struct {
 }
 
 const (
-	maxSVGBytes        = 4 << 20
-	maxSVGNodes        = 20_000
-	maxSVGDepth        = 256
-	maxSVGPathCommands = 200_000
-	maxSVGSurfaceBytes = 64 << 20
+	maxSVGBytes            = 4 << 20
+	maxSVGNodes            = 20_000
+	maxSVGDepth            = 256
+	maxSVGPathCommands     = 200_000
+	maxSVGSurfaceBytes     = 64 << 20
+	maxSVGEvenOddPixelWork = 64 << 20
 )
 
 var allowedSVGElements = map[string]bool{
@@ -81,6 +83,14 @@ func rasterizeSVGWithBudget(source []byte, budget *imageDecodeBudget) (decoded i
 	if err != nil {
 		return nil, 0, 0, fmt.Errorf("parse SVG graphics: %w", err)
 	}
+	hasEvenOdd := false
+	for index, useNonZero := range svgWindingRules(sanitized) {
+		if index >= len(icon.SVGPaths) {
+			break
+		}
+		icon.SVGPaths[index].UseNonZeroWinding = useNonZero
+		hasEvenOdd = hasEvenOdd || !useNonZero
+	}
 	viewBox := metadata.viewBox
 	if viewBox[2] <= 0 || viewBox[3] <= 0 {
 		viewBox = [4]float64{icon.ViewBox.X, icon.ViewBox.Y, icon.ViewBox.W, icon.ViewBox.H}
@@ -105,6 +115,9 @@ func rasterizeSVGWithBudget(source []byte, budget *imageDecodeBudget) (decoded i
 	if pixelWidth <= 0 || pixelHeight <= 0 || pixelWidth > maxSVGSurfaceBytes/4/pixelHeight {
 		return nil, 0, 0, errors.New("SVG raster surface is too large")
 	}
+	if hasEvenOdd && int64(pixelWidth)*int64(pixelHeight)*12 > maxSVGSurfaceBytes {
+		return nil, 0, 0, errors.New("SVG even-odd raster surface is too large")
+	}
 	if !budget.reserveSurface(pixelWidth, pixelHeight) {
 		return nil, 0, 0, errors.New("page image decode surface limit exceeded")
 	}
@@ -112,14 +125,149 @@ func rasterizeSVGWithBudget(source []byte, budget *imageDecodeBudget) (decoded i
 	icon.ViewBox.X, icon.ViewBox.Y, icon.ViewBox.W, icon.ViewBox.H = viewBox[0], viewBox[1], viewBox[2], viewBox[3]
 	result := image.NewRGBA(image.Rect(0, 0, pixelWidth, pixelHeight))
 	icon.SetTarget(0, 0, float64(pixelWidth), float64(pixelHeight))
-	scanner := rasterx.NewScannerGV(pixelWidth, pixelHeight, result, result.Bounds())
-	icon.Draw(rasterx.NewDasher(pixelWidth, pixelHeight, scanner), 1)
+	if err := drawSVGIcon(icon, result); err != nil {
+		return nil, 0, 0, err
+	}
 	paintSVGText(result, metadata)
 	applySVGClip(result, metadata)
 	if pathologicalCompoundPathRaster(source, result) {
 		return nil, 0, 0, errors.New("SVG compound path rasterization is invalid")
 	}
 	return result, pixelWidth, pixelHeight, nil
+}
+
+func svgWindingRules(source []byte) []bool {
+	decoder := xml.NewDecoder(bytes.NewReader(source))
+	rules := make([]bool, 0)
+	stack := []bool{true}
+	defsDepth := 0
+	for {
+		token, err := decoder.Token()
+		if err != nil {
+			return rules
+		}
+		switch value := token.(type) {
+		case xml.StartElement:
+			useNonZero := stack[len(stack)-1]
+			for _, attribute := range value.Attr {
+				switch strings.ToLower(attribute.Name.Local) {
+				case "fill-rule":
+					useNonZero = !strings.EqualFold(strings.TrimSpace(attribute.Value), "evenodd")
+				case "style":
+					for _, declaration := range strings.Split(attribute.Value, ";") {
+						parts := strings.SplitN(declaration, ":", 2)
+						if len(parts) == 2 && strings.EqualFold(strings.TrimSpace(parts[0]), "fill-rule") {
+							useNonZero = !strings.EqualFold(strings.TrimSpace(parts[1]), "evenodd")
+						}
+					}
+				}
+			}
+			name := canonicalSVGName(value.Name.Local)
+			if name == "defs" {
+				defsDepth++
+			}
+			if defsDepth == 0 {
+				switch name {
+				case "path", "rect", "circle", "ellipse", "line", "polyline", "polygon":
+					rules = append(rules, useNonZero)
+				}
+			}
+			stack = append(stack, useNonZero)
+		case xml.EndElement:
+			if canonicalSVGName(value.Name.Local) == "defs" {
+				defsDepth--
+			}
+			if len(stack) > 1 {
+				stack = stack[:len(stack)-1]
+			}
+		}
+	}
+}
+
+func drawSVGIcon(icon *oksvg.SvgIcon, target *image.RGBA) error {
+	if icon == nil || target == nil {
+		return nil
+	}
+	pixelWork := int64(0)
+	for index := range icon.SVGPaths {
+		path := &icon.SVGPaths[index]
+		if path.UseNonZeroWinding {
+			continue
+		}
+		pixelWork += int64(len(splitSVGPath(path.Path))) * int64(target.Bounds().Dx()) * int64(target.Bounds().Dy())
+		if pixelWork > maxSVGEvenOddPixelWork {
+			return errors.New("SVG even-odd raster work limit exceeded")
+		}
+	}
+	scanner := rasterx.NewScannerGV(target.Bounds().Dx(), target.Bounds().Dy(), target, target.Bounds())
+	dasher := rasterx.NewDasher(target.Bounds().Dx(), target.Bounds().Dy(), scanner)
+	for index := range icon.SVGPaths {
+		path := &icon.SVGPaths[index]
+		if path.UseNonZeroWinding {
+			path.DrawTransformed(dasher, 1, icon.Transform)
+			continue
+		}
+		drawEvenOddSVGPath(path, icon.Transform, target)
+	}
+	return nil
+}
+
+func drawEvenOddSVGPath(path *oksvg.SvgPath, transform rasterx.Matrix2D, target *image.RGBA) {
+	if path == nil || target == nil {
+		return
+	}
+	parity := image.NewRGBA(target.Bounds())
+	for _, subpath := range splitSVGPath(path.Path) {
+		layer := image.NewRGBA(target.Bounds())
+		scanner := rasterx.NewScannerGV(layer.Bounds().Dx(), layer.Bounds().Dy(), layer, layer.Bounds())
+		segment := *path
+		segment.Path = subpath
+		segment.UseNonZeroWinding = true
+		segment.DrawTransformed(rasterx.NewDasher(layer.Bounds().Dx(), layer.Bounds().Dy(), scanner), 1, transform)
+		for y := layer.Bounds().Min.Y; y < layer.Bounds().Max.Y; y++ {
+			for x := layer.Bounds().Min.X; x < layer.Bounds().Max.X; x++ {
+				incoming := layer.RGBAAt(x, y)
+				if incoming.A == 0 {
+					continue
+				}
+				current := parity.RGBAAt(x, y)
+				if current.A == 0 {
+					parity.SetRGBA(x, y, incoming)
+				} else {
+					parity.SetRGBA(x, y, color.RGBA{})
+				}
+			}
+		}
+	}
+	draw.Draw(target, target.Bounds(), parity, target.Bounds().Min, draw.Over)
+}
+
+func splitSVGPath(path rasterx.Path) []rasterx.Path {
+	var subpaths []rasterx.Path
+	start := 0
+	for index := 0; index < len(path); {
+		command := rasterx.PathCommand(path[index])
+		if command == rasterx.PathMoveTo && index > start {
+			subpaths = append(subpaths, append(rasterx.Path(nil), path[start:index]...))
+			start = index
+		}
+		switch command {
+		case rasterx.PathMoveTo, rasterx.PathLineTo:
+			index += 3
+		case rasterx.PathQuadTo:
+			index += 5
+		case rasterx.PathCubicTo:
+			index += 7
+		case rasterx.PathClose:
+			index++
+		default:
+			return subpaths
+		}
+	}
+	if start < len(path) {
+		subpaths = append(subpaths, append(rasterx.Path(nil), path[start:]...))
+	}
+	return subpaths
 }
 
 func pathologicalCompoundPathRaster(source []byte, raster *image.RGBA) bool {

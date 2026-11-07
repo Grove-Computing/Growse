@@ -289,8 +289,9 @@ func TestSetTextContentReplacesDescendantsAndIndexes(t *testing.T) {
 	if got, want := parent.TextContent(), "after"; got != want {
 		t.Fatalf("TextContent() = %q, want %q", got, want)
 	}
-	if _, ok := document.NodeByID(child.ID); ok {
-		t.Fatal("removed child remains in node index")
+	retained, ok := document.NodeByID(child.ID)
+	if !ok || retained != child || retained.Parent != nil {
+		t.Fatal("removed child was not retained as a detached node")
 	}
 	if _, ok := document.GetElementByID("old"); ok {
 		t.Fatal("removed child remains in id index")

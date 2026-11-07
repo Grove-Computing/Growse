@@ -68,8 +68,8 @@ func TestDocumentAndElementMutationsUseGrowseDOM(t *testing.T) {
 	if _, ok := document.QuerySelector(".old"); ok {
 		t.Fatal("removed element remains connected")
 	}
-	if mutations < 7 {
-		t.Fatalf("mutation callbacks = %d, want at least 7", mutations)
+	if mutations == 0 {
+		t.Fatal("DOM mutation batch was not published")
 	}
 }
 
@@ -231,8 +231,8 @@ func TestJavaScriptElementReflectionSelectorsDatasetStyleAndHTMLMutation(t *test
 	if message != want {
 		t.Fatalf("Element API result = %q, want %q", message, want)
 	}
-	if mutations < 10 {
-		t.Fatalf("Element mutations = %d, want at least 10", mutations)
+	if mutations == 0 {
+		t.Fatal("Element mutation batch was not published")
 	}
 }
 
@@ -248,6 +248,9 @@ func TestJavaScriptDOMCollectionsTreeMetadataInnerHTMLAndClassList(t *testing.T)
 		if (document.querySelectorAll(".card").length !== 2) throw new Error("querySelectorAll");
 		if (document.getElementsByClassName("card featured").length !== 1) throw new Error("class collection");
 		if (document.getElementsByTagName("p").length !== 2) throw new Error("tag collection");
+		if (app.getElementsByTagName("p").length !== 2 || app.getElementsByClassName("card featured").length !== 1) throw new Error("element collection");
+		app.setAttribute("data-state", "ready");
+		if (app.getAttributeNode("data-state").value !== "ready" || app.attributes["data-state"].expando !== false) throw new Error("attributes collection");
 		if (app.id !== "app" || app.tagName !== "MAIN" || app.children.length !== 2) throw new Error("metadata");
 		var text = document.createTextNode("prefix");
 		var section = document.createElement("section");

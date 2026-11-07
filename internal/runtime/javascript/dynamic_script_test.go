@@ -63,15 +63,15 @@ func TestDynamicClassicScriptsSnapshotFetchAndExecuteExactlyOnce(t *testing.T) {
 		external.src = "/classic.js";
 		external.integrity = "` + integrity + `";
 		external.crossOrigin = "anonymous";
-		external.addEventListener("load", function () { result.setAttribute("load", "yes"); });
-		external.addEventListener("error", function () { result.setAttribute("unexpected-error", "yes"); });
+		external.onload = function () { result.setAttribute("load", "yes"); };
+		external.onerror = function () { result.setAttribute("unexpected-error", "yes"); };
 		detached.appendChild(external);
 
 		var bad = document.createElement("script");
 		bad.src = "/bad.js";
 		bad.integrity = "sha384-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 		bad.crossOrigin = "anonymous";
-		bad.addEventListener("error", function () { result.setAttribute("error", "yes"); });
+		bad.onerror = function () { result.setAttribute("error", "yes"); };
 		detached.appendChild(bad);
 
 		host.appendChild(detached);

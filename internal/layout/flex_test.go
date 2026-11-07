@@ -6,6 +6,7 @@ import (
 
 	"github.com/Grove-Computing/Growse/internal/css"
 	"github.com/Grove-Computing/Growse/internal/dom"
+	htmlparser "github.com/Grove-Computing/Growse/internal/html"
 	stylemodel "github.com/Grove-Computing/Growse/internal/style"
 )
 
@@ -845,4 +846,84 @@ func boxForNode(t *testing.T, tree *Tree, nodeID dom.NodeID) Box {
 	}
 	t.Fatalf("box for node %d was not created: %#v", nodeID, tree.Boxes)
 	return Box{}
+}
+
+func TestFlexItemMaxContentIncludesAtomicInlineDescendants(t *testing.T) {
+	document := dom.NewDocument()
+	list := document.CreateElement("ul", map[string]string{"class": "list"})
+	first := document.CreateElement("li", nil)
+	second := document.CreateElement("li", nil)
+	link := document.CreateElement("a", map[string]string{"class": "link"})
+	icon := document.CreateElement("span", map[string]string{"class": "icon"})
+	label := document.CreateElement("strong", nil)
+	appendNodes(t, document,
+		[2]*dom.Node{document.Root, list}, [2]*dom.Node{list, first}, [2]*dom.Node{list, second},
+		[2]*dom.Node{first, link}, [2]*dom.Node{link, icon}, [2]*dom.Node{link, label},
+		[2]*dom.Node{label, document.CreateText("All")}, [2]*dom.Node{second, document.CreateText("Images")},
+	)
+	stylesheet, err := css.Parse(strings.NewReader(`
+.list { display:flex }
+.link { display:inline-block }
+.icon { display:inline-block; width:16px; height:16px; margin-right:5px }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(document, stylemodel.Compute(document, stylesheet), 400)
+	firstRect, secondRect := tree.Bounds[first.ID], tree.Bounds[second.ID]
+	linkRect := tree.Bounds[link.ID]
+	if firstRect.Width < linkRect.Width || secondRect.X < linkRect.X+linkRect.Width {
+		t.Fatalf("flex items overlap atomic inline content: first=%#v link=%#v second=%#v", firstRect, linkRect, secondRect)
+	}
+}
+
+func TestFlexIntrinsicWidthIgnoresAbsolutelyPositionedInlineLabel(t *testing.T) {
+	document, err := htmlparser.Parse(strings.NewReader(`<div class="bar"><div class="item"><span>Search Settings</span></div><div class="fill">Results</div></div>`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stylesheet, err := css.Parse(strings.NewReader(`
+.bar { display:flex; width:300px }
+.item { display:block; flex:0 0 auto; position:relative }
+.item span { position:absolute; width:100%; overflow:hidden }
+.fill { flex:1 1 0 }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	computed := stylemodel.Compute(document, stylesheet)
+	tree := BuildWithViewport(document, computed, 300, 200)
+	item, _ := document.QuerySelector(".item")
+	bounds := tree.Bounds[item.ID]
+	if bounds.Width >= 100 {
+		t.Fatalf("absolute label inflated flex item width to %v", bounds.Width)
+	}
+}
+
+func TestFlexAutoAtomicInlineShrinksAroundInFlowContent(t *testing.T) {
+	document, err := htmlparser.Parse(strings.NewReader(`<nav class="bar"><ul class="fill"><li>All</li><li>Images</li></ul><ul class="actions"><li><span><button><strong><svg width="16" height="16"></svg><span class="sr">Search Settings</span><span class="fill-icon"></span></strong></button></span></li></ul></nav>`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stylesheet, err := css.Parse(strings.NewReader(`
+.bar { display:flex; width:672px }
+.bar ul { display:flex }
+.fill { flex:1 1 0; min-width:0 }
+.actions { flex:0 0 auto }
+button { display:inline-block }
+strong, button > strong > span { display:inline }
+.sr { position:absolute; width:1px; overflow:hidden }
+.fill-icon { display:inline-block; width:100% }
+svg { display:inline; width:16px; height:16px }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := BuildWithViewport(document, stylemodel.Compute(document, stylesheet), 672, 200)
+	actions, _ := document.QuerySelector(".actions")
+	fill, _ := document.QuerySelector(".fill")
+	actionsBounds, fillBounds := tree.Bounds[actions.ID], tree.Bounds[fill.ID]
+	if actionsBounds.Width >= 200 || fillBounds.Width <= 400 {
+		t.Fatalf("auto atomic inline expanded from percentage descendant: actions=%#v fill=%#v", actionsBounds, fillBounds)
+	}
 }

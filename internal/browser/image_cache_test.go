@@ -330,3 +330,29 @@ func TestImageResourceCacheIsReleasedOnEngineSwitch(t *testing.T) {
 		t.Fatalf("engine switch cache release = new:%p oldCache:%p oldImages:%v entries:%d bytes:%d", newPage, oldPage.imageCache, oldPage.Images, len(cache.entries), cache.bytes)
 	}
 }
+
+func TestDecodedImageCacheIsReusedAcrossPageCaches(t *testing.T) {
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, image.NewNRGBA(image.Rect(0, 0, 4, 3))); err != nil {
+		t.Fatal(err)
+	}
+	target := mustParseURL(t, "https://example.com/shared.png")
+	loader := &routeLoader{responses: map[string]*network.Response{
+		target.String(): {URL: target, StatusCode: http.StatusOK, ContentType: "image/png", Body: encoded.Bytes()},
+	}}
+	shared := newSharedDecodedImageCache()
+	first := newImageResourceCacheWithShared(shared)
+	loaded := first.load(context.Background(), loader, target, newImageDecodeBudget())
+	if loaded.failure != imageLoadOK || loaded.decoded == nil || first.statsSnapshot().decodes != 1 {
+		t.Fatalf("first decode = %#v stats=%#v", loaded, first.statsSnapshot())
+	}
+	first.clear()
+	second := newImageResourceCacheWithShared(shared)
+	reused := second.load(context.Background(), loader, target, newImageDecodeBudget())
+	if reused.failure != imageLoadOK || reused.decoded == nil {
+		t.Fatalf("reused decode = %#v", reused)
+	}
+	if stats := second.statsSnapshot(); stats.decodes != 0 || stats.hits == 0 {
+		t.Fatalf("second cache stats = %#v, want shared hit without decode", stats)
+	}
+}
