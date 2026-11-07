@@ -35,6 +35,9 @@ func (runtime *Runtime) installFetch(vm *goja.Runtime) error {
 	}); err != nil {
 		return err
 	}
+	if err := runtime.installXMLHttpRequest(vm); err != nil {
+		return err
+	}
 	return runtime.installAbortController(vm)
 }
 

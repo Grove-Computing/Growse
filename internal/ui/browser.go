@@ -25,6 +25,7 @@ import (
 	"gioui.org/io/event"
 	"gioui.org/io/key"
 	"gioui.org/io/pointer"
+	"gioui.org/io/semantic"
 	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/op/clip"
@@ -40,13 +41,19 @@ import (
 	"github.com/Grove-Computing/Growse/internal/browser"
 	devtoolsmodel "github.com/Grove-Computing/Growse/internal/devtools"
 	"github.com/Grove-Computing/Growse/internal/dom"
+	"github.com/Grove-Computing/Growse/internal/findpage"
 	"github.com/Grove-Computing/Growse/internal/forms"
+	"github.com/Grove-Computing/Growse/internal/homeconfig"
 	layoutengine "github.com/Grove-Computing/Growse/internal/layout"
 	"github.com/Grove-Computing/Growse/internal/network"
+	"github.com/Grove-Computing/Growse/internal/omnibox"
 	paintmodel "github.com/Grove-Computing/Growse/internal/paint"
 	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
+	"github.com/Grove-Computing/Growse/internal/searchdata"
+	"github.com/Grove-Computing/Growse/internal/searchprovider"
 	stylemodel "github.com/Grove-Computing/Growse/internal/style"
 	"github.com/Grove-Computing/Growse/internal/updater"
+	desktopassets "github.com/Grove-Computing/Growse/packaging/linux"
 )
 
 //go:embed assets/gopher-blue.png
@@ -55,7 +62,8 @@ var gopherPNG []byte
 const (
 	defaultURL         = "http://localhost:6053"
 	tabRailWidth       = unit.Dp(224)
-	toolbarHeight      = unit.Dp(92)
+	toolbarHeight      = unit.Dp(100)
+	bookmarkBarHeight  = unit.Dp(32)
 	controlHeight      = unit.Dp(44)
 	addressBarHeight   = unit.Dp(48)
 	gopherButtonWidth  = unit.Dp(72)
@@ -80,7 +88,9 @@ type BrowserUI struct {
 	backButton        widget.Clickable
 	forwardButton     widget.Clickable
 	reloadButton      widget.Clickable
+	homeButton        widget.Clickable
 	goButton          widget.Clickable
+	bookmarkButton    widget.Clickable
 	updateButton      widget.Clickable
 	engineButton      widget.Clickable
 	devToolsButton    widget.Clickable
@@ -104,8 +114,37 @@ type BrowserUI struct {
 	pageList          widget.List
 	tabList           widget.List
 	viewportClick     gesture.Click
-	address           widget.Editor
+	address           *widget.Editor
+	omniboxStates     map[browser.TabID]omniboxState
+	homeTabs          map[browser.TabID]*homeTabState
+	homeRollbacks     map[browser.TabID]homeHistorySnapshot
+	homeSettings      homeconfig.Settings
+	homeStore         *homeconfig.Store
+	homePanel         homeSettingsPanel
+	homeCustomize     widget.Clickable
+	homeShortcuts     [homeconfig.MaxShortcuts]widget.Clickable
+	findStates        map[browser.TabID]*findTabState
+	findFocusPending  bool
+
+	suggestions              *omnibox.Pipeline
+	suggestionPopup          suggestionPopup
+	suggestionSnapshot       omnibox.Snapshot
+	suggestionFetcher        omnibox.RemoteFetcher
+	remoteSuggestions        bool
+	providers                searchprovider.Settings
+	providerPanel            providerPanel
+	providerTransport        *searchprovider.Transport
+	providerImports          chan providerImportResult
+	providerStore            *searchprovider.Store
+	providerImportPending    bool
+	providerDiscoveryButtons map[string]*widget.Clickable
+	searchData               *searchdata.Store
+	localSuggestions         *searchdata.LocalPipeline
+	searchPanel              searchPanelState
+	searchPanelSuggestions   *searchdata.LocalPipeline
+
 	gopher            paint.ImageOp
+	growseIcon        paint.ImageOp
 	pointerTag        pointerTag
 	pointer           pointerState
 	nestedScrollPage  *browser.Page
@@ -114,6 +153,7 @@ type BrowserUI struct {
 	backIcon          *widget.Icon
 	forwardIcon       *widget.Icon
 	reloadIcon        *widget.Icon
+	homeIcon          *widget.Icon
 	pageTitle         string
 	status            string
 	pageStatus        string
@@ -129,6 +169,12 @@ type BrowserUI struct {
 	layoutBuildImages func(*dom.Document, stylemodel.Map, map[dom.NodeID]layoutengine.ImageResource, float32, float32, float32, float32) *layoutengine.Tree
 	layoutBuildFonts  func(*dom.Document, stylemodel.Map, map[dom.NodeID]layoutengine.ImageResource, *layoutengine.FontSet, float32, float32, float32, float32) *layoutengine.Tree
 	layoutCache       documentLayoutCache
+	renderContext     context.Context
+	cancelRender      context.CancelFunc
+	renderJobs        chan documentRenderJob
+	renderResults     chan documentRenderResult
+	renderPending     documentRenderKey
+	asyncRender       bool
 	imagePaintCache   pageImagePaintCache
 	fontPage          *browser.Page
 	fontRevision      uint64
@@ -141,6 +187,11 @@ type BrowserUI struct {
 	updateAvailable   bool
 	updating          bool
 	onUpdateApplied   func()
+
+	bookmarkIcon       *widget.Icon
+	bookmarkBorderIcon *widget.Icon
+	bookmarkBarList    widget.List
+	bookmarkBarButtons map[string]*widget.Clickable
 }
 
 type documentLayoutCache struct {
@@ -159,6 +210,67 @@ type browserChromeGeometry struct {
 	toolbar  image.Rectangle
 	viewport image.Rectangle
 	devTools image.Rectangle
+}
+
+type findTabState struct {
+	open              bool
+	editor            *widget.Editor
+	options           findpage.Options
+	result            findpage.Result
+	current           int
+	searching         bool
+	pendingSearch     bool
+	scrollPending     bool
+	searchPage        *browser.Page
+	searchRevision    uint64
+	viewportWidth     float32
+	viewportHeight    float32
+	startPage         *browser.Page
+	startPagePosition layout.Position
+	startNestedScroll map[dom.NodeID]layoutengine.ScrollOffset
+	startPageFocus    dom.NodeID
+	restoreFocus      event.Tag
+	previous          widget.Clickable
+	next              widget.Clickable
+	caseToggle        widget.Clickable
+	wordToggle        widget.Clickable
+	close             widget.Clickable
+}
+
+func newFindTabState() *findTabState {
+	editor := new(widget.Editor)
+	editor.SingleLine = true
+	editor.Submit = true
+	return &findTabState{editor: editor}
+}
+
+func (state *findTabState) statusLabel() string {
+	if state == nil || state.editor.Text() == "" {
+		return "検索語を入力"
+	}
+	if state.searching {
+		return "検索中…"
+	}
+	if state.result.Limit != findpage.LimitNone {
+		return fmt.Sprintf("%d件 · 上限超過", len(state.result.Matches))
+	}
+	if len(state.result.Matches) == 0 {
+		return "0 / 0"
+	}
+	return fmt.Sprintf("%d / %d", state.current+1, len(state.result.Matches))
+}
+
+func (state *findTabState) move(delta int) {
+	count := len(state.result.Matches)
+	if count == 0 {
+		state.current = 0
+		return
+	}
+	state.current = (state.current + delta) % count
+	if state.current < 0 {
+		state.current += count
+	}
+	state.scrollPending = true
 }
 
 type devToolsPanel string
@@ -237,6 +349,10 @@ type activeBrowserSource interface {
 	ActiveBrowserTarget() (browser.TabID, *browser.Browser, bool)
 }
 
+type tabBrowserSource interface {
+	BrowserTarget(browser.TabID) (*browser.Browser, bool)
+}
+
 type pageInspector interface {
 	InspectPage(func(*browser.Page) bool) bool
 }
@@ -244,6 +360,11 @@ type pageInspector interface {
 type engineNavigator interface {
 	Engine() runtimemodel.Engine
 	SetEngine(context.Context, runtimemodel.Engine) (*browser.Page, error)
+}
+
+type nativeFormNavigator interface {
+	Submit(context.Context, dom.NodeID, dom.NodeID) (*browser.Page, error)
+	ActivateSubmitter(context.Context, dom.NodeID, float32, float32) (*browser.Page, error)
 }
 
 type tabNavigationStateSink interface {
@@ -285,8 +406,29 @@ type applicationUpdateResult struct {
 }
 
 type tabNavigation struct {
-	id     uint64
-	cancel context.CancelFunc
+	id         uint64
+	cancel     context.CancelFunc
+	homeBefore *homeHistorySnapshot
+}
+
+type omniboxDisposition uint8
+
+const (
+	omniboxCurrentTab omniboxDisposition = iota
+	omniboxNewForegroundTab
+	omniboxNewBackgroundTab
+)
+
+// omniboxState keeps the document URL separate from the editable buffer. The
+// editor itself is tab-owned, which preserves its native selection, clipboard,
+// undo/redo and IME composition state while another tab is active.
+type omniboxState struct {
+	editor       *widget.Editor
+	committedURL string
+	observedText string
+	preview      string
+	scope        omnibox.Scope
+	scopeQuery   string
 }
 
 // NewBrowserUI creates a browser toolbar and an empty viewport.
@@ -305,6 +447,10 @@ func NewBrowserUIWithTabsAndUpdater(navigator Navigator, tabs TabController, inv
 	if err != nil {
 		panic("decode embedded Go Gopher image: " + err.Error())
 	}
+	growseIconImage, err := png.Decode(bytes.NewReader(desktopassets.IconPNG()))
+	if err != nil {
+		panic("decode embedded Growse icon: " + err.Error())
+	}
 
 	updateContext, cancelUpdate := context.WithCancel(context.Background())
 	ui := &BrowserUI{
@@ -312,13 +458,16 @@ func NewBrowserUIWithTabsAndUpdater(navigator Navigator, tabs TabController, inv
 		navigator:         navigator,
 		tabs:              tabs,
 		invalidate:        invalidate,
+		asyncRender:       invalidate != nil,
 		results:           make(chan navigationResult, browser.DefaultSessionPolicy().MaxTabs),
 		navigations:       make(map[browser.TabID]tabNavigation),
 		tabRenderStates:   make(map[browser.TabID]tabRenderState),
 		gopher:            paint.NewImageOp(gopherImage),
+		growseIcon:        paint.NewImageOp(growseIconImage),
 		backIcon:          mustIcon(widget.NewIcon(icons.NavigationArrowBack)),
 		forwardIcon:       mustIcon(widget.NewIcon(icons.NavigationArrowForward)),
 		reloadIcon:        mustIcon(widget.NewIcon(icons.NavigationRefresh)),
+		homeIcon:          mustIcon(widget.NewIcon(icons.ActionHome)),
 		pageTitle:         "新しい Web を Go で開く",
 		status:            "URLを入力して Gopher ボタンを押してください",
 		pageStatus:        "URLを入力して Gopher ボタンを押してください",
@@ -336,6 +485,12 @@ func NewBrowserUIWithTabsAndUpdater(navigator Navigator, tabs TabController, inv
 		tabShortcutDown:   make(map[key.Name]bool),
 		devToolsStates:    make(map[browser.TabID]devToolsTabState),
 		inspectorButtons:  make(map[browser.TabID]map[dom.NodeID]*widget.Clickable),
+		omniboxStates:     make(map[browser.TabID]omniboxState),
+		homeTabs:          make(map[browser.TabID]*homeTabState),
+		homeRollbacks:     make(map[browser.TabID]homeHistorySnapshot),
+		homeSettings:      homeconfig.Defaults(),
+		homePanel:         newHomeSettingsPanel(),
+		findStates:        make(map[browser.TabID]*findTabState),
 		layoutBuild:       layoutengine.BuildWithScroll,
 		layoutBuildImages: layoutengine.BuildWithScrollAndImages,
 		layoutBuildFonts:  layoutengine.BuildWithScrollAndResources,
@@ -344,25 +499,40 @@ func NewBrowserUIWithTabsAndUpdater(navigator Navigator, tabs TabController, inv
 		updateContext:     updateContext,
 		cancelUpdate:      cancelUpdate,
 		onUpdateApplied:   onUpdateApplied,
+
+		bookmarkIcon:       mustIcon(widget.NewIcon(icons.ToggleStar)),
+		bookmarkBorderIcon: mustIcon(widget.NewIcon(icons.ToggleStarBorder)),
+		bookmarkBarButtons: make(map[string]*widget.Clickable),
 	}
 	if ui.invalidate == nil {
 		ui.invalidate = func() {}
 	}
-	ui.address.SingleLine = true
-	ui.address.Submit = true
-	ui.address.SetText(defaultURL)
+	ui.providers = searchprovider.Defaults()
+	ui.providerTransport = searchprovider.NewTransport(nil)
+	ui.providerImports = make(chan providerImportResult, 1)
+	ui.providerDiscoveryButtons = map[string]*widget.Clickable{}
+	ui.suggestions = omnibox.NewPipeline(ui.invalidate)
+	ui.address = newOmniboxEditor(defaultURL)
+	ui.omniboxStates[0] = omniboxState{editor: ui.address, committedURL: defaultURL, observedText: defaultURL}
 	ui.pageList.Axis = layout.Vertical
+	ui.bookmarkBarList.Axis = layout.Horizontal
+	ui.searchPanel = newSearchPanelState()
 	ui.tabList.Axis = layout.Vertical
 	ui.devToolsList.Axis = layout.Vertical
 	ui.inspectorList.Axis = layout.Vertical
 	ui.networkList.Axis = layout.Vertical
+	ui.startRenderWorker()
 	ui.startUpdateCheck()
 	return ui
 }
 
 // Layout draws the vertical tab rail, browser toolbar, and page viewport.
 func (ui *BrowserUI) Layout(gtx layout.Context) layout.Dimensions {
-	ui.handlePointerEvents(gtx)
+	ui.syncActiveTabChrome()
+	ui.readSuggestionAddressPress(gtx)
+	if !ui.providerPanel.open {
+		ui.handlePointerEvents(gtx)
+	}
 	ui.handleKeyboardShortcuts(gtx)
 	ui.handleActions(gtx)
 	ui.syncActiveTabChrome()
@@ -372,10 +542,19 @@ func (ui *BrowserUI) Layout(gtx layout.Context) layout.Dimensions {
 		panelHeight = gtx.Dp(devToolsHeight)
 	}
 	geometry := calculateBrowserChromeGeometryWithDevTools(gtx.Constraints.Max, gtx.Dp(tabRailWidth), gtx.Dp(toolbarHeight), panelHeight)
-	layoutRegion(gtx, geometry.viewport, ui.layoutViewport)
+	if ui.searchPanel.open {
+		layoutRegion(gtx, geometry.viewport, ui.layoutSearchPanel)
+	} else if ui.providerPanel.open {
+		layoutRegion(gtx, geometry.viewport, ui.layoutProviderSettings)
+	} else {
+		layoutRegion(gtx, geometry.viewport, ui.layoutViewport)
+	}
 	layoutRegion(gtx, geometry.devTools, ui.layoutDevTools)
 	layoutRegion(gtx, geometry.toolbar, ui.layoutToolbar)
 	layoutRegion(gtx, geometry.tabRail, ui.layoutTabRail)
+	ui.layoutSuggestions(gtx, geometry.viewport)
+	ui.layoutFindOverlay(gtx, geometry.viewport)
+
 	ui.registerPointerTracker(gtx)
 	return layout.Dimensions{Size: gtx.Constraints.Max}
 }
@@ -590,6 +769,8 @@ func tabStateColor(tab browser.TabSnapshot) color.NRGBA {
 
 func (ui *BrowserUI) handleKeyboardShortcuts(gtx layout.Context) {
 	ui.handleTabKeyboardShortcuts(gtx)
+	ui.handleFindKeyboardShortcuts(gtx)
+	ui.handleSearchPanelKeyboardShortcuts(gtx)
 	for {
 		event, ok := gtx.Event(key.Filter{Name: "L", Required: key.ModShortcut})
 		if !ok {
@@ -600,7 +781,17 @@ func (ui *BrowserUI) handleKeyboardShortcuts(gtx layout.Context) {
 			continue
 		}
 		ui.address.SetCaret(0, ui.address.Len())
-		gtx.Execute(key.FocusCmd{Tag: &ui.address})
+		gtx.Execute(key.FocusCmd{Tag: ui.address})
+	}
+	for {
+		event, ok := gtx.Event(key.Filter{Name: "D", Required: key.ModShortcut})
+		if !ok {
+			break
+		}
+		keyEvent, ok := event.(key.Event)
+		if ok && keyEvent.State == key.Press {
+			ui.toggleActiveBookmark()
+		}
 	}
 	for {
 		event, ok := gtx.Event(key.Filter{Name: key.NameF12})
@@ -630,6 +821,529 @@ func (ui *BrowserUI) handleKeyboardShortcuts(gtx layout.Context) {
 		}
 		ui.startPageLoad(tabID, navigator, "ページを再読み込み中", navigator.Reload)
 	}
+}
+
+func (ui *BrowserUI) activeFindState() *findTabState {
+	id, _ := ui.activeNavigationTarget()
+	return ui.findStates[id]
+}
+
+func (ui *BrowserUI) ensureFindState() *findTabState {
+	id, _ := ui.activeNavigationTarget()
+	state := ui.findStates[id]
+	if state == nil {
+		state = newFindTabState()
+		ui.findStates[id] = state
+	}
+	return state
+}
+
+func (ui *BrowserUI) handleFindKeyboardShortcuts(gtx layout.Context) {
+	for {
+		event, ok := gtx.Event(key.Filter{Name: "F", Required: key.ModShortcut})
+		if !ok {
+			break
+		}
+		keyEvent, ok := event.(key.Event)
+		if !ok || keyEvent.State != key.Press {
+			continue
+		}
+		state := ui.ensureFindState()
+		if !state.open {
+			ui.captureFindStart(gtx, state)
+			state.open = true
+			if state.editor.Text() != "" {
+				state.searching = true
+				state.pendingSearch = true
+			}
+		}
+		state.editor.SetCaret(0, state.editor.Len())
+		ui.closeSuggestionPopup()
+		gtx.Execute(key.FocusCmd{Tag: state.editor})
+	}
+	state := ui.activeFindState()
+	if state == nil || !state.open {
+		ui.findFocusPending = false
+		return
+	}
+	if ui.findFocusPending {
+		ui.findFocusPending = false
+		gtx.Execute(key.FocusCmd{Tag: state.editor})
+	}
+	for {
+		event, ok := gtx.Event(key.Filter{Name: key.NameF3, Optional: key.ModShift})
+		if !ok {
+			break
+		}
+		keyEvent, ok := event.(key.Event)
+		if !ok || keyEvent.State != key.Press {
+			continue
+		}
+		ui.runFindSearch(state)
+		if keyEvent.Modifiers.Contain(key.ModShift) {
+			state.move(-1)
+		} else {
+			state.move(1)
+		}
+	}
+	for {
+		event, ok := gtx.Event(
+			key.Filter{Focus: state.editor, Name: key.NameReturn, Required: key.ModShift},
+			key.Filter{Focus: state.editor, Name: key.NameEnter, Required: key.ModShift},
+		)
+		if !ok {
+			break
+		}
+		keyEvent, ok := event.(key.Event)
+		if !ok || keyEvent.State != key.Press {
+			continue
+		}
+		ui.runFindSearch(state)
+		state.move(-1)
+	}
+	for {
+		event, ok := gtx.Event(key.Filter{Focus: state.editor, Name: key.NameEscape})
+		if !ok {
+			break
+		}
+		keyEvent, ok := event.(key.Event)
+		if ok && keyEvent.State == key.Press {
+			ui.closeFindBar(gtx, state, true)
+		}
+	}
+}
+
+func (ui *BrowserUI) handleFindActions(gtx layout.Context) {
+	state := ui.activeFindState()
+	if state == nil || !state.open {
+		return
+	}
+	if state.pendingSearch {
+		ui.runFindSearch(state)
+	}
+	for {
+		event, ok := state.editor.Update(gtx)
+		if !ok {
+			break
+		}
+		switch event.(type) {
+		case widget.ChangeEvent:
+			state.searching = true
+			state.pendingSearch = true
+			ui.invalidate()
+		case widget.SubmitEvent:
+			ui.runFindSearch(state)
+			state.move(1)
+		}
+	}
+	for state.previous.Clicked(gtx) {
+		ui.runFindSearch(state)
+		state.move(-1)
+	}
+	for state.next.Clicked(gtx) {
+		ui.runFindSearch(state)
+		state.move(1)
+	}
+	for state.caseToggle.Clicked(gtx) {
+		state.options.CaseSensitive = !state.options.CaseSensitive
+		state.searching = true
+		state.pendingSearch = true
+		ui.invalidate()
+	}
+	for state.wordToggle.Clicked(gtx) {
+		state.options.WholeWord = !state.options.WholeWord
+		state.searching = true
+		state.pendingSearch = true
+		ui.invalidate()
+	}
+	for state.close.Clicked(gtx) {
+		ui.closeFindBar(gtx, state, true)
+	}
+}
+
+func (ui *BrowserUI) captureFindStart(gtx layout.Context, state *findTabState) {
+	if state == nil {
+		return
+	}
+	state.startPagePosition = ui.pageList.Position
+	state.startNestedScroll = cloneFindScrollOffsets(ui.nestedScroll)
+	state.restoreFocus = ui.focusedChromeTag(gtx)
+	if navigator := ui.activeNavigator(); navigator != nil {
+		state.startPage = navigator.Page()
+		if state.startPage != nil {
+			state.startPageFocus = state.startPage.FocusTarget
+		}
+	}
+}
+
+func (ui *BrowserUI) focusedChromeTag(gtx layout.Context) event.Tag {
+	if ui.address != nil && gtx.Focused(ui.address) {
+		return ui.address
+	}
+	for _, editor := range ui.inputEditors {
+		if gtx.Focused(editor) {
+			return editor
+		}
+	}
+	for _, button := range ui.selectButtons {
+		if gtx.Focused(button) {
+			return button
+		}
+	}
+	for _, button := range ui.checkableButtons {
+		if gtx.Focused(button) {
+			return button
+		}
+	}
+	for _, button := range ui.formButtons {
+		if gtx.Focused(button) {
+			return button
+		}
+	}
+	return nil
+}
+
+func cloneFindScrollOffsets(source map[dom.NodeID]layoutengine.ScrollOffset) map[dom.NodeID]layoutengine.ScrollOffset {
+	result := make(map[dom.NodeID]layoutengine.ScrollOffset, len(source))
+	for nodeID, offset := range source {
+		result[nodeID] = offset
+	}
+	return result
+}
+
+func (ui *BrowserUI) closeFindBar(gtx layout.Context, state *findTabState, restore bool) {
+	if state == nil {
+		return
+	}
+	if restore {
+		currentPage := (*browser.Page)(nil)
+		if navigator := ui.activeNavigator(); navigator != nil {
+			currentPage = navigator.Page()
+		}
+		if currentPage == state.startPage {
+			ui.pageList.Position = state.startPagePosition
+			ui.nestedScroll = cloneFindScrollOffsets(state.startNestedScroll)
+			ui.layoutCache = documentLayoutCache{}
+			if ui.navigator != nil && state.startPageFocus != 0 {
+				ui.navigator.UpdateFocus(state.startPageFocus)
+			}
+		}
+		if state.restoreFocus != nil {
+			gtx.Execute(key.FocusCmd{Tag: state.restoreFocus})
+		} else {
+			gtx.Execute(key.FocusCmd{})
+		}
+	}
+	state.open = false
+	state.searching = false
+	state.pendingSearch = false
+	state.scrollPending = false
+	state.result = findpage.Result{}
+	state.searchPage = nil
+	state.searchRevision = 0
+	state.viewportWidth = 0
+	state.viewportHeight = 0
+	state.startPage = nil
+	state.startNestedScroll = nil
+	state.startPageFocus = 0
+	state.restoreFocus = nil
+	ui.invalidate()
+}
+
+func (ui *BrowserUI) runFindSearch(state *findTabState) {
+	if state == nil || !state.open || !state.pendingSearch && !state.searching {
+		return
+	}
+	query := state.editor.Text()
+	if query == "" {
+		state.result = findpage.Result{}
+		state.current = 0
+		state.searching = false
+		state.pendingSearch = false
+		return
+	}
+	var document *dom.Document
+	var styles stylemodel.Map
+	if navigator := ui.activeNavigator(); navigator != nil {
+		if page := navigator.Page(); page != nil {
+			document = page.Document
+			styles = page.ComputedStyles
+			state.searchPage = page
+			state.searchRevision = page.StyleRevision
+		}
+	}
+	previous := findpage.Match{}
+	hasPrevious := state.current >= 0 && state.current < len(state.result.Matches)
+	if hasPrevious {
+		previous = state.result.Matches[state.current]
+	}
+	state.result = findpage.Search(document, styles, query, state.options, findpage.Limits{})
+	state.current = 0
+	if hasPrevious {
+		for index, match := range state.result.Matches {
+			if match == previous {
+				state.current = index
+				break
+			}
+		}
+	}
+	state.searching = false
+	state.pendingSearch = false
+	state.scrollPending = len(state.result.Matches) > 0
+}
+
+func (ui *BrowserUI) refreshFindSnapshot(page *browser.Page, tree *layoutengine.Tree, viewportWidth, viewportHeight float32) {
+	state := ui.activeFindState()
+	if state == nil || !state.open {
+		return
+	}
+	viewportChanged := state.viewportWidth != viewportWidth || state.viewportHeight != viewportHeight
+	searchChanged := state.searchPage != page || state.searchRevision != page.StyleRevision
+	if searchChanged && state.editor.Text() != "" {
+		state.searching = true
+		state.pendingSearch = true
+		ui.runFindSearch(state)
+	}
+	if searchChanged || viewportChanged || tree != nil && tree.Revision != state.searchRevision {
+		state.scrollPending = len(state.result.Matches) > 0
+	}
+	state.searchPage = page
+	state.searchRevision = page.StyleRevision
+	state.viewportWidth = viewportWidth
+	state.viewportHeight = viewportHeight
+}
+
+type findHighlightGeometry struct {
+	commandIndex  int
+	matchIndex    int
+	x, y          float32
+	width, height float32
+	clip          *layoutengine.Rect
+	clips         []layoutengine.ClipRegion
+	transform     stylemodel.Matrix
+	originX       float32
+	originY       float32
+}
+
+type findHighlightTextSegment struct {
+	nodeID dom.NodeID
+	start  int
+}
+
+type findHighlightTextSource struct {
+	text     string
+	segments []findHighlightTextSegment
+}
+
+func collectFindHighlightText(node *dom.Node, source *findHighlightTextSource) {
+	if node == nil {
+		return
+	}
+	if node.Type == dom.NodeText {
+		start := len(source.text)
+		source.text += node.Text
+		source.segments = append(source.segments, findHighlightTextSegment{
+			nodeID: node.ID,
+			start:  start,
+		})
+		return
+	}
+	for _, child := range node.Children {
+		collectFindHighlightText(child, source)
+	}
+}
+
+func findHighlightSource(node *dom.Node) findHighlightTextSource {
+	var source findHighlightTextSource
+	collectFindHighlightText(node, &source)
+	return source
+}
+
+func (ui *BrowserUI) findHighlightGeometry(displayList *paintmodel.DisplayList, page *browser.Page) []findHighlightGeometry {
+	state := ui.activeFindState()
+	if state == nil || !state.open || len(state.result.Matches) == 0 || displayList == nil || page == nil || page.Document == nil {
+		return nil
+	}
+	matches := make(map[dom.NodeID][]int)
+	for index, match := range state.result.Matches {
+		matches[match.NodeID] = append(matches[match.NodeID], index)
+	}
+	sourceOffsets := make(map[dom.NodeID]int)
+	textSources := make(map[dom.NodeID]findHighlightTextSource)
+	result := make([]findHighlightGeometry, 0, len(state.result.Matches))
+	for commandIndex, source := range displayList.Commands {
+		command, ok := source.(paintmodel.DrawText)
+		if !ok {
+			continue
+		}
+		runs := command.Runs
+		if len(runs) == 0 {
+			runs = []paintmodel.TextRun{{
+				NodeID: command.NodeID, Text: command.Text, Width: command.Width,
+				FontSize: command.FontSize, Bold: command.Bold, FontFamilies: command.FontFamilies,
+				FontStyle: command.FontStyle, FontStretch: command.FontStretch,
+				LetterSpacing: command.LetterSpacing, WordSpacing: command.WordSpacing,
+				WritingMode: command.WritingMode, Direction: command.Direction,
+			}}
+		}
+		runX := float32(0)
+		for _, run := range runs {
+			if run.Text == "" || run.Atomic {
+				runX += run.Width
+				continue
+			}
+			node, exists := page.Document.NodeByID(run.NodeID)
+			if !exists || !page.Document.IsConnected(node) {
+				runX += run.Width
+				continue
+			}
+			textSource, cached := textSources[run.NodeID]
+			if !cached {
+				textSource = findHighlightSource(node)
+				textSources[run.NodeID] = textSource
+			}
+			hasMatches := false
+			for _, segment := range textSource.segments {
+				if len(matches[segment.nodeID]) > 0 {
+					hasMatches = true
+					break
+				}
+			}
+			if !hasMatches {
+				runX += run.Width
+				continue
+			}
+			runStart := locateRenderedText(textSource.text, sourceOffsets[run.NodeID], run.Text)
+			if runStart < 0 {
+				runX += run.Width
+				continue
+			}
+			runEnd := runStart + len(run.Text)
+			sourceOffsets[run.NodeID] = runEnd
+			layoutRun := layoutengine.TextRun{
+				NodeID: run.NodeID, Text: run.Text, Width: run.Width, FontSize: run.FontSize, Bold: run.Bold,
+				FontFamilies: append([]string(nil), run.FontFamilies...), FontStyle: run.FontStyle, FontStretch: run.FontStretch,
+				LetterSpacing: run.LetterSpacing, WordSpacing: run.WordSpacing, WritingMode: run.WritingMode, Direction: run.Direction,
+			}
+			for _, segment := range textSource.segments {
+				for _, matchIndex := range matches[segment.nodeID] {
+					match := state.result.Matches[matchIndex]
+					matchStart := segment.start + match.Start
+					matchEnd := segment.start + match.End
+					start, end := max(matchStart, runStart), min(matchEnd, runEnd)
+					if start >= end {
+						continue
+					}
+					prefix := layoutengine.MeasureTextRun(run.Text[:start-runStart], layoutRun, page.WebFonts)
+					advance := layoutengine.MeasureTextRun(run.Text[:end-runStart], layoutRun, page.WebFonts) - prefix
+					if advance <= 0 {
+						advance = run.Width * float32(end-start) / float32(max(runEnd-runStart, 1))
+					}
+					geometry := findHighlightGeometry{
+						commandIndex: commandIndex, matchIndex: matchIndex,
+						x: command.X + runX + prefix, y: command.Y,
+						width: advance, height: command.Height,
+						clip: command.Clip, clips: command.Clips, transform: command.Transform,
+						originX: command.X, originY: command.Y,
+					}
+					if command.WritingMode != stylemodel.WritingModeHorizontalTB {
+						geometry.x = command.X + run.OffsetX
+						geometry.y = command.Y + run.OffsetY + prefix
+						geometry.width = max(run.CrossSize, command.Width)
+						geometry.height = advance
+					}
+					result = append(result, geometry)
+				}
+			}
+			runX += run.Width
+		}
+	}
+	return result
+}
+
+func locateRenderedText(source string, offset int, rendered string) int {
+	if offset < 0 || offset > len(source) {
+		return -1
+	}
+	if relative := strings.Index(source[offset:], rendered); relative >= 0 {
+		return offset + relative
+	}
+	return -1
+}
+
+func (ui *BrowserUI) layoutFindOverlay(gtx layout.Context, viewport image.Rectangle) {
+	state := ui.activeFindState()
+	if state == nil || !state.open || viewport.Empty() {
+		return
+	}
+	width := min(gtx.Dp(unit.Dp(560)), max(viewport.Dx()-gtx.Dp(unit.Dp(24)), 0))
+	height := min(gtx.Dp(unit.Dp(54)), viewport.Dy())
+	if width <= 0 || height <= 0 {
+		return
+	}
+	region := image.Rect(viewport.Max.X-width-gtx.Dp(unit.Dp(12)), viewport.Min.Y+gtx.Dp(unit.Dp(8)), viewport.Max.X-gtx.Dp(unit.Dp(12)), viewport.Min.Y+gtx.Dp(unit.Dp(8))+height)
+	layoutRegion(gtx, region, func(gtx layout.Context) layout.Dimensions {
+		return widget.Border{
+			Color:        color.NRGBA{R: 203, G: 213, B: 225, A: 255},
+			CornerRadius: unit.Dp(10),
+			Width:        unit.Dp(1),
+		}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+			paint.FillShape(gtx.Ops, color.NRGBA{R: 255, G: 255, B: 255, A: 255}, clip.UniformRRect(image.Rectangle{Max: gtx.Constraints.Min}, gtx.Dp(unit.Dp(10))).Op(gtx.Ops))
+			return layout.Inset{Top: unit.Dp(5), Right: unit.Dp(6), Bottom: unit.Dp(5), Left: unit.Dp(10)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+					layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+						editor := material.Editor(ui.theme, state.editor, "ページ内を検索")
+						editor.TextSize = unit.Sp(14)
+						return editor.Layout(gtx)
+					}),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						gtx.Constraints.Min.X = gtx.Dp(unit.Dp(92))
+						label := material.Caption(ui.theme, state.statusLabel())
+						label.Color = color.NRGBA{R: 71, G: 85, B: 105, A: 255}
+						return layout.Center.Layout(gtx, label.Layout)
+					}),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return ui.layoutFindButton(gtx, &state.previous, "↑", false, "前の一致")
+					}),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return ui.layoutFindButton(gtx, &state.next, "↓", false, "次の一致")
+					}),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return ui.layoutFindButton(gtx, &state.caseToggle, "Aa", state.options.CaseSensitive, "大文字と小文字を区別")
+					}),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return ui.layoutFindButton(gtx, &state.wordToggle, "単語", state.options.WholeWord, "単語単位")
+					}),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return ui.layoutFindButton(gtx, &state.close, "×", false, "閉じる")
+					}),
+				)
+			})
+		})
+	})
+}
+
+func (ui *BrowserUI) layoutFindButton(gtx layout.Context, button *widget.Clickable, labelText string, active bool, description string) layout.Dimensions {
+	width := gtx.Dp(unit.Dp(42))
+	if labelText == "単語" {
+		width = gtx.Dp(unit.Dp(52))
+	}
+	gtx.Constraints = layout.Exact(image.Pt(width, gtx.Dp(unit.Dp(40))))
+	return button.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		background := color.NRGBA{A: 0}
+		foreground := color.NRGBA{R: 51, G: 65, B: 85, A: 255}
+		if active {
+			background = color.NRGBA{R: 219, G: 234, B: 254, A: 255}
+			foreground = color.NRGBA{R: 29, G: 78, B: 216, A: 255}
+		}
+		if background.A != 0 {
+			paint.FillShape(gtx.Ops, background, clip.UniformRRect(image.Rectangle{Max: gtx.Constraints.Min}, gtx.Dp(unit.Dp(7))).Op(gtx.Ops))
+		}
+		label := material.Body2(ui.theme, labelText)
+		label.Color = foreground
+		semantic.DescriptionOp(description).Add(gtx.Ops)
+		return layout.Center.Layout(gtx, label.Layout)
+	})
 }
 
 func (ui *BrowserUI) handleTabKeyboardShortcuts(gtx layout.Context) {
@@ -689,33 +1403,51 @@ func (ui *BrowserUI) handleActions(gtx layout.Context) {
 	ui.consumeNavigationResult()
 	ui.consumeUpdateResults()
 	ui.handleTabActions(gtx)
+	ui.syncActiveTabChrome()
+	ui.handleSuggestionKeys(gtx)
+	ui.handleHomeActions(gtx)
+	ui.handleOmniboxSubmit(gtx)
+	ui.handleFindActions(gtx)
+	ui.handleSearchPanelActions(gtx)
 
 	for {
 		event, ok := ui.address.Update(gtx)
 		if !ok {
 			break
 		}
-		if submitted, ok := event.(widget.SubmitEvent); ok {
-			ui.startNavigation(submitted.Text)
+		if _, changed := event.(widget.ChangeEvent); changed {
+			ui.handleOmniboxChange(gtx)
 		}
 	}
+	ui.handleSuggestionMouseAndFocus(gtx)
+	ui.handleBookmarkBarActions(gtx)
 	for ui.goButton.Clicked(gtx) {
 		ui.startNavigation(ui.address.Text())
 	}
+	for ui.bookmarkButton.Clicked(gtx) {
+		ui.toggleActiveBookmark()
+	}
 	for ui.backButton.Clicked(gtx) {
-		if tabID, navigator := ui.activeNavigationTarget(); navigator != nil && navigator.CanBack() {
-			ui.startPageLoad(tabID, navigator, "前のページを読み込み中", navigator.Back)
+		if !ui.traverseHomeHistory(-1) {
+			if tabID, navigator := ui.activeNavigationTarget(); navigator != nil && navigator.CanBack() {
+				ui.startPageLoad(tabID, navigator, "前のページを読み込み中", navigator.Back)
+			}
 		}
 	}
 	for ui.forwardButton.Clicked(gtx) {
-		if tabID, navigator := ui.activeNavigationTarget(); navigator != nil && navigator.CanForward() {
-			ui.startPageLoad(tabID, navigator, "次のページを読み込み中", navigator.Forward)
+		if !ui.traverseHomeHistory(1) {
+			if tabID, navigator := ui.activeNavigationTarget(); navigator != nil && navigator.CanForward() {
+				ui.startPageLoad(tabID, navigator, "次のページを読み込み中", navigator.Forward)
+			}
 		}
 	}
 	for ui.reloadButton.Clicked(gtx) {
 		if tabID, navigator := ui.activeNavigationTarget(); navigator != nil && navigator.Page() != nil {
 			ui.startPageLoad(tabID, navigator, "ページを再読み込み中", navigator.Reload)
 		}
+	}
+	for ui.homeButton.Clicked(gtx) {
+		ui.showHome()
 	}
 	for ui.updateButton.Clicked(gtx) {
 		ui.startUpdate()
@@ -775,6 +1507,32 @@ func (ui *BrowserUI) handleActions(gtx layout.Context) {
 			state := ui.devToolsState()
 			state.NodeID = nodeID
 			ui.setDevToolsState(state)
+		}
+	}
+}
+
+func (ui *BrowserUI) handleOmniboxSubmit(gtx layout.Context) {
+	for {
+		event, ok := gtx.Event(key.Filter{Focus: ui.address, Name: key.NameReturn, Optional: key.ModShift | key.ModAlt}, key.Filter{Focus: ui.address, Name: key.NameEnter, Optional: key.ModShift | key.ModAlt})
+		if !ok {
+			return
+		}
+		keyEvent, ok := event.(key.Event)
+		if !ok || keyEvent.State != key.Press {
+			continue
+		}
+		disposition := omniboxCurrentTab
+		if keyEvent.Modifiers.Contain(key.ModAlt) {
+			disposition = omniboxNewBackgroundTab
+		} else if keyEvent.Modifiers.Contain(key.ModShift) {
+			disposition = omniboxNewForegroundTab
+		}
+		popup := &ui.suggestionPopup
+		if keyEvent.Modifiers == 0 && popup.open && popup.selected >= 0 && popup.selected < len(popup.candidates) {
+			ui.submitSuggestion(popup.candidates[popup.selected], disposition)
+		} else {
+			ui.closeSuggestionPopup()
+			ui.startNavigationWithDisposition(ui.address.Text(), disposition)
 		}
 	}
 }
@@ -900,15 +1658,23 @@ func (ui *BrowserUI) createTab(gtx layout.Context) {
 		ui.reportTabOperationError("新しいTabを選択できません", err)
 		return
 	}
-	gtx.Execute(key.FocusCmd{Tag: &ui.address})
+	ui.homeTabs[tab.ID] = newHomeTabState(true)
 }
 
 func (ui *BrowserUI) closeTab(id browser.TabID) bool {
+	ui.closeSuggestionPopup()
 	ui.cancelTabNavigation(id)
 	if _, err := ui.tabs.CloseTab(id); err != nil {
 		ui.reportTabOperationError("Tabを終了できません", err)
 		return false
 	}
+	delete(ui.omniboxStates, id)
+	if state := ui.homeTabs[id]; state != nil {
+		state.closeSuggestions()
+	}
+	delete(ui.homeTabs, id)
+	delete(ui.homeRollbacks, id)
+	delete(ui.findStates, id)
 	delete(ui.tabRenderStates, id)
 	delete(ui.devToolsStates, id)
 	delete(ui.inspectorButtons, id)
@@ -926,18 +1692,157 @@ func (ui *BrowserUI) reportTabOperationError(message string, err error) {
 }
 
 func (ui *BrowserUI) startNavigation(rawURL string) {
+	ui.startNavigationWithDisposition(rawURL, omniboxCurrentTab)
+}
+
+func (ui *BrowserUI) startNavigationWithDisposition(rawURL string, disposition omniboxDisposition) {
+	ui.recordOmniboxText()
+	ui.closeSuggestionPopup()
+	classification := omnibox.Classify(rawURL)
+	tabID, _ := ui.activeNavigationTarget()
+	var target string
+	switch classification.Kind {
+	case omnibox.Invalid:
+		ui.status = "Omnibox エラー: " + classification.Error
+		ui.statusHasError = true
+		return
+	case omnibox.Search:
+		ui.setOmniboxScope(tabID, "", "")
+		var err error
+		target, err = ui.providerSearchURL(classification.Query)
+		if err != nil {
+			ui.status = err.Error()
+			ui.statusHasError = true
+			return
+		}
+	case omnibox.Command:
+		ui.setOmniboxScope(tabID, classification.Scope, classification.Query)
+		if classification.Scope != omnibox.Web {
+			ui.refreshSuggestionsFor(classification.Input)
+			ui.reportOmniboxScope(classification.Scope, classification.Query)
+			return
+		}
+		if classification.Query == "" {
+			ui.status = "Omnibox @search: 検索語を入力してください"
+			ui.statusHasError = false
+			return
+		}
+		var err error
+		target, err = ui.providerSearchURL(classification.Query)
+		if err != nil {
+			ui.status = err.Error()
+			ui.statusHasError = true
+			return
+		}
+	case omnibox.URL:
+		ui.setOmniboxScope(tabID, "", "")
+		target = classification.URL.String()
+	}
+	if disposition == omniboxCurrentTab {
+		ui.startResolvedNavigation(target, classification.Kind != omnibox.URL)
+		return
+	}
+	ui.startNavigationInNewTab(target, disposition == omniboxNewBackgroundTab, classification.Kind != omnibox.URL)
+}
+
+func (ui *BrowserUI) reportOmniboxScope(scope omnibox.Scope, query string) {
+	if scope == omnibox.Tabs {
+		matches := 0
+		for _, tab := range ui.tabSnapshots() {
+			if omniboxScopeMatches(query, tab.Title, tab.URL) {
+				matches++
+			}
+		}
+		ui.status = fmt.Sprintf("Omnibox @tabs: %d件の候補", matches)
+	} else {
+		ui.status = "Omnibox @" + string(scope) + ": local source を検索"
+	}
+	ui.statusHasError = false
+}
+
+func omniboxScopeMatches(query string, values ...string) bool {
+	query = strings.ToLower(strings.TrimSpace(query))
+	if query == "" {
+		return true
+	}
+	for _, value := range values {
+		if strings.Contains(strings.ToLower(value), query) {
+			return true
+		}
+	}
+	return false
+}
+
+func (ui *BrowserUI) startResolvedNavigation(rawURL string, search ...bool) {
 	tabID, navigator := ui.activeNavigationTarget()
 	if navigator == nil {
 		ui.status = "Navigationを利用できません"
 		ui.statusHasError = true
 		return
 	}
+	ui.cancelNavigationForHome(tabID)
+	ui.beginHomeNavigation(tabID)
 	ui.startPageLoad(tabID, navigator, navigationLoadingStatus(rawURL), func(ctx context.Context) (*browser.Page, error) {
+		if len(search) > 0 && search[0] {
+			ctx = network.WithRedirectPolicy(ctx, rawURL, searchprovider.ValidateRedirect)
+		} else {
+			ctx = browser.WithTypedNavigation(ctx)
+		}
+		return navigator.Navigate(ctx, rawURL)
+	})
+}
+
+func (ui *BrowserUI) startNavigationInNewTab(rawURL string, background bool, search ...bool) {
+	if ui.tabs == nil {
+		ui.status = "新しい Tab を利用できません"
+		ui.statusHasError = true
+		return
+	}
+	target, err := url.Parse(rawURL)
+	if err != nil {
+		ui.status = "Omnibox エラー: URL が不正です"
+		ui.statusHasError = true
+		return
+	}
+	tab, err := ui.tabs.NewTab(target)
+	if err != nil {
+		ui.reportTabOperationError("新しい Tab を作成できません", err)
+		return
+	}
+	ui.homeTabs[tab.ID] = newHomeTabState(false)
+	targets, ok := ui.tabs.(tabBrowserSource)
+	if !ok {
+		ui.status = "新しい Tab の Navigation を利用できません"
+		ui.statusHasError = true
+		return
+	}
+	navigator, ok := targets.BrowserTarget(tab.ID)
+	if !ok {
+		ui.status = "新しい Tab の Navigation 先がありません"
+		ui.statusHasError = true
+		return
+	}
+	if !background {
+		if _, err := ui.tabs.SelectTab(tab.ID); err != nil {
+			ui.reportTabOperationError("新しい Tab を選択できません", err)
+			return
+		}
+	}
+	ui.startPageLoad(tab.ID, navigator, navigationLoadingStatus(rawURL), func(ctx context.Context) (*browser.Page, error) {
+		if len(search) > 0 && search[0] {
+			ctx = network.WithRedirectPolicy(ctx, rawURL, searchprovider.ValidateRedirect)
+		} else {
+			ctx = browser.WithTypedNavigation(ctx)
+		}
 		return navigator.Navigate(ctx, rawURL)
 	})
 }
 
 func (ui *BrowserUI) startPageLoad(tabID browser.TabID, navigator Navigator, status string, load func(context.Context) (*browser.Page, error)) {
+	if activeID, _ := ui.activeNavigationTarget(); activeID == tabID {
+		ui.recordOmniboxText()
+		ui.closeSuggestionPopup()
+	}
 	ui.persistHistoryScroll()
 	if navigator != nil {
 		navigator.ClearHover()
@@ -947,7 +1852,13 @@ func (ui *BrowserUI) startPageLoad(tabID browser.TabID, navigator Navigator, sta
 	ctx, cancel := context.WithCancel(context.Background())
 	ui.nextNavigationID++
 	navigationID := ui.nextNavigationID
-	ui.navigations[tabID] = tabNavigation{id: navigationID, cancel: cancel}
+	navigation := tabNavigation{id: navigationID, cancel: cancel}
+	if before, ok := ui.homeRollbacks[tabID]; ok {
+		copy := before
+		navigation.homeBefore = &copy
+		delete(ui.homeRollbacks, tabID)
+	}
+	ui.navigations[tabID] = navigation
 	if sink, ok := ui.tabs.(tabNavigationStateSink); ok && tabID != 0 {
 		if _, err := sink.BeginTabNavigation(tabID); err != nil {
 			cancel()
@@ -991,6 +1902,97 @@ func (ui *BrowserUI) activeNavigationTarget() (browser.TabID, Navigator) {
 	return 0, ui.navigator
 }
 
+func (ui *BrowserUI) startFormSubmission(controlID dom.NodeID) bool {
+	tabID, navigator := ui.activeNavigationTarget()
+	native, ok := navigator.(nativeFormNavigator)
+	if !ok || navigator == nil || navigator.Page() == nil || navigator.Page().Document == nil {
+		return false
+	}
+	node, exists := navigator.Page().Document.NodeByID(controlID)
+	if !exists {
+		return false
+	}
+	form := forms.FormOwner(navigator.Page().Document, node)
+	if form == nil {
+		return false
+	}
+	ui.startPageLoad(tabID, navigator, "フォームを送信中", func(ctx context.Context) (*browser.Page, error) {
+		return native.Submit(ctx, form.ID, 0)
+	})
+	return true
+}
+
+func (ui *BrowserUI) startSubmitterActivation(nodeID dom.NodeID, x, y float32) bool {
+	tabID, navigator := ui.activeNavigationTarget()
+	native, ok := navigator.(nativeFormNavigator)
+	if !ok || navigator == nil || navigator.Page() == nil || navigator.Page().Document == nil {
+		return false
+	}
+	node, exists := navigator.Page().Document.NodeByID(nodeID)
+	if !exists || !forms.IsSubmitButton(node) || forms.FormOwner(navigator.Page().Document, node) == nil {
+		return false
+	}
+	ui.startPageLoad(tabID, navigator, "フォームを送信中", func(ctx context.Context) (*browser.Page, error) {
+		return native.ActivateSubmitter(ctx, nodeID, x, y)
+	})
+	return true
+}
+
+func newOmniboxEditor(value string) *widget.Editor {
+	editor := new(widget.Editor)
+	editor.SingleLine = true
+	editor.SetText(value)
+	return editor
+}
+
+func (ui *BrowserUI) activateOmnibox(tabID browser.TabID, committedURL string) {
+	state, ok := ui.omniboxStates[tabID]
+	if !ok {
+		state = omniboxState{editor: newOmniboxEditor(committedURL), committedURL: committedURL, observedText: committedURL}
+		ui.omniboxStates[tabID] = state
+	}
+	ui.address = state.editor
+}
+
+func (ui *BrowserUI) setCommittedOmniboxURL(tabID browser.TabID, rawURL string, display bool) {
+	state, ok := ui.omniboxStates[tabID]
+	if !ok {
+		state = omniboxState{editor: newOmniboxEditor(rawURL), observedText: rawURL}
+	}
+	state.committedURL = rawURL
+	if display {
+		if ui.suggestionPopup.open && ui.suggestionPopup.owner == tabID {
+			ui.closeSuggestionPopup()
+			state.preview = ""
+		}
+		state.observedText = rawURL
+		state.editor.SetText(rawURL)
+	}
+	ui.omniboxStates[tabID] = state
+	if ui.displayedTabID == tabID || ui.tabs == nil {
+		ui.address = state.editor
+	}
+}
+
+func (ui *BrowserUI) setOmniboxPreview(tabID browser.TabID, preview string) {
+	state, ok := ui.omniboxStates[tabID]
+	if !ok {
+		state = omniboxState{editor: newOmniboxEditor("")}
+	}
+	state.preview = preview
+	ui.omniboxStates[tabID] = state
+}
+
+func (ui *BrowserUI) setOmniboxScope(tabID browser.TabID, scope omnibox.Scope, query string) {
+	state, ok := ui.omniboxStates[tabID]
+	if !ok {
+		state = omniboxState{editor: newOmniboxEditor("")}
+	}
+	state.scope = scope
+	state.scopeQuery = query
+	ui.omniboxStates[tabID] = state
+}
+
 func (ui *BrowserUI) syncActiveTabChrome() {
 	if ui.tabs == nil {
 		return
@@ -1004,6 +2006,9 @@ func (ui *BrowserUI) syncActiveTabChrome() {
 		return
 	}
 	if ui.displayedTabID != 0 {
+		if state := ui.homeTabs[ui.displayedTabID]; state != nil {
+			state.cancelSuggestions()
+		}
 		ui.tabRenderStates[ui.displayedTabID] = tabRenderState{
 			layoutCache: ui.layoutCache, scrollRevision: ui.scrollRevision, pagePosition: ui.pageList.Position,
 			inputEditors: ui.inputEditors, inputFocused: ui.inputFocused, inputCommitted: ui.inputCommitted,
@@ -1011,8 +2016,18 @@ func (ui *BrowserUI) syncActiveTabChrome() {
 			nestedScrollPage: ui.nestedScrollPage, nestedScrollTags: ui.nestedScrollTags, nestedScroll: ui.nestedScroll,
 		}
 	}
+	ui.closeSuggestionPopup()
 	ui.displayedTabID = active.ID
 	ui.navigator = navigator
+	ui.findFocusPending = ui.findStates[active.ID] != nil && ui.findStates[active.ID].open
+	committedURL := active.URL
+	if page := navigator.Page(); page != nil && page.URL != nil {
+		committedURL = page.URL.String()
+	}
+	ui.activateOmnibox(active.ID, committedURL)
+	if state := ui.homeTabs[active.ID]; state != nil && state.visible {
+		ui.showBlankOmnibox(active.ID)
+	}
 	ui.loading = active.Loading
 	ui.statusHasError = active.Error
 	if state, ok := ui.tabRenderStates[active.ID]; ok {
@@ -1042,9 +2057,6 @@ func (ui *BrowserUI) syncActiveTabChrome() {
 		ui.nestedScroll = make(map[dom.NodeID]layoutengine.ScrollOffset)
 	}
 	if page := navigator.Page(); page != nil {
-		if page.URL != nil {
-			ui.address.SetText(page.URL.String())
-		}
 		if _, restored := ui.tabRenderStates[active.ID]; !restored {
 			ui.pageList.Position = layout.Position{First: page.ScrollFirst, Offset: page.ScrollOffset}
 		}
@@ -1059,7 +2071,6 @@ func (ui *BrowserUI) syncActiveTabChrome() {
 			ui.pageTitle = page.URL.Hostname()
 		}
 	} else {
-		ui.address.SetText(active.URL)
 		ui.pageList.Position = layout.Position{}
 		ui.scrollRevision = 0
 		ui.pageTitle = tabDisplayTitle(active)
@@ -1082,13 +2093,36 @@ func (ui *BrowserUI) consumeNavigationResult() {
 				continue
 			}
 			delete(ui.navigations, result.tabID)
+			if (result.err != nil || result.page == nil || result.page.URL == nil) && navigation.homeBefore != nil {
+				ui.restoreHomeHistory(result.tabID, *navigation.homeBefore)
+			}
 			if sink, ok := ui.tabs.(tabNavigationStateSink); ok && result.tabID != 0 {
 				if _, err := sink.FinishTabNavigation(result.tabID, result.err != nil); err != nil {
 					ui.reportTabOperationError("TabのNavigation結果を更新できません", err)
 				}
 			}
-			if result.tabID != 0 && !ui.tabIsActive(result.tabID) {
+			if result.err != nil {
+				if result.tabID != 0 && !ui.tabIsActive(result.tabID) {
+					continue
+				}
 				ui.loading = false
+				ui.status = "読み込みエラー: " + result.err.Error()
+				ui.pageStatus = ui.status
+				ui.statusHasError = true
+				return
+			}
+			if result.page == nil || result.page.URL == nil {
+				if result.tabID != 0 && !ui.tabIsActive(result.tabID) {
+					continue
+				}
+				ui.loading = false
+				ui.status = "読み込みエラー: ページ情報がありません"
+				ui.pageStatus = ui.status
+				ui.statusHasError = true
+				return
+			}
+			ui.setCommittedOmniboxURL(result.tabID, result.page.URL.String(), result.tabID == 0 || ui.tabIsActive(result.tabID))
+			if result.tabID != 0 && !ui.tabIsActive(result.tabID) {
 				continue
 			}
 			ui.loading = false
@@ -1101,20 +2135,7 @@ func (ui *BrowserUI) consumeNavigationResult() {
 			ui.nestedScrollPage = nil
 			ui.nestedScrollTags = make(map[dom.NodeID]*nestedScrollTag)
 			ui.nestedScroll = make(map[dom.NodeID]layoutengine.ScrollOffset)
-			if result.err != nil {
-				ui.status = "読み込みエラー: " + result.err.Error()
-				ui.pageStatus = ui.status
-				ui.statusHasError = true
-				return
-			}
-			if result.page == nil || result.page.URL == nil {
-				ui.status = "読み込みエラー: ページ情報がありません"
-				ui.pageStatus = ui.status
-				ui.statusHasError = true
-				return
-			}
 
-			ui.address.SetText(result.page.URL.String())
 			ui.pageList.Position = layout.Position{First: result.page.ScrollFirst, Offset: result.page.ScrollOffset}
 			ui.scrollRevision = result.page.ScrollRevision
 			ui.pageTitle = result.page.URL.Host
@@ -1154,6 +2175,16 @@ func (ui *BrowserUI) tabIsActive(id browser.TabID) bool {
 
 // Close cancels an in-flight navigation when the window closes.
 func (ui *BrowserUI) Close() {
+	if ui.cancelRender != nil {
+		ui.cancelRender()
+	}
+	ui.suggestions.Close()
+	if ui.localSuggestions != nil {
+		ui.localSuggestions.Close()
+	}
+	if ui.searchPanelSuggestions != nil {
+		ui.searchPanelSuggestions.Close()
+	}
 	ui.cancelUpdate()
 	if ui.navigator != nil {
 		ui.navigator.ClearHover()
@@ -1161,6 +2192,11 @@ func (ui *BrowserUI) Close() {
 	for tabID := range ui.navigations {
 		ui.cancelTabNavigation(tabID)
 	}
+	clear(ui.findStates)
+	for _, state := range ui.homeTabs {
+		state.closeSuggestions()
+	}
+	clear(ui.homeTabs)
 }
 
 func (ui *BrowserUI) layoutToolbar(gtx layout.Context) layout.Dimensions {
@@ -1180,8 +2216,9 @@ func (ui *BrowserUI) layoutToolbar(gtx layout.Context) layout.Dimensions {
 
 	return layout.Inset{Top: unit.Dp(8), Right: unit.Dp(8), Bottom: unit.Dp(6), Left: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		navigator := ui.activeNavigator()
-		canBack := navigator != nil && navigator.CanBack()
-		canForward := navigator != nil && navigator.CanForward()
+		tabID, _ := ui.activeNavigationTarget()
+		canBack := ui.canTraverseHomeHistory(tabID, -1) || navigator != nil && navigator.CanBack()
+		canForward := ui.canTraverseHomeHistory(tabID, 1) || navigator != nil && navigator.CanForward()
 		canReload := navigator != nil && navigator.Page() != nil
 		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
@@ -1197,12 +2234,17 @@ func (ui *BrowserUI) layoutToolbar(gtx layout.Context) layout.Dimensions {
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 						return ui.layoutToolbarButton(gtx, &ui.reloadButton, ui.reloadIcon, "再読込", canReload)
 					}),
+					layout.Rigid(layout.Spacer{Width: unit.Dp(4)}.Layout),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return ui.layoutToolbarButton(gtx, &ui.homeButton, ui.homeIcon, "ホーム", true)
+					}),
 					layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
 					layout.Rigid(ui.layoutUpdateButton),
 					layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
 					layout.Rigid(ui.layoutEngineButton),
 					layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
 					layout.Rigid(ui.layoutDevToolsButton),
+					layout.Rigid(ui.layoutProviderButton),
 					layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
 					layout.Flexed(1, ui.layoutAddressBar),
 					layout.Rigid(layout.Spacer{Width: unit.Dp(4)}.Layout),
@@ -1210,12 +2252,7 @@ func (ui *BrowserUI) layoutToolbar(gtx layout.Context) layout.Dimensions {
 				)
 			}),
 			layout.Rigid(layout.Spacer{Height: unit.Dp(2)}.Layout),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				label := material.Caption(ui.theme, ui.status)
-				label.Color = color.NRGBA{R: 72, G: 84, B: 102, A: 255}
-				label.MaxLines = 1
-				return label.Layout(gtx)
-			}),
+			layout.Rigid(ui.layoutBookmarkBar),
 		)
 	})
 }
@@ -1724,6 +2761,7 @@ func (ui *BrowserUI) layoutToolbarButton(gtx layout.Context, button *widget.Clic
 }
 
 func (ui *BrowserUI) layoutAddressBar(gtx layout.Context) layout.Dimensions {
+	defer ui.registerSuggestionAddress(gtx)
 	// Match the Gopher button's row height so the URL field and icon share one
 	// visual center line even when the icon grows.
 	height := gtx.Dp(addressBarHeight)
@@ -1747,12 +2785,21 @@ func (ui *BrowserUI) layoutAddressBar(gtx layout.Context) layout.Dimensions {
 				return layout.Dimensions{Size: gtx.Constraints.Min}
 			}),
 			layout.Stacked(func(gtx layout.Context) layout.Dimensions {
-				return layout.UniformInset(unit.Dp(10)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				return layout.Inset{Top: unit.Dp(10), Right: unit.Dp(48), Bottom: unit.Dp(10), Left: unit.Dp(10)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 					// Stack children receive a zero minimum width by default. Keep the
 					// editor's hit area as wide as the visible address bar instead of
 					// letting it shrink to its placeholder text.
 					gtx.Constraints.Min.X = gtx.Constraints.Max.X
-					return material.Editor(ui.theme, &ui.address, "URLを入力").Layout(gtx)
+					return layout.Stack{}.Layout(gtx,
+						layout.Stacked(material.Editor(ui.theme, ui.address, "URLを入力").Layout),
+						layout.Stacked(ui.layoutSuggestionPreview),
+					)
+				})
+			}),
+			layout.Stacked(func(gtx layout.Context) layout.Dimensions {
+				gtx.Constraints.Min.X = gtx.Constraints.Max.X
+				return layout.E.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					return layout.Inset{Right: unit.Dp(4)}.Layout(gtx, ui.layoutBookmarkButton)
 				})
 			}),
 		)
@@ -1781,6 +2828,9 @@ func mustIcon(icon *widget.Icon, err error) *widget.Icon {
 }
 
 func (ui *BrowserUI) layoutViewport(gtx layout.Context) layout.Dimensions {
+	if ui.homeVisible() {
+		return ui.layoutHome(gtx)
+	}
 	if ui.navigator != nil {
 		if page := ui.navigator.Page(); page != nil && page.Document != nil {
 			return ui.layoutDocument(gtx, page)
@@ -1874,7 +2924,7 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 	case stylemodel.AnimationDamageLayout:
 		page.RecordRenderEvent(browser.RenderLayoutFrame)
 	}
-	tree, displayList, reusedDisplayList := ui.cachedDocumentFrame(page, viewportWidth, viewportHeight, gtx.Metric.PxPerDp)
+	tree, displayList, reusedDisplayList := ui.cachedDocumentFrameAsync(page, viewportWidth, viewportHeight, gtx.Metric.PxPerDp)
 	if animationDamage == stylemodel.AnimationDamageLayout {
 		page.RecordRenderRebuild(browser.RenderRebuildAnimation)
 		tree = ui.buildDocumentTree(page, frameStyles, viewportWidth, viewportHeight, gtx.Metric.PxPerDp)
@@ -1888,8 +2938,10 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 			page.RecordRenderEvent(browser.RenderDisplayListReuse)
 		}
 	}
+	ui.refreshFindSnapshot(page, tree, viewportWidth, viewportHeight)
 	documentPosition := ui.pageList.Position
 	nestedScrollConsumed := ui.handleNestedScrollEvents(gtx, page, tree, displayList)
+	ui.scrollActiveFindMatch(gtx, page, tree, displayList)
 	dirtySnapshot := page.RenderInvalidationSnapshot()
 	page.RecordCompositorSnapshot(len(dirtySnapshot.StyleNodes), len(displayList.Layers), len(displayList.DamageRegions))
 	paint.Fill(gtx.Ops, rgba(displayList.Background))
@@ -1909,7 +2961,7 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 	if nestedScrollConsumed {
 		ui.pageList.Position = documentPosition
 	}
-	ui.registerNestedScrollTargets(gtx, tree, displayList)
+	ui.registerNestedScrollTargets(gtx, page, tree, displayList)
 	pass := pointer.PassOp{}.Push(gtx.Ops)
 	ui.viewportClick.Add(gtx.Ops)
 	pass.Pop()
@@ -1927,18 +2979,162 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 	return dimensions
 }
 
+func (ui *BrowserUI) scrollActiveFindMatch(gtx layout.Context, page *browser.Page, tree *layoutengine.Tree, displayList *paintmodel.DisplayList) {
+	state := ui.activeFindState()
+	if state == nil || !state.open || !state.scrollPending || state.current < 0 || state.current >= len(state.result.Matches) {
+		return
+	}
+	defer func() { state.scrollPending = false }()
+	activeBounds := func() (layoutengine.Rect, bool) {
+		var result layoutengine.Rect
+		found := false
+		for _, geometry := range ui.findHighlightGeometry(displayList, page) {
+			if geometry.matchIndex != state.current {
+				continue
+			}
+			current := layoutengine.Rect{X: geometry.x, Y: geometry.y, Width: geometry.width, Height: geometry.height}
+			if !found {
+				result, found = current, true
+				continue
+			}
+			minimumX, minimumY := min(result.X, current.X), min(result.Y, current.Y)
+			maximumX := max(result.X+result.Width, current.X+current.Width)
+			maximumY := max(result.Y+result.Height, current.Y+current.Height)
+			result = layoutengine.Rect{X: minimumX, Y: minimumY, Width: maximumX - minimumX, Height: maximumY - minimumY}
+		}
+		return result, found
+	}
+	bounds, found := activeBounds()
+	if !found {
+		return
+	}
+	match := state.result.Matches[state.current]
+	for ancestor := tree.Parents[match.NodeID]; ancestor != 0; ancestor = tree.Parents[ancestor] {
+		container, exists := tree.ScrollContainers[ancestor]
+		if !exists || isDocumentBody(page, ancestor) {
+			continue
+		}
+		targetX, targetY := container.Offset.X, container.Offset.Y
+		margin := float32(6)
+		if bounds.X < container.Viewport.X+margin {
+			targetX += bounds.X - container.Viewport.X - margin
+		} else if bounds.X+bounds.Width > container.Viewport.X+container.Viewport.Width-margin {
+			targetX += bounds.X + bounds.Width - container.Viewport.X - container.Viewport.Width + margin
+		}
+		if bounds.Y < container.Viewport.Y+margin {
+			targetY += bounds.Y - container.Viewport.Y - margin
+		} else if bounds.Y+bounds.Height > container.Viewport.Y+container.Viewport.Height-margin {
+			targetY += bounds.Y + bounds.Height - container.Viewport.Y - container.Viewport.Height + margin
+		}
+		if len(layoutengine.ApplyScrollContainerOffset(tree, page.ComputedStyles, ancestor, targetX, targetY)) == 0 {
+			continue
+		}
+		container = tree.ScrollContainers[ancestor]
+		ui.nestedScroll[ancestor] = container.Offset
+		if ui.layoutCache.baseTree != nil {
+			layoutengine.ApplyScrollContainerOffset(ui.layoutCache.baseTree, page.ComputedStyles, ancestor, container.Offset.X, container.Offset.Y)
+		}
+		paintmodel.ApplyAnimatedLayout(displayList, tree)
+		if updated, ok := activeBounds(); ok {
+			bounds = updated
+		}
+	}
+	ui.layoutCache.tree = layoutengine.Clone(tree)
+	ui.layoutCache.displayList = displayList
+
+	pixelsPerDP := gtx.Metric.PxPerDp
+	if pixelsPerDP <= 0 {
+		pixelsPerDP = 1
+	}
+	currentScroll := max(float32(ui.pageList.Position.Offset)/pixelsPerDP, float32(0))
+	viewportHeight := float32(gtx.Constraints.Max.Y) / pixelsPerDP
+	topInset, bottomInset := findViewportOcclusion(tree, page, bounds, currentScroll, viewportHeight)
+	visibleTop := currentScroll + topInset
+	visibleBottom := currentScroll + viewportHeight - bottomInset
+	targetScroll := currentScroll
+	if bounds.Y < visibleTop {
+		targetScroll = max(bounds.Y-topInset, float32(0))
+	} else if bounds.Y+bounds.Height > visibleBottom {
+		targetScroll = max(bounds.Y+bounds.Height-viewportHeight+bottomInset, float32(0))
+	}
+	if targetScroll != currentScroll {
+		ui.pageList.Position.First = 0
+		ui.pageList.Position.Offset = int(math.Round(float64(targetScroll * pixelsPerDP)))
+	}
+}
+
+func findViewportOcclusion(tree *layoutengine.Tree, page *browser.Page, target layoutengine.Rect, scrollY, viewportHeight float32) (float32, float32) {
+	topInset, bottomInset := float32(70), float32(12)
+	if tree == nil || page == nil || viewportHeight <= 0 {
+		return topInset, bottomInset
+	}
+	viewportBottom := scrollY + viewportHeight
+	for nodeID, computed := range page.ComputedStyles {
+		if computed.Position != stylemodel.PositionFixed && computed.Position != stylemodel.PositionSticky {
+			continue
+		}
+		bounds, exists := tree.Bounds[nodeID]
+		if !exists || bounds.Width <= 0 || bounds.Height <= 0 ||
+			bounds.X+bounds.Width <= target.X || bounds.X >= target.X+target.Width {
+			continue
+		}
+		if bounds.Y <= scrollY+viewportHeight/2 && bounds.Y+bounds.Height > scrollY {
+			topInset = max(topInset, bounds.Y+bounds.Height-scrollY+6)
+		} else if bounds.Y < viewportBottom && bounds.Y+bounds.Height >= scrollY+viewportHeight/2 {
+			bottomInset = max(bottomInset, viewportBottom-bounds.Y+6)
+		}
+	}
+	return min(topInset, viewportHeight), min(bottomInset, viewportHeight)
+}
+
 func (ui *BrowserUI) layoutDocumentPaintLayer(gtx layout.Context, displayList *paintmodel.DisplayList, page *browser.Page) layout.Dimensions {
-	children := make([]layout.StackChild, 0, len(displayList.Commands)+1)
+	highlightsByCommand := make(map[int][]findHighlightGeometry)
+	for _, geometry := range ui.findHighlightGeometry(displayList, page) {
+		highlightsByCommand[geometry.commandIndex] = append(highlightsByCommand[geometry.commandIndex], geometry)
+	}
+	children := make([]layout.StackChild, 0, len(displayList.Commands)+len(highlightsByCommand)+1)
 	children = append(children, layout.Stacked(func(gtx layout.Context) layout.Dimensions {
 		return layout.Spacer{Height: unit.Dp(max(displayList.ScrollHeight, displayList.Height))}.Layout(gtx)
 	}))
-	for _, source := range displayList.Commands {
+	for index, source := range displayList.Commands {
+		for _, sourceGeometry := range highlightsByCommand[index] {
+			geometry := sourceGeometry
+			children = append(children, layout.Stacked(func(gtx layout.Context) layout.Dimensions {
+				return ui.layoutFindHighlight(gtx, geometry)
+			}))
+		}
 		command := source
 		children = append(children, layout.Stacked(func(gtx layout.Context) layout.Dimensions {
 			return ui.layoutAbsolutePaintCommand(gtx, command, page)
 		}))
 	}
 	return layout.Stack{Alignment: layout.NW}.Layout(gtx, children...)
+}
+
+func (ui *BrowserUI) layoutFindHighlight(gtx layout.Context, geometry findHighlightGeometry) layout.Dimensions {
+	left := unit.Dp(max(geometry.x, float32(0)))
+	viewportWidth := float32(gtx.Constraints.Max.X) / gtx.Metric.PxPerDp
+	right := unit.Dp(max(viewportWidth-geometry.x-geometry.width, float32(0)))
+	return layoutPaintCommand(gtx, geometry.y, geometry.height, layout.Inset{Left: left, Right: right}, func(gtx layout.Context) layout.Dimensions {
+		if geometry.transform != (stylemodel.Matrix{}) && geometry.transform != stylemodel.IdentityMatrix() {
+			defer pushCSSMatrix(gtx, geometry.transform, geometry.x, geometry.y).Pop()
+		}
+		if geometry.clip != nil {
+			defer commandClip(gtx, geometry.clip, geometry.x, geometry.y).Push(gtx.Ops).Pop()
+		}
+		for _, region := range geometry.clips {
+			defer commandRoundedClip(gtx, region, geometry.x, geometry.y).Push(gtx.Ops).Pop()
+		}
+		width := max(gtx.Dp(unit.Dp(geometry.width)), 1)
+		height := max(gtx.Dp(unit.Dp(geometry.height)), 1)
+		gtx.Constraints = layout.Exact(image.Pt(width, height))
+		fill := color.NRGBA{R: 253, G: 224, B: 71, A: 150}
+		if state := ui.activeFindState(); state != nil && geometry.matchIndex == state.current {
+			fill = color.NRGBA{R: 251, G: 146, B: 60, A: 210}
+		}
+		paint.FillShape(gtx.Ops, fill, clip.UniformRRect(image.Rectangle{Max: gtx.Constraints.Min}, gtx.Dp(unit.Dp(2))).Op(gtx.Ops))
+		return layout.Dimensions{Size: gtx.Constraints.Min}
+	})
 }
 
 func (ui *BrowserUI) layoutAbsolutePaintCommand(gtx layout.Context, source paintmodel.Command, page *browser.Page) layout.Dimensions {
@@ -2020,6 +3216,9 @@ func (ui *BrowserUI) handleNestedScrollEvents(gtx layout.Context, page *browser.
 	}
 	dirty := false
 	for nodeID, container := range tree.ScrollContainers {
+		if isDocumentBody(page, nodeID) {
+			continue
+		}
 		tag := ui.nestedScrollTags[nodeID]
 		if tag == nil {
 			tag = &nestedScrollTag{nodeID: nodeID}
@@ -2078,7 +3277,7 @@ func userScrollableOverflow(value stylemodel.Overflow) bool {
 	return value == stylemodel.OverflowAuto || value == stylemodel.OverflowScroll
 }
 
-func (ui *BrowserUI) registerNestedScrollTargets(gtx layout.Context, tree *layoutengine.Tree, displayList *paintmodel.DisplayList) {
+func (ui *BrowserUI) registerNestedScrollTargets(gtx layout.Context, page *browser.Page, tree *layoutengine.Tree, displayList *paintmodel.DisplayList) {
 	if tree == nil || displayList == nil || len(tree.ScrollContainers) == 0 {
 		return
 	}
@@ -2093,6 +3292,9 @@ func (ui *BrowserUI) registerNestedScrollTargets(gtx layout.Context, tree *layou
 	}
 	targets := make([]target, 0, len(tree.ScrollContainers))
 	for nodeID, container := range tree.ScrollContainers {
+		if isDocumentBody(page, nodeID) {
+			continue
+		}
 		maxX := max(container.ScrollWidth-container.Viewport.Width, float32(0))
 		maxY := max(container.ScrollHeight-container.Viewport.Height, float32(0))
 		if !userScrollableOverflow(container.OverflowX) || maxX == 0 {
@@ -2137,6 +3339,14 @@ func (ui *BrowserUI) registerNestedScrollTargets(gtx layout.Context, tree *layou
 		event.Op(gtx.Ops, tag)
 		area.Pop()
 	}
+}
+
+func isDocumentBody(page *browser.Page, nodeID dom.NodeID) bool {
+	if page == nil || page.Document == nil {
+		return false
+	}
+	node, exists := page.Document.NodeByID(nodeID)
+	return exists && node.Type == dom.NodeElement && node.TagName == "body"
 }
 
 func nestedScrollTransform(tree *layoutengine.Tree, nodeID dom.NodeID) stylemodel.Matrix {
@@ -2332,15 +3542,19 @@ func (ui *BrowserUI) documentTheme() *material.Theme {
 
 func (ui *BrowserUI) installPageFonts(page *browser.Page) {
 	// A Gio Shaper owns bounded LRUs for shaped layouts and glyph operations.
-	// Reuse it only within the same Page generation and Style revision; replacing
-	// the pointer here drops every cached face and glyph on Navigation or font
-	// revision without sharing it with Browser chrome.
-	if page == nil || ui.fontPage == page && ui.fontRevision == page.StyleRevision {
+	// Reuse it within the same Page until its font collection changes. DOM and
+	// ordinary style mutations advance StyleRevision frequently; rebuilding the
+	// system-font fallback cache for each of them stalls dynamic pages.
+	if page == nil {
+		return
+	}
+	fontRevision := page.FontInvalidationSnapshot().Revision
+	if ui.fontPage == page && ui.fontRevision == fontRevision {
 		return
 	}
 	if !page.UsesModernWebCompatibility() {
 		ui.documentTheme().Shaper = newPageTextShaper(gofont.Collection(), true)
-		ui.fontPage, ui.fontRevision = page, page.StyleRevision
+		ui.fontPage, ui.fontRevision = page, fontRevision
 		return
 	}
 	collection := make([]font.FontFace, 0, len(page.Fonts)+len(gofont.Collection()))
@@ -2359,7 +3573,7 @@ func (ui *BrowserUI) installPageFonts(page *browser.Page) {
 	// let Gio resolve glyphs they do not cover from the operating system. This
 	// path belongs only to an explicitly selected modern-web JavaScript Page.
 	ui.documentTheme().Shaper = newPageTextShaper(collection, true)
-	ui.fontPage, ui.fontRevision = page, page.StyleRevision
+	ui.fontPage, ui.fontRevision = page, fontRevision
 }
 
 func newPageTextShaper(collection []font.FontFace, systemFonts bool) *text.Shaper {
@@ -2427,6 +3641,9 @@ func (ui *BrowserUI) updateLinkPreview(page *browser.Page, nodeID dom.NodeID) {
 		return
 	}
 	if linkURL, ok := page.LinkURL(nodeID); ok {
+		if resolved, err := searchprovider.ResolveResultURL(linkURL); err == nil {
+			linkURL = resolved
+		}
 		ui.status = network.RedactedURL(linkURL)
 		return
 	}
@@ -2454,6 +3671,10 @@ func (ui *BrowserUI) dispatchPaintedClick(page *browser.Page, hit paintedDisplay
 	nodeID := hit.NodeID
 	if _, handledByButton := ui.formButtons[nodeID]; handledByButton {
 		ui.navigator.UpdateFocus(focusableNodeID(page.Document, nodeID))
+		if ui.startSubmitterActivation(nodeID, hit.DocumentX, hit.DocumentY) {
+			ui.formPointerClicks[nodeID]++
+			return
+		}
 		if ui.navigator.DispatchClick(nodeID, hit.DocumentX, hit.DocumentY) {
 			ui.formPointerClicks[nodeID]++
 		}
@@ -2465,6 +3686,12 @@ func (ui *BrowserUI) dispatchPaintedClick(page *browser.Page, hit paintedDisplay
 	}
 	linkURL, target, ok := page.LinkDestination(nodeID)
 	if !ok {
+		return
+	}
+	linkURL, err := searchprovider.ResolveResultURL(linkURL)
+	if err != nil {
+		ui.status = "検索結果リンクを開けません"
+		ui.statusHasError = true
 		return
 	}
 	if target == "_blank" {
@@ -3244,7 +4471,7 @@ func (ui *BrowserUI) layoutDrawInput(gtx layout.Context, command paintmodel.Draw
 			}
 			if _, submitted := event.(widget.SubmitEvent); submitted {
 				ui.commitInput(command.NodeID, editor.Text())
-				if ui.navigator != nil {
+				if !ui.startFormSubmission(command.NodeID) && ui.navigator != nil {
 					ui.navigator.SubmitForm(command.NodeID)
 				}
 			}
@@ -3426,7 +4653,9 @@ func (ui *BrowserUI) layoutDrawButton(gtx layout.Context, command paintmodel.Dra
 			}
 			if ui.navigator != nil {
 				ui.navigator.UpdateFocus(command.NodeID)
-				ui.navigator.DispatchClick(command.NodeID, command.X, command.Y)
+				if !ui.startSubmitterActivation(command.NodeID, command.X, command.Y) {
+					ui.navigator.DispatchClick(command.NodeID, command.X, command.Y)
+				}
 			}
 		}
 		gtx.Constraints.Min.Y = gtx.Dp(unit.Dp(command.Height))
@@ -3501,10 +4730,16 @@ func (ui *BrowserUI) layoutDrawText(gtx layout.Context, command paintmodel.DrawT
 		if command.Transform != (stylemodel.Matrix{}) && command.Transform != stylemodel.IdentityMatrix() {
 			defer pushCSSMatrix(gtx, command.Transform, command.X, command.Y).Pop()
 		}
+		// Layout and Gio can select different fallback font metrics. Give glyph ink
+		// a small vertical allowance at overflow edges while keeping the CSS line
+		// box and hit geometry unchanged.
+		clipOutset := max(command.FontSize*.6, float32(2))
 		if command.Clip != nil {
-			defer commandClip(gtx, command.Clip, command.X, command.Y).Push(gtx.Ops).Pop()
+			clipped := textInkClip(*command.Clip, clipOutset)
+			defer commandClip(gtx, &clipped, command.X, command.Y).Push(gtx.Ops).Pop()
 		}
 		for _, region := range command.Clips {
+			region.Rect = textInkClip(region.Rect, clipOutset)
 			defer commandRoundedClip(gtx, region, command.X, command.Y).Push(gtx.Ops).Pop()
 		}
 		height := gtx.Dp(unit.Dp(command.Height))
@@ -3537,6 +4772,13 @@ func (ui *BrowserUI) layoutDrawText(gtx layout.Context, command paintmodel.DrawT
 			return ui.layoutShadowedText(gtx, command.Text, command.FontSize, command.Bold, command.FontFamilies, command.FontStyle, command.LetterSpacing, command.WordSpacing, command.Color, command.Decoration, command.DecorationColor, command.Baseline, command.TextShadows)
 		})
 	})
+}
+
+func textInkClip(rectangle layoutengine.Rect, outset float32) layoutengine.Rect {
+	outset = max(outset, float32(0))
+	rectangle.Y -= outset
+	rectangle.Height += outset * 2
+	return rectangle
 }
 
 func layoutTextCursorArea(gtx layout.Context, width, height int, cursor stylemodel.Cursor, content layout.Widget) layout.Dimensions {

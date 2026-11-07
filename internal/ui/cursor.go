@@ -6,6 +6,7 @@ import (
 	"gioui.org/io/pointer"
 	"gioui.org/layout"
 	"gioui.org/op/clip"
+	"image"
 )
 
 type pointerState struct {
@@ -28,6 +29,9 @@ func (ui *BrowserUI) handlePointerEvents(gtx layout.Context) {
 			return
 		}
 		event, ok := raw.(pointer.Event)
+		if ok && event.Kind == pointer.Press && ui.suggestionPopup.open && !ui.suggestionPopup.addressPressed && !image.Pt(int(event.Position.X), int(event.Position.Y)).In(ui.suggestionPopup.bounds) {
+			ui.closeSuggestionPopup()
+		}
 		if !ok || event.Source != pointer.Mouse {
 			continue
 		}

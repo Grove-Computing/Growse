@@ -44,6 +44,14 @@ func safeConsoleValue(value goja.Value) string {
 	}
 	if object, ok := value.(*goja.Object); ok {
 		class := object.ClassName()
+		if class == "Error" {
+			if stack := object.Get("stack"); stack != nil && !goja.IsUndefined(stack) && !goja.IsNull(stack) {
+				return stack.String()
+			}
+			if message := object.Get("message"); message != nil && !goja.IsUndefined(message) && !goja.IsNull(message) {
+				return message.String()
+			}
+		}
 		if class == "" {
 			class = "Object"
 		}

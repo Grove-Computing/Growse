@@ -8,6 +8,7 @@ import (
 
 	"github.com/Grove-Computing/Growse/internal/css"
 	"github.com/Grove-Computing/Growse/internal/dom"
+	htmlparser "github.com/Grove-Computing/Growse/internal/html"
 	stylemodel "github.com/Grove-Computing/Growse/internal/style"
 )
 
@@ -431,4 +432,57 @@ func hasFallbackReason(tree *Tree, reason string) bool {
 		}
 	}
 	return false
+}
+
+func TestNestedInlineButtonStaysOnInlineLine(t *testing.T) {
+	document, err := htmlparser.Parse(strings.NewReader(`<div class="row"><span><button type="button">More</button></span><span class="next">Next</span></div>`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stylesheet, err := css.Parse(strings.NewReader(`
+.row { width:300px }
+button { display:inline-block; width:60px; height:28px }
+.next { display:inline }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := BuildWithViewport(document, stylemodel.Compute(document, stylesheet), 300, 100)
+	button, _ := document.QuerySelector("button")
+	next, _ := document.QuerySelector(".next")
+	buttonBounds := tree.Bounds[button.ID]
+	var nextRun TextRun
+	for _, box := range tree.Boxes {
+		for _, run := range box.Runs {
+			if run.NodeID == next.ID {
+				nextRun = run
+			}
+		}
+	}
+	if buttonBounds.Height == 0 || nextRun.NodeID == 0 {
+		t.Fatalf("nested inline content missing: button=%#v next=%#v boxes=%#v", buttonBounds, nextRun, tree.Boxes)
+	}
+	if nextRun.Baseline < buttonBounds.Y || nextRun.Baseline > buttonBounds.Y+buttonBounds.Height+8 {
+		t.Fatalf("nested button was promoted away from inline line: button=%#v next=%#v", buttonBounds, nextRun)
+	}
+}
+
+func TestAtomicInlineAutoHeightIncludesLineHeight(t *testing.T) {
+	document, err := htmlparser.Parse(strings.NewReader(`<div class="clip"><a href="#"><strong>All</strong></a></div>`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stylesheet, err := css.Parse(strings.NewReader(`
+.clip { display:flex }
+a { display:inline-block; line-height:38px }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := BuildWithViewport(document, stylemodel.Compute(document, stylesheet), 300, 100)
+	link, _ := document.QuerySelector("a")
+	bounds := tree.Bounds[link.ID]
+	if bounds.Height < 38 {
+		t.Fatalf("atomic inline height = %v, want at least line-height 38", bounds.Height)
+	}
 }

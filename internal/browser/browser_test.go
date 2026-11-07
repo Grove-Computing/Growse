@@ -955,14 +955,14 @@ func TestBrowserReducedMotionSettingRecomputesAuthorMediaQuery(t *testing.T) {
 	}
 }
 
-func TestNavigateRejectsUnsupportedContentType(t *testing.T) {
+func TestNavigateRejectsUnsupportedNonImageContentType(t *testing.T) {
 	browser := New(stubLoader{response: &network.Response{
-		URL:         mustParseURL(t, "https://example.com/image.png"),
+		URL:         mustParseURL(t, "https://example.com/file.pdf"),
 		StatusCode:  200,
-		ContentType: "image/png",
+		ContentType: "application/pdf",
 	}})
 
-	if _, err := browser.Navigate(context.Background(), "https://example.com/image.png"); err == nil {
+	if _, err := browser.Navigate(context.Background(), "https://example.com/file.pdf"); err == nil {
 		t.Fatal("Navigate() error = nil, want unsupported Content-Type error")
 	}
 }
@@ -972,7 +972,7 @@ func TestCachedNavigationStillValidatesDocumentMIMEType(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
 		requests++
 		response.Header().Set("Cache-Control", "max-age=60")
-		response.Header().Set("Content-Type", "image/png")
+		response.Header().Set("Content-Type", "application/pdf")
 		_, _ = response.Write([]byte("not-html"))
 	}))
 	defer server.Close()
@@ -1532,6 +1532,37 @@ func TestSubmitHonorsValidationPreventDefaultAndNoValidate(t *testing.T) {
 	}
 }
 
+func TestSubmitUsesCapturedFormDataWhenSubmitHandlerReplacesForm(t *testing.T) {
+	document := dom.NewDocument()
+	form := document.CreateElement("form", map[string]string{"action": "/result"})
+	input := document.CreateElement("input", map[string]string{"name": "q", "value": "golang"})
+	if err := document.AppendChild(document.Root, form); err != nil {
+		t.Fatal(err)
+	}
+	if err := document.AppendChild(form, input); err != nil {
+		t.Fatal(err)
+	}
+	baseURL := mustParseURL(t, "https://example.com/search")
+	targetURL := mustParseURL(t, "https://example.com/result?q=golang")
+	loader := &routeLoader{responses: map[string]*network.Response{
+		targetURL.String(): {URL: targetURL, StatusCode: 200, ContentType: "text/html", Body: []byte(`<!doctype html><title>Result</title>`)},
+	}}
+	page := &Page{URL: baseURL, Document: document, ComputedStyles: style.Compute(document, nil), Events: events.NewDispatcher()}
+	page.Events.AddEventListener(form.ID, events.Submit, func(events.Event) {
+		_, _ = document.Remove(form.ID)
+	})
+	browserState := New(loader)
+	browserState.SetPage(page)
+
+	submitted, err := browserState.Submit(context.Background(), form.ID, 0)
+	if err != nil {
+		t.Fatalf("Submit() error = %v", err)
+	}
+	if submitted.URL.String() != targetURL.String() || len(loader.requested) != 1 {
+		t.Fatalf("submitted URL = %s requests=%v", submitted.URL, loader.requested)
+	}
+}
+
 func TestNewPageCopiesURL(t *testing.T) {
 	pageURL := mustParseURL(t, "https://example.com/original")
 	page := NewPage(pageURL)
@@ -1613,4 +1644,56 @@ func mustParseURL(t *testing.T, rawURL string) *url.URL {
 		t.Fatalf("url.Parse(%q): %v", rawURL, err)
 	}
 	return parsed
+}
+
+func TestNavigationObserverReportsOnlyHistoryPush(t *testing.T) {
+	target := mustParseURL(t, "https://example.com/final")
+	browser := New(stubLoader{response: &network.Response{
+		URL: target, StatusCode: http.StatusOK, ContentType: "text/html", Body: []byte("<title>Final title</title>"),
+	}})
+	var records []NavigationRecord
+	browser.SetNavigationObserver(func(record NavigationRecord) { records = append(records, record) })
+	if _, err := browser.Navigate(WithTypedNavigation(context.Background()), "https://example.com/start"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := browser.Reload(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 || records[0].URL != target.String() || records[0].Title != "Final title" || !records[0].Typed {
+		t.Fatalf("navigation records = %#v", records)
+	}
+}
+
+func TestActivateSubmitterDispatchesClickAndNavigates(t *testing.T) {
+	document := dom.NewDocument()
+	form := document.CreateElement("form", map[string]string{"action": "/search", "method": "get"})
+	query := document.CreateElement("input", map[string]string{"name": "q", "value": "hoge"})
+	submit := document.CreateElement("button", map[string]string{"name": "source", "value": "button"})
+	for _, edge := range [][2]*dom.Node{{document.Root, form}, {form, query}, {form, submit}} {
+		if err := document.AppendChild(edge[0], edge[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	baseURL := mustParseURL(t, "https://example.com/form")
+	targetURL := mustParseURL(t, "https://example.com/search?q=hoge&source=button")
+	loader := &routeLoader{responses: map[string]*network.Response{
+		targetURL.String(): {URL: targetURL, StatusCode: 200, ContentType: "text/html", Body: []byte(`<!doctype html><title>Results</title>`)},
+	}}
+	dispatcher := events.NewDispatcher()
+	clicks, submits := 0, 0
+	dispatcher.AddEventListener(submit.ID, events.Click, func(events.Event) { clicks++ })
+	dispatcher.AddEventListener(form.ID, events.Submit, func(events.Event) { submits++ })
+	browser := New(loader)
+	browser.SetPage(&Page{URL: baseURL, Document: document, ComputedStyles: style.Compute(document, nil), Events: dispatcher})
+
+	page, err := browser.ActivateSubmitter(context.Background(), submit.ID, 12, 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := page.URL.String(), targetURL.String(); got != want {
+		t.Fatalf("page URL = %q, want %q", got, want)
+	}
+	if clicks != 1 || submits != 1 {
+		t.Fatalf("event counts click=%d submit=%d, want 1 each", clicks, submits)
+	}
 }

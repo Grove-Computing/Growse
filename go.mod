@@ -1,6 +1,6 @@
 module github.com/Grove-Computing/Growse
 
-go 1.26.6
+go 1.26.10
 
 require (
 	gioui.org v0.10.2
@@ -20,6 +20,7 @@ require (
 	golang.org/x/image v0.46.0
 	golang.org/x/net v0.59.0
 	golang.org/x/sys v0.48.0
+	golang.org/x/text v0.42.0
 )
 
 require (
@@ -28,5 +29,4 @@ require (
 	github.com/ebitengine/purego v0.10.1 // indirect
 	github.com/go-sourcemap/sourcemap v2.1.3+incompatible // indirect
 	github.com/google/pprof v0.0.0-20230207041349-798e818bf904 // indirect
-	golang.org/x/text v0.42.0 // indirect
 )

@@ -13,7 +13,7 @@ import (
 
 const (
 	Version         = 1
-	MaxMessageBytes = 1 << 20
+	MaxMessageBytes = 48 << 20
 )
 
 type Kind string
