@@ -1295,12 +1295,11 @@ func (ui *BrowserUI) layoutFindOverlay(gtx layout.Context, viewport image.Rectan
 	if state == nil || !state.open || viewport.Empty() {
 		return
 	}
-	width := min(gtx.Dp(unit.Dp(560)), max(viewport.Dx()-gtx.Dp(unit.Dp(24)), 0))
-	height := min(gtx.Dp(unit.Dp(54)), viewport.Dy())
-	if width <= 0 || height <= 0 {
+	region := findOverlayBounds(viewport, gtx.Dp(unit.Dp(560)), gtx.Dp(unit.Dp(54)), gtx.Dp(unit.Dp(12)))
+	if region.Empty() {
 		return
 	}
-	region := image.Rect(viewport.Max.X-width-gtx.Dp(unit.Dp(12)), viewport.Min.Y+gtx.Dp(unit.Dp(8)), viewport.Max.X-gtx.Dp(unit.Dp(12)), viewport.Min.Y+gtx.Dp(unit.Dp(8))+height)
+	region = region.Add(image.Pt(0, min(gtx.Dp(unit.Dp(8)), max(viewport.Dy()-region.Dy(), 0))))
 	layoutRegion(gtx, region, func(gtx layout.Context) layout.Dimensions {
 		borderColor, borderWidth := focusBorder(gtx.Focused(state.editor))
 		return widget.Border{

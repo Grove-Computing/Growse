@@ -682,7 +682,7 @@ func (ui *BrowserUI) layoutHomeCandidatesWithHeight(gtx layout.Context, state *h
 			gtx.Constraints.Min.Y = rowHeight
 			gtx.Constraints.Max.Y = rowHeight
 			semantic.ClassOp(semantic.Button).Add(gtx.Ops)
-			semantic.DescriptionOp(candidate.Source.Label() + ": " + candidate.Primary).Add(gtx.Ops)
+			semantic.DescriptionOp(candidate.Source.Label() + ": " + candidate.Primary + "。" + candidateMetadata(candidate)).Add(gtx.Ops)
 			semantic.SelectedOp(index == state.selected).Add(gtx.Ops)
 			gtx.Constraints.Min.X = gtx.Constraints.Max.X
 			background := color.NRGBA{R: 248, G: 250, B: 252, A: 255}
@@ -692,8 +692,16 @@ func (ui *BrowserUI) layoutHomeCandidatesWithHeight(gtx layout.Context, state *h
 			paint.FillShape(gtx.Ops, background, clip.Rect{Max: gtx.Constraints.Min}.Op())
 			return layout.Inset{Top: unit.Dp(6), Right: unit.Dp(10), Bottom: unit.Dp(6), Left: unit.Dp(10)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 				return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-					layout.Rigid(material.Body2(ui.theme, candidate.Primary).Layout),
-					layout.Rigid(material.Caption(ui.theme, candidate.Source.Label()+" · "+candidate.Secondary).Layout),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						label := material.Body2(ui.theme, candidate.Primary)
+						label.MaxLines = 1
+						return label.Layout(gtx)
+					}),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						label := material.Caption(ui.theme, candidateMetadata(candidate))
+						label.MaxLines = 1
+						return label.Layout(gtx)
+					}),
 				)
 			})
 		})

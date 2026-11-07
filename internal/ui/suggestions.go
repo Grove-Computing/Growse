@@ -357,7 +357,7 @@ func (ui *BrowserUI) layoutSuggestions(gtx layout.Context, viewport image.Rectan
 				}
 				paint.FillShape(gtx.Ops, background, clip.Rect{Max: gtx.Constraints.Min}.Op())
 				semantic.ClassOp(semantic.Button).Add(gtx.Ops)
-				semantic.DescriptionOp(candidate.Source.Label() + ": " + candidate.Primary).Add(gtx.Ops)
+				semantic.DescriptionOp(candidate.Source.Label() + ": " + candidate.Primary + "。" + candidateMetadata(candidate)).Add(gtx.Ops)
 				semantic.SelectedOp(index == popup.selected).Add(gtx.Ops)
 				return layout.Inset{Top: unit.Dp(6), Bottom: unit.Dp(6), Left: unit.Dp(12), Right: unit.Dp(12)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 					return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
@@ -367,7 +367,7 @@ func (ui *BrowserUI) layoutSuggestions(gtx layout.Context, viewport image.Rectan
 							return label.Layout(gtx)
 						}),
 						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-							label := material.Caption(ui.theme, candidate.Source.Label()+" · "+candidate.Secondary)
+							label := material.Caption(ui.theme, candidateMetadata(candidate))
 							label.MaxLines = 1
 							return label.Layout(gtx)
 						}),
