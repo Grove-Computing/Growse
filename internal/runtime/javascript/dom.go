@@ -45,6 +45,8 @@ func (runtime *Runtime) installDOM(vm *goja.Runtime) error {
 	_ = document.DefineDataProperty("nodeType", vm.ToValue(9), goja.FLAG_FALSE, goja.FLAG_FALSE, goja.FLAG_TRUE)
 	_ = document.DefineDataProperty("nodeName", vm.ToValue("#document"), goja.FLAG_FALSE, goja.FLAG_FALSE, goja.FLAG_TRUE)
 	_ = document.DefineDataProperty("parentNode", goja.Null(), goja.FLAG_FALSE, goja.FLAG_FALSE, goja.FLAG_TRUE)
+	_ = document.DefineDataProperty("defaultView", vm.GlobalObject(), goja.FLAG_FALSE, goja.FLAG_FALSE, goja.FLAG_TRUE)
+	_ = document.DefineDataProperty("oninput", goja.Null(), goja.FLAG_TRUE, goja.FLAG_FALSE, goja.FLAG_TRUE)
 	documentChildrenGetter := vm.ToValue(func(goja.FunctionCall) goja.Value {
 		return runtime.nodeCollectionValue(vm, documentRoot.ChildNodes())
 	})
@@ -108,13 +110,17 @@ func (runtime *Runtime) installDOM(vm *goja.Runtime) error {
 		return err
 	}
 	if err := document.Set("removeEventListener", func(call goja.FunctionCall) goja.Value {
-		if documentRoot != nil {
+		eventType := strings.ToLower(strings.TrimSpace(call.Argument(0).String()))
+		if eventType == "readystatechange" || eventType == "domcontentloaded" {
+			runtime.removeDocumentEventListener(eventType, call.Argument(1))
+		} else if documentRoot != nil {
 			runtime.removeEventListener(documentRoot, call.Argument(0).String(), call.Argument(1), call.Argument(2))
 		}
 		return goja.Undefined()
 	}); err != nil {
 		return err
 	}
+	runtime.installLifecycleEventHandlerProperties(vm, document, true, "readystatechange")
 	if err := document.Set("dispatchEvent", func(call goja.FunctionCall) goja.Value {
 		if documentRoot == nil {
 			return vm.ToValue(true)
@@ -161,7 +167,11 @@ func (runtime *Runtime) installDOM(vm *goja.Runtime) error {
 		if !goja.IsNull(call.Argument(0)) && !goja.IsUndefined(call.Argument(0)) {
 			namespace = call.Argument(0).String()
 		}
-		return runtime.mustCreateNodeValue(vm, runtime.domAPI.CreateElementNS(namespace, call.Argument(1).String()), "createElementNS")
+		element := runtime.domAPI.CreateElementNS(namespace, call.Argument(1).String())
+		if element != nil && namespace == "http://www.w3.org/2000/svg" {
+			runtime.svgElements[uint64(element.ID())] = struct{}{}
+		}
+		return runtime.mustCreateNodeValue(vm, element, "createElementNS")
 	}); err != nil {
 		return err
 	}
@@ -189,7 +199,33 @@ func (runtime *Runtime) installDOM(vm *goja.Runtime) error {
 	}); err != nil {
 		return err
 	}
-	return vm.Set("document", document)
+	if err := vm.Set("document", document); err != nil {
+		return err
+	}
+	_, err := vm.RunString(`
+		Object.defineProperty(document, "implementation", {
+			configurable: true,
+			enumerable: true,
+			value: {
+				createHTMLDocument: function (title) {
+					var parsed = new DOMParser().parseFromString("", "text/html");
+					parsed.createElement = document.createElement.bind(document);
+					parsed.createElementNS = document.createElementNS.bind(document);
+					parsed.createTextNode = document.createTextNode.bind(document);
+					if (title !== undefined && title !== null && String(title) !== "") {
+						var titleElement = parsed.createElement("title");
+						titleElement.textContent = String(title);
+						parsed.head.appendChild(titleElement);
+					}
+					return parsed;
+				}
+			}
+		});
+	`)
+	if err != nil {
+		return fmt.Errorf("install document implementation: %w", err)
+	}
+	return nil
 }
 
 func (runtime *Runtime) mustCreateNodeValue(vm *goja.Runtime, element *domapi.Element, operation string) goja.Value {
@@ -220,6 +256,53 @@ func (runtime *Runtime) addDocumentEventListener(vm *goja.Runtime, eventType str
 	}
 	runtime.documentListeners = append(runtime.documentListeners, listenerRecord{eventType: eventType, function: value})
 	runtime.listenerCount++
+}
+
+func (runtime *Runtime) removeDocumentEventListener(eventType string, value goja.Value) {
+	eventType = strings.ToLower(strings.TrimSpace(eventType))
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	for index, listener := range runtime.documentListeners {
+		if listener.eventType == eventType && listener.function.SameAs(value) {
+			runtime.documentListeners = append(runtime.documentListeners[:index], runtime.documentListeners[index+1:]...)
+			runtime.listenerCount--
+			return
+		}
+	}
+}
+
+func (runtime *Runtime) installLifecycleEventHandlerProperties(vm *goja.Runtime, object *goja.Object, documentTarget bool, eventTypes ...string) {
+	handlers := make(map[string]goja.Value, len(eventTypes))
+	for _, eventType := range eventTypes {
+		currentType := strings.ToLower(eventType)
+		getter := vm.ToValue(func(goja.FunctionCall) goja.Value {
+			if handler := handlers[currentType]; handler != nil {
+				return handler
+			}
+			return goja.Null()
+		})
+		setter := vm.ToValue(func(call goja.FunctionCall) goja.Value {
+			if previous := handlers[currentType]; previous != nil {
+				if documentTarget {
+					runtime.removeDocumentEventListener(currentType, previous)
+				} else {
+					runtime.removeWindowEventListener(currentType, previous)
+				}
+				delete(handlers, currentType)
+			}
+			next := call.Argument(0)
+			if _, ok := goja.AssertFunction(next); ok {
+				if documentTarget {
+					runtime.addDocumentEventListener(vm, currentType, next)
+				} else {
+					runtime.addWindowEventListener(vm, currentType, next)
+				}
+				handlers[currentType] = next
+			}
+			return goja.Undefined()
+		})
+		_ = object.DefineAccessorProperty("on"+currentType, getter, setter, goja.FLAG_FALSE, goja.FLAG_TRUE)
+	}
 }
 
 func (runtime *Runtime) setDocumentReadyState(vm *goja.Runtime, state string) {
@@ -279,6 +362,20 @@ func (runtime *Runtime) elementValue(vm *goja.Runtime, element *domapi.Element) 
 		_ = object.SetPrototype(prototype)
 	}
 
+	attributeValue := func(name string) goja.Value {
+		value, ok := element.GetAttribute(name)
+		if !ok {
+			return goja.Null()
+		}
+		attribute := vm.NewObject()
+		_ = attribute.Set("name", name)
+		_ = attribute.Set("nodeName", name)
+		_ = attribute.Set("value", value)
+		_ = attribute.Set("nodeValue", value)
+		_ = attribute.Set("specified", true)
+		_ = attribute.Set("expando", false)
+		return attribute
+	}
 	_ = object.Set("getAttribute", func(call goja.FunctionCall) goja.Value {
 		value, ok := element.GetAttribute(call.Argument(0).String())
 		if !ok {
@@ -286,6 +383,31 @@ func (runtime *Runtime) elementValue(vm *goja.Runtime, element *domapi.Element) 
 		}
 		return vm.ToValue(value)
 	})
+	_ = object.Set("getAttributeNode", func(call goja.FunctionCall) goja.Value {
+		return attributeValue(call.Argument(0).String())
+	})
+	attributesGetter := vm.ToValue(func(goja.FunctionCall) goja.Value {
+		names := element.AttributeNames()
+		values := make([]any, len(names))
+		attributes := vm.NewArray(values...)
+		for index, name := range names {
+			attribute := attributeValue(name)
+			_ = attributes.Set(fmt.Sprint(index), attribute)
+			_ = attributes.Set(name, attribute)
+		}
+		_ = attributes.Set("item", func(call goja.FunctionCall) goja.Value {
+			index := int(call.Argument(0).ToInteger())
+			if index < 0 || index >= len(names) {
+				return goja.Null()
+			}
+			return attributeValue(names[index])
+		})
+		_ = attributes.Set("getNamedItem", func(call goja.FunctionCall) goja.Value {
+			return attributeValue(call.Argument(0).String())
+		})
+		return attributes
+	})
+	_ = object.DefineAccessorProperty("attributes", attributesGetter, nil, goja.FLAG_FALSE, goja.FLAG_TRUE)
 	_ = object.Set("setAttribute", func(call goja.FunctionCall) goja.Value {
 		changed := element.SetAttribute(call.Argument(0).String(), call.Argument(1).String())
 		runtime.resourceElementChanged(vm, element)
@@ -331,6 +453,12 @@ func (runtime *Runtime) elementValue(vm *goja.Runtime, element *domapi.Element) 
 	})
 	_ = object.Set("querySelectorAll", func(call goja.FunctionCall) goja.Value {
 		return runtime.nodeCollectionValue(vm, element.QuerySelectorAll(call.Argument(0).String()))
+	})
+	_ = object.Set("getElementsByTagName", func(call goja.FunctionCall) goja.Value {
+		return runtime.nodeCollectionValue(vm, element.GetElementsByTagName(call.Argument(0).String()))
+	})
+	_ = object.Set("getElementsByClassName", func(call goja.FunctionCall) goja.Value {
+		return runtime.nodeCollectionValue(vm, element.GetElementsByClassName(call.Argument(0).String()))
 	})
 	_ = object.Set("appendChild", func(call goja.FunctionCall) goja.Value {
 		childObject, ok := call.Argument(0).(*goja.Object)
@@ -500,6 +628,7 @@ func (runtime *Runtime) elementValue(vm *goja.Runtime, element *domapi.Element) 
 		runtime.removeEventListener(element, call.Argument(0).String(), call.Argument(1), call.Argument(2))
 		return goja.Undefined()
 	})
+	runtime.installElementEventHandlerProperties(vm, object, element)
 	_ = object.Set("dispatchEvent", func(call goja.FunctionCall) goja.Value {
 		return vm.ToValue(runtime.dispatchJSEvent(vm, element, call.Argument(0)))
 	})
@@ -600,6 +729,7 @@ func (runtime *Runtime) elementValue(vm *goja.Runtime, element *domapi.Element) 
 	_ = object.DefineAccessorProperty("isConnected", connectedGetter, nil, goja.FLAG_FALSE, goja.FLAG_TRUE)
 	_ = object.DefineDataProperty("nodeType", vm.ToValue(domNodeTypeValue(element.NodeType())), goja.FLAG_FALSE, goja.FLAG_FALSE, goja.FLAG_TRUE)
 	_ = object.DefineDataProperty("nodeName", vm.ToValue(element.NodeName()), goja.FLAG_FALSE, goja.FLAG_FALSE, goja.FLAG_TRUE)
+	_ = object.DefineDataProperty("ownerDocument", vm.Get("document"), goja.FLAG_FALSE, goja.FLAG_FALSE, goja.FLAG_TRUE)
 	parentNodeGetter := vm.ToValue(func(goja.FunctionCall) goja.Value { return runtime.nodeValue(vm, element.ParentNode()) })
 	_ = object.DefineAccessorProperty("parentNode", parentNodeGetter, nil, goja.FLAG_FALSE, goja.FLAG_TRUE)
 	childrenGetter := vm.ToValue(func(goja.FunctionCall) goja.Value { return runtime.elementArrayValue(vm, element.Children()) })
@@ -624,11 +754,14 @@ func (runtime *Runtime) elementValue(vm *goja.Runtime, element *domapi.Element) 
 	}
 	innerHTMLGetter := vm.ToValue(func(goja.FunctionCall) goja.Value { return vm.ToValue(element.InnerHTML()) })
 	innerHTMLSetter := vm.ToValue(func(call goja.FunctionCall) goja.Value {
+		hadStyles := containsStyleResource(element)
 		if !element.SetInnerHTML(call.Argument(0).String()) {
 			panic(vm.NewTypeError("innerHTML fragment was rejected"))
 		}
 		runtime.prepareConnectedScripts(vm, element.Children()...)
-		runtime.refreshInlineStyles(dynamicStyleSnapshot{})
+		if hadStyles || containsStyleResource(element) {
+			runtime.refreshInlineStyles(dynamicStyleSnapshot{})
+		}
 		return goja.Undefined()
 	})
 	_ = object.DefineAccessorProperty("innerHTML", innerHTMLGetter, innerHTMLSetter, goja.FLAG_FALSE, goja.FLAG_TRUE)
@@ -655,12 +788,6 @@ func (runtime *Runtime) elementValue(vm *goja.Runtime, element *domapi.Element) 
 		return goja.Undefined()
 	})
 	runtime.installElementGeometry(vm, object, element)
-	valueGetter := vm.ToValue(func(goja.FunctionCall) goja.Value { return vm.ToValue(element.Value()) })
-	valueSetter := vm.ToValue(func(call goja.FunctionCall) goja.Value {
-		element.SetValue(call.Argument(0).String())
-		return goja.Undefined()
-	})
-	_ = object.DefineAccessorProperty("value", valueGetter, valueSetter, goja.FLAG_FALSE, goja.FLAG_TRUE)
 	runtime.installScriptElement(vm, object, element)
 	runtime.installLinkElement(vm, object, element)
 	runtime.installStyleElement(vm, object, element)
@@ -699,21 +826,44 @@ func (runtime *Runtime) installDOMInterfaces(vm *goja.Runtime) error {
 			function DocumentFragment() { illegal(); }
 			function Element() { illegal(); }
 			function HTMLElement() { illegal(); }
+			function SVGElement() { illegal(); }
 			function HTMLScriptElement() { illegal(); }
 			function HTMLLinkElement() { illegal(); }
 			function HTMLImageElement() { illegal(); }
+			function HTMLIFrameElement() { illegal(); }
 			function HTMLTemplateElement() { illegal(); }
 			function CSSStyleDeclaration() { illegal(); }
 			function Range() { illegal(); }
+			function DOMParser() {}
+			DOMParser.prototype.parseFromString = function (source, type) {
+				if (String(type).toLowerCase() !== "text/html") throw new TypeError("unsupported DOMParser content type");
+				var parsed = Object.create(Document.prototype);
+				var root = document.createElement("html");
+				var head = document.createElement("head");
+				var body = document.createElement("body");
+				root.appendChild(head);
+				root.appendChild(body);
+				body.innerHTML = String(source);
+				Object.defineProperties(parsed, {
+					documentElement: { value: root, enumerable: true },
+					head: { value: head, enumerable: true },
+					body: { value: body, enumerable: true }
+				});
+				parsed.querySelector = function (selector) { return root.querySelector(selector); };
+				parsed.querySelectorAll = function (selector) { return root.querySelectorAll(selector); };
+				return parsed;
+			};
 
 			Object.setPrototypeOf(Node.prototype, EventTarget.prototype);
 			Object.setPrototypeOf(Document.prototype, Node.prototype);
 			Object.setPrototypeOf(DocumentFragment.prototype, Node.prototype);
 			Object.setPrototypeOf(Element.prototype, Node.prototype);
 			Object.setPrototypeOf(HTMLElement.prototype, Element.prototype);
+			Object.setPrototypeOf(SVGElement.prototype, Element.prototype);
 			Object.setPrototypeOf(HTMLScriptElement.prototype, HTMLElement.prototype);
 			Object.setPrototypeOf(HTMLLinkElement.prototype, HTMLElement.prototype);
 			Object.setPrototypeOf(HTMLImageElement.prototype, HTMLElement.prototype);
+			Object.setPrototypeOf(HTMLIFrameElement.prototype, HTMLElement.prototype);
 			Object.setPrototypeOf(HTMLTemplateElement.prototype, HTMLElement.prototype);
 
 			var interfaces = {
@@ -723,12 +873,15 @@ func (runtime *Runtime) installDOMInterfaces(vm *goja.Runtime) error {
 				DocumentFragment: DocumentFragment,
 				Element: Element,
 				HTMLElement: HTMLElement,
+				SVGElement: SVGElement,
 				HTMLScriptElement: HTMLScriptElement,
 				HTMLLinkElement: HTMLLinkElement,
 				HTMLImageElement: HTMLImageElement,
+				HTMLIFrameElement: HTMLIFrameElement,
 				HTMLTemplateElement: HTMLTemplateElement,
 				CSSStyleDeclaration: CSSStyleDeclaration,
-				Range: Range
+				Range: Range,
+				DOMParser: DOMParser
 			};
 			Object.keys(interfaces).forEach(function (name) {
 				Object.defineProperty(interfaces[name].prototype, Symbol.toStringTag, { value: name });
@@ -739,18 +892,48 @@ func (runtime *Runtime) installDOMInterfaces(vm *goja.Runtime) error {
 	if err != nil {
 		return fmt.Errorf("install DOM interfaces: %w", err)
 	}
+	nodePrototype := domInterfacePrototype(vm, "Node")
+	if nodePrototype == nil {
+		return errors.New("node prototype is unavailable")
+	}
+	if err := nodePrototype.Set("hasChildNodes", func(call goja.FunctionCall) goja.Value {
+		element := runtime.domElementForThis(vm, call.This)
+		return vm.ToValue(len(element.ChildNodes()) != 0)
+	}); err != nil {
+		return err
+	}
+	firstChildGetter := vm.ToValue(func(call goja.FunctionCall) goja.Value {
+		return runtime.nodeValue(vm, runtime.domElementForThis(vm, call.This).FirstChild())
+	})
+	if err := nodePrototype.DefineAccessorProperty("firstChild", firstChildGetter, nil, goja.FLAG_FALSE, goja.FLAG_TRUE); err != nil {
+		return err
+	}
 	elementPrototype := domInterfacePrototype(vm, "Element")
 	if elementPrototype == nil {
 		return errors.New("element prototype is unavailable")
 	}
-	return elementPrototype.Set("getAttribute", func(call goja.FunctionCall) goja.Value {
+	if err := elementPrototype.Set("getAttribute", func(call goja.FunctionCall) goja.Value {
 		element := runtime.domElementForThis(vm, call.This)
 		value, ok := element.GetAttribute(call.Argument(0).String())
 		if !ok {
 			return goja.Null()
 		}
 		return vm.ToValue(value)
+	}); err != nil {
+		return err
+	}
+	htmlElementPrototype := domInterfacePrototype(vm, "HTMLElement")
+	if htmlElementPrototype == nil {
+		return errors.New("HTML element prototype is unavailable")
+	}
+	valueGetter := vm.ToValue(func(call goja.FunctionCall) goja.Value {
+		return vm.ToValue(runtime.domElementForThis(vm, call.This).Value())
 	})
+	valueSetter := vm.ToValue(func(call goja.FunctionCall) goja.Value {
+		runtime.domElementForThis(vm, call.This).SetValue(call.Argument(0).String())
+		return goja.Undefined()
+	})
+	return htmlElementPrototype.DefineAccessorProperty("value", valueGetter, valueSetter, goja.FLAG_FALSE, goja.FLAG_TRUE)
 }
 
 func domInterfacePrototype(vm *goja.Runtime, name string) *goja.Object {
@@ -768,6 +951,9 @@ func (runtime *Runtime) elementPrototype(vm *goja.Runtime, element *domapi.Eleme
 		name = "DocumentFragment"
 	} else if tagName := element.TagName(); tagName != "" {
 		name = "HTMLElement"
+		if runtime.isSVGElement(element) {
+			name = "SVGElement"
+		}
 		switch strings.ToLower(tagName) {
 		case "script":
 			name = "HTMLScriptElement"
@@ -775,11 +961,28 @@ func (runtime *Runtime) elementPrototype(vm *goja.Runtime, element *domapi.Eleme
 			name = "HTMLLinkElement"
 		case "img":
 			name = "HTMLImageElement"
+		case "iframe":
+			name = "HTMLIFrameElement"
 		case "template":
 			name = "HTMLTemplateElement"
 		}
 	}
 	return domInterfacePrototype(vm, name)
+}
+
+func (runtime *Runtime) isSVGElement(element *domapi.Element) bool {
+	if element == nil {
+		return false
+	}
+	if _, ok := runtime.svgElements[uint64(element.ID())]; ok {
+		return true
+	}
+	for current := element; current != nil; current = current.ParentNode() {
+		if strings.EqualFold(current.TagName(), "svg") {
+			return true
+		}
+	}
+	return false
 }
 
 func (runtime *Runtime) domElementForThis(vm *goja.Runtime, value goja.Value) *domapi.Element {
@@ -798,6 +1001,14 @@ func (runtime *Runtime) installHTMLElementReflection(vm *goja.Runtime, object *g
 		attributeName := attribute
 		getter := vm.ToValue(func(goja.FunctionCall) goja.Value {
 			value, _ := element.GetAttribute(attributeName)
+			if attributeName == "type" && value == "" {
+				switch strings.ToLower(element.TagName()) {
+				case "input":
+					value = "text"
+				case "button":
+					value = "submit"
+				}
+			}
 			return vm.ToValue(value)
 		})
 		setter := vm.ToValue(func(call goja.FunctionCall) goja.Value {
@@ -895,6 +1106,52 @@ func (runtime *Runtime) domArguments(vm *goja.Runtime, values []goja.Value) ([]*
 	return result, true
 }
 
+func (runtime *Runtime) installElementEventHandlerProperties(vm *goja.Runtime, object *goja.Object, element *domapi.Element) {
+	handlers := make(map[string]goja.Value)
+	for _, eventType := range []string{
+		"blur", "change", "click", "error", "focus", "input", "keydown", "keyup", "load",
+		"mousedown", "mouseenter", "mouseleave", "mousemove", "mouseout", "mouseover", "mouseup",
+		"pointerdown", "pointerenter", "pointerleave", "pointermove", "pointerout", "pointerover", "pointerup",
+		"reset", "submit", "touchend", "touchmove", "touchstart",
+	} {
+		currentType := eventType
+		getter := vm.ToValue(func(goja.FunctionCall) goja.Value {
+			if handler := handlers[currentType]; handler != nil {
+				return handler
+			}
+			return goja.Null()
+		})
+		setter := vm.ToValue(func(call goja.FunctionCall) goja.Value {
+			if previous := handlers[currentType]; previous != nil {
+				runtime.removeEventListener(element, currentType, previous, goja.Undefined())
+				delete(handlers, currentType)
+			}
+			next := call.Argument(0)
+			if _, ok := goja.AssertFunction(next); ok {
+				runtime.addEventListener(vm, object, element, currentType, next, goja.Undefined())
+				handlers[currentType] = next
+			}
+			return goja.Undefined()
+		})
+		property := "on" + currentType
+		_ = object.DefineAccessorProperty(property, getter, setter, goja.FLAG_FALSE, goja.FLAG_TRUE)
+		if source, present := element.GetAttribute(property); present && strings.TrimSpace(source) != "" {
+			program, err := goja.Compile("inline-"+property+"-handler.js", "(function(event){\n"+source+"\n})", false)
+			if err != nil {
+				runtime.recordError(fmt.Sprintf("compile %s handler: %v", property, err))
+				continue
+			}
+			handler, err := vm.RunProgram(program)
+			if err != nil {
+				runtime.recordError(fmt.Sprintf("evaluate %s handler: %v", property, err))
+				continue
+			}
+			runtime.addEventListener(vm, object, element, currentType, handler, goja.Undefined())
+			handlers[currentType] = handler
+		}
+	}
+}
+
 func (runtime *Runtime) addEventListener(vm *goja.Runtime, object *goja.Object, element *domapi.Element, eventType string, value, options goja.Value) {
 	callable, ok := goja.AssertFunction(value)
 	if !ok {
@@ -944,7 +1201,7 @@ func (runtime *Runtime) addEventListener(vm *goja.Runtime, object *goja.Object, 
 		}
 	})
 	if token == 0 {
-		panic(vm.NewTypeError("event target is disconnected or event type is unsupported"))
+		panic(vm.NewTypeError(fmt.Sprintf("event listener %q could not be registered on %s (id=%d, connected=%t)", eventType, element.NodeName(), element.ID(), element.IsConnected())))
 	}
 	runtime.mu.Lock()
 	runtime.listeners = append(runtime.listeners, listenerRecord{
@@ -1044,6 +1301,7 @@ func (runtime *Runtime) eventValue(vm *goja.Runtime, currentTarget *goja.Object,
 	_ = object.Set("bubbles", event.Bubbles)
 	_ = object.Set("cancelable", event.Cancelable)
 	_ = object.Set("eventPhase", int(event.Phase))
+	_ = object.Set("isTrusted", event.RuntimeID == 0)
 	_ = object.Set("value", event.Value)
 	_ = object.Set("clientX", event.X)
 	_ = object.Set("clientY", event.Y)

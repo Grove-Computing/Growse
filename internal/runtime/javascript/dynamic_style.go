@@ -71,6 +71,9 @@ func (runtime *Runtime) prepareDynamicImage(element *domapi.Element) {
 	if environment.RefreshImage == nil {
 		return
 	}
+	// Publish the connected image before asking an isolated browser host to
+	// resolve it by node ID.
+	runtime.flushDOMMutation()
 	state, loadErr := environment.RefreshImage(loadContext, element.ID())
 	if loadErr != nil {
 		if !errors.Is(loadErr, context.Canceled) {
@@ -176,6 +179,9 @@ func (runtime *Runtime) refreshStylesSerialized(onRuntimeQueue bool) error {
 		return context.Canceled
 	}
 	if onRuntimeQueue {
+		// The isolated runtime's browser-side stylesheet loader must see the
+		// connected style/link node before it rebuilds the stylesheet.
+		runtime.flushDOMMutation()
 		return refresh(ctx)
 	}
 	return runtime.runSync(ctx, func(*goja.Runtime) error { return refresh(ctx) })

@@ -745,7 +745,18 @@ func submitButtonLabel(node *dom.Node) string {
 	if label := strings.TrimSpace(node.TextContent()); label != "" {
 		return label
 	}
-	return "Submit"
+	if label, exists := node.Attribute("aria-label"); exists {
+		switch strings.ToLower(strings.TrimSpace(label)) {
+		case "search":
+			return "⌕"
+		case "clear":
+			return "×"
+		}
+	}
+	if _, exists := node.Attribute("aria-controls"); exists {
+		return "⋯"
+	}
+	return ""
 }
 
 func (e *engine) addControlDecoration(node *dom.Node, style blockStyle, rect Rect) bool {
@@ -1552,7 +1563,10 @@ func hasNestedFormControl(node *dom.Node) bool {
 		if child == nil || child.Type != dom.NodeElement {
 			continue
 		}
-		if isEditableTextControl(child) || isSelectControl(child) || isCheckableControl(child) || isSubmitButtonControl(child) || hasNestedFormControl(child) {
+		// Buttons with inline-level display already participate as atomic inline
+		// boxes. Promoting their wrapper onto a separate line breaks navigation
+		// bars that nest icon buttons inside spans.
+		if isEditableTextControl(child) || isSelectControl(child) || isCheckableControl(child) || hasNestedFormControl(child) {
 			return true
 		}
 	}
@@ -2104,7 +2118,7 @@ func isCJKLineBreakRune(character rune) bool {
 func resolveAtomicSize(run inlineRun, containingWidth float32) (float32, float32) {
 	horizontal := run.style.padding.Left + run.style.padding.Right + run.style.border.Left.Width + run.style.border.Right.Width
 	vertical := run.style.padding.Top + run.style.padding.Bottom + run.style.border.Top.Width + run.style.border.Bottom.Width
-	width, _, _ := measureStyledText(normalizeWhitespace(run.text), run.style)
+	width, textHeight, _ := measureStyledText(normalizeWhitespace(run.text), run.style)
 	widthDefinite := false
 	if resolved, ok := resolveSize(run.style.width, containingWidth, true); ok {
 		width = resolved
@@ -2114,7 +2128,7 @@ func resolveAtomicSize(run inlineRun, containingWidth float32) (float32, float32
 		// intrinsic size still has to contain its padding and border.
 		width += horizontal
 	}
-	height := run.style.fontSize * 1.4
+	height := max(textHeight, run.style.lineHeight, run.style.fontSize*1.4)
 	heightDefinite := false
 	if resolved, ok := resolveSize(run.style.height, 0, false); ok {
 		height = resolved

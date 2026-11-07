@@ -11,6 +11,7 @@ import (
 	"gioui.org/widget"
 	"gioui.org/widget/material"
 	"github.com/Grove-Computing/Growse/internal/browser"
+	"github.com/Grove-Computing/Growse/internal/homeconfig"
 	"github.com/Grove-Computing/Growse/internal/searchprovider"
 )
 
@@ -49,6 +50,16 @@ func (ui *BrowserUI) OpenSearchProfile(root string) error {
 		return err
 	}
 	ui.providerStore = store
+	homeStore, err := homeconfig.OpenStore(root)
+	if err != nil {
+		return err
+	}
+	homeSettings := homeStore.Load()
+	if homeSettings.Validate() != nil {
+		homeSettings = homeconfig.Defaults()
+	}
+	ui.homeSettings = homeSettings
+	ui.homeStore = homeStore
 	return nil
 }
 func (ui *BrowserUI) providerSearchURL(input string) (string, error) {

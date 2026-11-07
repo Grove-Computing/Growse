@@ -50,6 +50,15 @@ type Response struct {
 	CacheStatus string
 }
 
+// ResponseHead is the response metadata available before its body is read.
+type ResponseHead struct {
+	URL         *url.URL
+	StatusCode  int
+	Header      http.Header
+	ContentType string
+	Redirected  bool
+}
+
 // Request contains the HTTP request data accepted by the network client.
 type Request struct {
 	Method      string
@@ -64,6 +73,12 @@ type Request struct {
 	Initiator   string
 	Schedule    string
 	Observer    func(Observation)
+	// OnResponseHeaders runs synchronously after response validation and before
+	// the body is read. Callers must return quickly and must not retain Header.
+	OnResponseHeaders func(ResponseHead)
+	// OnBodyChunk runs synchronously as response bytes arrive. The slice is only
+	// valid for the duration of the callback.
+	OnBodyChunk func([]byte)
 }
 
 // Observation is body-free request metadata emitted after one client operation.
@@ -155,6 +170,13 @@ func NewClientWithCacheRoot(httpClient *http.Client, maxBodyBytes int64, cacheRo
 	}
 	client.cache = cache
 	return client, nil
+}
+
+// FlushCache waits for queued disk-cache writes without affecting live requests.
+func (c *Client) FlushCache() {
+	if c != nil && c.cache != nil {
+		c.cache.FlushDisk()
+	}
 }
 
 func configuredHTTPClient(source *http.Client) *http.Client {
@@ -310,6 +332,10 @@ func (c *Client) Do(ctx context.Context, requestData *Request) (result *Response
 		}
 		if result != nil {
 			result.CacheStatus = "hit"
+			notifyResponseHeaders(requestData, result.URL, result.StatusCode, result.Header, result.ContentType, result.Redirected)
+			if requestData.OnBodyChunk != nil && len(result.Body) != 0 {
+				requestData.OnBodyChunk(result.Body)
+			}
 		}
 		return result, resultErr
 	}
@@ -355,12 +381,17 @@ func (c *Client) Do(ctx context.Context, requestData *Request) (result *Response
 	if err := validateCORSResponse(response, requestData); err != nil {
 		return nil, err
 	}
+	finalURL := requestData.URL
+	if response.Request != nil && response.Request.URL != nil {
+		finalURL = response.Request.URL
+	}
+	notifyResponseHeaders(requestData, finalURL, response.StatusCode, response.Header, response.Header.Get("Content-Type"), finalURL.String() != requestData.URL.String())
 
 	if response.ContentLength > c.maxBodyBytes {
 		return nil, fmt.Errorf("%w: limit is %d bytes", ErrResponseTooLarge, c.maxBodyBytes)
 	}
 
-	body, err := io.ReadAll(io.LimitReader(response.Body, c.maxBodyBytes+1))
+	body, err := readResponseBody(response.Body, c.maxBodyBytes, requestData.OnBodyChunk)
 	if err != nil {
 		if errors.Is(err, io.ErrUnexpectedEOF) {
 			return nil, fmt.Errorf("%w: %v", ErrResponseTruncated, err)
@@ -371,10 +402,6 @@ func (c *Client) Do(ctx context.Context, requestData *Request) (result *Response
 		return nil, fmt.Errorf("%w: limit is %d bytes", ErrResponseTooLarge, c.maxBodyBytes)
 	}
 
-	finalURL := requestData.URL
-	if response.Request != nil && response.Request.URL != nil {
-		finalURL = response.Request.URL
-	}
 	cachedResult := &Response{
 		URL:         cloneURL(finalURL),
 		StatusCode:  response.StatusCode,
@@ -399,6 +426,39 @@ func (c *Client) Do(ctx context.Context, requestData *Request) (result *Response
 	}
 	c.cache.Store(&cacheRequest, cachedResult)
 	return prepareCachedResponse(cachedResult, requestData)
+}
+
+func readResponseBody(reader io.Reader, maxBytes int64, onChunk func([]byte)) ([]byte, error) {
+	limited := io.LimitReader(reader, maxBytes+1)
+	var body bytes.Buffer
+	buffer := make([]byte, 32<<10)
+	for {
+		read, err := limited.Read(buffer)
+		if read > 0 {
+			chunk := buffer[:read]
+			_, _ = body.Write(chunk)
+			if onChunk != nil {
+				onChunk(chunk)
+			}
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	return body.Bytes(), nil
+}
+
+func notifyResponseHeaders(request *Request, finalURL *url.URL, statusCode int, header http.Header, contentType string, redirected bool) {
+	if request == nil || request.OnResponseHeaders == nil {
+		return
+	}
+	request.OnResponseHeaders(ResponseHead{
+		URL: cloneURL(finalURL), StatusCode: statusCode, Header: header.Clone(),
+		ContentType: contentType, Redirected: redirected,
+	})
 }
 
 func observationErrorCategory(err error) string {

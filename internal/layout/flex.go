@@ -559,6 +559,13 @@ func (e *engine) flexIntrinsicSizes(node *dom.Node, style blockStyle, axis flexA
 		flexWidth, flexHeight, _ := e.resolveInlineFlexSize(node, style, width)
 		intrinsicWidth = max(intrinsicWidth, flexWidth)
 		intrinsicHeight = max(intrinsicHeight, flexHeight)
+	} else if node.Type == dom.NodeElement && e.hasOnlyInlineChildren(node) {
+		// Flattened text omits the dimensions of atomic inline descendants such
+		// as links, icons and buttons. Measure the same runs used for painting so
+		// flex items reserve their complete max-content size on both axes.
+		inlineWidth, inlineHeight := e.inlineChildrenMaxContentSize(node, width, 0)
+		intrinsicWidth = max(intrinsicWidth, inlineWidth+horizontalExtras)
+		intrinsicHeight = max(intrinsicHeight, inlineHeight+verticalExtras)
 	} else if node.Type == dom.NodeElement && strings.TrimSpace(text) == "" && hasElementChildren(node) {
 		// Empty wrapper spans are commonly used to stack replaced images (for
 		// example Wikipedia's wordmark and tagline). They have no flattened text
@@ -619,10 +626,102 @@ func (e *engine) flexIntrinsicSizes(node *dom.Node, style blockStyle, axis flexA
 			base = intrinsicWidth / style.aspectRatio
 		}
 	}
+
 	if axis.horizontal {
 		return max(base, float32(0)), max(intrinsicHeight, float32(0)), max(minTextWidth+horizontalExtras, float32(0))
 	}
 	return max(base, float32(0)), max(intrinsicWidth, float32(1)), max(intrinsicHeight, float32(0))
+}
+
+func (e *engine) hasOnlyInlineChildren(node *dom.Node) bool {
+	if node == nil || !hasElementChildren(node) {
+		return false
+	}
+	hasInFlowChild := false
+	for _, child := range node.Children {
+		if child == nil || child.Type != dom.NodeElement {
+			continue
+		}
+		childStyle := e.styleFor(child)
+		if childStyle.display == stylemodel.DisplayNone || childStyle.layoutPosition == stylemodel.PositionAbsolute || childStyle.layoutPosition == stylemodel.PositionFixed {
+			continue
+		}
+		hasInFlowChild = true
+		if !isInlineLevelDisplay(childStyle.display) {
+			return false
+		}
+	}
+	return hasInFlowChild
+}
+
+func (e *engine) inlineChildrenMaxContentSize(node *dom.Node, containingWidth float32, depth int) (float32, float32) {
+	if node == nil || depth >= 8 {
+		return 0, 0
+	}
+	container := e.styleFor(node)
+	runs := e.generatedRuns(node, true, container)
+	for _, child := range node.Children {
+		if child != nil && child.Type == dom.NodeElement {
+			childStyle := e.styleFor(child)
+			if childStyle.display == stylemodel.DisplayNone || childStyle.layoutPosition == stylemodel.PositionAbsolute || childStyle.layoutPosition == stylemodel.PositionFixed {
+				continue
+			}
+		}
+		runs = append(runs, e.collectInlineRuns(child, node)...)
+	}
+	runs = append(runs, e.generatedRuns(node, false, container)...)
+	maximum, current := float32(0), float32(0)
+	totalHeight, lineHeight := float32(0), float32(0)
+	for _, token := range tokenizeInlineRuns(transformInlineRuns(runs)) {
+		if token.text == "\n" {
+			maximum = max(maximum, current)
+			totalHeight += lineHeight
+			current, lineHeight = 0, 0
+			continue
+		}
+		width, height := float32(0), float32(0)
+		if token.atomic {
+			switch {
+			case token.image:
+				width, height, _ = e.resolveInlineImageSize(token, containingWidth)
+			case token.flex:
+				width, height, _ = e.resolveInlineFlexSize(token.node, token.style, containingWidth)
+			case token.grid:
+				width, height, _ = e.resolveInlineGridSize(token.node, token.style, containingWidth)
+			default:
+				width, height = resolveAtomicSize(token, containingWidth)
+				extra := token.style.padding.Left + token.style.padding.Right + token.style.border.Left.Width + token.style.border.Right.Width
+				if token.style.width.Kind == stylemodel.SizeLength && token.style.width.Value.Percentage != 0 {
+					// Percentages are indefinite while finding max-content size. Using
+					// the outer containing block here makes a width:100% child inflate
+					// every auto-sized atomic ancestor to the viewport width.
+					width = token.style.width.Value.Pixels
+					if token.style.boxSizing == stylemodel.BoxSizingContentBox {
+						width += extra
+					}
+				}
+				if token.node != nil && (token.style.width.Kind == stylemodel.SizeAuto || token.style.width.Value.Percentage != 0) && e.hasOnlyInlineChildren(token.node) {
+					nested, nestedHeight := e.inlineChildrenMaxContentSize(token.node, containingWidth, depth+1)
+					if token.style.width.Kind == stylemodel.SizeAuto {
+						// An auto-sized atomic inline is shrink-to-fit around its in-flow
+						// content rather than the outer containing block.
+						width = nested + extra
+					} else {
+						width = max(width, nested+extra)
+					}
+					verticalExtra := token.style.padding.Top + token.style.padding.Bottom + token.style.border.Top.Width + token.style.border.Bottom.Width
+					height = max(height, nestedHeight+verticalExtra)
+				}
+			}
+			width += token.style.margin.Left + token.style.margin.Right
+			height += token.style.margin.Top + token.style.margin.Bottom
+		} else {
+			width, height, _ = measureStyledText(token.text, token.style)
+		}
+		current += width
+		lineHeight = max(lineHeight, height)
+	}
+	return max(maximum, current), totalHeight + lineHeight
 }
 
 func (e *engine) emptyWrapperIntrinsicWidth(node *dom.Node, width, height float32, heightDefinite bool) float32 {
@@ -782,6 +881,7 @@ func (e *engine) resolveInlineFlexSize(node *dom.Node, containerStyle blockStyle
 			continue
 		}
 		main, cross, _ := e.flexIntrinsicSizes(child, childStyle, axis, containingWidth, containingWidth, 0, false)
+
 		if axis.horizontal {
 			mainSize += main + childStyle.margin.Left + childStyle.margin.Right
 			crossSize = max(crossSize, cross+childStyle.margin.Top+childStyle.margin.Bottom)

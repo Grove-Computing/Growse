@@ -66,7 +66,7 @@ func TestClassifyRecognizesOnlyLeadingReservedCommands(t *testing.T) {
 }
 
 func TestSearchURLEncodesQueryOnce(t *testing.T) {
-	if got, want := SearchURL("日本語 + gopher").String(), "https://html.duckduckgo.com/html/?q=%E6%97%A5%E6%9C%AC%E8%AA%9E+%2B+gopher"; got != want {
+	if got, want := SearchURL("日本語 + gopher").String(), "https://duckduckgo.com/?q=%E6%97%A5%E6%9C%AC%E8%AA%9E+%2B+gopher&ia=web"; got != want {
 		t.Fatalf("SearchURL = %q, want %q", got, want)
 	}
 }

@@ -43,6 +43,7 @@ import (
 	"github.com/Grove-Computing/Growse/internal/dom"
 	"github.com/Grove-Computing/Growse/internal/findpage"
 	"github.com/Grove-Computing/Growse/internal/forms"
+	"github.com/Grove-Computing/Growse/internal/homeconfig"
 	layoutengine "github.com/Grove-Computing/Growse/internal/layout"
 	"github.com/Grove-Computing/Growse/internal/network"
 	"github.com/Grove-Computing/Growse/internal/omnibox"
@@ -52,6 +53,7 @@ import (
 	"github.com/Grove-Computing/Growse/internal/searchprovider"
 	stylemodel "github.com/Grove-Computing/Growse/internal/style"
 	"github.com/Grove-Computing/Growse/internal/updater"
+	desktopassets "github.com/Grove-Computing/Growse/packaging/linux"
 )
 
 //go:embed assets/gopher-blue.png
@@ -86,6 +88,7 @@ type BrowserUI struct {
 	backButton        widget.Clickable
 	forwardButton     widget.Clickable
 	reloadButton      widget.Clickable
+	homeButton        widget.Clickable
 	goButton          widget.Clickable
 	bookmarkButton    widget.Clickable
 	updateButton      widget.Clickable
@@ -113,6 +116,13 @@ type BrowserUI struct {
 	viewportClick     gesture.Click
 	address           *widget.Editor
 	omniboxStates     map[browser.TabID]omniboxState
+	homeTabs          map[browser.TabID]*homeTabState
+	homeRollbacks     map[browser.TabID]homeHistorySnapshot
+	homeSettings      homeconfig.Settings
+	homeStore         *homeconfig.Store
+	homePanel         homeSettingsPanel
+	homeCustomize     widget.Clickable
+	homeShortcuts     [homeconfig.MaxShortcuts]widget.Clickable
 	findStates        map[browser.TabID]*findTabState
 	findFocusPending  bool
 
@@ -134,6 +144,7 @@ type BrowserUI struct {
 	searchPanelSuggestions   *searchdata.LocalPipeline
 
 	gopher            paint.ImageOp
+	growseIcon        paint.ImageOp
 	pointerTag        pointerTag
 	pointer           pointerState
 	nestedScrollPage  *browser.Page
@@ -142,6 +153,7 @@ type BrowserUI struct {
 	backIcon          *widget.Icon
 	forwardIcon       *widget.Icon
 	reloadIcon        *widget.Icon
+	homeIcon          *widget.Icon
 	pageTitle         string
 	status            string
 	pageStatus        string
@@ -157,6 +169,12 @@ type BrowserUI struct {
 	layoutBuildImages func(*dom.Document, stylemodel.Map, map[dom.NodeID]layoutengine.ImageResource, float32, float32, float32, float32) *layoutengine.Tree
 	layoutBuildFonts  func(*dom.Document, stylemodel.Map, map[dom.NodeID]layoutengine.ImageResource, *layoutengine.FontSet, float32, float32, float32, float32) *layoutengine.Tree
 	layoutCache       documentLayoutCache
+	renderContext     context.Context
+	cancelRender      context.CancelFunc
+	renderJobs        chan documentRenderJob
+	renderResults     chan documentRenderResult
+	renderPending     documentRenderKey
+	asyncRender       bool
 	imagePaintCache   pageImagePaintCache
 	fontPage          *browser.Page
 	fontRevision      uint64
@@ -388,8 +406,9 @@ type applicationUpdateResult struct {
 }
 
 type tabNavigation struct {
-	id     uint64
-	cancel context.CancelFunc
+	id         uint64
+	cancel     context.CancelFunc
+	homeBefore *homeHistorySnapshot
 }
 
 type omniboxDisposition uint8
@@ -428,6 +447,10 @@ func NewBrowserUIWithTabsAndUpdater(navigator Navigator, tabs TabController, inv
 	if err != nil {
 		panic("decode embedded Go Gopher image: " + err.Error())
 	}
+	growseIconImage, err := png.Decode(bytes.NewReader(desktopassets.IconPNG()))
+	if err != nil {
+		panic("decode embedded Growse icon: " + err.Error())
+	}
 
 	updateContext, cancelUpdate := context.WithCancel(context.Background())
 	ui := &BrowserUI{
@@ -435,13 +458,16 @@ func NewBrowserUIWithTabsAndUpdater(navigator Navigator, tabs TabController, inv
 		navigator:         navigator,
 		tabs:              tabs,
 		invalidate:        invalidate,
+		asyncRender:       invalidate != nil,
 		results:           make(chan navigationResult, browser.DefaultSessionPolicy().MaxTabs),
 		navigations:       make(map[browser.TabID]tabNavigation),
 		tabRenderStates:   make(map[browser.TabID]tabRenderState),
 		gopher:            paint.NewImageOp(gopherImage),
+		growseIcon:        paint.NewImageOp(growseIconImage),
 		backIcon:          mustIcon(widget.NewIcon(icons.NavigationArrowBack)),
 		forwardIcon:       mustIcon(widget.NewIcon(icons.NavigationArrowForward)),
 		reloadIcon:        mustIcon(widget.NewIcon(icons.NavigationRefresh)),
+		homeIcon:          mustIcon(widget.NewIcon(icons.ActionHome)),
 		pageTitle:         "新しい Web を Go で開く",
 		status:            "URLを入力して Gopher ボタンを押してください",
 		pageStatus:        "URLを入力して Gopher ボタンを押してください",
@@ -460,6 +486,10 @@ func NewBrowserUIWithTabsAndUpdater(navigator Navigator, tabs TabController, inv
 		devToolsStates:    make(map[browser.TabID]devToolsTabState),
 		inspectorButtons:  make(map[browser.TabID]map[dom.NodeID]*widget.Clickable),
 		omniboxStates:     make(map[browser.TabID]omniboxState),
+		homeTabs:          make(map[browser.TabID]*homeTabState),
+		homeRollbacks:     make(map[browser.TabID]homeHistorySnapshot),
+		homeSettings:      homeconfig.Defaults(),
+		homePanel:         newHomeSettingsPanel(),
 		findStates:        make(map[browser.TabID]*findTabState),
 		layoutBuild:       layoutengine.BuildWithScroll,
 		layoutBuildImages: layoutengine.BuildWithScrollAndImages,
@@ -491,6 +521,7 @@ func NewBrowserUIWithTabsAndUpdater(navigator Navigator, tabs TabController, inv
 	ui.devToolsList.Axis = layout.Vertical
 	ui.inspectorList.Axis = layout.Vertical
 	ui.networkList.Axis = layout.Vertical
+	ui.startRenderWorker()
 	ui.startUpdateCheck()
 	return ui
 }
@@ -1162,7 +1193,7 @@ func (ui *BrowserUI) findHighlightGeometry(displayList *paintmodel.DisplayList, 
 				continue
 			}
 			node, exists := page.Document.NodeByID(run.NodeID)
-			if !exists {
+			if !exists || !page.Document.IsConnected(node) {
 				runX += run.Width
 				continue
 			}
@@ -1374,6 +1405,7 @@ func (ui *BrowserUI) handleActions(gtx layout.Context) {
 	ui.handleTabActions(gtx)
 	ui.syncActiveTabChrome()
 	ui.handleSuggestionKeys(gtx)
+	ui.handleHomeActions(gtx)
 	ui.handleOmniboxSubmit(gtx)
 	ui.handleFindActions(gtx)
 	ui.handleSearchPanelActions(gtx)
@@ -1396,19 +1428,26 @@ func (ui *BrowserUI) handleActions(gtx layout.Context) {
 		ui.toggleActiveBookmark()
 	}
 	for ui.backButton.Clicked(gtx) {
-		if tabID, navigator := ui.activeNavigationTarget(); navigator != nil && navigator.CanBack() {
-			ui.startPageLoad(tabID, navigator, "前のページを読み込み中", navigator.Back)
+		if !ui.traverseHomeHistory(-1) {
+			if tabID, navigator := ui.activeNavigationTarget(); navigator != nil && navigator.CanBack() {
+				ui.startPageLoad(tabID, navigator, "前のページを読み込み中", navigator.Back)
+			}
 		}
 	}
 	for ui.forwardButton.Clicked(gtx) {
-		if tabID, navigator := ui.activeNavigationTarget(); navigator != nil && navigator.CanForward() {
-			ui.startPageLoad(tabID, navigator, "次のページを読み込み中", navigator.Forward)
+		if !ui.traverseHomeHistory(1) {
+			if tabID, navigator := ui.activeNavigationTarget(); navigator != nil && navigator.CanForward() {
+				ui.startPageLoad(tabID, navigator, "次のページを読み込み中", navigator.Forward)
+			}
 		}
 	}
 	for ui.reloadButton.Clicked(gtx) {
 		if tabID, navigator := ui.activeNavigationTarget(); navigator != nil && navigator.Page() != nil {
 			ui.startPageLoad(tabID, navigator, "ページを再読み込み中", navigator.Reload)
 		}
+	}
+	for ui.homeButton.Clicked(gtx) {
+		ui.showHome()
 	}
 	for ui.updateButton.Clicked(gtx) {
 		ui.startUpdate()
@@ -1619,7 +1658,7 @@ func (ui *BrowserUI) createTab(gtx layout.Context) {
 		ui.reportTabOperationError("新しいTabを選択できません", err)
 		return
 	}
-	gtx.Execute(key.FocusCmd{Tag: ui.address})
+	ui.homeTabs[tab.ID] = newHomeTabState(true)
 }
 
 func (ui *BrowserUI) closeTab(id browser.TabID) bool {
@@ -1630,6 +1669,11 @@ func (ui *BrowserUI) closeTab(id browser.TabID) bool {
 		return false
 	}
 	delete(ui.omniboxStates, id)
+	if state := ui.homeTabs[id]; state != nil {
+		state.closeSuggestions()
+	}
+	delete(ui.homeTabs, id)
+	delete(ui.homeRollbacks, id)
 	delete(ui.findStates, id)
 	delete(ui.tabRenderStates, id)
 	delete(ui.devToolsStates, id)
@@ -1736,6 +1780,8 @@ func (ui *BrowserUI) startResolvedNavigation(rawURL string, search ...bool) {
 		ui.statusHasError = true
 		return
 	}
+	ui.cancelNavigationForHome(tabID)
+	ui.beginHomeNavigation(tabID)
 	ui.startPageLoad(tabID, navigator, navigationLoadingStatus(rawURL), func(ctx context.Context) (*browser.Page, error) {
 		if len(search) > 0 && search[0] {
 			ctx = network.WithRedirectPolicy(ctx, rawURL, searchprovider.ValidateRedirect)
@@ -1763,6 +1809,7 @@ func (ui *BrowserUI) startNavigationInNewTab(rawURL string, background bool, sea
 		ui.reportTabOperationError("新しい Tab を作成できません", err)
 		return
 	}
+	ui.homeTabs[tab.ID] = newHomeTabState(false)
 	targets, ok := ui.tabs.(tabBrowserSource)
 	if !ok {
 		ui.status = "新しい Tab の Navigation を利用できません"
@@ -1805,7 +1852,13 @@ func (ui *BrowserUI) startPageLoad(tabID browser.TabID, navigator Navigator, sta
 	ctx, cancel := context.WithCancel(context.Background())
 	ui.nextNavigationID++
 	navigationID := ui.nextNavigationID
-	ui.navigations[tabID] = tabNavigation{id: navigationID, cancel: cancel}
+	navigation := tabNavigation{id: navigationID, cancel: cancel}
+	if before, ok := ui.homeRollbacks[tabID]; ok {
+		copy := before
+		navigation.homeBefore = &copy
+		delete(ui.homeRollbacks, tabID)
+	}
+	ui.navigations[tabID] = navigation
 	if sink, ok := ui.tabs.(tabNavigationStateSink); ok && tabID != 0 {
 		if _, err := sink.BeginTabNavigation(tabID); err != nil {
 			cancel()
@@ -1953,6 +2006,9 @@ func (ui *BrowserUI) syncActiveTabChrome() {
 		return
 	}
 	if ui.displayedTabID != 0 {
+		if state := ui.homeTabs[ui.displayedTabID]; state != nil {
+			state.cancelSuggestions()
+		}
 		ui.tabRenderStates[ui.displayedTabID] = tabRenderState{
 			layoutCache: ui.layoutCache, scrollRevision: ui.scrollRevision, pagePosition: ui.pageList.Position,
 			inputEditors: ui.inputEditors, inputFocused: ui.inputFocused, inputCommitted: ui.inputCommitted,
@@ -1969,6 +2025,9 @@ func (ui *BrowserUI) syncActiveTabChrome() {
 		committedURL = page.URL.String()
 	}
 	ui.activateOmnibox(active.ID, committedURL)
+	if state := ui.homeTabs[active.ID]; state != nil && state.visible {
+		ui.showBlankOmnibox(active.ID)
+	}
 	ui.loading = active.Loading
 	ui.statusHasError = active.Error
 	if state, ok := ui.tabRenderStates[active.ID]; ok {
@@ -2034,6 +2093,9 @@ func (ui *BrowserUI) consumeNavigationResult() {
 				continue
 			}
 			delete(ui.navigations, result.tabID)
+			if (result.err != nil || result.page == nil || result.page.URL == nil) && navigation.homeBefore != nil {
+				ui.restoreHomeHistory(result.tabID, *navigation.homeBefore)
+			}
 			if sink, ok := ui.tabs.(tabNavigationStateSink); ok && result.tabID != 0 {
 				if _, err := sink.FinishTabNavigation(result.tabID, result.err != nil); err != nil {
 					ui.reportTabOperationError("TabのNavigation結果を更新できません", err)
@@ -2113,6 +2175,9 @@ func (ui *BrowserUI) tabIsActive(id browser.TabID) bool {
 
 // Close cancels an in-flight navigation when the window closes.
 func (ui *BrowserUI) Close() {
+	if ui.cancelRender != nil {
+		ui.cancelRender()
+	}
 	ui.suggestions.Close()
 	if ui.localSuggestions != nil {
 		ui.localSuggestions.Close()
@@ -2128,6 +2193,10 @@ func (ui *BrowserUI) Close() {
 		ui.cancelTabNavigation(tabID)
 	}
 	clear(ui.findStates)
+	for _, state := range ui.homeTabs {
+		state.closeSuggestions()
+	}
+	clear(ui.homeTabs)
 }
 
 func (ui *BrowserUI) layoutToolbar(gtx layout.Context) layout.Dimensions {
@@ -2147,8 +2216,9 @@ func (ui *BrowserUI) layoutToolbar(gtx layout.Context) layout.Dimensions {
 
 	return layout.Inset{Top: unit.Dp(8), Right: unit.Dp(8), Bottom: unit.Dp(6), Left: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		navigator := ui.activeNavigator()
-		canBack := navigator != nil && navigator.CanBack()
-		canForward := navigator != nil && navigator.CanForward()
+		tabID, _ := ui.activeNavigationTarget()
+		canBack := ui.canTraverseHomeHistory(tabID, -1) || navigator != nil && navigator.CanBack()
+		canForward := ui.canTraverseHomeHistory(tabID, 1) || navigator != nil && navigator.CanForward()
 		canReload := navigator != nil && navigator.Page() != nil
 		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
@@ -2163,6 +2233,10 @@ func (ui *BrowserUI) layoutToolbar(gtx layout.Context) layout.Dimensions {
 					layout.Rigid(layout.Spacer{Width: unit.Dp(4)}.Layout),
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 						return ui.layoutToolbarButton(gtx, &ui.reloadButton, ui.reloadIcon, "再読込", canReload)
+					}),
+					layout.Rigid(layout.Spacer{Width: unit.Dp(4)}.Layout),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return ui.layoutToolbarButton(gtx, &ui.homeButton, ui.homeIcon, "ホーム", true)
 					}),
 					layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
 					layout.Rigid(ui.layoutUpdateButton),
@@ -2754,6 +2828,9 @@ func mustIcon(icon *widget.Icon, err error) *widget.Icon {
 }
 
 func (ui *BrowserUI) layoutViewport(gtx layout.Context) layout.Dimensions {
+	if ui.homeVisible() {
+		return ui.layoutHome(gtx)
+	}
 	if ui.navigator != nil {
 		if page := ui.navigator.Page(); page != nil && page.Document != nil {
 			return ui.layoutDocument(gtx, page)
@@ -2847,7 +2924,7 @@ func (ui *BrowserUI) layoutDocument(gtx layout.Context, page *browser.Page) layo
 	case stylemodel.AnimationDamageLayout:
 		page.RecordRenderEvent(browser.RenderLayoutFrame)
 	}
-	tree, displayList, reusedDisplayList := ui.cachedDocumentFrame(page, viewportWidth, viewportHeight, gtx.Metric.PxPerDp)
+	tree, displayList, reusedDisplayList := ui.cachedDocumentFrameAsync(page, viewportWidth, viewportHeight, gtx.Metric.PxPerDp)
 	if animationDamage == stylemodel.AnimationDamageLayout {
 		page.RecordRenderRebuild(browser.RenderRebuildAnimation)
 		tree = ui.buildDocumentTree(page, frameStyles, viewportWidth, viewportHeight, gtx.Metric.PxPerDp)
@@ -3465,15 +3542,19 @@ func (ui *BrowserUI) documentTheme() *material.Theme {
 
 func (ui *BrowserUI) installPageFonts(page *browser.Page) {
 	// A Gio Shaper owns bounded LRUs for shaped layouts and glyph operations.
-	// Reuse it only within the same Page generation and Style revision; replacing
-	// the pointer here drops every cached face and glyph on Navigation or font
-	// revision without sharing it with Browser chrome.
-	if page == nil || ui.fontPage == page && ui.fontRevision == page.StyleRevision {
+	// Reuse it within the same Page until its font collection changes. DOM and
+	// ordinary style mutations advance StyleRevision frequently; rebuilding the
+	// system-font fallback cache for each of them stalls dynamic pages.
+	if page == nil {
+		return
+	}
+	fontRevision := page.FontInvalidationSnapshot().Revision
+	if ui.fontPage == page && ui.fontRevision == fontRevision {
 		return
 	}
 	if !page.UsesModernWebCompatibility() {
 		ui.documentTheme().Shaper = newPageTextShaper(gofont.Collection(), true)
-		ui.fontPage, ui.fontRevision = page, page.StyleRevision
+		ui.fontPage, ui.fontRevision = page, fontRevision
 		return
 	}
 	collection := make([]font.FontFace, 0, len(page.Fonts)+len(gofont.Collection()))
@@ -3492,7 +3573,7 @@ func (ui *BrowserUI) installPageFonts(page *browser.Page) {
 	// let Gio resolve glyphs they do not cover from the operating system. This
 	// path belongs only to an explicitly selected modern-web JavaScript Page.
 	ui.documentTheme().Shaper = newPageTextShaper(collection, true)
-	ui.fontPage, ui.fontRevision = page, page.StyleRevision
+	ui.fontPage, ui.fontRevision = page, fontRevision
 }
 
 func newPageTextShaper(collection []font.FontFace, systemFonts bool) *text.Shaper {
@@ -4649,10 +4730,16 @@ func (ui *BrowserUI) layoutDrawText(gtx layout.Context, command paintmodel.DrawT
 		if command.Transform != (stylemodel.Matrix{}) && command.Transform != stylemodel.IdentityMatrix() {
 			defer pushCSSMatrix(gtx, command.Transform, command.X, command.Y).Pop()
 		}
+		// Layout and Gio can select different fallback font metrics. Give glyph ink
+		// a small vertical allowance at overflow edges while keeping the CSS line
+		// box and hit geometry unchanged.
+		clipOutset := max(command.FontSize*.6, float32(2))
 		if command.Clip != nil {
-			defer commandClip(gtx, command.Clip, command.X, command.Y).Push(gtx.Ops).Pop()
+			clipped := textInkClip(*command.Clip, clipOutset)
+			defer commandClip(gtx, &clipped, command.X, command.Y).Push(gtx.Ops).Pop()
 		}
 		for _, region := range command.Clips {
+			region.Rect = textInkClip(region.Rect, clipOutset)
 			defer commandRoundedClip(gtx, region, command.X, command.Y).Push(gtx.Ops).Pop()
 		}
 		height := gtx.Dp(unit.Dp(command.Height))
@@ -4685,6 +4772,13 @@ func (ui *BrowserUI) layoutDrawText(gtx layout.Context, command paintmodel.DrawT
 			return ui.layoutShadowedText(gtx, command.Text, command.FontSize, command.Bold, command.FontFamilies, command.FontStyle, command.LetterSpacing, command.WordSpacing, command.Color, command.Decoration, command.DecorationColor, command.Baseline, command.TextShadows)
 		})
 	})
+}
+
+func textInkClip(rectangle layoutengine.Rect, outset float32) layoutengine.Rect {
+	outset = max(outset, float32(0))
+	rectangle.Y -= outset
+	rectangle.Height += outset * 2
+	return rectangle
 }
 
 func layoutTextCursorArea(gtx layout.Context, width, height int, cursor stylemodel.Cursor, content layout.Widget) layout.Dimensions {

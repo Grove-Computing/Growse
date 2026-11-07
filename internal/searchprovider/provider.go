@@ -34,10 +34,9 @@ type Settings struct {
 }
 
 func Builtin() Provider {
-	// Use DuckDuckGo's static HTML results page. The regular endpoint ships
-	// search results through its JavaScript application, so a script failure can
-	// leave an otherwise successful navigation with an empty document viewport.
-	return Provider{ID: "duckduckgo", Name: "DuckDuckGo", Keyword: "ddg", SearchTemplate: "https://html.duckduckgo.com/html/?q={searchTerms}", SuggestionTemplate: "https://duckduckgo.com/ac/?q={searchTerms}&type=list"}
+	// Use DuckDuckGo's regular results experience so search categories, filters,
+	// and the interactive search form remain available inside Growse.
+	return Provider{ID: "duckduckgo", Name: "DuckDuckGo", Keyword: "ddg", SearchTemplate: "https://duckduckgo.com/?q={searchTerms}&ia=web", SuggestionTemplate: "https://duckduckgo.com/ac/?q={searchTerms}&type=list"}
 }
 
 // ResolveResultURL unwraps DuckDuckGo's HTTPS result redirect without loading

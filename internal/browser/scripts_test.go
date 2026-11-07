@@ -132,6 +132,7 @@ func TestCollectJavaScriptRecognizesDefaultAndExplicitTypes(t *testing.T) {
 <script type="text/javascript" src="app.js"></script>
 <script type="application/javascript">fourth()</script>
 <script type="module">fifth()</script>
+<script nomodule>legacy()</script>
 <script type="text/go">package main</script>
 `))
 	if err != nil {
@@ -242,7 +243,11 @@ func TestIsGoContentTypeAcceptsCommonGoMIMETypes(t *testing.T) {
 }
 
 func TestIsJavaScriptContentTypeAcceptsSupportedMIMETypes(t *testing.T) {
-	for _, contentType := range []string{"text/javascript", "application/javascript; charset=utf-8", "application/ecmascript", "text/ecmascript"} {
+	for _, contentType := range []string{
+		"text/javascript", "application/javascript; charset=utf-8", "application/ecmascript", "text/ecmascript",
+		"application/x-javascript", "application/x-javascript; charset=UTF-8", "application/x-ecmascript",
+		"text/javascript1.0", "text/javascript1.5", "text/jscript", "text/livescript", "text/x-ecmascript", "text/x-javascript",
+	} {
 		if !isJavaScriptContentType(contentType) {
 			t.Errorf("isJavaScriptContentType(%q) = false, want true", contentType)
 		}

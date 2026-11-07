@@ -76,6 +76,7 @@ func runWindow(window *gioapp.Window) error {
 	} else {
 		log.Printf("HTTP Cache directoryを解決できませんでした: %v", err)
 	}
+	defer networkClient.FlushCache()
 	session := browser.NewSession(func() *browser.Browser {
 		state := browser.NewWithEngineFactoryAndStorageAndServiceWorkers(networkClient, func(engine runtimemodel.Engine) runtimemodel.Runtime {
 			if !runtimemodel.NormalizeEngine(engine).Valid() {
