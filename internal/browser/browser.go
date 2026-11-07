@@ -1959,7 +1959,6 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	background = !b.active
 	childRuntimes = frameRuntimes(page)
 	b.mu.Unlock()
-	close(navigationReady)
 	if runtime, ok := pageRuntime.(backgroundRuntime); ok {
 		runtime.SetBackground(background)
 	}
@@ -1977,6 +1976,9 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 			dispatcher.DispatchPopState(popState)
 		}
 	}
+	// Runtime-requested navigation can tear down this Page. Keep it blocked until
+	// all lifecycle events for the committed Page have finished reading Frames.
+	close(navigationReady)
 	return page, nil
 }
 
