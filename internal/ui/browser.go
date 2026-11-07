@@ -235,6 +235,7 @@ type findTabState struct {
 	caseToggle        widget.Clickable
 	wordToggle        widget.Clickable
 	close             widget.Clickable
+	ime               imeInputState
 }
 
 func newFindTabState() *findTabState {
@@ -429,6 +430,7 @@ type omniboxState struct {
 	preview      string
 	scope        omnibox.Scope
 	scopeQuery   string
+	ime          imeInputState
 }
 
 // NewBrowserUI creates a browser toolbar and an empty viewport.
@@ -898,6 +900,9 @@ func (ui *BrowserUI) handleFindKeyboardShortcuts(gtx layout.Context) {
 		if !ok || keyEvent.State != key.Press {
 			continue
 		}
+		if state.ime.active(state.editor) {
+			continue
+		}
 		ui.runFindSearch(state)
 		state.move(-1)
 	}
@@ -908,6 +913,9 @@ func (ui *BrowserUI) handleFindKeyboardShortcuts(gtx layout.Context) {
 		}
 		keyEvent, ok := event.(key.Event)
 		if ok && keyEvent.State == key.Press {
+			if state.ime.active(state.editor) {
+				continue
+			}
 			ui.closeFindBar(gtx, state, true)
 		}
 	}
@@ -928,13 +936,24 @@ func (ui *BrowserUI) handleFindActions(gtx layout.Context) {
 		}
 		switch event.(type) {
 		case widget.ChangeEvent:
+			if !state.ime.changed(state.editor) {
+				continue
+			}
 			state.searching = true
 			state.pendingSearch = true
 			ui.invalidate()
 		case widget.SubmitEvent:
+			if state.ime.active(state.editor) {
+				continue
+			}
 			ui.runFindSearch(state)
 			state.move(1)
 		}
+	}
+	if gtx.Focused(state.editor) && state.ime.committed(state.editor) {
+		state.searching = true
+		state.pendingSearch = true
+		ui.invalidate()
 	}
 	for state.previous.Clicked(gtx) {
 		ui.runFindSearch(state)
@@ -1276,28 +1295,32 @@ func (ui *BrowserUI) layoutFindOverlay(gtx layout.Context, viewport image.Rectan
 	if state == nil || !state.open || viewport.Empty() {
 		return
 	}
-	width := min(gtx.Dp(unit.Dp(560)), max(viewport.Dx()-gtx.Dp(unit.Dp(24)), 0))
-	height := min(gtx.Dp(unit.Dp(54)), viewport.Dy())
-	if width <= 0 || height <= 0 {
+	region := findOverlayBounds(viewport, gtx.Dp(unit.Dp(560)), gtx.Dp(unit.Dp(54)), gtx.Dp(unit.Dp(12)))
+	if region.Empty() {
 		return
 	}
-	region := image.Rect(viewport.Max.X-width-gtx.Dp(unit.Dp(12)), viewport.Min.Y+gtx.Dp(unit.Dp(8)), viewport.Max.X-gtx.Dp(unit.Dp(12)), viewport.Min.Y+gtx.Dp(unit.Dp(8))+height)
+	region = region.Add(image.Pt(0, min(gtx.Dp(unit.Dp(8)), max(viewport.Dy()-region.Dy(), 0))))
 	layoutRegion(gtx, region, func(gtx layout.Context) layout.Dimensions {
+		borderColor, borderWidth := focusBorder(gtx.Focused(state.editor))
 		return widget.Border{
-			Color:        color.NRGBA{R: 203, G: 213, B: 225, A: 255},
+			Color:        borderColor,
 			CornerRadius: unit.Dp(10),
-			Width:        unit.Dp(1),
+			Width:        borderWidth,
 		}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 			paint.FillShape(gtx.Ops, color.NRGBA{R: 255, G: 255, B: 255, A: 255}, clip.UniformRRect(image.Rectangle{Max: gtx.Constraints.Min}, gtx.Dp(unit.Dp(10))).Op(gtx.Ops))
 			return layout.Inset{Top: unit.Dp(5), Right: unit.Dp(6), Bottom: unit.Dp(5), Left: unit.Dp(10)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 				return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
 					layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+						semantic.ClassOp(semantic.Editor).Add(gtx.Ops)
+						semantic.DescriptionOp("ページ内検索語").Add(gtx.Ops)
 						editor := material.Editor(ui.theme, state.editor, "ページ内を検索")
 						editor.TextSize = unit.Sp(14)
 						return editor.Layout(gtx)
 					}),
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 						gtx.Constraints.Min.X = gtx.Dp(unit.Dp(92))
+						defer clip.Rect{Max: gtx.Constraints.Max}.Push(gtx.Ops).Pop()
+						semantic.DescriptionOp("ページ内検索: " + state.statusLabel()).Add(gtx.Ops)
 						label := material.Caption(ui.theme, state.statusLabel())
 						label.Color = color.NRGBA{R: 71, G: 85, B: 105, A: 255}
 						return layout.Center.Layout(gtx, label.Layout)
@@ -1336,12 +1359,15 @@ func (ui *BrowserUI) layoutFindButton(gtx layout.Context, button *widget.Clickab
 			background = color.NRGBA{R: 219, G: 234, B: 254, A: 255}
 			foreground = color.NRGBA{R: 29, G: 78, B: 216, A: 255}
 		}
+		background = focusSurface(gtx.Focused(button), background)
 		if background.A != 0 {
 			paint.FillShape(gtx.Ops, background, clip.UniformRRect(image.Rectangle{Max: gtx.Constraints.Min}, gtx.Dp(unit.Dp(7))).Op(gtx.Ops))
 		}
 		label := material.Body2(ui.theme, labelText)
 		label.Color = foreground
+		semantic.ClassOp(semantic.Button).Add(gtx.Ops)
 		semantic.DescriptionOp(description).Add(gtx.Ops)
+		semantic.SelectedOp(active).Add(gtx.Ops)
 		return layout.Center.Layout(gtx, label.Layout)
 	})
 }
@@ -1404,6 +1430,7 @@ func (ui *BrowserUI) handleActions(gtx layout.Context) {
 	ui.consumeUpdateResults()
 	ui.handleTabActions(gtx)
 	ui.syncActiveTabChrome()
+	ui.handleFocusTraversal(gtx)
 	ui.handleSuggestionKeys(gtx)
 	ui.handleHomeActions(gtx)
 	ui.handleOmniboxSubmit(gtx)
@@ -1415,9 +1442,12 @@ func (ui *BrowserUI) handleActions(gtx layout.Context) {
 		if !ok {
 			break
 		}
-		if _, changed := event.(widget.ChangeEvent); changed {
+		if _, changed := event.(widget.ChangeEvent); changed && ui.addressIMEChanged() {
 			ui.handleOmniboxChange(gtx)
 		}
+	}
+	if gtx.Focused(ui.address) && ui.addressIMECommitted() {
+		ui.handleOmniboxChange(gtx)
 	}
 	ui.handleSuggestionMouseAndFocus(gtx)
 	ui.handleBookmarkBarActions(gtx)
@@ -1521,6 +1551,9 @@ func (ui *BrowserUI) handleOmniboxSubmit(gtx layout.Context) {
 		if !ok || keyEvent.State != key.Press {
 			continue
 		}
+		if ui.addressIMEActive() {
+			continue
+		}
 		disposition := omniboxCurrentTab
 		if keyEvent.Modifiers.Contain(key.ModAlt) {
 			disposition = omniboxNewBackgroundTab
@@ -1535,6 +1568,37 @@ func (ui *BrowserUI) handleOmniboxSubmit(gtx layout.Context) {
 			ui.startNavigationWithDisposition(ui.address.Text(), disposition)
 		}
 	}
+}
+
+func (ui *BrowserUI) updateAddressIME(update func(*imeInputState) bool) bool {
+	tabID, _ := ui.activeNavigationTarget()
+	state, ok := ui.omniboxStates[tabID]
+	if !ok {
+		state = omniboxState{editor: ui.address}
+	}
+	if state.editor == nil {
+		state.editor = ui.address
+	}
+	result := update(&state.ime)
+	ui.omniboxStates[tabID] = state
+	return result
+}
+
+func (ui *BrowserUI) addressIMEActive() bool {
+	return ui.updateAddressIME(func(state *imeInputState) bool { return state.active(ui.address) })
+}
+
+func (ui *BrowserUI) addressIMEComposing() bool {
+	tabID, _ := ui.activeNavigationTarget()
+	return ui.omniboxStates[tabID].ime.composing
+}
+
+func (ui *BrowserUI) addressIMEChanged() bool {
+	return ui.updateAddressIME(func(state *imeInputState) bool { return state.changed(ui.address) })
+}
+
+func (ui *BrowserUI) addressIMECommitted() bool {
+	return ui.updateAddressIME(func(state *imeInputState) bool { return state.committed(ui.address) })
 }
 
 func (ui *BrowserUI) switchActiveEngine() {
@@ -2755,6 +2819,9 @@ func (ui *BrowserUI) layoutToolbarButton(gtx layout.Context, button *widget.Clic
 		style.Background = color.NRGBA{R: 238, G: 242, B: 247, A: 255}
 		style.Color = color.NRGBA{R: 160, G: 169, B: 182, A: 255}
 	}
+	if enabled {
+		style.Background = focusSurface(gtx.Focused(button), style.Background)
+	}
 	style.Size = unit.Dp(22)
 	style.Inset = layout.UniformInset(unit.Dp(11))
 	return style.Layout(gtx)
@@ -2771,10 +2838,17 @@ func (ui *BrowserUI) layoutAddressBar(gtx layout.Context) layout.Dimensions {
 	gtx.Constraints.Min.Y = height
 	gtx.Constraints.Max.Y = height
 
+	borderColor, borderWidth := focusBorder(gtx.Focused(ui.address))
+	addressDescription := "Omnibox。URLまたは検索語を入力"
+	if ui.statusHasError {
+		addressDescription += "。エラー: " + ui.status
+	}
+	semantic.ClassOp(semantic.Editor).Add(gtx.Ops)
+	semantic.DescriptionOp(addressDescription).Add(gtx.Ops)
 	return widget.Border{
-		Color:        color.NRGBA{R: 183, G: 193, B: 207, A: 255},
+		Color:        borderColor,
 		CornerRadius: unit.Dp(12),
-		Width:        unit.Dp(1),
+		Width:        borderWidth,
 	}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		return layout.Stack{Alignment: layout.Center}.Layout(gtx,
 			layout.Expanded(func(gtx layout.Context) layout.Dimensions {
@@ -2812,6 +2886,11 @@ func (ui *BrowserUI) layoutGopherButton(gtx layout.Context) layout.Dimensions {
 	gtx.Constraints = layout.Exact(image.Pt(width, height))
 
 	return ui.goButton.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		semantic.ClassOp(semantic.Button).Add(gtx.Ops)
+		semantic.DescriptionOp("Omniboxの入力を開く").Add(gtx.Ops)
+		if gtx.Focused(&ui.goButton) {
+			paint.FillShape(gtx.Ops, focusSurface(true, color.NRGBA{}), clip.UniformRRect(image.Rectangle{Max: gtx.Constraints.Min}, gtx.Dp(unit.Dp(10))).Op(gtx.Ops))
+		}
 		return widget.Image{
 			Src:      ui.gopher,
 			Fit:      widget.Contain,

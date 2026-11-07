@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"image/color"
 
+	"gioui.org/io/key"
 	"gioui.org/layout"
 	"gioui.org/op/paint"
 	"gioui.org/unit"
@@ -70,6 +71,7 @@ func (ui *BrowserUI) providerSearchURL(input string) (string, error) {
 // providerPanel is internal chrome; web content cannot access these editors.
 type providerPanel struct {
 	open                                  bool
+	focusPending                          bool
 	remote                                widget.Clickable
 	toggle, close, save, add              widget.Clickable
 	list                                  widget.List
@@ -89,8 +91,9 @@ func (ui *BrowserUI) layoutProviderButton(gtx layout.Context) layout.Dimensions 
 	if ui.providerPanel.toggle.Clicked(gtx) {
 		ui.closeSuggestionPopup()
 		ui.providerPanel.open = !ui.providerPanel.open
+		ui.providerPanel.focusPending = ui.providerPanel.open
 	}
-	return material.Button(ui.theme, &ui.providerPanel.toggle, "検索設定").Layout(gtx)
+	return ui.layoutTextButton(gtx, &ui.providerPanel.toggle, "検索設定")
 }
 func (ui *BrowserUI) selectProvider(p searchprovider.Provider) {
 	panel := &ui.providerPanel
@@ -143,6 +146,7 @@ func (ui *BrowserUI) layoutProviderSettings(gtx layout.Context) layout.Dimension
 	}
 	if panel.close.Clicked(gtx) {
 		panel.open = false
+		gtx.Execute(key.FocusCmd{Tag: &panel.toggle})
 	}
 	if panel.add.Clicked(gtx) {
 		ui.selectProvider(searchprovider.Provider{})
@@ -174,11 +178,11 @@ func (ui *BrowserUI) layoutProviderSettings(gtx layout.Context) layout.Dimension
 		material.Body1(ui.theme, "外部候補の送信先: "+destination).Layout,
 		material.Body1(ui.theme, "有効にすると入力した検索語を選択providerへ送信します。URL・command・credential・localhostは送信しません。keyword切替時はそのproviderへ送信します。ここでいつでも無効にできます。").Layout,
 		func(gtx layout.Context) layout.Dimensions {
-			return material.Button(ui.theme, &panel.remote, remoteLabel).Layout(gtx)
+			return ui.layoutTextButton(gtx, &panel.remote, remoteLabel)
 		},
 		material.H6(ui.theme, "検索provider設定").Layout,
 		func(gtx layout.Context) layout.Dimensions {
-			return material.Button(ui.theme, &panel.close, "閉じる").Layout(gtx)
+			return ui.layoutTextButton(gtx, &panel.close, "閉じる")
 		},
 	}
 	activeRows := map[string]*providerRow{}
@@ -230,17 +234,17 @@ func (ui *BrowserUI) layoutProviderSettings(gtx layout.Context) layout.Dimension
 		}
 		children = append(children, material.Body1(ui.theme, label).Layout,
 			func(gtx layout.Context) layout.Dimensions {
-				return material.Button(ui.theme, &row.choose, "既定にする").Layout(gtx)
+				return ui.layoutTextButton(gtx, &row.choose, "既定にする")
 			},
 			func(gtx layout.Context) layout.Dimensions {
-				return material.Button(ui.theme, &row.edit, "編集").Layout(gtx)
+				return ui.layoutTextButton(gtx, &row.edit, "編集")
 			},
 			func(gtx layout.Context) layout.Dimensions {
-				return material.Button(ui.theme, &row.disable, "有効 / 無効").Layout(gtx)
+				return ui.layoutTextButton(gtx, &row.disable, "有効 / 無効")
 			})
 		if p.ID != "duckduckgo" {
 			children = append(children, func(gtx layout.Context) layout.Dimensions {
-				return material.Button(ui.theme, &row.remove, "削除").Layout(gtx)
+				return ui.layoutTextButton(gtx, &row.remove, "削除")
 			})
 		}
 	}
@@ -275,28 +279,36 @@ func (ui *BrowserUI) layoutProviderSettings(gtx layout.Context) layout.Dimension
 			}
 			children = append(children, material.Body1(ui.theme, "検出したOpenSearch: "+d.Title+" — "+d.URL).Layout,
 				func(gtx layout.Context) layout.Dimensions {
-					return material.Button(ui.theme, button, "この送信先を確認して取得・登録").Layout(gtx)
+					return ui.layoutTextButton(gtx, button, "この送信先を確認して取得・登録")
 				})
 		}
 	}
 	ui.providerDiscoveryButtons = activeDiscovery
 	children = append(children, func(gtx layout.Context) layout.Dimensions {
-		return material.Button(ui.theme, &panel.add, "providerを追加").Layout(gtx)
+		return ui.layoutTextButton(gtx, &panel.add, "providerを追加")
 	})
 	for _, field := range []struct {
 		label  string
 		editor *widget.Editor
 	}{{"ID", &panel.id}, {"表示名", &panel.name}, {"keyword", &panel.keyword}, {"HTTPS検索URL ({searchTerms})", &panel.search}, {"HTTPS候補URL (任意)", &panel.suggestion}} {
 		children = append(children, material.Body1(ui.theme, field.label).Layout, func(gtx layout.Context) layout.Dimensions {
-			return material.Editor(ui.theme, field.editor, field.label).Layout(gtx)
+			borderColor, borderWidth := focusBorder(gtx.Focused(field.editor))
+			return widget.Border{Color: borderColor, CornerRadius: unit.Dp(8), Width: borderWidth}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				return layout.UniformInset(unit.Dp(8)).Layout(gtx, material.Editor(ui.theme, field.editor, field.label).Layout)
+			})
 		})
 	}
 	children = append(children, func(gtx layout.Context) layout.Dimensions {
-		return material.Button(ui.theme, &panel.save, "保存").Layout(gtx)
+		return ui.layoutTextButton(gtx, &panel.save, "保存")
 	})
-	return layout.UniformInset(unit.Dp(12)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+	dimensions := layout.UniformInset(unit.Dp(12)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		return material.List(ui.theme, &panel.list).Layout(gtx, len(children), func(gtx layout.Context, i int) layout.Dimensions {
 			return layout.Inset{Bottom: unit.Dp(8)}.Layout(gtx, children[i])
 		})
 	})
+	if panel.focusPending {
+		panel.focusPending = false
+		gtx.Execute(key.FocusCmd{Tag: &panel.remote})
+	}
+	return dimensions
 }

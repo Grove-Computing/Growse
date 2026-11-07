@@ -51,6 +51,7 @@ func (ui *BrowserUI) handleHomeSettingsActions(gtx layout.Context) {
 	for panel.close.Clicked(gtx) {
 		panel.open = false
 		panel.errorMessage = ""
+		gtx.Execute(key.FocusCmd{Tag: &ui.homeCustomize})
 	}
 	for panel.add.Clicked(gtx) {
 		panel.editing = -1
@@ -210,7 +211,11 @@ func (ui *BrowserUI) layoutHomeShortcutsWithColumns(gtx layout.Context, columns 
 								layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 									size := gtx.Dp(unit.Dp(36))
 									gtx.Constraints = layout.Exact(image.Pt(size, size))
-									paint.FillShape(gtx.Ops, color.NRGBA{R: 37, G: 99, B: 235, A: 255}, clipCircle(gtx, size))
+									background := color.NRGBA{R: 37, G: 99, B: 235, A: 255}
+									if gtx.Focused(&ui.homeShortcuts[index]) {
+										background = color.NRGBA{R: 30, G: 64, B: 175, A: 255}
+									}
+									paint.FillShape(gtx.Ops, background, clipCircle(gtx, size))
 									label := material.Body1(ui.theme, shortcutLetter(ui.homeSettings.Shortcuts[index].Title))
 									label.Color = color.NRGBA{R: 255, G: 255, B: 255, A: 255}
 									return layout.Center.Layout(gtx, label.Layout)
@@ -264,6 +269,10 @@ func (ui *BrowserUI) layoutHomePresetButton(gtx layout.Context, button *widget.C
 		foreground := color.NRGBA{R: 30, G: 41, B: 59, A: 255}
 		if selected {
 			background = color.NRGBA{R: 37, G: 99, B: 235, A: 255}
+			foreground = color.NRGBA{R: 255, G: 255, B: 255, A: 255}
+		}
+		if gtx.Focused(button) {
+			background = color.NRGBA{R: 30, G: 64, B: 175, A: 255}
 			foreground = color.NRGBA{R: 255, G: 255, B: 255, A: 255}
 		}
 		minWidth := gtx.Dp(unit.Dp(80))
@@ -334,11 +343,13 @@ func (ui *BrowserUI) layoutHomeSettings(gtx layout.Context) layout.Dimensions {
 					layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 						return layout.Flex{}.Layout(gtx,
-							layout.Rigid(material.Button(ui.theme, &panel.save, "保存").Layout),
+							layout.Rigid(func(gtx layout.Context) layout.Dimensions { return ui.layoutTextButton(gtx, &panel.save, "保存") }),
 							layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
-							layout.Rigid(material.Button(ui.theme, &panel.add, "新規入力").Layout),
+							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+								return ui.layoutTextButton(gtx, &panel.add, "新規入力")
+							}),
 							layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
-							layout.Rigid(material.Button(ui.theme, &panel.close, "完了").Layout),
+							layout.Rigid(func(gtx layout.Context) layout.Dimensions { return ui.layoutTextButton(gtx, &panel.close, "完了") }),
 						)
 					}),
 				}
@@ -358,10 +369,10 @@ func (ui *BrowserUI) layoutHomeSettings(gtx layout.Context) layout.Dimensions {
 							row := &panel.rows[index]
 							return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
 								layout.Flexed(1, material.Body1(ui.theme, shortcut.Title+" · "+shortcut.URL).Layout),
-								layout.Rigid(material.Button(ui.theme, &row.edit, "編集").Layout),
-								layout.Rigid(material.Button(ui.theme, &row.up, "↑").Layout),
-								layout.Rigid(material.Button(ui.theme, &row.down, "↓").Layout),
-								layout.Rigid(material.Button(ui.theme, &row.remove, "削除").Layout),
+								layout.Rigid(func(gtx layout.Context) layout.Dimensions { return ui.layoutTextButton(gtx, &row.edit, "編集") }),
+								layout.Rigid(func(gtx layout.Context) layout.Dimensions { return ui.layoutTextButton(gtx, &row.up, "↑") }),
+								layout.Rigid(func(gtx layout.Context) layout.Dimensions { return ui.layoutTextButton(gtx, &row.down, "↓") }),
+								layout.Rigid(func(gtx layout.Context) layout.Dimensions { return ui.layoutTextButton(gtx, &row.remove, "削除") }),
 							)
 						}),
 					)

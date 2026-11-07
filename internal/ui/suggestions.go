@@ -27,13 +27,13 @@ func (ui *BrowserUI) SetSuggestionSnapshot(snapshot omnibox.Snapshot) {
 		History:   append([]omnibox.Candidate(nil), snapshot.History...),
 		Bookmarks: append([]omnibox.Candidate(nil), snapshot.Bookmarks...),
 	}
-	if ui.suggestionPopup.open {
+	if ui.suggestionPopup.open && !ui.addressIMEComposing() {
 		ui.refreshSuggestions()
 	} else {
 		ui.suggestions.Cancel()
 	}
 	for _, state := range ui.homeTabs {
-		if state.visible && state.editor.Text() != "" {
+		if state.visible && state.editor.Text() != "" && !state.ime.composing {
 			ui.refreshHomeSuggestions(state)
 		}
 	}
@@ -44,14 +44,14 @@ func (ui *BrowserUI) SetSuggestionSnapshot(snapshot omnibox.Snapshot) {
 func (ui *BrowserUI) SetSuggestionProvider(fetch omnibox.RemoteFetcher, enabled bool) {
 	ui.suggestions.Cancel()
 	ui.suggestionFetcher, ui.remoteSuggestions = fetch, enabled
-	if ui.suggestionPopup.open {
+	if ui.suggestionPopup.open && !ui.addressIMEComposing() {
 		ui.refreshSuggestions()
 	}
 	for _, state := range ui.homeTabs {
 		if state.pipeline != nil {
 			state.pipeline.Cancel()
 		}
-		if state.visible && state.editor.Text() != "" {
+		if state.visible && state.editor.Text() != "" && !state.ime.composing {
 			ui.refreshHomeSuggestions(state)
 		}
 	}
@@ -221,7 +221,7 @@ func (ui *BrowserUI) handleSuggestionKeys(gtx layout.Context) {
 	ui.syncSuggestions()
 	names := []key.Name{key.NameDownArrow, key.NameUpArrow}
 	if ui.suggestionPopup.open {
-		names = append(names, key.NamePageUp, key.NamePageDown, key.NameHome, key.NameEnd, key.NameEscape, key.NameTab)
+		names = append(names, key.NamePageUp, key.NamePageDown, key.NameHome, key.NameEnd, key.NameEscape)
 	}
 	for _, name := range names {
 		for {
@@ -233,15 +233,11 @@ func (ui *BrowserUI) handleSuggestionKeys(gtx layout.Context) {
 			if !ok || e.State != key.Press {
 				continue
 			}
-			if name == key.NameEscape || name == key.NameTab {
+			if ui.addressIMEActive() {
+				continue
+			}
+			if name == key.NameEscape {
 				ui.closeSuggestionPopup()
-				if name == key.NameTab {
-					if e.Modifiers.Contain(key.ModShift) {
-						gtx.Execute(key.FocusCmd{Tag: &ui.devToolsButton})
-					} else {
-						gtx.Execute(key.FocusCmd{Tag: &ui.goButton})
-					}
-				}
 				continue
 			}
 			if !ui.suggestionPopup.open {
@@ -349,6 +345,7 @@ func (ui *BrowserUI) layoutSuggestions(gtx layout.Context, viewport image.Rectan
 	popup.list.Axis = layout.Vertical
 	layoutRegion(gtx, popup.bounds, func(gtx layout.Context) layout.Dimensions {
 		paint.Fill(gtx.Ops, color.NRGBA{R: 255, G: 255, B: 255, A: 255})
+		semantic.DescriptionOp(selectionSummary("検索候補", len(popup.candidates), popup.selected)).Add(gtx.Ops)
 		return material.List(ui.theme, &popup.list).Layout(gtx, len(popup.candidates), func(gtx layout.Context, index int) layout.Dimensions {
 			candidate := popup.candidates[index]
 			return popup.rows[index].Layout(gtx, func(gtx layout.Context) layout.Dimensions {
@@ -359,7 +356,8 @@ func (ui *BrowserUI) layoutSuggestions(gtx layout.Context, viewport image.Rectan
 					background = color.NRGBA{R: 219, G: 234, B: 254, A: 255}
 				}
 				paint.FillShape(gtx.Ops, background, clip.Rect{Max: gtx.Constraints.Min}.Op())
-				semantic.DescriptionOp(candidate.Source.Label() + ": " + candidate.Primary).Add(gtx.Ops)
+				semantic.ClassOp(semantic.Button).Add(gtx.Ops)
+				semantic.DescriptionOp(candidate.Source.Label() + ": " + candidate.Primary + "。" + candidateMetadata(candidate)).Add(gtx.Ops)
 				semantic.SelectedOp(index == popup.selected).Add(gtx.Ops)
 				return layout.Inset{Top: unit.Dp(6), Bottom: unit.Dp(6), Left: unit.Dp(12), Right: unit.Dp(12)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 					return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
@@ -369,7 +367,7 @@ func (ui *BrowserUI) layoutSuggestions(gtx layout.Context, viewport image.Rectan
 							return label.Layout(gtx)
 						}),
 						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-							label := material.Caption(ui.theme, candidate.Source.Label()+" · "+candidate.Secondary)
+							label := material.Caption(ui.theme, candidateMetadata(candidate))
 							label.MaxLines = 1
 							return label.Layout(gtx)
 						}),

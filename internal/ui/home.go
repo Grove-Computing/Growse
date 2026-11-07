@@ -55,6 +55,7 @@ type homeTabState struct {
 	browserPosition  int
 	needsRefresh     bool
 	restoreSelection int
+	ime              imeInputState
 }
 
 func newHomeTabState(visible bool) *homeTabState {
@@ -177,12 +178,23 @@ func (ui *BrowserUI) handleHomeActions(gtx layout.Context) {
 		}
 		switch event.(type) {
 		case widget.ChangeEvent:
+			if !state.ime.changed(state.editor) {
+				continue
+			}
 			state.selected = -1
 			state.restoreSelection = -1
 			ui.refreshHomeSuggestions(state)
 		case widget.SubmitEvent:
+			if state.ime.active(state.editor) {
+				continue
+			}
 			ui.submitHomeInput(state, omniboxCurrentTab)
 		}
+	}
+	if gtx.Focused(state.editor) && state.ime.committed(state.editor) {
+		state.selected = -1
+		state.restoreSelection = -1
+		ui.refreshHomeSuggestions(state)
 	}
 	for state.search.Clicked(gtx) {
 		ui.submitHomeInput(state, omniboxCurrentTab)
@@ -257,6 +269,9 @@ func (ui *BrowserUI) handleHomeSuggestionKeys(gtx layout.Context, state *homeTab
 				break
 			}
 			if pressed, ok := event.(key.Event); ok && pressed.State == key.Press {
+				if state.ime.active(state.editor) {
+					continue
+				}
 				disposition := omniboxNewForegroundTab
 				if modifiers == key.ModAlt {
 					disposition = omniboxNewBackgroundTab
@@ -273,6 +288,9 @@ func (ui *BrowserUI) handleHomeSuggestionKeys(gtx layout.Context, state *homeTab
 			}
 			pressed, ok := event.(key.Event)
 			if !ok || pressed.State != key.Press {
+				continue
+			}
+			if state.ime.active(state.editor) {
 				continue
 			}
 			if name == key.NameEscape {
@@ -486,9 +504,7 @@ func (ui *BrowserUI) layoutHome(gtx layout.Context) layout.Dimensions {
 									}),
 									layout.Rigid(layout.Spacer{Height: unit.Dp(12)}.Layout),
 									layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-										button := material.Button(ui.theme, &state.search, ui.homeSearchLabel())
-										button.CornerRadius = unit.Dp(12)
-										return button.Layout(gtx)
+										return ui.layoutTextButton(gtx, &state.search, ui.homeSearchLabel())
 									}),
 									layout.Rigid(layout.Spacer{Height: unit.Dp(18)}.Layout),
 									layout.Rigid(func(gtx layout.Context) layout.Dimensions {
@@ -498,6 +514,9 @@ func (ui *BrowserUI) layoutHome(gtx layout.Context) layout.Dimensions {
 									layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 										button := material.Button(ui.theme, &ui.homeCustomize, "ショートカットを編集")
 										button.Background = color.NRGBA{R: 71, G: 85, B: 105, A: 255}
+										if gtx.Focused(&ui.homeCustomize) {
+											button.Background = color.NRGBA{R: 30, G: 64, B: 175, A: 255}
+										}
 										button.CornerRadius = unit.Dp(10)
 										return button.Layout(gtx)
 									}),
@@ -655,6 +674,7 @@ func (ui *BrowserUI) layoutHomeCandidatesWithHeight(gtx layout.Context, state *h
 	height := min(gtx.Dp(unit.Dp(48))*len(state.candidates), gtx.Dp(maxHeight))
 	gtx.Constraints.Min.Y = height
 	gtx.Constraints.Max.Y = height
+	semantic.DescriptionOp(selectionSummary("ホーム検索候補", len(state.candidates), state.selected)).Add(gtx.Ops)
 	return material.List(ui.theme, &state.list).Layout(gtx, len(state.candidates), func(gtx layout.Context, index int) layout.Dimensions {
 		candidate := state.candidates[index]
 		return state.rows[index].Layout(gtx, func(gtx layout.Context) layout.Dimensions {
@@ -662,7 +682,7 @@ func (ui *BrowserUI) layoutHomeCandidatesWithHeight(gtx layout.Context, state *h
 			gtx.Constraints.Min.Y = rowHeight
 			gtx.Constraints.Max.Y = rowHeight
 			semantic.ClassOp(semantic.Button).Add(gtx.Ops)
-			semantic.DescriptionOp(candidate.Source.Label() + ": " + candidate.Primary).Add(gtx.Ops)
+			semantic.DescriptionOp(candidate.Source.Label() + ": " + candidate.Primary + "。" + candidateMetadata(candidate)).Add(gtx.Ops)
 			semantic.SelectedOp(index == state.selected).Add(gtx.Ops)
 			gtx.Constraints.Min.X = gtx.Constraints.Max.X
 			background := color.NRGBA{R: 248, G: 250, B: 252, A: 255}
@@ -672,8 +692,16 @@ func (ui *BrowserUI) layoutHomeCandidatesWithHeight(gtx layout.Context, state *h
 			paint.FillShape(gtx.Ops, background, clip.Rect{Max: gtx.Constraints.Min}.Op())
 			return layout.Inset{Top: unit.Dp(6), Right: unit.Dp(10), Bottom: unit.Dp(6), Left: unit.Dp(10)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 				return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-					layout.Rigid(material.Body2(ui.theme, candidate.Primary).Layout),
-					layout.Rigid(material.Caption(ui.theme, candidate.Source.Label()+" · "+candidate.Secondary).Layout),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						label := material.Body2(ui.theme, candidate.Primary)
+						label.MaxLines = 1
+						return label.Layout(gtx)
+					}),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						label := material.Caption(ui.theme, candidateMetadata(candidate))
+						label.MaxLines = 1
+						return label.Layout(gtx)
+					}),
 				)
 			})
 		})
