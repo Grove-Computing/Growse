@@ -80,6 +80,7 @@ example_resources=(
   modern-web-compat
   multi-tab-workspace
   persistent-app
+  search-showcase
   todo
 )
 mkdir -p "${package_dir}/examples"

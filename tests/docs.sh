@@ -5,7 +5,7 @@ require() {
     local file=$1
     local value=$2
     if ! grep -Fq -- "$value" "$file"; then
-        echo "${file}にv0.20.0文書の必須記述がありません: ${value}" >&2
+        echo "${file}にv0.21.0文書の必須記述がありません: ${value}" >&2
         exit 1
     fi
 }
@@ -22,8 +22,13 @@ require README.md "examples/modern-web-compat"
 require README.md "examples/browser-grade-compat"
 require README.md "examples/css-layout-2026"
 require README.md "examples/visual-fidelity"
-require README.md "GROWSE_VERSION=v0.20.0"
-require README.md "growse:v0.20.0"
+require README.md "examples/search-showcase"
+require README.md "go run ./examples/search-showcase"
+require examples/search-showcase/README.md "desktop evidence"
+require examples/search-showcase/README.md "mutated needle"
+require examples/search-showcase/README.md "oversize"
+require README.md "GROWSE_VERSION=v0.21.0"
+require README.md "growse:v0.21.0"
 require README.md "Desktop Entry"
 require README.md "GROWSE_DATA_HOME"
 require README.md "GROWSE_APPLICATIONS_DIR"
@@ -50,6 +55,7 @@ require README.md "v0.17.0リリース定義"
 require README.md "v0.18.0リリース定義"
 require README.md "v0.19.0リリース定義"
 require README.md "v0.20.0リリース定義"
+require README.md "v0.21.0リリース定義"
 require docs/v0.20.0.md "Real-World CSS Compatibility"
 require docs/v0.20.0.md "P0 = 0、P1 = 0"
 require docs/v0.20.0.md '`https://1mb.club/`'
@@ -67,8 +73,18 @@ require README.md "Runtime / Web API対応表"
 require README.md "Runtime worker / Web Platform設計"
 require README.md "Modern Web Compatibility"
 require README.md "明示選択"
-require SECURITY.md "| 0.20.x | Yes |"
-require SECURITY.md "| 0.19.x | No |"
+require SECURITY.md "| 0.21.x | Yes |"
+require SECURITY.md "| 0.20.x | No |"
+require README.md "Search対応表"
+require docs/search-support.md "Ctrl+Shift+A"
+require docs/search-support.md "remote suggestionは既定で無効"
+require docs/search-support.md "home-settings.json"
+require docs/search-support.md "GOTOOLCHAIN=go1.26.10 make v021-search-regression-test"
+require docs/sveltekit-3-verification.md "@sveltejs/kit"
+require docs/sveltekit-3-verification.md "byte-for-byte一致"
+require docs/sveltekit-3-verification.md "TestSvelteKitSSRFixtureHydratesAndEnhancesForm"
+require SECURITY.md "Search Privacy and Profile Boundary"
+require SECURITY.md "開いているTab、History、Bookmark"
 require SECURITY.md "brokered host I/O"
 require SECURITY.md "未知"
 require SECURITY.md "Service Worker registrationとCache Storage"
@@ -191,7 +207,7 @@ require examples/css-layout-2026/index.html "CSS Layout 2026"
 require examples/css-layout-2026/app.mjs "column-toggle"
 require Makefile "v018-resource-loading-test"
 require .github/workflows/ci.yml "Run v0.18.0 browser-grade resource loading tests"
-require .github/workflows/ci.yml "Docker package (v0.20.0)"
+require .github/workflows/ci.yml "Docker package (v0.21.0)"
 require .github/workflows/ci.yml "Run CSS Layout 2026 smoke"
 require .github/workflows/ci.yml "Run v0.20.0 visual evidence tests"
 require tests/v018-resource-loading.sh "NextJSDelayedResourcesKeepSSRInteractiveThroughIncrementalCommits"
@@ -204,7 +220,7 @@ if grep -Eq "Growse v0\.[4-9]\.0の実装を基準|Growse v0\.1[0-9]\.0の実装
     exit 1
 fi
 
-if grep -Eq 'GROWSE_VERSION=v0\.1[3-9]\.0|growse:v0\.1[3-9]\.0' README.md; then
+if grep -Eq 'GROWSE_VERSION=v0\.(1[3-9]|20)\.0|growse:v0\.(1[3-9]|20)\.0' README.md; then
     echo "README.mdに古い現行install例が残っています" >&2
     exit 1
 fi
@@ -221,4 +237,4 @@ if grep -Eq 'Growse v0\.1[3-8]\.0は' docs/devtools.md; then
     exit 1
 fi
 
-echo "v0.20.0文書同期検証成功: README, SECURITY.md, CSS対応表, WPT, Visual Evidence, Visual Fidelity Showcase"
+echo "v0.21.0文書同期検証成功: Search, Privacy, README, SECURITY.md, legacy compatibility documents"

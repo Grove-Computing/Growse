@@ -68,6 +68,10 @@ type isolatedDOMEventRuntime interface {
 	DispatchDOMEvent(events.Event) bool
 }
 
+type pendingDOMMutationRuntime interface {
+	CommitPendingDOMMutation() bool
+}
+
 type mediaEnvironmentRuntime interface {
 	UpdateMediaEnvironment(runtimemodel.MediaEnvironment)
 }
@@ -98,6 +102,8 @@ type Browser struct {
 	fetchLimiter     *fetchapi.Limiter
 	devToolsSession  *devtools.SessionStore
 	serviceWorkers   *serviceworker.Manager
+	onNavigation     func(NavigationRecord)
+	sharedImages     *sharedDecodedImageCache
 }
 
 var nextStorageSourceID atomic.Uint64
@@ -107,6 +113,25 @@ var (
 	ErrSubmissionPrevented = errors.New("form submission was prevented")
 	ErrInvalidEngine       = errors.New("invalid runtime engine")
 )
+
+// NavigationRecord reports one successfully committed top-level document.
+// Reloads, session-history traversal, same-document changes, and redirect
+// intermediates are never reported.
+type NavigationRecord struct {
+	URL   string
+	Title string
+	Typed bool
+}
+
+type navigationContextKey uint8
+
+const typedNavigationKey navigationContextKey = iota
+
+// WithTypedNavigation marks a direct address-bar URL navigation. The marker is
+// consumed only by the profile-history observer and is never exposed to pages.
+func WithTypedNavigation(ctx context.Context) context.Context {
+	return context.WithValue(ctx, typedNavigationKey, true)
+}
 
 // New creates a browser with no page loaded.
 func New(client ResourceLoader) *Browser {
@@ -133,7 +158,7 @@ func NewWithRuntimeFactoryAndStorageAndServiceWorkers(client ResourceLoader, fac
 	}
 	return &Browser{
 		client: client, runtimeFactory: factory, engineFactory: runtimemodel.ForGo(factory), engine: runtimemodel.EngineGo,
-		history: newHistory(), clock: animationmodel.SystemClock{}, storage: manager, active: true,
+		history: newHistory(), clock: animationmodel.SystemClock{}, storage: manager, active: true, sharedImages: newSharedDecodedImageCache(),
 		storageSourceID: nextStorageSourceID.Add(1), devToolsSession: devtools.NewSessionStore(),
 		serviceWorkers: serviceWorkers,
 	}
@@ -175,6 +200,16 @@ func (b *Browser) SetDevToolsSession(session *devtools.SessionStore) {
 	b.mu.Unlock()
 }
 
+// SetNavigationObserver registers the profile-history sink for committed pages.
+func (b *Browser) SetNavigationObserver(observer func(NavigationRecord)) {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	b.onNavigation = observer
+	b.mu.Unlock()
+}
+
 func (b *Browser) newDevToolsPageStore() *devtools.PageStore {
 	b.mu.RLock()
 	session := b.devToolsSession
@@ -203,6 +238,26 @@ func (b *Browser) SetTabActive(active bool) {
 }
 
 // SetFetchLimiter sets the Browser Session shared WebGo Fetch limit.
+
+func (b *Browser) newImageResourceCache() *imageResourceCache {
+	b.mu.Lock()
+	if b.sharedImages == nil {
+		b.sharedImages = newSharedDecodedImageCache()
+	}
+	shared := b.sharedImages
+	b.mu.Unlock()
+	return newImageResourceCacheWithShared(shared)
+}
+
+func (b *Browser) setSharedImageCache(shared *sharedDecodedImageCache) {
+	if b == nil || shared == nil {
+		return
+	}
+	b.mu.Lock()
+	b.sharedImages = shared
+	b.mu.Unlock()
+}
+
 func (b *Browser) SetFetchLimiter(limiter *fetchapi.Limiter) {
 	if b == nil {
 		return
@@ -234,11 +289,26 @@ func (b *Browser) SetOnMutation(callback func()) {
 // navigation.
 func (b *Browser) Page() *Page {
 	b.mu.RLock()
-	page := b.page
+	activeRuntime := b.activeRuntime
 	b.mu.RUnlock()
-	if page != nil && page.commitPendingImageLoad() {
-		dispatchImageResourceEvents(b, page)
-		// The asynchronous loader invalidates when it stages results. If that
+	if runtime, ok := activeRuntime.(pendingDOMMutationRuntime); ok {
+		runtime.CommitPendingDOMMutation()
+	}
+	page := b.currentPage()
+	committedFonts := page != nil && page.commitPendingWebFonts()
+	committedImages := page != nil && page.commitPendingImageLoad()
+	if page != nil && (committedImages || page.hasPendingImageEvents()) {
+		if _, isolated := activeRuntime.(pendingDOMMutationRuntime); isolated {
+			// Isolated resource handlers execute as page tasks and can take longer
+			// than a frame. Their DOM changes are staged until the next Page call,
+			// so dispatch can safely continue outside the UI frame.
+			go dispatchImageResourceEvents(b, page)
+		} else {
+			// In-process runtimes mutate the host DOM directly and must remain on
+			// the caller to avoid racing layout and paint.
+			dispatchImageResourceEvents(b, page)
+		}
+		// The asynchronous loader invalidates when it publishes results. If that
 		// happens while a Gio frame is already being assembled, the wake-up can
 		// be coalesced into that frame before Page publishes the staged maps.
 		// Request one more frame after publication so decoded images never wait
@@ -250,6 +320,27 @@ func (b *Browser) Page() *Page {
 			onMutation()
 		}
 	}
+	if committedFonts {
+		b.mu.RLock()
+		onMutation := b.onMutation
+		b.mu.RUnlock()
+		if onMutation != nil {
+			onMutation()
+		}
+	}
+	return page
+}
+
+// currentPage returns the active page without publishing staged resources or
+// invoking mutation callbacks. Session snapshots use it while holding their
+// own lock so a resource completion cannot re-enter the Session.
+func (b *Browser) currentPage() *Page {
+	if b == nil {
+		return nil
+	}
+	b.mu.RLock()
+	page := b.page
+	b.mu.RUnlock()
 	return page
 }
 
@@ -472,6 +563,37 @@ func (b *Browser) DispatchClick(nodeID dom.NodeID, x, y float32) bool {
 	return clickHandled || submitHandled || labelHandled
 }
 
+// ActivateSubmitter dispatches a button click and performs its default form
+// submission when script does not cancel the click.
+func (b *Browser) ActivateSubmitter(ctx context.Context, nodeID dom.NodeID, x, y float32) (*Page, error) {
+	b.mu.RLock()
+	page := b.page
+	if page == nil || page.Document == nil {
+		b.mu.RUnlock()
+		return nil, errors.New("no active page for form submission")
+	}
+	node, ok := page.Document.NodeByID(nodeID)
+	if !ok || !page.Document.IsConnected(node) || forms.Disabled(node) || !isSubmitButton(node) {
+		b.mu.RUnlock()
+		return nil, errors.New("submitter was not found")
+	}
+	form := forms.FormOwner(page.Document, node)
+	if form == nil {
+		b.mu.RUnlock()
+		return nil, errors.New("form was not found")
+	}
+	formID := form.ID
+	b.mu.RUnlock()
+
+	clickEvent := events.Cancelable(events.Click, nodeID)
+	clickEvent.X, clickEvent.Y = x, y
+	b.dispatchPageEvent(page, clickEvent)
+	if clickEvent.DefaultPrevented() {
+		return nil, ErrSubmissionPrevented
+	}
+	return b.Submit(ctx, formID, nodeID)
+}
+
 // SetInputValue はユーザー入力をアクティブページの編集可能なText Controlへ反映する。
 func (b *Browser) SetInputValue(nodeID dom.NodeID, value string) bool {
 	b.mu.Lock()
@@ -488,16 +610,15 @@ func (b *Browser) SetInputValue(nodeID dom.NodeID, value string) bool {
 	}
 	changed := forms.SetCurrentValue(node, value)
 	if changed {
-		recomputePageStyles(page, b.currentTime())
 		page.RecordDOMMutation(nodeID)
 	}
 	dispatcher := page.Events
 	b.mu.Unlock()
-	if changed && onMutation != nil {
-		onMutation()
-	}
 	if changed && dispatcher != nil {
 		b.dispatchPageEvent(page, events.Event{Type: events.Input, Target: nodeID, Value: value})
+	}
+	if changed && onMutation != nil {
+		onMutation()
 	}
 	return changed
 }
@@ -800,33 +921,47 @@ func (b *Browser) UpdateViewport(width, height float32) bool {
 
 func (b *Browser) loadPageImagesAsync(loadContext context.Context, generation uint64, page *Page, imageLoader ResourceLoader, baseURL *url.URL, document *dom.Document, width float32, policy map[dom.NodeID]bool, budget *imageDecodeBudget, imageCache *imageResourceCache, backgroundResources []string, backgroundPreloads map[string]resourcePriority, loadBackgrounds bool, onMutation func()) {
 	go func() {
-		var resources map[dom.NodeID]layoutengine.ImageResource
-		var images, backgrounds map[string]image.Image
-		var failures, backgroundFailures []string
+		notify := func() {
+			b.mu.RLock()
+			active := b.page == page && page.Engine == runtimemodel.EngineJavaScript
+			b.mu.RUnlock()
+			if active && loadContext.Err() == nil && onMutation != nil {
+				onMutation()
+			}
+		}
 		var group sync.WaitGroup
 		group.Add(1)
 		go func() {
 			defer group.Done()
-			resources, images, failures = loadReplacedImagesWithCache(loadContext, imageLoader, baseURL, document, width, 1, policy, budget, imageCache)
+			_, _, _ = loadReplacedImagesWithCallback(loadContext, imageLoader, baseURL, document, width, 1, policy, budget, imageCache, func(result imageLoadResult) {
+				if page.stageImageResourceLoad(generation, result.nodeID, result.resource, result.decoded, result.failure) {
+					notify()
+				}
+			})
 		}()
 		if loadBackgrounds {
 			group.Add(1)
 			go func() {
 				defer group.Done()
-				backgrounds, backgroundFailures = loadBackgroundImageResourcesWithCache(loadContext, imageLoader, backgroundResources, budget, imageCache, backgroundPreloads)
+				_, _ = loadBackgroundImageResourcesWithCallback(loadContext, imageLoader, backgroundResources, budget, imageCache, backgroundPreloads, func(result backgroundLoadResult) {
+					if page.stageBackgroundImageLoad(generation, result.resource, result.decoded, result.failure) {
+						notify()
+					}
+				})
 			}()
 		}
-		group.Wait()
 		inlineResources, inlineImages, inlineFailures := loadInlineSVGImagesWithBudget(document, budget)
-		mergeImageResources(resources, images, inlineResources, inlineImages)
-		failures = append(failures, inlineFailures...)
-		b.mu.RLock()
-		active := b.page == page && page.Engine == runtimemodel.EngineJavaScript
-		b.mu.RUnlock()
-		staged := active && loadContext.Err() == nil && page.stageImageLoad(generation, resources, images, failures, backgrounds, backgroundFailures, loadBackgrounds)
-		if staged && onMutation != nil {
-			onMutation()
+		for nodeID, resource := range inlineResources {
+			failure := ""
+			if resource.Error != "" {
+				failure = resource.Error
+			}
+			if page.stageImageResourceLoad(generation, nodeID, resource, inlineImages[resource.URL], failure) {
+				notify()
+			}
 		}
+		_ = inlineFailures
+		group.Wait()
 	}()
 }
 
@@ -1144,6 +1279,8 @@ func (b *Browser) Submit(ctx context.Context, formID, submitterID dom.NodeID) (*
 		b.mu.RUnlock()
 		return nil, errors.New("invalid form submission configuration")
 	}
+	entries := forms.CollectEntries(page.Document, form, submitter)
+	baseURL := cloneURL(pageBaseURL(page))
 	firstInvalid, invalid := forms.FirstInvalidControl(page.Document, form)
 	dispatcher := page.Events
 	b.mu.RUnlock()
@@ -1169,12 +1306,72 @@ func (b *Browser) Submit(ctx context.Context, formID, submitterID dom.NodeID) (*
 	}
 	switch config.Method {
 	case "get":
-		return b.SubmitGET(ctx, formID, submitterID)
+		target, err := resolveFormAction(baseURL, config.Action)
+		if err != nil {
+			return nil, err
+		}
+		encoded, err := forms.EncodeURLEncodedLimited(entries)
+		if err != nil {
+			return nil, err
+		}
+		target.RawQuery = encoded
+		target.Fragment = ""
+		return b.loadForm(ctx, target, historyPush, -1)
 	case "post":
-		return b.SubmitPOST(ctx, formID, submitterID)
+		return b.submitPOSTResolved(ctx, page, baseURL, config, entries)
 	default:
 		return nil, fmt.Errorf("unsupported form method %q", config.Method)
 	}
+}
+
+func (b *Browser) submitPOSTResolved(ctx context.Context, page *Page, baseURL *url.URL, config forms.SubmissionConfig, entries []forms.Entry) (*Page, error) {
+	if config.Enctype != forms.URLEncoded || config.Target != "_self" {
+		return nil, errors.New("unsupported POST form configuration")
+	}
+	target, err := resolveFormAction(baseURL, config.Action)
+	if err != nil {
+		return nil, err
+	}
+	target.Fragment = ""
+	encoded, err := forms.EncodeURLEncodedLimited(entries)
+	if err != nil {
+		return nil, err
+	}
+
+	b.mu.Lock()
+	if b.page != page {
+		b.mu.Unlock()
+		return nil, errors.New("form page is no longer active")
+	}
+	client := b.client
+	_, supportsRequests := client.(requestLoader)
+	if !supportsRequests {
+		b.mu.Unlock()
+		return nil, errors.New("network client does not support POST")
+	}
+	b.navigationID++
+	page.cancelImageLoads()
+	navigationID := b.navigationID
+	engineFactory := b.engineFactory
+	engine := runtimemodel.NormalizeEngine(b.engine)
+	storageManager := b.storage
+	serviceWorkers := b.serviceWorkers
+	onMutation := b.onMutation
+	reducedMotion := b.reducedMotion
+	b.mu.Unlock()
+
+	pageStore := b.newDevToolsPageStore()
+	intercepted := serviceWorkerLoader{ResourceLoader: client, manager: serviceWorkers}
+	response, err := intercepted.Do(ctx, &network.Request{
+		Method: http.MethodPost, URL: target, Body: []byte(encoded),
+		Header: http.Header{"Content-Type": []string{forms.URLEncoded}}, SiteURL: cloneURL(page.URL),
+		Kind: network.RequestForm, Observer: pageStore.ObserveNetwork,
+	})
+	if err != nil {
+		pageStore.Close()
+		return nil, fmt.Errorf("submit form to %s: %w", network.RedactedURL(target), err)
+	}
+	return b.finishLoad(ctx, target, response, historyPush, -1, navigationID, intercepted, intercepted, engineFactory, engine, storageManager, onMutation, reducedMotion, pageStore)
 }
 
 func resolveFormAction(baseURL *url.URL, action string) (*url.URL, error) {
@@ -1360,15 +1557,57 @@ func (b *Browser) loadWithClient(ctx context.Context, pageURL *url.URL, commit h
 
 	var response *network.Response
 	var err error
+	var imageLoad *imageNavigation
+	var preloader *streamingPreloader
+	responseHeaders := func(head network.ResponseHead) {
+		if imageLoad != nil {
+			return
+		}
+		loaded, commitErr := b.commitImageResponseHead(navigationContext, head, commit, historyIndex, navigationID, engine, reducedMotion, pageStore)
+		if commitErr == nil {
+			imageLoad = loaded
+		}
+		mediaType, _, parseErr := mime.ParseMediaType(head.ContentType)
+		if parseErr == nil && (mediaType == "text/html" || mediaType == "application/xhtml+xml") && preloader == nil {
+			if loader, ok := resourceClient.(requestLoader); ok {
+				preloader = newStreamingPreloader(navigationContext, loader, head.URL, string(engine), pageStore.ObserveNetwork)
+			}
+		}
+	}
+	bodyChunk := func(chunk []byte) {
+		if preloader != nil {
+			preloader.write(chunk)
+		}
+	}
 	if loader, ok := documentClient.(requestLoader); ok {
-		response, err = loader.Do(navigationContext, &network.Request{Method: http.MethodGet, URL: pageURL, Kind: requestKind, Observer: pageStore.ObserveNetwork})
+		response, err = loader.Do(navigationContext, &network.Request{Method: http.MethodGet, URL: pageURL, Kind: requestKind, Observer: pageStore.ObserveNetwork, OnResponseHeaders: responseHeaders, OnBodyChunk: bodyChunk})
 	} else {
 		response, err = documentClient.Get(navigationContext, pageURL)
 	}
+	if preloader != nil {
+		preloader.finishInput()
+		resourceClient = preloader
+	}
 	if err != nil {
 		cancel()
+		if page := finishImageNavigationError(imageLoad, err, onMutation); page != nil {
+			return page, nil
+		}
 		pageStore.Close()
 		return nil, fmt.Errorf("navigate to %s: %w", network.RedactedURL(pageURL), err)
+	}
+	if _, imageResponse := imageMediaType(response.ContentType); imageResponse {
+		if imageLoad == nil {
+			head := network.ResponseHead{URL: response.URL, StatusCode: response.StatusCode, Header: response.Header, ContentType: response.ContentType, Redirected: response.Redirected}
+			imageLoad, err = b.commitImageResponseHead(navigationContext, head, commit, historyIndex, navigationID, engine, reducedMotion, pageStore)
+			if err != nil {
+				cancel()
+				return nil, err
+			}
+		}
+		page, finishErr := b.finishImageNavigation(imageLoad, response, navigationID, onMutation)
+		cancel()
+		return page, finishErr
 	}
 	return b.finishLoad(navigationContext, pageURL, response, commit, historyIndex, navigationID, resourceClient, runtimeClient, engineFactory, engine, storageManager, onMutation, reducedMotion, pageStore)
 }
@@ -1474,7 +1713,7 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	}
 	computedStyles, styleErrors := computeStableStylesWithDiagnostics(document, stylesheet, style.InteractionState{}, 1280, 720, reducedMotion, engine == runtimemodel.EngineJavaScript)
 	imageBudget := newImageDecodeBudget()
-	imageCache := newImageResourceCache()
+	imageCache := b.newImageResourceCache()
 	backgroundResources := backgroundImageResources(computedStyles)
 	backgroundPreloads := imagePreloadPriorities(document, baseURL)
 	backgroundImages := make(map[string]image.Image)
@@ -1494,7 +1733,6 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 		imageDocument = snapshotImageDocument(document)
 		replacedImages = make(map[dom.NodeID]layoutengine.ImageResource)
 		decodedImages = make(map[string]image.Image)
-		fonts, fontErrors = loadWebFonts(ctx, fontResources, response.URL, stylesheet)
 	}
 	var scriptErrors []string
 	var importMap map[string]string
@@ -1588,9 +1826,16 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	}
 	dispatchPopState := false
 	popState := ""
+	var navigationRecord *NavigationRecord
+	var navigationObserver func(NavigationRecord)
 	switch commit {
 	case historyPush:
 		b.history.pushEntry(&historyEntry{URL: page.URL, PageID: page.HistoryID})
+		if b.onNavigation != nil && page.URL != nil {
+			record := NavigationRecord{URL: page.URL.String(), Title: document.Title(), Typed: ctx.Value(typedNavigationKey) == true}
+			navigationRecord = &record
+			navigationObserver = b.onNavigation
+		}
 	case historyTraverse:
 		previousEntry := cloneHistoryEntry(b.history.entries[historyIndex])
 		b.history.index = historyIndex
@@ -1623,9 +1868,29 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	childRuntimes := frameRuntimes(page)
 	b.mu.Unlock()
 	committed = true
+	if navigationObserver != nil && navigationRecord != nil {
+		navigationObserver(*navigationRecord)
+	}
 	if engine == runtimemodel.EngineJavaScript && (documentHasViewportImageWork(imageDocument) || len(backgroundResources) != 0) {
 		loadContext, generation := page.beginImageLoad(context.Background())
 		b.loadPageImagesAsync(loadContext, generation, page, imageResources, baseURL, imageDocument, 1280, imagePolicy, imageBudget, imageCache, backgroundResources, backgroundPreloads, true, onMutation)
+	}
+	if engine == runtimemodel.EngineJavaScript && len(stylesheet.FontFaces) != 0 {
+		generation := page.BeginWebFontLoad()
+		go func() {
+			_, _ = loadWebFontsWithCallback(ctx, fontResources, response.URL, stylesheet, func(resource FontResource) {
+				b.mu.RLock()
+				active := b.page == page && navigationID == b.navigationID
+				b.mu.RUnlock()
+				if !active || ctx.Err() != nil {
+					return
+				}
+				committed := page.stageWebFontResult(generation, resource)
+				if committed && onMutation != nil {
+					onMutation()
+				}
+			})
+		}()
 	}
 	for _, childRuntime := range childRuntimes {
 		if runtime, ok := childRuntime.(backgroundRuntime); ok {
@@ -1694,7 +1959,6 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 	background = !b.active
 	childRuntimes = frameRuntimes(page)
 	b.mu.Unlock()
-	close(navigationReady)
 	if runtime, ok := pageRuntime.(backgroundRuntime); ok {
 		runtime.SetBackground(background)
 	}
@@ -1712,6 +1976,9 @@ func (b *Browser) finishLoad(ctx context.Context, pageURL *url.URL, response *ne
 			dispatcher.DispatchPopState(popState)
 		}
 	}
+	// Runtime-requested navigation can tear down this Page. Keep it blocked until
+	// all lifecycle events for the committed Page have finished reading Frames.
+	close(navigationReady)
 	return page, nil
 }
 

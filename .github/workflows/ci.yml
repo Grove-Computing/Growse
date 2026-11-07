@@ -14,7 +14,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  GO_VERSION: 1.26.6
+  GO_VERSION: 1.26.10
   STATICCHECK_VERSION: "2026.1"
   GOVULNCHECK_VERSION: v1.6.0
   ACTIONLINT_VERSION: v1.7.12
@@ -63,7 +63,7 @@ jobs:
       - name: Check module files
         run: go mod tidy -diff
 
-      - name: Test v0.10.0 installer
+      - name: Test v0.21.0 installer
         run: |
           bash tests/install.sh
           bash tests/install-platforms.sh
@@ -129,9 +129,12 @@ jobs:
           GROWSE_REAL_SITE_ARTIFACT_DIR: ${{ runner.temp }}/growse-visual/real-site
         run: bash tests/v020-real-site-visual.sh
 
+      - name: Run v0.21.0 search regression tests
+        run: bash tests/v021-search-regression.sh
+
       - name: Upload v0.20.0 visual evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: v020-visual-evidence
           path: ${{ runner.temp }}/growse-visual
@@ -246,7 +249,7 @@ jobs:
           CGO_ENABLED: ${{ matrix.cgo_enabled }}
           GOARCH: ${{ matrix.goarch }}
           GOOS: ${{ matrix.goos }}
-        run: scripts/package-gui.sh dist/package v0.20.0 "$GITHUB_RUN_NUMBER"
+        run: scripts/package-gui.sh dist/package v0.21.0 "$GITHUB_RUN_NUMBER"
 
       - name: Verify GUI package
         shell: bash
@@ -274,7 +277,7 @@ jobs:
           esac
 
   docker-package:
-    name: Docker package (v0.20.0)
+    name: Docker package (v0.21.0)
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -284,38 +287,38 @@ jobs:
           persist-credentials: false
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
-      - name: Build v0.20.0 Docker image
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+      - name: Build v0.21.0 Docker image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           platforms: linux/amd64
           load: true
           push: false
-          tags: growse:v0.20.0
+          tags: growse:v0.21.0
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
       - name: Verify unused Pebble runtime is absent
-        run: docker run --rm --user root --entrypoint sh growse:v0.20.0 -c 'test ! -e /usr/bin/pebble'
+        run: docker run --rm --user root --entrypoint sh growse:v0.21.0 -c 'test ! -e /usr/bin/pebble'
 
       - name: Run sandbox Web Platform smoke
-        run: docker run --rm --entrypoint growse-smoke growse:v0.20.0 /usr/local/share/growse/examples/external-web-platform
+        run: docker run --rm --entrypoint growse-smoke growse:v0.21.0 /usr/local/share/growse/examples/external-web-platform
 
       - name: Run Modern Web Compatibility smoke
-        run: docker run --rm --entrypoint growse-smoke growse:v0.20.0 /usr/local/share/growse/examples/modern-web-compat
+        run: docker run --rm --entrypoint growse-smoke growse:v0.21.0 /usr/local/share/growse/examples/modern-web-compat
 
       - name: Run Browser-grade Compatibility smoke
-        run: docker run --rm --entrypoint growse-smoke growse:v0.20.0 /usr/local/share/growse/examples/browser-grade-compat
+        run: docker run --rm --entrypoint growse-smoke growse:v0.21.0 /usr/local/share/growse/examples/browser-grade-compat
 
       - name: Run CSS Layout 2026 smoke
-        run: docker run --rm --entrypoint growse-smoke growse:v0.20.0 /usr/local/share/growse/examples/css-layout-2026
+        run: docker run --rm --entrypoint growse-smoke growse:v0.21.0 /usr/local/share/growse/examples/css-layout-2026
 
       - name: Scan Docker image
-        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
+        uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
         with:
-          image: growse:v0.20.0
+          image: growse:v0.21.0
           fail-build: true
           severity-cutoff: high
           output-format: table

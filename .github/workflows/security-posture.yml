@@ -25,15 +25,15 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.26.6"
+          go-version: "1.26.10"
       - run: >-
           go run github.com/securego/gosec/v2/cmd/gosec@v2.28.0
           -fmt sarif -out gosec.sarif
           ./internal/animation ./internal/browser ./internal/css ./internal/dom
           ./internal/events ./internal/forms ./internal/html ./internal/layout
-          ./internal/network ./internal/paint ./internal/securityscan ./internal/storage
+          ./internal/network ./internal/paint ./internal/searchdata ./internal/searchprovider ./internal/securityscan ./internal/storage
           ./internal/style ./internal/supplychain ./internal/updater ./internal/webapi/...
-      - uses: github/codeql-action/upload-sarif@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8
+      - uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           sarif_file: gosec.sarif
 
@@ -63,7 +63,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.26.6"
+          go-version: "1.26.10"
       - name: Fuzz parsers
         run: |
           go test -run='^$' -fuzz=FuzzParse -fuzztime=30s ./internal/html
@@ -71,7 +71,7 @@ jobs:
 
   scorecard:
     name: OpenSSF Scorecard
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -79,11 +79,11 @@ jobs:
       security-events: write
       id-token: write
     steps:
-      - uses: ossf/scorecard-action@2d1146689b8cda280b9bc96326124645441f03bc # v2.4.4
+      - uses: ossf/scorecard-action@fa7117db83c52d787ae5a89f350999701505d78e # v2.5.0
         with:
           results_file: scorecard.sarif
           results_format: sarif
           publish_results: true
-      - uses: github/codeql-action/upload-sarif@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8
+      - uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           sarif_file: scorecard.sarif

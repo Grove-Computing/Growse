@@ -2,6 +2,7 @@
 set -euo pipefail
 
 workflow=.github/workflows/unicode-security.yml
+security_workflow=.github/workflows/security-posture.yml
 release_workflow=.github/workflows/release.yml
 policy=.security/security-policy.json
 documentation=docs/developer-security.md
@@ -36,6 +37,8 @@ if grep -Eq 'pull_request_target:|secrets\.|(contents|actions|checks|pull-reques
     echo "trusted scanner workflowはSecretや書き込み権限を使用できません" >&2
     exit 1
 fi
+
+require_file_value "$security_workflow" "github.event_name != 'pull_request' && github.ref == 'refs/heads/main'"
 
 for value in \
     "Revalidate release source" \

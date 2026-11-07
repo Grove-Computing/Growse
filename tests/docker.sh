@@ -44,9 +44,9 @@ fi
 
 workflow=.github/workflows/release.yml
 require_file_value "$workflow" "needs: build"
-require_file_value "$workflow" "docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e"
-require_file_value "$workflow" "docker/login-action@dbcb813823bdd20940b903addbd779551569679f"
-require_file_value "$workflow" "docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a"
+require_file_value "$workflow" "docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069"
+require_file_value "$workflow" "docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6"
+require_file_value "$workflow" "docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc"
 require_file_value "$workflow" "push: true"
 require_file_value "$workflow" "sbom: true"
 require_file_value "$workflow" "provenance: mode=max"
@@ -62,7 +62,7 @@ require_file_value "$workflow" "push-to-registry: true"
 container_attest_job=$(sed -n '/^  container-attest:/,/^  publish:/p' "$workflow")
 for value in \
     "Log in to GitHub Container Registry for attestation" \
-    "docker/login-action@dbcb813823bdd20940b903addbd779551569679f" \
+    "docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6" \
     "registry: ghcr.io" \
     'username: ${{ github.actor }}' \
     'password: ${{ github.token }}'; do
@@ -73,12 +73,12 @@ for value in \
 done
 
 ci_workflow=.github/workflows/ci.yml
-require_file_value "$ci_workflow" "Docker package (v0.20.0)"
-require_file_value "$ci_workflow" "docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e"
-require_file_value "$ci_workflow" "docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a"
+require_file_value "$ci_workflow" "Docker package (v0.21.0)"
+require_file_value "$ci_workflow" "docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069"
+require_file_value "$ci_workflow" "docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc"
 require_file_value "$ci_workflow" "load: true"
 require_file_value "$ci_workflow" "push: false"
-require_file_value "$ci_workflow" "growse:v0.20.0"
+require_file_value "$ci_workflow" "growse:v0.21.0"
 require_file_value "$ci_workflow" "Verify unused Pebble runtime is absent"
 require_file_value "$ci_workflow" "Run sandbox Web Platform smoke"
 require_file_value "$ci_workflow" "--entrypoint growse-smoke"
@@ -89,7 +89,7 @@ require_file_value "$ci_workflow" "Run Browser-grade Compatibility smoke"
 require_file_value "$ci_workflow" "/usr/local/share/growse/examples/browser-grade-compat"
 require_file_value "$ci_workflow" "Run CSS Layout 2026 smoke"
 require_file_value "$ci_workflow" "/usr/local/share/growse/examples/css-layout-2026"
-require_file_value "$ci_workflow" "anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2"
+require_file_value "$ci_workflow" "anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439"
 require_file_value "$ci_workflow" "severity-cutoff: high"
 require_file_value "$ci_workflow" "fail-build: true"
 require_file_value "$workflow" "Run sandbox Web Platform smoke by digest"

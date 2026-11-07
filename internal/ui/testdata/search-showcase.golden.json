@@ -1,0 +1,14 @@
+{
+  "desktop": [
+    "window=1280x800 viewport=(224,100)-(1280,800)",
+    "popup=(224,100)-(1280,380) rows=5 selected=2 sources=Input/Tab/History/Bookmark/Suggestion",
+    "search-panel=1056x700 rows=3 selected=1",
+    "home=1056x700 card=620 columns=5 candidate-height=192"
+  ],
+  "narrow": [
+    "window=720x640 viewport=(224,100)-(720,640)",
+    "popup=(224,100)-(720,380) rows=5 selected=2 sources=Input/Tab/History/Bookmark/Suggestion",
+    "search-panel=496x540 rows=3 selected=1",
+    "home=496x540 card=496 columns=2 candidate-height=144"
+  ]
+}

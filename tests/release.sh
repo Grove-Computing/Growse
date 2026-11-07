@@ -50,7 +50,7 @@ for value in \
     'tar -czf "dist/$archive_name"' \
     "Compress-Archive" \
     ".sha256" \
-    "anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610" \
+    "anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c" \
     'dist/growse_${{ env.RELEASE_TAG }}_${{ matrix.artifact }}.spdx.json' \
     'scripts/validate-sbom.sh' \
     "actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8" \
@@ -76,6 +76,7 @@ for resource in \
     modern-web-compat \
     multi-tab-workspace \
     persistent-app \
+    search-showcase \
     todo
 do
     if ! grep -Fq -- "  ${resource}" "$package_script"; then
@@ -89,7 +90,7 @@ for value in \
     "runner: windows-2025" \
     "name: Run platform tests" \
     "run: go test ./..." \
-    'scripts/package-gui.sh dist/package v0.20.0 "$GITHUB_RUN_NUMBER"' \
+    'scripts/package-gui.sh dist/package v0.21.0 "$GITHUB_RUN_NUMBER"' \
     'bash scripts/verify-gui-package.sh dist/package'
 do
     require_ci "$value"

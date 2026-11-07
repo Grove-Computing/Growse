@@ -6,7 +6,8 @@
 
 | Version | Supported |
 | --- | --- |
-| 0.20.x | Yes |
+| 0.21.x | Yes |
+| 0.20.x | No |
 | 0.19.x | No |
 | 0.18.x | No |
 | 0.17.x | No |
@@ -48,7 +49,7 @@ GitHub Releaseの各Archiveには、同名の`.sha256`と、`growse_<version>_<p
 たとえばLinux amd64のArchiveを検証する場合は、次を実行します。
 
 ```sh
-VERSION=v0.20.0
+VERSION=v0.21.0
 ASSET="growse_${VERSION}_linux_amd64.tar.gz"
 gh release download "$VERSION" --repo Grove-Computing/Growse \
   --pattern "$ASSET" --pattern "$ASSET.sha256" \
@@ -77,7 +78,7 @@ Developer workstationからのCredential窃取、不可視Unicode、未承認Bin
 
 ## Go / JavaScript Runtime Security Boundary
 
-Growse v0.20.0はPage / FrameのYaegi・goja・WASMとService WorkerをBrowser UIとは別の専用worker processで実行します。workerはversion / length制限付きの型付きIPCを通して、BrowserがbrokerするDOM、Event、Timer、Frame、Fetch、Storage、Navigation、Console、Module、dynamic resource、CSSOM、observer、WASM操作だけを要求できます。Browser credential、任意filesystem、直接socket / DNS、subprocess、dynamic library、OS shell、Go reflection、Node.js APIをhost surfaceとして公開しません。
+Growse v0.21.0はPage / FrameのYaegi・goja・WASMとService WorkerをBrowser UIとは別の専用worker processで実行します。workerはversion / length制限付きの型付きIPCを通して、BrowserがbrokerするDOM、Event、Timer、Frame、Fetch、Storage、Navigation、Console、Module、dynamic resource、CSSOM、observer、WASM操作だけを要求できます。Browser credential、任意filesystem、直接socket / DNS、subprocess、dynamic library、OS shell、Go reflection、Node.js APIをhost surfaceとして公開しません。
 
 Browserはcodeを渡す前に、別PID、worker executable / protocol、brokered host I/O、最小environment、parent lifecycle、memory上限を検証します。Linuxでは`no-new-privileges`とparent-death signal、macOS / Windowsでは専用process group、全platformではparent IPC EOFによる終了を適用します。必須条件が欠ける、workerがtimeout / crashする、protocolに違反する場合は対象contextだけをfail closedし、停止済みgenerationのcallbackを拒否します。
 
@@ -101,7 +102,15 @@ Service Worker registrationとCache StorageはOrigin profileへ保存します�
 
 DevToolsはPageごとのread-only診断境界です。Consoleは1件4 KiB・Page 1,000件、DOM snapshotは2,000 node・深さ128・attribute 64件・文字列4 KiB、NetworkはPage 2,000件・Browser Session 4,000件を上限とします。Runtime panelはPage / Frame / Service WorkerのID、generation、Engine、state、script種別に加え、CSS局所無視、font fallback chain、image cache counter、frame rebuild理由をbody-free metadataとして表示します。同一診断はcountへ集約し、1 Page 2,000種類・1 field 4 KiB・count 1,000,000で飽和します。Request / Response body、Header、Cookie、Authorization、Service Worker Cache body、decoded pixel、font bytes、IPC payload、raw error本文を保持せず、diagnostic URLからuserinfo、query、fragmentを除去します。Inspectorはpassword inputのvalue、WebGo callback、Runtime objectを公開しません。
 
-外部Go sourceを信頼しないでください。外部JavaScriptはv0.20.0 sandbox boundary内で扱いますが、未知の実装脆弱性を想定し、機密情報を持つ高権限環境では実行しないでください。
+外部Go sourceを信頼しないでください。外部JavaScriptはv0.21.0 sandbox boundary内で扱いますが、未知の実装脆弱性を想定し、機密情報を持つ高権限環境では実行しないでください。
+
+## Search Privacy and Profile Boundary
+
+remote suggestionは既定で無効です。利用者がprovider設定で明示的に有効化した場合だけ、選択providerの表示済みHTTPS endpointへqueryを送ります。空入力、Omnibox command、URL / credentialらしい入力、localhost / private IP、制御文字を含む入力は送信しません。開いているTab、History、Bookmark、Page本文、shortcut、背景設定をsuggestion requestへ付加しません。
+
+provider候補は150 ms以上debounceし、active generationの1 request、timeout 2秒、redirect 3回、response 256 KiBに制限します。無効化、入力変更、provider変更、Tab切替、popup / Tab / window closeでcancelし、遅延responseを現在の候補へcommitしません。responseはplain text候補としてだけ扱い、HTML、script、imageを実行・描画しません。
+
+provider設定、History / Bookmark、検索ホームのshortcut・背景はOS標準のGrowse profileへatomic保存します。Historyは50,000件、Bookmarkは10,000件、shortcutは10件、検索profile dataとindex metadataは64 MiB、ホーム設定は64 KiBを上限とします。検索indexはHistory / Bookmarkから再構築できる派生dataで、queryやPage本文を保存しません。query、suggestion response、local検索dataをapplication log、crash message、DevTools、telemetryへ複製しません。v0.21.0はtelemetryを導入しません。
 
 ## Hoverとカーソル表示
 

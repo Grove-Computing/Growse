@@ -1373,17 +1373,21 @@ func TestComputeShadowsAndOutline(t *testing.T) {
 
 func TestComputeAllTwoDimensionalTransformsAndOrigin(t *testing.T) {
 	document := dom.NewDocument()
-	item := document.CreateElement("div", map[string]string{"style": `transform:translate(10px, 20%) translateX(2px) translateY(3px) scale(2, 3) scaleX(4) scaleY(5) rotate(90deg) skew(10deg, 20deg) skewX(5deg) skewY(6deg) matrix(1, 2, 3, 4, 5, 6); transform-origin:left top`})
+	item := document.CreateElement("div", map[string]string{"style": `transform:translate(10px, 20%) translate3d(18.25em, 0, 0) translateX(2px) translateY(3px) scale(2, 3) scaleX(4) scaleY(5) rotate(90deg) skew(10deg, 20deg) skewX(5deg) skewY(6deg) matrix(1, 2, 3, 4, 5, 6); transform-origin:left top`})
 	appendNode(t, document, document.Root, item)
 	computed, _ := Compute(document, nil).For(item)
-	if len(computed.Transform) != 11 {
+	if len(computed.Transform) != 12 {
 		t.Fatalf("transform functions = %#v", computed.Transform)
 	}
-	if computed.Transform[0].Kind != TransformTranslate || computed.Transform[0].Y.Percentage != 20 || computed.Transform[6].Kind != TransformRotate || computed.Transform[10].Kind != TransformMatrix {
+	if computed.Transform[0].Kind != TransformTranslate || computed.Transform[0].Y.Percentage != 20 || computed.Transform[1].Kind != TransformTranslate || computed.Transform[1].X.Pixels != 292 || computed.Transform[7].Kind != TransformRotate || computed.Transform[11].Kind != TransformMatrix {
 		t.Fatalf("parsed transforms = %#v", computed.Transform)
 	}
 	if computed.TransformOrigin.X != (LengthPercentage{}) || computed.TransformOrigin.Y != (LengthPercentage{}) {
 		t.Fatalf("transform origin = %#v", computed.TransformOrigin)
+	}
+
+	if _, valid := parseTransform("translate3d(1px, 2px, 3px)", LengthContext{}); valid {
+		t.Fatal("non-zero translate3d z-axis must not be flattened")
 	}
 
 	simple, valid := parseTransform("translate(10px, 20px) scale(2)", LengthContext{})

@@ -55,6 +55,10 @@ type fontSource struct {
 }
 
 func loadWebFonts(ctx context.Context, client ResourceLoader, pageURL *url.URL, stylesheet *css.Stylesheet) ([]FontResource, []string) {
+	return loadWebFontsWithCallback(ctx, client, pageURL, stylesheet, nil)
+}
+
+func loadWebFontsWithCallback(ctx context.Context, client ResourceLoader, pageURL *url.URL, stylesheet *css.Stylesheet, onResult func(FontResource)) ([]FontResource, []string) {
 	if client == nil || pageURL == nil || stylesheet == nil {
 		return nil, nil
 	}
@@ -80,6 +84,9 @@ func loadWebFonts(ctx context.Context, client ResourceLoader, pageURL *url.URL, 
 			resource.Error = "font descriptors are invalid"
 			failures = append(failures, resource.Error+": "+resource.Family)
 			resources = append(resources, resource)
+			if onResult != nil {
+				onResult(resource)
+			}
 			continue
 		}
 		for _, source := range sources {
@@ -120,6 +127,9 @@ func loadWebFonts(ctx context.Context, client ResourceLoader, pageURL *url.URL, 
 			failures = append(failures, resource.Error+": "+resource.Family)
 		}
 		resources = append(resources, resource)
+		if onResult != nil {
+			onResult(resource)
+		}
 	}
 	return resources, failures
 }
