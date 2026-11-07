@@ -3,6 +3,7 @@
 package omnibox
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -52,19 +53,10 @@ type Result struct {
 // Classify deterministically separates URLs, web searches, local commands and
 // invalid input. Invalid and ambiguous URL-shaped input is never a search.
 func Classify(raw string) Result {
-	if strings.IndexFunc(raw, unicode.IsControl) >= 0 {
-		return invalid(Result{Input: strings.TrimSpace(raw)}, "制御文字を含む入力は実行できません")
-	}
 	input := strings.TrimSpace(raw)
 	result := Result{Input: input}
-	if input == "" {
-		return invalid(result, "入力が空です")
-	}
-	if !utf8.ValidString(input) {
-		return invalid(result, "入力は有効な UTF-8 ではありません")
-	}
-	if len(input) > MaxInputBytes {
-		return invalid(result, fmt.Sprintf("入力は %d bytes を超えています", MaxInputBytes))
+	if err := ValidateInput(raw); err != nil {
+		return invalid(result, err.Error())
 	}
 	if scope, query, ok := command(input); ok {
 		return Result{Kind: Command, Input: input, Query: query, Scope: scope}
@@ -83,6 +75,26 @@ func Classify(raw string) Result {
 	result.Kind = Search
 	result.Query = input
 	return result
+}
+
+// ValidateInput applies the shared input boundary without applying the
+// provider-query boundary. Local-only search surfaces use this validation so
+// they can accept up to MaxInputBytes without making a remote request.
+func ValidateInput(raw string) error {
+	if strings.IndexFunc(raw, unicode.IsControl) >= 0 {
+		return errors.New("制御文字を含む入力は実行できません")
+	}
+	input := strings.TrimSpace(raw)
+	if input == "" {
+		return errors.New("入力が空です")
+	}
+	if !utf8.ValidString(input) {
+		return errors.New("入力は有効な UTF-8 ではありません")
+	}
+	if len(input) > MaxInputBytes {
+		return fmt.Errorf("入力は %d bytes を超えています", MaxInputBytes)
+	}
+	return nil
 }
 
 // SearchURL produces the built-in DuckDuckGo request. Provider selection is

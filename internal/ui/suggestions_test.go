@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"gioui.org/f32"
 	"gioui.org/io/input"
@@ -13,6 +14,7 @@ import (
 	"image"
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/Grove-Computing/Growse/internal/browser"
 	"github.com/Grove-Computing/Growse/internal/omnibox"
@@ -48,6 +50,103 @@ func TestSuggestionPipelineConnectedToTabsAndLocalSnapshots(t *testing.T) {
 	next, _ = ui.suggestions.Results()
 	if next <= generation {
 		t.Fatal("provider change did not invalidate generation")
+	}
+}
+
+func TestSuggestionRemoteFailureKeepsDraftAndLocalCandidates(t *testing.T) {
+	ui := NewBrowserUI(nil, nil)
+	defer ui.Close()
+	ui.SetSuggestionSnapshot(omnibox.Snapshot{History: []omnibox.Candidate{{Primary: "Guide history", URL: "https://local.example/guide"}}})
+	failed := make(chan struct{})
+	ui.SetSuggestionProvider(func(_ context.Context, query string) ([]string, error) {
+		if query != "guide" {
+			t.Errorf("remote query = %q", query)
+		}
+		close(failed)
+		return nil, errors.New("unavailable")
+	}, true)
+	ui.address.SetText("guide")
+	ui.refreshSuggestions()
+
+	select {
+	case <-failed:
+	case <-time.After(time.Second):
+		t.Fatal("remote failure did not complete")
+	}
+	ui.syncSuggestions()
+	if ui.address.Text() != "guide" {
+		t.Fatalf("remote failure changed draft to %q", ui.address.Text())
+	}
+	if len(ui.suggestionPopup.candidates) != 2 || ui.suggestionPopup.candidates[1].Source != omnibox.HistorySource {
+		t.Fatalf("remote failure changed local candidates: %+v", ui.suggestionPopup.candidates)
+	}
+}
+
+func TestSuggestionRequestBlocksSensitiveOriginalAndResolvedInput(t *testing.T) {
+	ui := NewBrowserUI(nil, nil)
+	defer ui.Close()
+	ui.remoteSuggestions = true
+	for _, input := range []string{
+		"https://example.com/private",
+		"user:password@example.com",
+		"@search private query",
+		"localhost",
+		"ddg localhost",
+		"ddg user:password@example.com",
+		"ddg @search private query",
+	} {
+		request := ui.buildSuggestionRequest(input, omnibox.Snapshot{})
+		if request.remoteEnabled {
+			t.Errorf("remote enabled for sensitive input %q resolved as %q", input, request.input)
+		}
+	}
+	request := ui.buildSuggestionRequest("ddg gopher browser", omnibox.Snapshot{})
+	if !request.remoteEnabled || request.input != "gopher browser" {
+		t.Fatalf("safe keyword request = enabled %t input %q", request.remoteEnabled, request.input)
+	}
+}
+
+func TestBrowserUICloseCancelsPendingSuggestionWithoutWaiting(t *testing.T) {
+	ui := NewBrowserUI(nil, nil)
+	started := make(chan context.Context, 1)
+	finished := make(chan struct{})
+	ui.SetSuggestionProvider(func(ctx context.Context, _ string) ([]string, error) {
+		started <- ctx
+		<-ctx.Done()
+		close(finished)
+		return nil, ctx.Err()
+	}, true)
+	ui.address.SetText("pending query")
+	ui.refreshSuggestions()
+
+	var requestContext context.Context
+	select {
+	case requestContext = <-started:
+	case <-time.After(time.Second):
+		t.Fatal("pending suggestion did not start")
+	}
+	closed := make(chan struct{})
+	go func() {
+		ui.Close()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("window close waited for remote suggestion")
+	}
+	select {
+	case <-requestContext.Done():
+	case <-time.After(time.Second):
+		t.Fatal("window close did not cancel request context")
+	}
+	select {
+	case <-finished:
+	case <-time.After(time.Second):
+		t.Fatal("remote suggestion did not finish after cancellation")
+	}
+	if ui.address.Text() != "pending query" {
+		t.Fatalf("window close changed draft to %q", ui.address.Text())
 	}
 }
 

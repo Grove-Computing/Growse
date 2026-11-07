@@ -24,6 +24,7 @@ type searchPanelState struct {
 	editor                    *widget.Editor
 	scope                     omnibox.Scope
 	query                     string
+	errorMessage              string
 	localGeneration           uint64
 	localApplied              uint64
 	candidates                []omnibox.Candidate
@@ -116,6 +117,18 @@ func (ui *BrowserUI) refreshSearchPanel() {
 	panel.localApplied = 0
 	panel.selected = -1
 	panel.list.Position = layout.Position{}
+	if strings.TrimSpace(panel.query) != "" {
+		if err := omnibox.ValidateInput(panel.query); err != nil {
+			panel.errorMessage = err.Error()
+			panel.candidates = nil
+			panel.localGeneration = 0
+			if ui.searchPanelSuggestions != nil {
+				ui.searchPanelSuggestions.Cancel()
+			}
+			return
+		}
+	}
+	panel.errorMessage = ""
 	if ui.searchPanelSuggestions != nil {
 		panel.localGeneration = ui.searchPanelSuggestions.Update(panel.query)
 	} else {
@@ -349,6 +362,7 @@ func (ui *BrowserUI) layoutSearchPanel(gtx layout.Context) layout.Dimensions {
 			layout.Rigid(ui.layoutSearchPanelHeader),
 			layout.Rigid(layout.Spacer{Height: unit.Dp(14)}.Layout),
 			layout.Rigid(ui.layoutSearchPanelEditor),
+			layout.Rigid(ui.layoutSearchPanelInputError),
 			layout.Rigid(layout.Spacer{Height: unit.Dp(12)}.Layout),
 			layout.Rigid(ui.layoutSearchPanelScopes),
 			layout.Rigid(layout.Spacer{Height: unit.Dp(10)}.Layout),
@@ -362,6 +376,19 @@ func (ui *BrowserUI) layoutSearchPanel(gtx layout.Context) layout.Dimensions {
 			layout.Rigid(layout.Spacer{Height: unit.Dp(6)}.Layout),
 			layout.Flexed(1, ui.layoutSearchPanelResults),
 		)
+	})
+}
+
+func (ui *BrowserUI) layoutSearchPanelInputError(gtx layout.Context) layout.Dimensions {
+	message := ui.searchPanel.errorMessage
+	if message == "" {
+		return layout.Dimensions{}
+	}
+	return layout.Inset{Top: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		semantic.DescriptionOp("入力エラー: " + message).Add(gtx.Ops)
+		label := material.Body2(ui.theme, message)
+		label.Color = color.NRGBA{R: 185, G: 28, B: 28, A: 255}
+		return label.Layout(gtx)
 	})
 }
 
@@ -471,6 +498,9 @@ func (ui *BrowserUI) layoutSearchPanelResults(gtx layout.Context) layout.Dimensi
 	semantic.DescriptionOp(selectionSummary("検索結果", len(panel.candidates), panel.selected)).Add(gtx.Ops)
 	if panel.confirmClearHistory {
 		return ui.layoutClearHistoryConfirmation(gtx)
+	}
+	if panel.errorMessage != "" {
+		return layout.Dimensions{}
 	}
 	if len(panel.candidates) == 0 {
 		label := material.Body1(ui.theme, "No matching tabs, history, or bookmarks")

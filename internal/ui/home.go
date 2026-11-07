@@ -338,8 +338,21 @@ func (ui *BrowserUI) handleHomeSuggestionKeys(gtx layout.Context, state *homeTab
 func (ui *BrowserUI) refreshHomeSuggestions(state *homeTabState) {
 	ui.ensureHomePipelines(state)
 	state.input = state.editor.Text()
+	classification := omnibox.Classify(state.input)
+	if strings.TrimSpace(state.input) != "" && classification.Kind == omnibox.Invalid {
+		state.errorMessage = classification.Error
+		state.pipeline.Cancel()
+		state.local.Cancel()
+		state.localGeneration = 0
+		state.localApplied = 0
+		state.candidates = nil
+		state.selected = -1
+		state.needsRefresh = false
+		return
+	}
+	state.errorMessage = ""
 	query := state.input
-	if classification := omnibox.Classify(query); classification.Kind == omnibox.Command {
+	if classification.Kind == omnibox.Command {
 		query = classification.Query
 	}
 	state.localGeneration = state.local.Update(query)
@@ -389,6 +402,12 @@ func (ui *BrowserUI) submitHomeInput(state *homeTabState, disposition omniboxDis
 	input := strings.TrimSpace(state.editor.Text())
 	if input == "" {
 		state.errorMessage = "検索語またはURLを入力してください"
+		ui.status = state.errorMessage
+		ui.statusHasError = true
+		return
+	}
+	if classification := omnibox.Classify(input); classification.Kind == omnibox.Invalid {
+		state.errorMessage = classification.Error
 		ui.status = state.errorMessage
 		ui.statusHasError = true
 		return
