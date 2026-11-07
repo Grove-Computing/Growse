@@ -219,6 +219,7 @@ DevToolsはRequest / Response body、Header、Cookie、Authorizationを保持し
 | --- | --- |
 | [Search対応表](docs/search-support.md) | Omnibox、検索ホーム、shortcut一覧、Find、横断検索、keyboard / IME、privacy、保存範囲 |
 | [Search Provider](docs/search-providers.md) | v0.21.0のprovider管理、keyword、OpenSearch確認登録、候補privacy、設定保存 |
+| [SvelteKit 3.0 RC検証](docs/sveltekit-3-verification.md) | 固定version、再build digest、SSR / hydration / interaction / navigation / Engine分離の個別evidence |
 | [CSS対応表](docs/css-support.md) | CSS Property、Layout、Animationの対応状況と制限 |
 | [Form / Fetch / Cookie対応表](docs/form-fetch-cookie-support.md) | Form、HTTP、Cookie、CORSの対応状況と制限 |
 | [Storage / Cache対応表](docs/storage-cache-support.md) | Web Storage、HTTP Cache、永続化、quotaの対応状況と制限 |
