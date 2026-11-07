@@ -25,7 +25,7 @@ RUN CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
     && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
     go build -trimpath -ldflags="-s -w" -o /out/growse-smoke ./cmd/growse-smoke
 
-FROM ubuntu:26.04@sha256:513c074113a871b51a8d16ab445c88779d6452d937a164fb5cc479f32668a41d
+FROM ubuntu:26.04@sha256:6a06111c3b0a8600feadb270aec771dc239bf407b25625f93f44ab00e11f4d3c
 
 # Ubuntuのベースイメージに含まれるPebbleはGrowseでは使用しない。
 # 不要なGoバイナリをランタイムへ残さず、脆弱性の影響範囲から外す。
