@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.Title}} · Growse Search Showcase</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main>
+    <p class="eyebrow">GROWSE · V0.21.0 · OFFLINE</p>
+    <h1>{{.Title}}</h1>
+    <p class="route">fixture route: <code>{{.Route}}</code>{{if .Query}} · query: <strong>{{.Query}}</strong>{{end}}</p>
+    <section>
+      <h2>Smart Omnibox scenario</h2>
+      <ol>
+        <li><kbd>Ctrl/⌘</kbd> + <kbd>L</kbd>を押し、<code>guide</code>を入力します。</li>
+        <li>Input、Tab、History、Bookmark、fake remoteの全sourceと決定的rankingを確認します。</li>
+        <li><kbd>Enter</kbd>、<kbd>Shift</kbd> + <kbd>Enter</kbd>、<kbd>Alt</kbd> + <kbd>Enter</kbd>でcurrent / foreground / background Tabを確認します。</li>
+        <li>Homeへ戻り、中央検索欄でも同じ<code>guide</code>候補を確認します。</li>
+      </ol>
+    </section>
+    <section>
+      <h2>Classification inputs</h2>
+      <p><code>demo gopher browser</code>、<code>@tabs guide</code>、<code>@history guide</code>、<code>@bookmarks guide</code>、このfixtureのHTTPS URLを順に試せます。</p>
+      <p>providerとPageはprocess内localhostだけで完結し、Public Internetや実profileを使用しません。</p>
+    </section>
+  </main>
+</body>
+</html>
