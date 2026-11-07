@@ -116,7 +116,7 @@ provider設定、History / Bookmark、検索ホームのshortcut・背景はOS�
 
 リンク先プレビューはURLの表示だけを行い、hoverを理由とするDNS問い合わせ、HTTPリクエスト、先読み、WebGo実行は行いません。URLにuserinfoが含まれる場合は認証情報全体を除去しますが、表示されたリンク先と接続先を利用者自身でも確認してください。
 
-カーソルはplatform cursorを使用し、閲覧pageのCSS `cursor`は実装済みの標準shapeへだけ対応付けます。外部画像や閲覧page由来のSVGをcursorとして読み込み、application frameへ描画する機能はありません。
+通常のカーソルには、`internal/ui/assets/blue.svg`から起動時にrasterizeした、ビルド埋め込みのGopherだけを使用します。閲覧pageがCSS `cursor`で実装済みの標準shapeを明示した領域ではplatform cursorへ切り替えます。外部画像や閲覧page由来のSVGをcursorとして読み込み、application frameへ描画する機能はありません。
 
 ## CSS Resource
 
