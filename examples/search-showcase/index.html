@@ -11,6 +11,24 @@
     <p class="eyebrow">GROWSE · V0.21.0 · OFFLINE</p>
     <h1>{{.Title}}</h1>
     <p class="route">fixture route: <code>{{.Route}}</code>{{if .Query}} · query: <strong>{{.Query}}</strong>{{end}}</p>
+    {{if .Find}}
+    <section class="find-fixture">
+      <h2>Find in Page scenario</h2>
+      <p><kbd>Ctrl/⌘</kbd> + <kbd>F</kbd>で、<code>interoperability</code>、<code>検索対象</code>、<code>Café</code>を順に検索します。</p>
+      <p class="long-copy">Interoperability appears inside this deliberately long Latin paragraph. Browser search must keep matching after extensive wrapping, punctuation, repeated layout words, and enough descriptive prose to occupy several visual lines without truncating the searchable text. The paragraph continues with accessibility, determinism, normalization, viewport geometry, lifecycle safety, and one final interoperability marker.</p>
+      <p>長文の日本語でも検索対象という語をDOM順で見つけます。折返しが増えても、検索対象のmatch数とactive rangeは同じ内容を示します。</p>
+      <p>combining sequence: <span id="combining">Cafe&#x301;</span> / precomposed query: Café</p>
+      <div class="nested-scroll" aria-label="nested scroll find fixture">
+        <p>nested scrollの先頭です。active matchは内側のscroll containerを移動します。</p>
+        <div class="scroll-spacer">geometry spacer<br>layout spacer<br>viewport spacer<br>scroll spacer</div>
+        <p id="nested-target">nested needle は内側の末尾付近にあります。</p>
+      </div>
+      <button id="mutate-find" type="button">DOM mutationを追加</button>
+      <output id="mutation-state">before mutation</output>
+      <p id="mutation-target">mutation前の安全なtext</p>
+    </section>
+    <script type="text/go" src="/_find.go"></script>
+    {{else}}
     <section>
       <h2>Smart Omnibox scenario</h2>
       <ol>
@@ -25,6 +43,7 @@
       <p><code>demo gopher browser</code>、<code>@tabs guide</code>、<code>@history guide</code>、<code>@bookmarks guide</code>、このfixtureのHTTPS URLを順に試せます。</p>
       <p>providerとPageはprocess内localhostだけで完結し、Public Internetや実profileを使用しません。</p>
     </section>
+    {{end}}
   </main>
 </body>
 </html>

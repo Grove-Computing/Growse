@@ -8,7 +8,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Grove-Computing/Growse/internal/browser"
+	"github.com/Grove-Computing/Growse/internal/findpage"
+	"github.com/Grove-Computing/Growse/internal/network"
 	"github.com/Grove-Computing/Growse/internal/omnibox"
+	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
+	"github.com/Grove-Computing/Growse/internal/runtime/yaegi"
 )
 
 func TestSearchShowcaseReproducesEverySuggestionSourceOffline(t *testing.T) {
@@ -19,7 +24,7 @@ func TestSearchShowcaseReproducesEverySuggestionSourceOffline(t *testing.T) {
 	defer showcase.Close()
 
 	tabs := showcase.session.Tabs()
-	if len(tabs) != 3 || !tabs[0].Active {
+	if len(tabs) != 4 || !tabs[0].Active {
 		t.Fatalf("fixture tabs = %+v", tabs)
 	}
 	snapshot := showcase.data.SuggestionSnapshot(t.Context(), "guide")
@@ -49,6 +54,41 @@ func TestSearchShowcaseReproducesEverySuggestionSourceOffline(t *testing.T) {
 	target, err := provider.SearchURL("gopher browser")
 	if err != nil || !strings.HasPrefix(target, showcase.server.URL+"/search?") {
 		t.Fatalf("offline search target = %q, %v", target, err)
+	}
+}
+
+func TestSearchShowcaseFindFixtureCoversUnicodeNestedScrollAndMutation(t *testing.T) {
+	server := newTLSServerForTest(t)
+	engine := browser.NewWithRuntimeFactory(network.NewClientWithLimits(server.Client(), 1<<20), func() runtimemodel.Runtime { return yaegi.New() })
+	defer engine.Close()
+	page, err := engine.Navigate(t.Context(), server.URL+"/find")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, query := range []string{"interoperability", "検索対象", "Café", "nested needle"} {
+		result := findpage.Search(page.Document, page.ComputedStyles, query, findpage.Options{}, findpage.Limits{})
+		if len(result.Matches) == 0 || result.Limit != findpage.LimitNone {
+			t.Errorf("Find(%q) = %+v", query, result)
+		}
+	}
+	nested, ok := page.Document.GetElementByID("nested-target")
+	if !ok || nested.TextContent() == "" {
+		t.Fatal("nested scroll target is missing")
+	}
+	if before := findpage.Search(page.Document, page.ComputedStyles, "mutated needle", findpage.Options{}, findpage.Limits{}); len(before.Matches) != 0 {
+		t.Fatalf("mutation text existed before click: %+v", before.Matches)
+	}
+	button, ok := page.Document.GetElementByID("mutate-find")
+	if !ok {
+		t.Fatal("mutation button is missing")
+	}
+	if !engine.DispatchClick(button.ID, 0, 0) {
+		t.Fatalf("mutation click failed: started=%t error=%q scripts=%+v", page.RuntimeStarted, page.RuntimeError, page.ScriptErrors)
+	}
+	state, _ := page.Document.GetElementByID("mutation-state")
+	after := findpage.Search(page.Document, page.ComputedStyles, "mutated needle", findpage.Options{}, findpage.Limits{})
+	if state == nil || state.TextContent() != "mutation committed" || len(after.Matches) != 1 {
+		t.Fatalf("mutation state=%v Find=%+v runtimeStarted=%t runtime=%q selected=%+v errors=%v", state, after, page.RuntimeStarted, page.RuntimeError, page.Scripts, page.ScriptErrors)
 	}
 }
 

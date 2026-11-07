@@ -3,12 +3,12 @@ package main
 import (
 	"context"
 	"embed"
-	"fmt"
 	"html/template"
 	"io/fs"
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"time"
 
 	gioapp "gioui.org/app"
@@ -18,12 +18,14 @@ import (
 	"github.com/Grove-Computing/Growse/internal/browser"
 	"github.com/Grove-Computing/Growse/internal/network"
 	"github.com/Grove-Computing/Growse/internal/omnibox"
+	runtimemodel "github.com/Grove-Computing/Growse/internal/runtime"
+	"github.com/Grove-Computing/Growse/internal/runtime/yaegi"
 	"github.com/Grove-Computing/Growse/internal/searchdata"
 	"github.com/Grove-Computing/Growse/internal/searchprovider"
 	"github.com/Grove-Computing/Growse/internal/ui"
 )
 
-//go:embed index.html style.css
+//go:embed index.html style.css _find.go
 var showcaseAssets embed.FS
 
 var showcasePage = template.Must(template.ParseFS(showcaseAssets, "index.html"))
@@ -32,6 +34,7 @@ type pageData struct {
 	Title string
 	Route string
 	Query string
+	Find  bool
 }
 
 func searchShowcaseHandler() http.Handler {
@@ -45,6 +48,15 @@ func searchShowcaseHandler() http.Handler {
 		response.Header().Set("Content-Type", "text/css; charset=utf-8")
 		_, _ = response.Write(body)
 	})
+	mux.HandleFunc("/_find.go", func(response http.ResponseWriter, _ *http.Request) {
+		body, err := fs.ReadFile(showcaseAssets, "_find.go")
+		if err != nil {
+			http.Error(response, "fixture unavailable", http.StatusInternalServerError)
+			return
+		}
+		response.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = response.Write(body)
+	})
 	mux.HandleFunc("/", func(response http.ResponseWriter, request *http.Request) {
 		titles := map[string]string{
 			"/tab-guide":      "Guide tab",
@@ -52,6 +64,7 @@ func searchShowcaseHandler() http.Handler {
 			"/history-guide":  "Guide history",
 			"/bookmark-guide": "Guide bookmark",
 			"/search":         "Offline search result",
+			"/find":           "Find in Page fixture",
 		}
 		title, ok := titles[request.URL.Path]
 		if !ok {
@@ -59,7 +72,7 @@ func searchShowcaseHandler() http.Handler {
 			return
 		}
 		response.Header().Set("Content-Type", "text/html; charset=utf-8")
-		if err := showcasePage.Execute(response, pageData{Title: title, Route: request.URL.Path, Query: request.URL.Query().Get("q")}); err != nil {
+		if err := showcasePage.Execute(response, pageData{Title: title, Route: request.URL.Path, Query: request.URL.Query().Get("q"), Find: request.URL.Path == "/find"}); err != nil {
 			log.Printf("Search Showcase fixture render failed: %v", err)
 		}
 	})
@@ -118,7 +131,7 @@ func newSearchShowcase(invalidate func()) (*searchShowcase, error) {
 
 	showcase := &searchShowcase{server: server, client: client, data: data, settings: settings, remote: remote}
 	showcase.session = browser.NewSession(func() *browser.Browser {
-		state := browser.New(client)
+		state := browser.NewWithRuntimeFactory(client, func() runtimemodel.Runtime { return yaegi.New() })
 		state.SetNavigationObserver(func(record browser.NavigationRecord) {
 			_ = data.RecordNavigation(searchdata.Navigation{
 				URL: record.URL, Title: record.Title, Typed: record.Typed, TopLevel: true, Success: true,
@@ -134,7 +147,7 @@ func newSearchShowcase(invalidate func()) (*searchShowcase, error) {
 		showcase.Close()
 		return nil, err
 	}
-	for _, tab := range []struct{ path, title string }{{"/tab-guide", "Guide tab"}, {"/tab-ranking", "Ranking tab"}} {
+	for _, tab := range []struct{ path, title string }{{"/tab-guide", "Guide tab"}, {"/tab-ranking", "Ranking tab"}, {"/find", "Find mutation"}} {
 		if err := showcase.addFixtureTab(tab.path, tab.title); err != nil {
 			showcase.Close()
 			return nil, err
@@ -158,17 +171,12 @@ func newSearchShowcase(invalidate func()) (*searchShowcase, error) {
 }
 
 func (showcase *searchShowcase) addFixtureTab(path, title string) error {
-	tab, err := showcase.session.NewTab(nil)
+	target, err := url.Parse(showcase.server.URL + path)
 	if err != nil {
 		return err
 	}
-	navigator, ok := showcase.session.BrowserTarget(tab.ID)
-	if !ok {
-		return fmt.Errorf("fixture tab %d is unavailable", tab.ID)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	if _, err := navigator.Navigate(ctx, showcase.server.URL+path); err != nil {
+	tab, err := showcase.session.NewTab(target)
+	if err != nil {
 		return err
 	}
 	_, err = showcase.session.SetTabTitle(tab.ID, title)
