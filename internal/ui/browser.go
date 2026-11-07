@@ -144,6 +144,8 @@ type BrowserUI struct {
 	searchPanelSuggestions   *searchdata.LocalPipeline
 
 	gopher            paint.ImageOp
+	gopherCursor      paint.ImageOp
+	gopherCursorReady bool
 	growseIcon        paint.ImageOp
 	pointerTag        pointerTag
 	pointer           pointerState
@@ -453,6 +455,7 @@ func NewBrowserUIWithTabsAndUpdater(navigator Navigator, tabs TabController, inv
 	if err != nil {
 		panic("decode embedded Growse icon: " + err.Error())
 	}
+	cursorImage, cursorErr := loadGopherCursor()
 
 	updateContext, cancelUpdate := context.WithCancel(context.Background())
 	ui := &BrowserUI{
@@ -506,6 +509,12 @@ func NewBrowserUIWithTabsAndUpdater(navigator Navigator, tabs TabController, inv
 		bookmarkBorderIcon: mustIcon(widget.NewIcon(icons.ToggleStarBorder)),
 		bookmarkBarButtons: make(map[string]*widget.Clickable),
 	}
+	if cursorErr != nil {
+		slog.Error("Gopherカーソルを初期化できませんでした", "component", "ui", "error", cursorErr)
+	} else {
+		ui.gopherCursor = paint.NewImageOp(cursorImage)
+		ui.gopherCursorReady = true
+	}
 	if ui.invalidate == nil {
 		ui.invalidate = func() {}
 	}
@@ -538,6 +547,7 @@ func (ui *BrowserUI) Layout(gtx layout.Context) layout.Dimensions {
 	ui.handleKeyboardShortcuts(gtx)
 	ui.handleActions(gtx)
 	ui.syncActiveTabChrome()
+	ui.pointer.platformCursor = false
 
 	panelHeight := 0
 	if ui.devToolsState().Open {
@@ -557,6 +567,7 @@ func (ui *BrowserUI) Layout(gtx layout.Context) layout.Dimensions {
 	ui.layoutSuggestions(gtx, geometry.viewport)
 	ui.layoutFindOverlay(gtx, geometry.viewport)
 
+	ui.layoutGopherCursor(gtx)
 	ui.registerPointerTracker(gtx)
 	return layout.Dimensions{Size: gtx.Constraints.Max}
 }
@@ -3692,16 +3703,19 @@ func (ui *BrowserUI) updateViewportHover(gtx layout.Context, page *browser.Page,
 	}
 	position, inside := viewportPointerPosition(gtx, ui.pointer.position, ui.pointer.inside)
 	if !inside {
+		ui.pointer.platformCursor = false
 		ui.navigator.ClearHover()
 		ui.updateLinkPreview(page, 0)
 		return
 	}
 	hit, ok := hitTestPaintedDisplayList(displayList, ui.pageList.Position, position, gtx.Metric.PxPerDp)
 	if !ok || tree == nil || tree.Revision != page.StyleRevision || displayList.Revision != page.StyleRevision {
+		ui.pointer.platformCursor = false
 		ui.navigator.ClearHover()
 		ui.updateLinkPreview(page, 0)
 		return
 	}
+	ui.pointer.platformCursor = cssCursor(hit.Cursor) != pointer.CursorDefault
 	ui.navigator.UpdateHover(hit.NodeID, hit.DocumentX, hit.DocumentY)
 	ui.updateLinkPreview(page, hit.NodeID)
 }
@@ -3783,6 +3797,7 @@ func (ui *BrowserUI) dispatchPaintedClick(page *browser.Page, hit paintedDisplay
 type paintedDisplayHit struct {
 	NodeID               dom.NodeID
 	DocumentX, DocumentY float32
+	Cursor               stylemodel.Cursor
 }
 
 // hitTestPaintedDisplayList maps a viewport point to the command where Gio
@@ -3830,7 +3845,7 @@ func hitTestPaintedDisplayList(displayList *paintmodel.DisplayList, position lay
 					}
 				}
 			}
-			result = paintedDisplayHit{NodeID: nodeID, DocumentX: documentX, DocumentY: documentY}
+			result = paintedDisplayHit{NodeID: nodeID, DocumentX: documentX, DocumentY: documentY, Cursor: visual.cursor}
 			found = nodeID != 0
 		}
 		cursorY += visual.advance
@@ -3847,24 +3862,29 @@ type paintedCommandVisual struct {
 	clips                             []layoutengine.ClipRegion
 	transform                         stylemodel.Matrix
 	radius                            layoutengine.BorderRadii
+	cursor                            stylemodel.Cursor
 }
 
 func paintedCommandVisualFor(command paintmodel.Command) paintedCommandVisual {
 	switch command := command.(type) {
 	case paintmodel.DrawText:
-		return paintedCommandVisual{nodeID: command.NodeID, x: command.X, y: command.Y, top: command.Top, width: command.Width, height: command.Height, advance: max(command.Top+command.Height, paintmodel.MinimumCommandAdvance), writingMode: command.WritingMode, runs: command.Runs, clip: command.Clip, clips: command.Clips, transform: command.Transform}
+		return paintedCommandVisual{nodeID: command.NodeID, x: command.X, y: command.Y, top: command.Top, width: command.Width, height: command.Height, advance: max(command.Top+command.Height, paintmodel.MinimumCommandAdvance), writingMode: command.WritingMode, runs: command.Runs, clip: command.Clip, clips: command.Clips, transform: command.Transform, cursor: command.Cursor}
 	case paintmodel.DrawInput:
-		return paintedCommandVisual{nodeID: command.NodeID, x: command.X, y: command.Y, top: command.Top, width: command.Width, height: command.Height, advance: max(command.Top+command.Height, paintmodel.MinimumCommandAdvance), writingMode: command.WritingMode, clip: command.Clip, clips: command.Clips, transform: command.Transform}
+		cursor := command.Cursor
+		if cursor == stylemodel.CursorAuto {
+			cursor = stylemodel.CursorText
+		}
+		return paintedCommandVisual{nodeID: command.NodeID, x: command.X, y: command.Y, top: command.Top, width: command.Width, height: command.Height, advance: max(command.Top+command.Height, paintmodel.MinimumCommandAdvance), writingMode: command.WritingMode, clip: command.Clip, clips: command.Clips, transform: command.Transform, cursor: cursor}
 	case paintmodel.DrawSelect:
-		return paintedCommandVisual{nodeID: command.NodeID, x: command.X, y: command.Y, top: command.Top, width: command.Width, height: command.Height, advance: max(command.Top+command.Height, paintmodel.MinimumCommandAdvance), writingMode: command.WritingMode, clip: command.Clip, clips: command.Clips, transform: command.Transform}
+		return paintedCommandVisual{nodeID: command.NodeID, x: command.X, y: command.Y, top: command.Top, width: command.Width, height: command.Height, advance: max(command.Top+command.Height, paintmodel.MinimumCommandAdvance), writingMode: command.WritingMode, clip: command.Clip, clips: command.Clips, transform: command.Transform, cursor: command.Cursor}
 	case paintmodel.DrawCheckable:
-		return paintedCommandVisual{nodeID: command.NodeID, x: command.X, y: command.Y, top: command.Top, width: command.Width, height: command.Height, advance: max(command.Top+command.Height, paintmodel.MinimumCommandAdvance), writingMode: command.WritingMode, clip: command.Clip, clips: command.Clips, transform: command.Transform}
+		return paintedCommandVisual{nodeID: command.NodeID, x: command.X, y: command.Y, top: command.Top, width: command.Width, height: command.Height, advance: max(command.Top+command.Height, paintmodel.MinimumCommandAdvance), writingMode: command.WritingMode, clip: command.Clip, clips: command.Clips, transform: command.Transform, cursor: command.Cursor}
 	case paintmodel.DrawButton:
-		return paintedCommandVisual{nodeID: command.NodeID, x: command.X, y: command.Y, top: command.Top, width: command.Width, height: command.Height, advance: max(command.Top+command.Height, paintmodel.MinimumCommandAdvance), writingMode: command.WritingMode, clip: command.Clip, clips: command.Clips, transform: command.Transform}
+		return paintedCommandVisual{nodeID: command.NodeID, x: command.X, y: command.Y, top: command.Top, width: command.Width, height: command.Height, advance: max(command.Top+command.Height, paintmodel.MinimumCommandAdvance), writingMode: command.WritingMode, clip: command.Clip, clips: command.Clips, transform: command.Transform, cursor: command.Cursor}
 	case paintmodel.DrawBox:
-		return paintedCommandVisual{nodeID: command.NodeID, x: command.X, y: command.Y, top: command.Top, width: command.Width, height: command.Height, advance: max(command.Top, paintmodel.MinimumCommandAdvance), writingMode: command.WritingMode, clip: command.Clip, clips: command.Clips, transform: command.Transform, radius: command.Radius}
+		return paintedCommandVisual{nodeID: command.NodeID, x: command.X, y: command.Y, top: command.Top, width: command.Width, height: command.Height, advance: max(command.Top, paintmodel.MinimumCommandAdvance), writingMode: command.WritingMode, clip: command.Clip, clips: command.Clips, transform: command.Transform, radius: command.Radius, cursor: command.Cursor}
 	case paintmodel.DrawImage:
-		return paintedCommandVisual{nodeID: command.NodeID, x: command.X, y: command.Y, top: command.Top, width: command.Width, height: command.Height, advance: max(command.Top+command.Height, paintmodel.MinimumCommandAdvance), writingMode: command.WritingMode, clip: command.Clip, clips: command.Clips, transform: command.Transform, radius: command.Radius}
+		return paintedCommandVisual{nodeID: command.NodeID, x: command.X, y: command.Y, top: command.Top, width: command.Width, height: command.Height, advance: max(command.Top+command.Height, paintmodel.MinimumCommandAdvance), writingMode: command.WritingMode, clip: command.Clip, clips: command.Clips, transform: command.Transform, radius: command.Radius, cursor: command.Cursor}
 	default:
 		return paintedCommandVisual{}
 	}
