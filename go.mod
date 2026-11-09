@@ -9,13 +9,13 @@ require (
 	github.com/gen2brain/avif v0.6.0
 	github.com/gen2brain/webp v0.6.4
 	github.com/go-text/typesetting v0.3.5
-	github.com/pgaskin/go-woff2 v0.0.3
+	github.com/pgaskin/go-woff2 v0.1.0
 	github.com/srwiley/oksvg v0.0.0-20221011165216-be6e8873101c
 	github.com/srwiley/rasterx v0.0.0-20220730225603-2ab79fcdd4ef
 	github.com/tdewolff/parse/v2 v2.8.20
 	github.com/tetratelabs/wabin v0.0.0-20230304001439-f6f874872834
 	github.com/tetratelabs/wazero v1.12.0
-	github.com/traefik/yaegi v0.16.1
+	github.com/traefik/yaegi v0.16.3
 	golang.org/x/exp/shiny v0.0.0-20250408133849-7e4ce0ab07d0
 	golang.org/x/image v0.47.0
 	golang.org/x/net v0.62.0
